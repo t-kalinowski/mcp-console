@@ -43,6 +43,7 @@ def test_materializes_records_only_for_console_use(
             execution.serve("--worker", str(zod)),
             {**os.environ, "TMPDIR": str(unused_workspace)},
             current_directory=unused_workspace,
+            record_in_project=False,
         )
         client.initialize_and_list_tools()
         assert not (unused_workspace / ".agents").exists(), unused_workspace
@@ -68,7 +69,7 @@ def test_materializes_records_only_for_console_use(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        assert not (workspace / ".agents").exists(), workspace
+        assert not (workspace / ".agents/console/sessions").exists(), workspace
         client.send(r="echo echo")
 
         sessions = list((workspace / ".agents/console/sessions").iterdir())
@@ -105,6 +106,67 @@ def test_materializes_records_only_for_console_use(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_selects_existing_project_or_home_recording_directory(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    records = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        for case in ("home", "project", "project path is a file"):
+            base = root / case
+            home = base / "home"
+            workspace = base / "workspace"
+            home.mkdir(parents=True)
+            workspace.mkdir()
+            project_console = workspace / ".agents/console"
+            if case == "project":
+                project_console.mkdir(parents=True)
+            elif case == "project path is a file":
+                project_console.parent.mkdir()
+                project_console.write_text("occupied", encoding="utf-8")
+            with McpClient(
+                binary,
+                execution.serve("--worker", str(zod)),
+                environment={**os.environ, "HOME": str(home)},
+                current_directory=workspace,
+                record_in_project=False,
+            ) as client:
+                client.initialize_and_list_tools()
+                assert not (home / ".agents").exists()
+                client.send(r="preview huge line")
+                recording_root = workspace if case == "project" else home
+                (session,) = (recording_root / ".agents/console/sessions").iterdir()
+                log = session / "outputs/call-000001.log"
+                assert log.is_file(), log
+                public_path = (
+                    Path(
+                        f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+                    )
+                    if case == "project"
+                    else log
+                )
+                text = "".join(
+                    block["text"]
+                    for block in client.transcript[-1]["result"]["content"]
+                    if block["type"] == "text"
+                )
+                assert str(public_path) in text
+                if case == "home":
+                    assert not (workspace / ".agents").exists()
+                if case == "project":
+                    assert not (home / ".agents").exists()
+                client.finish()
+            records.append(
+                {
+                    "case": case,
+                    "recording_root": "project" if case == "project" else "home",
+                }
+            )
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
 def test_continues_without_record_when_record_cannot_be_created(
     binary: Path,
     execution: Execution,
@@ -113,7 +175,10 @@ def test_continues_without_record_when_record_cannot_be_created(
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
         (workspace / ".agents").mkdir()
-        (workspace / ".agents/console").write_text("occupied", encoding="utf-8")
+        (workspace / ".agents/console").mkdir()
+        (workspace / ".agents/console/sessions").write_text(
+            "occupied", encoding="utf-8"
+        )
         client = McpClient(
             binary,
             execution.serve("--worker", str(zod)),
@@ -129,7 +194,9 @@ def test_continues_without_record_when_record_cannot_be_created(
             "code": -32602,
             "message": "tool not found",
         }, client.transcript[-1]
-        assert (workspace / ".agents/console").read_text(encoding="utf-8") == "occupied"
+        assert (workspace / ".agents/console/sessions").read_text(
+            encoding="utf-8"
+        ) == "occupied"
         transcript, standard_error = client.finish_with_standard_error()
         assert standard_error.count("\n") == 1, standard_error
         assert standard_error.startswith(

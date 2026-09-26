@@ -41,14 +41,14 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
 
-Project configuration is read only from `.agents/console/config.yaml` in the launch working directory.
+Project configuration is read from `.agents/console/config.yaml` in the launch working directory, falling back to `~/.agents/console/config.yaml` only when the project file is absent.
 Repeated `-c KEY=VALUE` overrides apply in command-line order before application decoding and validation.
 Keep `src/config.rs` and its parsers independent of application field names: mappings merge recursively, while lists, scalars, and explicit null replace prior values.
 Top-level `extends` selects the native `":workspace"` or `":read-only"` built-in; omission preserves the default policy.
 Capture the workspace once at trusted launch and retain it across worker generations.
 Reuse native constructors and path handling, and keep explicit native adjustments subject to native precedence.
 Console adds `.claude` as a read entry and excludes shared temporary write grants by default for `":workspace"`; metadata defaults are deliberately overridable.
-Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
+Recorded sessions, transcripts, outputs, and artifacts are written beneath the launch directory's `.agents/console/sessions/` only if `.agents/console` already exists there; otherwise they go beneath `~/.agents/console/sessions/`.
 
 An optional `target` independently selects transport and compute for `serve`, including `--no-sandbox`: SSH host, local Docker container, or local Docker Sandbox microVM.
 Omitted target and explicit local host selection share the existing local launch path.
@@ -189,6 +189,7 @@ Keep these invariants intact:
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/config.rs`, `src/config/{inline,yaml}.rs` — schema-independent project-file loading, inline override parsing, and recursive configuration layering.
+- `src/console_paths.rs` — the controller home Console directory shared by configuration discovery and recording selection.
 - `src/settings.rs`, `src/settings/target.rs` — project-path selection and application settings decoded after layering and retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs` — configured OpenSSH transport and remote retirement confirmation.
 - `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, direct/native launcher mechanics, image runtime selection, workload environment decoding, cancellable CLI transfer, and the shared local owner request and observation.

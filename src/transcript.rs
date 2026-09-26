@@ -39,6 +39,7 @@ struct TranscriptState {
 
 struct ActiveTranscript {
     directory: PathBuf,
+    public_directory: PathBuf,
     writer: BufWriter<File>,
     projections: Option<markdown::Writers>,
     pending_projection_failure: Option<String>,
@@ -270,8 +271,20 @@ impl ActiveTranscript {
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".agents/console/sessions");
+        let project_console = working_directory.join(".agents/console");
+        let in_project = project_console.is_dir();
+        let console = if in_project {
+            project_console
+        } else {
+            crate::console_paths::home_console_directory()?
+        };
+        let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);
+        let public_directory = if in_project {
+            PathBuf::from(".agents/console/sessions").join(&run_id)
+        } else {
+            directory.clone()
+        };
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
@@ -323,6 +336,7 @@ impl ActiveTranscript {
 
         let mut transcript = Self {
             directory,
+            public_directory,
             writer,
             projections,
             pending_projection_failure,

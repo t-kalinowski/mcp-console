@@ -160,7 +160,13 @@ def _initializes_and_lists_tools(
                 ),
                 encoding="utf-8",
             )
-        with McpClient(binary, execution.serve(), environment, workspace) as client:
+        with McpClient(
+            binary,
+            execution.serve(),
+            environment,
+            workspace,
+            record_in_project=False,
+        ) as client:
             client.initialize_and_list_tools()
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools

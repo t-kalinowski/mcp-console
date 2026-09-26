@@ -50,10 +50,11 @@ result:
 
         Each result has at most 8 KiB of UTF-8 text, including notices;
         oversized output keeps its beginning and latest tail. Images have
-        separate limits. Retained raw-log paths are relative to the Console
-        server recording workspace (the controller for remote targets). Full
-        retained text requires filesystem access there through existing tools;
-        Console provides no read/search interface.
+        separate limits. Retained raw-log paths are relative to the server's
+        launch directory for project recordings and absolute for home recordings
+        (both on the controller for remote targets). Full retained text requires
+        filesystem access there through existing tools; Console provides no
+        read/search interface.
 
 
         Evaluated code uses the native ":workspace" profile: it can edit files
@@ -73,7 +74,8 @@ result:
         requested R, Python, and DuckDB dependencies are prepared outside the
         worker sandbox with the remote account's trusted setup permissions; bare
         runtimes require preinstalled packages. Records and returned images are
-        saved locally beneath .agents/console/sessions/. Files created by code
+        saved on the controller beneath its existing project .agents/console
+        directory or its home .agents/console directory. Files created by code
         remain remote. The source-only Quarto export does not reproduce the
         remote filesystem.
       inputSchema:

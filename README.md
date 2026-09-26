@@ -83,7 +83,8 @@ Follow up in the same conversation:
 > Using the model and data already in the console, where does the model make the most mistakes?
 > Show me a plot and the path to the recorded console session transcript.
 
-Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the server's working directory.
+If `.agents/console` exists in the server's working directory, records and plot artifacts are written under its `sessions/<run-id>/` directory.
+Otherwise, Console writes them under `~/.agents/console/sessions/<run-id>/` without creating a project `.agents` directory.
 Your client uses its configured model; the exact calls and responses can vary.
 
 ## Reproducible reports

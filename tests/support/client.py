@@ -76,6 +76,7 @@ class McpClient:
         pass_fds: tuple[int, ...] = (),
         response_timeout: float = 600,
         shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS,
+        record_in_project: bool = True,
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
@@ -85,6 +86,9 @@ class McpClient:
         if current_directory is None:
             assert self.temporary_directory is not None
             current_directory = Path(self.temporary_directory.name)
+        if record_in_project:
+            # Existing transcript cases keep their project-local recording fixture.
+            (current_directory / ".agents/console").mkdir(parents=True, exist_ok=True)
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,

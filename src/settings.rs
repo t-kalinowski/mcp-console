@@ -1,6 +1,7 @@
 //! Trusted application settings, captured before starting a session or workload.
 
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -88,21 +89,33 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
-    pub source: Option<&'static str>,
+    pub source: Option<String>,
     pub policy: SandboxSettings,
     pub target: Option<Target>,
     pub provider: Provider,
 }
 
 pub fn discover(overrides: &[String]) -> Result<Captured, String> {
-    let name = ".agents/console/config.yaml";
-    let Some(value) = crate::config::load(name, overrides)? else {
+    let project = Path::new(".agents/console/config.yaml");
+    let path = match std::fs::symlink_metadata(project) {
+        Ok(_) => PathBuf::from(project),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            crate::console_paths::home_console_directory()?.join("config.yaml")
+        }
+        Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
+    };
+    let Some(value) = crate::config::load(&path, overrides)? else {
         return Ok(Captured::default());
     };
     let name = if overrides.is_empty() {
-        name
+        path.to_string_lossy().into_owned()
     } else {
-        "configuration with CLI overrides"
+        "configuration with CLI overrides".into()
     };
     let has_extends = value.get("extends").is_some();
     let mut project: Project =

@@ -544,9 +544,10 @@ A partial file is explicitly identified as a prefix; omitted text outside that p
 Some bytes missing from the file may still appear in the preview, so these raw loss counts are not counts of inline omissions.
 Startup, idle, and other sources without an active cell log report that their omitted text is unavailable, without borrowing a later cell's path.
 
-Advertised `.agents/console/sessions/...` paths are relative to the **Console server's recording workspace**.
-For SSH, Docker, and Docker Sandbox, this is the controller's workspace.
-Full retained text requires a filesystem tool with access to that directory; a tool that can read only the worker filesystem or another client host is insufficient.
+Advertised `.agents/console/sessions/...` paths are relative to the **Console server's launch directory**.
+When that directory lacks `.agents/console`, the advertised path is absolute under the server's home directory.
+For SSH, Docker, and Docker Sandbox, both locations are on the controller.
+Full retained text requires a filesystem tool with access to the selected recording location; a tool that can read only the worker filesystem or another client host is insufficient.
 Console does not discover file tools or provide a read/search interface in this version.
 Clients without appropriate filesystem access still receive bounded previews and final diagnostics.
 When repeated cancelled deliveries combine output from many cells, fully omitted intervals share one summary so their notices also fit the text budget.

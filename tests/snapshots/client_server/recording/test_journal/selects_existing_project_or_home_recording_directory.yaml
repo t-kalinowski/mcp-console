@@ -1,0 +1,9 @@
+---
+case: home
+recording_root: home
+---
+case: project
+recording_root: project
+---
+case: project path is a file
+recording_root: home

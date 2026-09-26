@@ -208,6 +208,64 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     return [{"overrides": list(overrides), "initialized": True}]
 
 
+def test_discovers_home_configuration_with_project_precedence(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        workspace = root / "project"
+        home.mkdir()
+        workspace.mkdir()
+        environment = {**os.environ, "HOME": str(home)}
+        configure(home, {"unknown": "home"})
+
+        def launch_error() -> str:
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox"],
+                cwd=workspace,
+                env=environment,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            return result.stderr
+
+        assert str(home / CONFIG) in launch_error()
+
+        configure(workspace, {})
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+        configure(workspace, {"unknown": "project"})
+        error = launch_error()
+        assert CONFIG in error and str(home / CONFIG) not in error, error
+
+        (workspace / CONFIG).unlink()
+        assert str(home / CONFIG) in launch_error()
+        configure(home, {})
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+    return [{"home_fallback": True, "project_precedence": True}]
+
+
 def test_rejects_malformed_overrides(binary: Path) -> Transcript:
     cases = (
         "sandbox",

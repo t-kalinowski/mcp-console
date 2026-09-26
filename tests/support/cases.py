@@ -110,6 +110,8 @@ def run_case_subprocess(
         tempfile.TemporaryFile() as stdout,
         tempfile.TemporaryFile() as stderr,
     ):
+        home = Path(directory) / "home"
+        home.mkdir()
         result = Path(directory) / "result.pickle"
         started_at = time.monotonic()
         ownership_reader, ownership_writer = os.pipe()
@@ -133,6 +135,7 @@ def run_case_subprocess(
                 pass_fds=(ownership_reader,),
                 env={
                     **os.environ,
+                    "HOME": str(home),
                     "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started_at + timeout),
                 },
             )
