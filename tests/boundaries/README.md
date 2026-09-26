@@ -2,11 +2,13 @@
 
 For embedded programs, execution modes, and lifecycle receipts, start with the [authoring recipe](AUTHORING.md).
 
-`scripts/test --quick` runs ordinary cases while skipping `@requires(EXTENDED)` stress cases and real external SSH, Docker, and SBX integrations, even when their fixtures are configured.
-It retains direct and sandbox execution, localhost SSH, and fake-provider cases.
-Plain `scripts/test` includes all capability-applicable cases; CI uses this full profile.
-Use `scripts/test --quick --list` to inspect the quick selection.
-Mark only deliberate extended stress workloads with `EXTENDED` from `tests/support/requirements.py`; do not hide ordinary slow or failing regressions behind that requirement.
+`scripts/test` and its `--quick` alias run the explicit smoke selection in [`_profiles.py`](_profiles.py), using existing cases, execution modes, and snapshots.
+The selection uses exact case names so new cases do not silently expand the local gate.
+`scripts/test --full` includes all capability-applicable cases; CI explicitly uses this full profile.
+Explicit selectors retain their scope with any profile flag.
+Use `scripts/test --list` to inspect the smoke selection or `scripts/test --full --list` to discover all cases.
+Only full runs audit orphan snapshots globally; use `scripts/test --full --update` for a complete snapshot update and orphan cleanup.
+Smoke and focused updates preserve unselected snapshots.
 The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
 
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
@@ -246,10 +248,10 @@ This output belongs only to the test-runner user interface; it is not captured t
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
 `--locate SELECTOR` does not run cases.
 It prints every matching case, its source file and definition line, and its mechanically derived primary snapshot path.
-Collection fails before listing, locating, or running cases when a snapshot has no matching suite and case.
+With `--full`, collection fails before listing, locating, or running cases when a snapshot has no matching suite and case.
 Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
-A full `scripts/test --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
+`scripts/test --full --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
 Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
 
 ## Requirements and execution modes

@@ -1,14 +1,31 @@
 # Development workflow
 
 Run development commands from the repository root.
-Use `scripts/test SELECTOR` for the red/green loop and `scripts/check --quick` for broader local feedback.
-The quick gate stages the companion, runs core checks, and runs ordinary transcript cases in all applicable execution modes.
-It skips installation checks, the three extended recovery allocation stress cases, and real external SSH, Docker, and SBX integrations.
-Localhost SSH and fake-provider coverage remain included.
-Use `scripts/test --quick --list` to inspect the cases available to the quick transcript profile.
-Omitted cases are reported as skips; a quick pass does not establish full validation.
-`scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
-Installation checks run last because they replace and hide the shared `target` directory.
+Use `scripts/test SELECTOR` for the red/green loop and `scripts/check` as the ordinary final local gate.
+Fast validation is the default; `--quick` remains an alias for it.
+Use `scripts/check --full` only when explicitly requested or when the changed area warrants exhaustive local validation, such as release preparation or changes spanning runtime, lifecycle, and packaging boundaries.
+CI explicitly runs full core checks, all capability-applicable transcripts, and installation checks as the comprehensive merge gate.
+Report the commands and scope actually validated; a default pass is not exhaustive validation.
+
+| Command                                    | Scope                                                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `scripts/check` or `scripts/check --quick` | Companion staging, focused core checks, release build, and the smoke transcript profile             |
+| `scripts/check --full`                     | Companion staging, full core checks, all capability-applicable transcripts, and installation checks |
+| `scripts/test` or `scripts/test --quick`   | The explicit smoke selection in [`tests/boundaries/_profiles.py`](../tests/boundaries/_profiles.py) |
+| `scripts/test --full`                      | All capability-applicable transcript cases and execution modes                                      |
+| `scripts/test SELECTOR`                    | The requested case or suite in its declared execution modes, including with `--quick` or `--full`   |
+
+The smoke profile selects existing cases and snapshots by exact case name.
+It covers MCP and CLI admission, real R/Python/SQL execution, persistent and mixed runtime state, interactive input, interruption, recording with an image, and native sandbox policy.
+It omits remote providers, installation, stress, and broad environment matrices by selection, without changing their assertions or capability requirements.
+Use `scripts/test --list` to inspect the smoke selection and `scripts/test --full --list` to discover the whole suite.
+Only `--full` audits orphan snapshots globally; `scripts/test --full --update` can remove them after a successful complete update.
+Smoke and focused updates preserve unselected snapshots.
+
+Default core checks validate extracted runtime sources, architecture, Rust formatting, Clippy, and Rust tests.
+`scripts/check-core --full` additionally runs release, staging, transcript-runner, workflow, formatter, development-tool, test-client, and architecture-checker self-tests; `scripts/check-core` and its `--quick` alias run the default core selection.
+When changing repository tooling, run its owning test directly, for example `tests/transcript_runner.py`, `python3 tests/workflow.py`, or `python3 tests/staging.py`.
+Installation checks remain last in the full gate because they replace and hide the shared `target` directory.
 
 ## Resume from a small checkpoint
 
@@ -95,7 +112,7 @@ Each Console checkout keeps its own application Cargo output and wheel staging a
 
 ## Find the public test
 
-Use `scripts/test --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.
+Use `scripts/test --full --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.
 These routes are starting points; read the relevant contract and case before changing behavior.
 
 | Task                   | Owning source                                              | Public check                                      | Selected snapshot update                                                                                    |
@@ -152,7 +169,7 @@ For a stack, measure each layer against its intended parent rather than accumula
    For an internal refactor, establish the existing public suite's baseline.
 2. Implement the change and rerun the focused case or suite until it passes.
    Failures print an exact rerun command; completion records retain the selector and full log.
-   Full-update reruns retain nondefault concurrency; every rerun retains the quick profile and a nondefault timeout.
+   Full-update reruns retain nondefault concurrency; every rerun retains an explicit profile flag and a nondefault timeout.
    A failed full snapshot update retains full-update scope so orphan cleanup remains available; other failures narrow the rerun to the failed case.
 3. Regenerate only the snapshots affected by an intentional behavior change with `scripts/test --update SELECTOR`, then rerun that selection without `--update`.
    A broader interface change may require a full update; inspect every resulting difference.
@@ -160,23 +177,24 @@ For a stack, measure each layer against its intended parent rather than accumula
 4. Run `scripts/format`, inspect every formatter's result, and review `git diff` and `git diff --check`.
    Check embedded program indentation after formatting.
    `scripts/format --strict` reports failure after attempting every formatter; the [authoring recipe](../tests/boundaries/AUTHORING.md) explains embedded program conventions.
-   Use `scripts/check --quick` while iterating; run the full gate when the change is ready instead of repeating packaging and extended stress checks after each edit.
-5. Run `scripts/check` before opening the PR.
-   Keep its completion record with the tested revision and log paths.
-   Use a failed phase's focused command for diagnosis; repeat the full gate when changes or unresolved failures require it.
+5. Run `scripts/check` as the ordinary final local gate, plus the owning focused tests for changed tooling.
+   Use `scripts/check --full` only when explicitly requested or when the changed area warrants exhaustive local validation.
+   Keep completion records with the tested revision and log paths, and report exactly which validation ran.
+   Use a failed phase's focused command for diagnosis; repeat checks when changes or unresolved failures require them.
+   CI supplies comprehensive validation before merge; opening a PR does not require a full local gate.
 
 ## Which commands mutate build state?
 
-| Command                                     | State it can change                                                                   |
-| ------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `scripts/test --help`, `--list`, `--locate` | No compilation or bundle changes; uv may prepare the script environment               |
-| `scripts/stage-sandbox-runner`              | Shared companion source/build cache, checkout-local staged manifest, and `wheel-data` |
-| `scripts/check-core`                        | Cargo debug build data and test fixture state                                         |
-| `scripts/test SELECTOR`                     | Cargo release build data and test fixture state                                       |
-| `scripts/test --update SELECTOR`            | The preceding state plus selected snapshots                                           |
-| `scripts/format`                            | Source and documentation formatting, including snapshot formatting                    |
-| `scripts/check`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`              |
-| `uv run` or source installation             | May build the local package and change its environment and bundle                     |
+| Command                                            | State it can change                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `scripts/test --help`, `--list`, `--locate`        | No compilation or bundle changes; uv may prepare the script environment               |
+| `scripts/stage-sandbox-runner`                     | Shared companion source/build cache, checkout-local staged manifest, and `wheel-data` |
+| `scripts/check-core`                               | Cargo debug build data and test fixture state                                         |
+| `scripts/check`, `scripts/test SELECTOR`           | Cargo debug/release build data and test fixture state                                 |
+| `scripts/test --update SELECTOR`                   | The preceding state plus selected snapshots                                           |
+| `scripts/format`                                   | Source and documentation formatting, including snapshot formatting                    |
+| `scripts/check --full`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`              |
+| `uv run` or source installation                    | May build the local package and change its environment and bundle                     |
 
 ## Checkout ownership
 
@@ -220,7 +238,7 @@ The same cooperative owner-lifetime limits apply to source ownership.
 `scripts/test --help`, `--list`, and `--locate` run before ownership or compilation; invalid test arguments also fail before building.
 Help and syntax-only validation use Python's standard library before invoking `uv`.
 Listing, location lookup, and semantic selector validation may prepare the script's dependency environment.
-Full checks and transcript runs share a host budget of one active owner by default.
+Aggregate checks and transcript runs share a host budget of one active owner by default.
 Set `MCP_CONSOLE_CHECK_SLOTS` to a positive integer to select another budget, using the same setting for concurrent callers.
 When every slot is occupied, the command exits with `full-check budget is busy` before running a phase.
 Nested commands reuse their parent's slot.

@@ -227,6 +227,15 @@ class TranscriptRunnerTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(RUNNER, self.boundaries / "_run.py")
+        (self.boundaries / "_profiles.py").write_text(
+            # fmt: python
+            code("""
+                SMOKE = (
+                    "client_server/server/test_tools::initializes_and_lists_tools",
+                    "client_server/server/test_tools::selected",
+                )
+                """)
+        )
         for name in (
             "__init__.py",
             "cases.py",
@@ -336,9 +345,9 @@ class TranscriptRunnerTests(unittest.TestCase):
             PUBLIC_SUITE
             # fmt: python
             + code("""
-                from support.requirements import EXTENDED, requires
+                from support.requirements import Requirement, requires
 
-                test_selected = requires(EXTENDED)(test_selected)
+                test_selected = requires(Requirement("fixture", False, "unavailable"))(test_selected)
                 """),
         )
         result = subprocess.run(
@@ -371,6 +380,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         suite = "client_server/server/test_tools"
         for arguments, status, expected in (
             (("--help",), 0, "usage: scripts/test"),
+            (("--quick", "--full"), 2, "not allowed with argument"),
             (("--list",), 0, f"{suite}::selected"),
             (("--locate", f"{suite}::selected"), 0, "source: tests/boundaries/"),
             (("--execution", "direct"), 2, "execution modes"),
@@ -730,10 +740,10 @@ exit 97
                 """),
             encoding="utf-8",
         )
-        listed = self.run_runner("--list")
+        listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertIn("::unselected", listed.stdout)
-        result = self.run_runner("--jobs", "1")
+        result = self.run_runner("--full", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
         self.assertFalse((self.root / "unselected.marker").exists())
@@ -749,37 +759,112 @@ exit 97
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
 
-    def test_quick_profile_skips_stress_and_disables_external_providers(self) -> None:
+    def test_script_profiles_and_explicit_selectors(self) -> None:
+        environment = self.prepare_script()
+        environment.update(
+            {
+                "MCP_CONSOLE_TEST_DOCKER_IMAGE": "fixture-image",
+                "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture-template",
+            }
+        )
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
             + code("""
                 import os
-                from support.requirements import EXTENDED, requires
 
-                test_unselected = requires(EXTENDED)(test_unselected)
-                if os.environ.get("MCP_CONSOLE_TEST_QUICK") == "1":
-                    for variable in (
-                        "MCP_CONSOLE_TEST_DOCKER_IMAGE",
-                        "MCP_CONSOLE_TEST_SBX_TEMPLATE",
-                    ):
-                        assert os.environ[variable] == "", variable
+                assert os.environ["MCP_CONSOLE_TEST_DOCKER_IMAGE"] == "fixture-image"
+                assert os.environ["MCP_CONSOLE_TEST_SBX_TEMPLATE"] == "fixture-template"
                 """),
         )
-        result = self.run_runner("--quick")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "selected.marker").exists())
-        self.assertFalse((self.root / "unselected.marker").exists())
-        self.assertIn("::unselected: skipped; extended stress coverage", result.stdout)
-        listed = self.run_runner("--quick", "--list")
-        self.assertEqual(listed.returncode, 0, listed.stderr)
-        self.assertIn("::selected", listed.stdout)
-        self.assertNotIn("::unselected", listed.stdout)
-        result = self.run_runner()
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "unselected.marker").exists())
+        for profile in ((), ("--quick",), ("--full",)):
+            for selectors in (
+                (),
+                ("client_server/server/test_tools::unselected",),
+                ("client_server/server/test_tools",),
+            ):
+                with self.subTest(profile=profile, selectors=selectors):
+                    expected = (
+                        {"unselected"}
+                        if selectors and "::" in selectors[0]
+                        else {"initialization", "selected", "unselected"}
+                        if selectors or profile == ("--full",)
+                        else {"initialization", "selected"}
+                    )
+                    for marker in self.root.glob("*.marker"):
+                        marker.unlink()
+                    for listing in (True, False):
+                        result = subprocess.run(
+                            [
+                                "scripts/test",
+                                *profile,
+                                *(["--list"] if listing else []),
+                                *selectors,
+                            ],
+                            cwd=self.root,
+                            env=environment,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        if listing:
+                            names = {
+                                line.split("::")[1]
+                                for line in result.stdout.splitlines()
+                            }
+                            self.assertEqual(
+                                names,
+                                {
+                                    "initializes_and_lists_tools"
+                                    if name == "initialization"
+                                    else name
+                                    for name in expected
+                                },
+                            )
+                    self.assertEqual(
+                        {p.stem for p in self.root.glob("*.marker")}, expected
+                    )
 
-    def test_quick_profile_skips_external_ssh_without_changing_host_selection(
+    def test_smoke_and_focused_runs_do_not_import_unselected_suites(self) -> None:
+        other = self.suite.with_name("test_expensive.py")
+        other.write_text('raise RuntimeError("unselected suite imported")')
+        other_snapshots = self.snapshots.with_name("test_expensive")
+        other_snapshots.mkdir()
+        (other_snapshots / "example.yaml").write_text("""---
+runner: example
+...
+""")
+        for arguments in (
+            (),
+            ("--quick",),
+            ("client_server/server/test_tools::selected",),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        full = self.run_runner("--full")
+        self.assertNotEqual(full.returncode, 0)
+        self.assertIn("unselected suite imported", full.stderr)
+
+    def test_smoke_update_preserves_unselected_and_orphan_snapshots(self) -> None:
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        unselected = self.snapshots / "unselected.yaml"
+        original = unselected.read_bytes()
+        for profile in ((), ("--quick",)):
+            result = self.run_runner(*profile, "--update")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(orphan.exists())
+            self.assertEqual(unselected.read_bytes(), original)
+        full = self.run_runner("--full", "--update")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertFalse(orphan.exists())
+
+    def test_explicit_profiles_preserve_external_ssh_host_selection(
         self,
     ) -> None:
         shutil.copy2(
@@ -828,12 +913,12 @@ exit 97
                     "MCP_CONSOLE_TEST_SSH_EXTERNAL": external,
                     "FIXTURE_SSH_EXTERNAL": external,
                 }
-                for quick in (True, False):
+                for profile in ([], ["--quick"], ["--full"]):
                     result = subprocess.run(
                         [
                             sys.executable,
                             self.boundaries / "_run.py",
-                            *(["--quick"] if quick else []),
+                            *profile,
                             "client_server/server/test_tools::selected",
                         ],
                         cwd=self.root,
@@ -843,32 +928,24 @@ exit 97
                         timeout=10,
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
-                    if quick:
-                        self.assertFalse(probes.exists())
-                        self.assertFalse((self.root / "selected.marker").exists())
-                        self.assertIn(
-                            "external SSH target: omitted by --quick",
-                            result.stdout,
-                        )
-                    else:
-                        self.assertTrue((self.root / "selected.marker").exists())
-                        expected = [
-                            "-T",
-                            "-a",
-                            "-o",
-                            "BatchMode=yes",
-                            "-o",
-                            "ConnectTimeout=3",
-                            *(["-F", "fixture-ssh-config"] if external else []),
-                            "--",
-                            "configured-host" if external else "fixture-host",
-                            "true",
-                        ]
-                        self.assertTrue(probes.read_text())
-                        for line in probes.read_text().splitlines():
-                            self.assertEqual(json.loads(line), expected)
-                        probes.unlink()
-                        (self.root / "selected.marker").unlink()
+                    self.assertTrue((self.root / "selected.marker").exists())
+                    expected = [
+                        "-T",
+                        "-a",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=3",
+                        *(["-F", "fixture-ssh-config"] if external else []),
+                        "--",
+                        "configured-host" if external else "fixture-host",
+                        "true",
+                    ]
+                    self.assertTrue(probes.read_text())
+                    for line in probes.read_text().splitlines():
+                        self.assertEqual(json.loads(line), expected)
+                    probes.unlink()
+                    (self.root / "selected.marker").unlink()
 
     def test_records_timings_for_each_execution_and_snapshot_failure(self) -> None:
         self.suite.write_text(
@@ -984,7 +1061,7 @@ runner: different
         stale = self.snapshots / "selected.md"
         stale.write_text("obsolete companion", encoding="utf-8")
         before = (self.snapshots / "unselected.yaml").read_bytes()
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.snapshots / "unselected.yaml").read_bytes(), before)
         self.assertEqual(companion.read_text(), "retained companion")
@@ -1010,7 +1087,7 @@ runner: different
                 """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "first.marker").exists())
         self.assertTrue((self.root / "second.marker").exists())
@@ -1026,7 +1103,7 @@ runner: different
                 'return [{"runner": execution.name}]',
             )
         )
-        differing = self.run_runner("--update", "--jobs", "1")
+        differing = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("second", differing.stderr)
 
@@ -1052,7 +1129,7 @@ runner: different
                 """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         snapshot = (self.snapshots / "selected.yaml").read_text()
         self.assertEqual(snapshot.count("!same-as"), 2, snapshot)
@@ -1097,7 +1174,7 @@ runner: different
                 """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         for reference in self.snapshots.glob("initializes_and_lists_tools*.yaml"):
             self.assertNotIn("id:", reference.read_text())
@@ -1111,7 +1188,7 @@ runner: different
         self.suite.write_text(
             self.suite.read_text().replace("else direct", "else sandbox")
         )
-        differing = self.run_runner("--jobs", "1")
+        differing = self.run_runner("--full", "--jobs", "1")
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
@@ -1172,7 +1249,7 @@ runner: different
                 """)
         )
         self.suite.write_text(source.replace("AVAILABLE", "True"))
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         references = {
             path: path.read_bytes()
@@ -1592,7 +1669,7 @@ warnings: []
             f"{suite}::unselected",
         ]
 
-        listed = self.run_runner("--list")
+        listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertEqual(listed.stdout.splitlines(), cases)
 
@@ -1649,7 +1726,7 @@ runner: orphan
             encoding="utf-8",
         )
 
-        rejected = self.run_runner("--list")
+        rejected = self.run_runner("--full", "--list")
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn(
             "orphan snapshot: "
@@ -1657,10 +1734,11 @@ runner: orphan
             rejected.stderr,
         )
         self.assertIn(
-            "run scripts/test --update to remove orphan snapshots", rejected.stderr
+            "run scripts/test --full --update to remove orphan snapshots",
+            rejected.stderr,
         )
 
-        updated = self.run_runner("--update", "--jobs", "2")
+        updated = self.run_runner("--full", "--update", "--jobs", "2")
         self.assertEqual(updated.returncode, 0, updated.stderr)
         self.assertFalse(orphan.exists())
         self.assertIn(
@@ -1681,7 +1759,7 @@ runner: orphan
 runner: mismatch
 ...
 """)
-        for profile in ([], ["--quick"]):
+        for profile in ([], ["--quick"], ["--full"]):
             with self.subTest(profile=profile):
                 arguments = [
                     *profile,
@@ -1727,23 +1805,17 @@ runner: mismatch
 runner: orphan
 ...
 """)
-        for profile in ([], ["--quick"]):
-            with self.subTest(profile=profile):
-                arguments = [*profile, "--update", "--jobs", "1"]
-                result = self.run_runner(*arguments)
-                self.assertNotEqual(result.returncode, 0)
-                receipt = next(
-                    line
-                    for line in result.stderr.splitlines()
-                    if line.startswith("rerun: ")
-                )
-                self.assertEqual(
-                    receipt, f"rerun: scripts/test {shlex.join(arguments)}"
-                )
-                self.assertTrue(orphan.exists())
-                retried = self.run_runner(*shlex.split(receipt)[2:])
-                self.assertIn("fixture failed before snapshot update", retried.stderr)
-                self.assertNotIn("orphan snapshot:", retried.stderr)
+        arguments = ["--full", "--update", "--jobs", "1"]
+        result = self.run_runner(*arguments)
+        self.assertNotEqual(result.returncode, 0)
+        receipt = next(
+            line for line in result.stderr.splitlines() if line.startswith("rerun: ")
+        )
+        self.assertEqual(receipt, f"rerun: scripts/test {shlex.join(arguments)}")
+        self.assertTrue(orphan.exists())
+        retried = self.run_runner(*shlex.split(receipt)[2:])
+        self.assertIn("fixture failed before snapshot update", retried.stderr)
+        self.assertNotIn("orphan snapshot:", retried.stderr)
 
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
@@ -1760,7 +1832,7 @@ runner: orphan
         started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
         release_first = os.open(self.root / "release-first", os.O_RDWR)
         release_second = os.open(self.root / "release-second", os.O_RDWR)
-        process = self.start_runner("--jobs", "2")
+        process = self.start_runner("--full", "--jobs", "2")
         try:
             acknowledgements = b""
             while len(acknowledgements) < 2:
@@ -1775,7 +1847,7 @@ runner: orphan
                 receipt,
                 [
                     "client_server/server/test_tools::first_failure: failed",
-                    "rerun: scripts/test client_server/server/test_tools::first_failure",
+                    "rerun: scripts/test --full client_server/server/test_tools::first_failure",
                 ],
             )
             observed_stderr = "\n".join(receipt) + "\n"
@@ -1801,7 +1873,7 @@ runner: orphan
         self.assertIn("client_server/server/test_tools::second_failure: failed", stderr)
         for name in ("first_failure", "second_failure"):
             self.assertIn(
-                f"rerun: scripts/test client_server/server/test_tools::{name}",
+                f"rerun: scripts/test --full client_server/server/test_tools::{name}",
                 stderr,
             )
         self.assertIn("runner: first actual", stderr)

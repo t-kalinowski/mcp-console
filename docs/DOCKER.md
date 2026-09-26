@@ -238,7 +238,7 @@ Cancellation of a running build is covered through the legacy builder's observab
 docker build -f examples/docker/Dockerfile -t mcp-console-test:analysis .
 export MCP_CONSOLE_TEST_DOCKER_IMAGE=mcp-console-test:analysis
 scripts/test cli/test_docker client_server/server/test_docker client_server/server/test_docker_setup client_server/server/test_docker_lifecycle client_server/server/test_docker_sandbox
-scripts/check
+scripts/check --full
 ```
 
 Deferred capabilities include SSH plus Docker, ordinary Docker compute enforcement, Podman guarantees, Windows containers or controllers, inline Dockerfiles, GPU/device/resource controls, arbitrary Docker flags, managed package preparation, synchronization, reconnect/resume, and reusable user containers.
