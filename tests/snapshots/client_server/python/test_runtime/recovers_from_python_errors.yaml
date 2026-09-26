@@ -16,7 +16,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 468, in _mcp_console_eval_cell
+          File "<string>", line 474, in _mcp_console_eval_cell
           File "<mcp-console:python:e1>", line 8, in <module>
           File "<mcp-console:python:e1>", line 5, in fail
         ValueError: boom
@@ -29,9 +29,7 @@ send:
 result:
   content:
     - type: text
-      text: |
-        Traceback (most recent call last):
-          File "<string>", line 460, in _mcp_console_eval_cell
+      text: |2
           File "<mcp-console:python:e2>", line 2
         SyntaxError: 'await' outside function
   isError: false
@@ -51,8 +49,6 @@ result:
   content:
     - type: text
       text: |
-        Traceback (most recent call last):
-          File "<string>", line 455, in _mcp_console_eval_cell
         SyntaxError: source code string cannot contain null bytes
   isError: false
 ---

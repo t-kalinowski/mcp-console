@@ -438,7 +438,7 @@ def _mcp_console_eval_cell(
     source,
     filename,
     _main=_main,
-    _ast_flags=_ast.PyCF_ONLY_AST,
+    _parse=_ast.parse,
     _Expr=_ast.Expr,
     _Expression=_ast.Expression,
     _isinstance=_builtins.isinstance,
@@ -446,13 +446,14 @@ def _mcp_console_eval_cell(
     _exec=_builtins.exec,
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
+    _SyntaxError=_builtins.SyntaxError,
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _sys=_sys,
     _print_exc=_traceback.print_exc,
 ):
     try:
-        module = _compile(source, filename, "exec", _ast_flags)
+        module = _parse(source, filename=filename, mode="exec")
         final = module.body[-1] if module.body else None
         if _isinstance(final, _Expr):
             module.body.pop()
@@ -461,13 +462,18 @@ def _mcp_console_eval_cell(
         else:
             statements = _compile(module, filename, "exec")
             expression = None
-
-        if statements is not None:
-            _exec(statements, _main.__dict__)
-        if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
+    except _SyntaxError:
+        _print_exc(limit=0)
     except _BaseException:
         _print_exc()
+    else:
+        try:
+            if statements is not None:
+                _exec(statements, _main.__dict__)
+            if expression is not None:
+                _sys.displayhook(_eval(expression, _main.__dict__))
+        except _BaseException:
+            _print_exc()
     try:
         for image in _collect_plots():
             _publish_plot(image)
