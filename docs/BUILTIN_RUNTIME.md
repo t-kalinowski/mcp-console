@@ -259,7 +259,7 @@ The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in 
 R can read Python globals through `py$name` and use the R-owned SQL connection through DBI or dplyr.
 `sql_connection()` returns that R-owned connection; it does not proxy a Python connection into R.
 In R, `console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
-In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` requests restoration of managed DuckDB for the next SQL cell.
+In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` restores managed DuckDB for subsequent SQL cells and R `sql_connection()` calls.
 The latest selection controls later SQL cells: selecting from R clears the Python provider, while selecting from Python leaves the R-owned connection available through `sql_connection()` without routing SQL cells to it.
 Do not disconnect the managed DuckDB connection.
 Restore it before disconnecting a custom connection that is still selected.
@@ -392,7 +392,7 @@ console_sql_connection(connection)
 The Python runtime retains the exact connection object.
 If it implements `execute()`, SQL cells execute directly on it so connection-local state is preserved; otherwise the adapter executes through `connection.cursor()`.
 The adapter reads result metadata and bounded rows through the returned cursor protocol, without converting the connection or its result rows through reticulate.
-`console_sql_connection(None)` restores managed DuckDB when the next SQL cell is dispatched.
+`console_sql_connection(None)` restores managed DuckDB for the next SQL cell or R `sql_connection()` call, whichever comes first.
 
 The R provider submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
 Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
