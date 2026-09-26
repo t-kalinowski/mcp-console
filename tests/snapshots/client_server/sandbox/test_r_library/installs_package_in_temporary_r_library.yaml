@@ -22,7 +22,6 @@ send:
       identical(dirname(find.package("mcpconsolelocalpkg")), library),
       identical(mcpconsolelocalpkg::answer(), 42L)
     )
-    cat("installed in sandbox library\n")
 result:
   content:
     - type: text
@@ -41,7 +40,6 @@ result:
         ** testing if installed package can be loaded from final location
         ** testing if installed package keeps a record of temporary installation path
         * DONE (mcpconsolelocalpkg)
-        installed in sandbox library
   isError: false
 ---
 send:

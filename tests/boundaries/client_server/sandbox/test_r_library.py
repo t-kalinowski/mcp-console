@@ -84,18 +84,31 @@ Encoding: UTF-8
                       identical(dirname(find.package("mcpconsolelocalpkg")), library),
                       identical(mcpconsolelocalpkg::answer(), 42L)
                     )
-                    cat("installed in sandbox library\n")
                     """)
             )
-            output = last_tool_text(client)
-            assert output.endswith("installed in sandbox library\n"), output
-            match = re.match(r"Installing package into .(/[^\n]+).\n", output)
-            assert match is not None, output
-            client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-                match.group(1), "<sandbox R library>"
-            )
+            install_output = last_tool_text(client)
             client.send(control="restart")
-            assert last_tool_text(client).endswith("[starting new worker]\n[idle]")
+            restart_output = last_tool_text(client)
+            restart_notices = (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            )
+            assert restart_output.endswith(restart_notices), restart_output
+
+            # Restart collects installer bytes that missed the evaluation cut.
+            output = install_output + restart_output.removesuffix(restart_notices)
+            notice = re.search(
+                r"Installing package into .(/[^\n]+).\n\(as .lib. is unspecified\)\n",
+                output,
+            )
+            assert notice is not None, output
+            installer = output[: notice.start()] + output[notice.end() :]
+            assert installer.endswith("* DONE (mcpconsolelocalpkg)\n"), installer
+            # The R notice uses sideband; installer status uses inherited streams.
+            client.transcript[-2]["result"]["content"][0]["text"] = (
+                notice.group(0).replace(notice.group(1), "<sandbox R library>")
+                + installer
+            )
+            client.transcript[-1]["result"]["content"][0]["text"] = restart_notices
             client.send(
                 # fmt: r
                 r=code(r"""
