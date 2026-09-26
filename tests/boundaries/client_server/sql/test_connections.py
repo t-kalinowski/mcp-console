@@ -167,6 +167,75 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_python_restores_managed_connection_before_r_reads_it(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, execution.serve(), environment)
+    client.initialize_and_list_tools()
+
+    client.send(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        lite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+        console_sql_connection(lite)
+        invisible()
+        """)
+    client.send(r=r, requirements={"r": ["RSQLite"]})
+    assert last_tool_text(client) == "[done]"
+
+    client.send(python="console_sql_connection(None)")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        restored <- sql_connection()
+        DBI::dbDisconnect(lite)
+        cat(
+          c("managed: ", inherits(restored, "duckdb_connection"), "\n"),
+          c(
+            "value: ",
+            DBI::dbGetQuery(sql_connection(), "SELECT value FROM managed_values")$value,
+            "\n"
+          ),
+          sep = ""
+        )
+        """)
+    client.send(r=r)
+    output = last_tool_text(client)
+    assert output == "managed: TRUE\nvalue: 42\n", output
+
+    client.send(sql="SELECT value FROM managed_values")
+    assert "42" in last_tool_text(client)
+
+    # Python can call R again before its own cell finishes.
+    # fmt: r
+    r = code(r"""
+        another <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+        console_sql_connection(another)
+        managed_in_r <- function() inherits(sql_connection(), "duckdb_connection")
+        invisible()
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: python
+    python = code("""
+        console_sql_connection(None)
+        assert r.managed_in_r()
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    client.send(r="DBI::dbDisconnect(another); invisible()")
+    assert last_tool_text(client) == "[done]"
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
     execution: Execution,

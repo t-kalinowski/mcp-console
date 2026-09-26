@@ -1,0 +1,95 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  sql: CREATE TABLE managed_values AS SELECT 42 AS value
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    lite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+    console_sql_connection(lite)
+    invisible()
+  requirements:
+    r:
+      - RSQLite
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: console_sql_connection(None)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    restored <- sql_connection()
+    DBI::dbDisconnect(lite)
+    cat(
+      c("managed: ", inherits(restored, "duckdb_connection"), "\n"),
+      c(
+        "value: ",
+        DBI::dbGetQuery(sql_connection(), "SELECT value FROM managed_values")$value,
+        "\n"
+      ),
+      sep = ""
+    )
+result:
+  content:
+    - type: text
+      text: |
+        managed: TRUE
+        value: 42
+  isError: false
+---
+send:
+  sql: SELECT value FROM managed_values
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+            value
+          <int32>
+        1      42
+  isError: false
+---
+send:
+  r: |
+    another <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+    console_sql_connection(another)
+    managed_in_r <- function() inherits(sql_connection(), "duckdb_connection")
+    invisible()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    console_sql_connection(None)
+    assert r.managed_in_r()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: DBI::dbDisconnect(another); invisible()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

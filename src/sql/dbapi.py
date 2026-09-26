@@ -256,3 +256,7 @@ def dispatch(source):
 
 
 _builtins.console_sql_connection = console_sql_connection
+
+
+def restore_managed_requested():
+    return _restore_managed
