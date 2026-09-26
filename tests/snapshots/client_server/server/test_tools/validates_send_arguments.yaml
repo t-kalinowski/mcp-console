@@ -2,8 +2,7 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
 ---
 send:
-  python: |
-    print("hello")
+  python: inspect controlled restart state
   wait_ms: 0
 result:
   content:
@@ -15,9 +14,9 @@ result:
   isError: true
 ---
 send:
-  r: "1"
-  python: "1"
-  sql: SELECT 1
+  r: inspect controlled restart state
+  python: inspect controlled restart state
+  sql: inspect controlled restart state
   control: restart
   requirements:
     r:
@@ -39,32 +38,11 @@ result:
   isError: true
 ---
 send:
-  requirements:
-    r:
-      - tidyverse
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-send:
-  stdin: ""
-  requirements:
-    r:
-      - tidyverse
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-send:
   stdin: |
     answer
   requirements:
     r:
-      - tidyverse
+      - praise
 result:
   content:
     - type: text
@@ -75,9 +53,11 @@ result:
 ---
 send:
   control: interrupt
+  stdin: |
+    must not queue
   requirements:
     r:
-      - tidyverse
+      - praise
 result:
   content:
     - type: text
@@ -85,20 +65,8 @@ result:
   isError: true
 ---
 send:
-  control: restart
-  requirements:
-    r:
-      - tidyverse
-result:
-  content:
-    - type: text
-      text: |-
-        [starting new worker]
-        [idle]
-  isError: false
----
-send:
-  r: stop('cell was run')
+  r: inspect controlled restart state
+  control: ~
   requirements: {}
 result:
   content:
@@ -109,7 +77,19 @@ result:
   isError: true
 ---
 send:
-  r: stop('cell was run')
+  r: inspect controlled restart state
+  control: restart
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
+  isError: true
+---
+send:
+  r: inspect controlled restart state
   requirements:
     r:
       - ""
@@ -120,7 +100,7 @@ result:
   isError: true
 ---
 send:
-  r: stop('cell was run')
+  r: inspect controlled restart state
   requirements:
     python:
       - example @ https://example.invalid/example.whl
@@ -134,7 +114,7 @@ result:
   isError: true
 ---
 send:
-  r: stop('cell was run')
+  r: inspect controlled restart state
   requirements:
     duckdb:
       - spatial FROM community
@@ -145,6 +125,160 @@ result:
         DuckDB extension names must start with a lowercase ASCII letter and
         contain only lowercase ASCII letters, digits, and underscores
   isError: true
+---
+send:
+  r: set controlled restart state
+result:
+  content:
+    - type: text
+      text: |
+        zod controlled state: old
+  isError: false
+---
+send:
+  python: inspect controlled restart state
+  wait_ms: 0
+result:
+  content:
+    - type: text
+      text: >-
+        failed to deserialize parameters: unknown field `wait_ms`, expected one
+        of `r`, `python`, `sql`, `control`, `requirements`, `stdin`,
+        `timeout_ms`
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+  python: inspect controlled restart state
+  sql: inspect controlled restart state
+  control: restart
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: only one of `r`, `python`, or `sql` may be supplied
+  isError: true
+---
+send:
+  control: prepare
+result:
+  content:
+    - type: text
+      text: >-
+        failed to deserialize parameters: unknown variant `prepare`, expected
+        `interrupt` or `restart`
+  isError: true
+---
+send:
+  stdin: |
+    answer
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: >-
+        requirements-only `send` performs standalone preparation and cannot also
+        queue stdin
+  isError: true
+---
+send:
+  control: interrupt
+  stdin: |
+    must not queue
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: '`requirements` with `control = "interrupt"` requires a code cell'
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+  control: ~
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+  control: restart
+  requirements: {}
+result:
+  content:
+    - type: text
+      text: >-
+        at least one of `requirements.r`, `requirements.python`, or
+        `requirements.duckdb` is required
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+  requirements:
+    r:
+      - ""
+result:
+  content:
+    - type: text
+      text: R requirement strings must not be empty
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+  requirements:
+    python:
+      - example @ https://example.invalid/example.whl
+result:
+  content:
+    - type: text
+      text: >-
+        Python requirement `example @ https://example.invalid/example.whl` is
+        not accepted: host-side managed resolution accepts named package
+        requirements only
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+  requirements:
+    duckdb:
+      - spatial FROM community
+result:
+  content:
+    - type: text
+      text: >-
+        DuckDB extension names must start with a lowercase ASCII letter and
+        contain only lowercase ASCII letters, digits, and underscores
+  isError: true
+---
+send:
+  r: inspect controlled restart state
+result:
+  content:
+    - type: text
+      text: |
+        zod controlled state: old; evaluation=1
+  isError: false
+---
+send:
+  r: input without request
+  stdin: |
+    accepted
+result:
+  content:
+    - type: text
+      text: |
+        zod stdin: accepted
+  isError: false
 ---
 send:
   r: ~

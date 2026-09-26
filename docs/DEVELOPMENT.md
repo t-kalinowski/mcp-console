@@ -123,6 +123,31 @@ These routes are starting points; read the relevant contract and case before cha
 | Fixture serialization  | `tests/support/snapshots.py`, `tests/transcript_runner.py` | `tests/transcript_runner.py`                      | For handshake changes: `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools` |
 | Validation ownership   | `checkout_workflow.py`, `build_backend.py`                 | `python3 tests/workflow.py`                       | No transcript snapshots                                                                                     |
 
+For MCP admission changes, use the public server with a custom worker and resolver sentinels:
+
+```sh
+scripts/test \
+  client_server/server/test_tools::validates_send_arguments \
+  client_server/server/test_tools::validates_standalone_requirement_arguments \
+  client_server/server/test_tools::invalid_send_has_no_external_effects \
+  client_server/server/test_tools::bounds_argument_decoding_errors
+```
+
+These checks reject malformed requests before startup and with a live worker without preparing a package environment.
+Resolver capability discovery is distinct from dependency preparation.
+For preparation/lifecycle changes, also run the real-runtime sequence and the existing causal startup and custom-worker restart cases:
+
+```sh
+scripts/test \
+  client_server/requirements/test_r::prepares_with_empty_stdin_then_restarts \
+  client_server/requirements/test_custom_workers::standalone_preparation_before_worker_startup_is_causal_and_idempotent \
+  client_server/requirements/test_custom_workers::custom_worker_restart_prepares_r_and_duckdb_requirements
+```
+
+`prepares_with_empty_stdin_then_restarts` owns the successful preparation, repeated preparation with empty stdin, and preparation-plus-restart sequence formerly in `validates_send_arguments`.
+It uses small R packages, verifies their availability in the managed library, and checks live-state preservation and reset in direct and sandboxed execution.
+The smoke selection and its real R/Python/SQL, persistent-state, mixed-language recording, and native-sandbox executions remain unchanged.
+
 A case selector narrows a suite further, for example:
 
 ```sh
