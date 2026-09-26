@@ -218,7 +218,7 @@ Keep these invariants intact:
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
 - `src/worker.rs`, `src/worker/{coordinator,core,input,r_integration}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, interactive stdin buffering, and optional R event, graphics, and interrupt hooks.
 - `src/worker/interrupt.{rs,c}` — native signal distribution, blocking R-free waiting, managed-input wakeups, and Python acknowledgment through startup-supplied interrupt-state callbacks.
-- `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
+- `src/worker/embedded_r.rs`, `src/worker/embedded_r/parse.{rs,R}`, `src/r_repl.c` — R runtime, complete-cell parsing, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
