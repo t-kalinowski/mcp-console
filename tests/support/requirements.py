@@ -108,6 +108,16 @@ def command(name: str) -> Requirement:
     )
 
 
+def joblib_processes() -> Requirement:
+    from joblib import cpu_count
+
+    return Requirement(
+        "joblib process pool",
+        cpu_count() >= 2,
+        "requires at least two effective joblib CPUs",
+    )
+
+
 Case = TypeVar("Case", bound=Callable)
 
 

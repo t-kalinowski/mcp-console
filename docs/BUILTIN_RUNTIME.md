@@ -41,6 +41,10 @@ A control-only interrupt may overlap a pending `send` while that call resolves o
 The same call may first interrupt or restart the session through its optional `control` field.
 Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or restart the same implicit session.
 
+Scikit-learn can use `n_jobs=-1` inside the default sandbox, including `GridSearchCV`, `cross_val_score`, random forests, and permutation importance.
+Joblib's process workers and temporary memory-mapped arrays use the selected Python environment and writable temporary storage.
+On macOS, the native sandbox allows the semaphore-limit query (`kern.sysv.semmns`) that joblib performs before starting its process pool; no serial-execution override is needed.
+
 ## Python sessions without R
 
 Local sessions discover R through `R_HOME` or `R` on `PATH`.

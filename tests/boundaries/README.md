@@ -90,6 +90,8 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
 | uv platform services        | Offline wheel installation in private storage     | `cli/sandbox/test_uv::installs_a_local_wheel_into_private_storage`                         |
 
+Scikit-learn workflows with `n_jobs=-1`, including grid search over memory-mapped inputs, random forests, cross-validation, and permutation importance, are covered by `client_server/python/test_processes::runs_sklearn_parallel_search` in direct and sandboxed execution.
+
 The [policy audit](../../docs/SANDBOX.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
 Runner protocol parsing belongs to the pinned executable tests; `tests/sandbox_installation.py` covers installation verification, one-shot resource closure, and startup without setup EOF.
 The CLI execution suite verifies frontend exec with PID and binary standard-stream preservation.
