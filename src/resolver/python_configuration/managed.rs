@@ -53,7 +53,25 @@ impl Preparation {
         if blocked.iter().any(|root| runner.starts_with(root)) {
             return Err("managed Python requires Console to be installed outside the project and worker temporary storage; set python in .agents/console/config.yaml to use an existing environment".into());
         }
-        let mut environment = std::env::vars_os().collect::<BTreeMap<_, _>>();
+        // Native policy JSON cannot carry arbitrary Unix bytes. Unrelated
+        // entries must not prevent startup; malformed uv settings still fail.
+        let mut environment = std::env::vars_os()
+            .filter(|(name, value)| {
+                name.to_str()
+                    .is_some_and(|name| name.starts_with("UV_") || value.to_str().is_some())
+            })
+            .collect::<BTreeMap<_, _>>();
+        for name in ["UV_CONFIG_FILE", "UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR"] {
+            if let Some(path) = environment.get_mut(OsStr::new(name)) {
+                *path = workspace.join(&*path).into_os_string();
+                if name == "UV_CONFIG_FILE" {
+                    // Do not traverse the denied workspace to reach ../uv.toml.
+                    *path = std::fs::canonicalize(&*path)
+                        .map_err(|error| format!("cannot locate uv configuration: {error}"))?
+                        .into_os_string();
+                }
+            }
+        }
         for name in ["VIRTUAL_ENV", "UV_MANAGED_PYTHON", "UV_NO_MANAGED_PYTHON"] {
             environment.remove(OsStr::new(name));
         }
@@ -114,9 +132,8 @@ impl Preparation {
                     .map_err(|error| error.to_string())?
                     .trim(),
             );
-            if !path.is_absolute() {
-                return Err("uv returned a non-absolute storage directory".into());
-            }
+            // uv reports relative cache-dir values from configuration verbatim.
+            let path = workspace.join(path);
             std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
             let path = path.canonicalize().map_err(|error| error.to_string())?;
             if blocked

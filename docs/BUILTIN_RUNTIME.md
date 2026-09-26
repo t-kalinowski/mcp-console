@@ -69,7 +69,8 @@ The local `python` setting is unavailable with custom workers or execution targe
 Managed sessions use the user's installed uv, normal user/system configuration, cache, and managed Python installation directory.
 Console captures the startup environment and asks uv for its effective storage paths; uv owns configuration parsing and precedence.
 Preparation runs from `/` to avoid workspace configuration discovery.
-File-valued settings must refer to protected host files; workspace and worker temporary files are inaccessible.
+Relative `UV_CONFIG_FILE`, `UV_CACHE_DIR`, and `UV_PYTHON_INSTALL_DIR` values, and a relative configured `cache-dir`, resolve against the launch directory.
+Other file-valued settings should use absolute paths to protected host files; workspace and worker temporary files are inaccessible.
 Worker environment changes do not configure later preparation.
 Console pins the selected storage paths for the session and never removes shared uv cache contents.
 
@@ -79,7 +80,11 @@ The resolver has network access and a read-only host filesystem view, with write
 It cannot access the workspace or worker temporary storage.
 The native launcher starts with a cleared environment; captured user configuration reaches the resolver only after isolation is established.
 Console requires managed Python, retained cache environments, and wheels, and disables project sources and environment-file loading.
-Package requests remain named PEP 508 registry requirements; source builds, local paths, editable requirements, and direct URLs are unavailable.
+Package requests accept named PEP 508 requirements; source builds, local-path requests, editable requirements, and direct URL requests are unavailable.
+Registry wheels are the default.
+Protected startup uv configuration counts as an explicit opt-in to local wheel sources: for example, `UV_FIND_LINKS=/trusted/wheels` or `find-links = ["/trusted/wheels"]` in a protected `uv.toml`.
+The configuration and wheel directories must be outside locations the worker can modify.
+Protected means inaccessible for worker writes, not that uv produced or verified the wheels; configure only sources you trust.
 Trusted uv and package code are part of this mode's trust model.
 The boundary prevents worker-created files from becoming executable inputs to preparation.
 

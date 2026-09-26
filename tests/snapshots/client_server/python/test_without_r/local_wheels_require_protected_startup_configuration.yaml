@@ -1,0 +1,28 @@
+---
+send:
+  requirements:
+    python:
+      - console_local_wheel
+  python: import console_local_wheel; console_local_wheel.answer
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+environment: workspace wheel source denied
+---
+send:
+  requirements:
+    python:
+      - console_local_wheel
+  python: import console_local_wheel; console_local_wheel.answer
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+configuration: workspace wheel source denied

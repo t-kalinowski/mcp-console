@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from zipfile import ZipFile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -330,6 +331,132 @@ exec "{shutil.which("uv")}" "$@"
                 -1
             ]
             assert not (workspace / "worker-cache").exists()
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_local_wheels_require_protected_startup_configuration(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for setting in ("environment", "configuration"):
+        for location in ("protected", "workspace"):
+            with preparation_directory() as directory:
+                root = Path(directory)
+                workspace = root / "workspace"
+                workspace.mkdir()
+                (root / "uv").symlink_to(shutil.which("uv"))
+                wheels = (root if location == "protected" else workspace) / "wheels"
+                wheels.mkdir()
+                package = "console_local_wheel"
+                metadata = f"{package}-0.0.0.dist-info"
+                with ZipFile(
+                    wheels / f"{package}-0.0.0-py3-none-any.whl", "w"
+                ) as wheel:
+                    wheel.writestr(f"{package}.py", "answer = 42\n")
+                    wheel.writestr(
+                        f"{metadata}/METADATA",
+                        code(f"""
+                            Metadata-Version: 2.1
+                            Name: {package}
+                            Version: 0.0.0
+                            """),
+                    )
+                    wheel.writestr(
+                        f"{metadata}/WHEEL",
+                        code("""
+                            Wheel-Version: 1.0
+                            Root-Is-Purelib: true
+                            Tag: py3-none-any
+                            """),
+                    )
+                    wheel.writestr(f"{metadata}/RECORD", "")
+                env = environment(root)
+                if setting == "environment":
+                    env["UV_FIND_LINKS"] = str(wheels)
+                else:
+                    config = root / "uv.toml"
+                    config.write_text(f'find-links = ["{wheels}"]\n')
+                    env["UV_CONFIG_FILE"] = str(config)
+                with McpClient(binary, execution.serve(), env, workspace) as client:
+                    if location == "workspace":
+                        client.process.wait(timeout=30)
+                        diagnostic = client.stderr.read()
+                        assert str(wheels) in diagnostic, diagnostic
+                        assert any(
+                            message in diagnostic
+                            for message in (
+                                "Permission denied",
+                                "Operation not permitted",
+                            )
+                        ), diagnostic
+                        records.append({setting: "workspace wheel source denied"})
+                    else:
+                        client.initialize_and_list_tools()
+                        client.send(
+                            requirements={"python": [package]},
+                            python="import console_local_wheel; console_local_wheel.answer",
+                        )
+                        assert last_result_text(client) == "42\n", client.transcript[-1]
+                        records.extend(client.finish()[3:])
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Transcript:
+    records = []
+    installations = subprocess.check_output(["uv", "python", "dir"], text=True).strip()
+    for cache_setting in ("environment", "configuration"):
+        with preparation_directory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (root / "uv").symlink_to(shutil.which("uv"))
+            config = root / "uv.toml"
+            config.write_text('cache-dir = "../shared-uv"\n')
+            env = dict(
+                environment(root),
+                UV_CONFIG_FILE="../uv.toml",
+                UV_PYTHON_INSTALL_DIR=os.path.relpath(installations, workspace),
+                MCP_CONSOLE_TEST_CACHE=str(root / "shared-uv"),
+            )
+            if cache_setting == "environment":
+                config.write_text('cache-dir = "unused-config-cache"\n')
+                env["UV_CACHE_DIR"] = "../shared-uv"
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        import os, sys
+                        from pathlib import Path
+
+                        assert Path(sys.prefix).is_relative_to(Path(os.environ["MCP_CONSOLE_TEST_CACHE"]))
+                        print("relative startup paths retained")
+                        """)
+                )
+                assert last_result_text(client) == "relative startup paths retained\n"
+                records.extend(client.finish()[3:])
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_ignores_unrelated_non_utf8_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        env = environment(root)
+        env["UNRELATED_STARTUP_VALUE"] = os.fsdecode(b"non-utf8-\xff")
+        env[os.fsdecode(b"UNRELATED_STARTUP_NAME_\xff")] = "unused"
+        with McpClient(binary, execution.serve(), env) as client:
+            client.initialize_and_list_tools()
+            # Exercise preparation independently of the native worker launcher's
+            # existing requirement that its inherited environment be UTF-8.
+            result = client.send(requirements={"python": ["py-yaml12"]})
+            assert not result["isError"], result
+            assert last_result_text(client) == "[prepared]"
             return client.finish()[3:]
 
 

@@ -410,6 +410,8 @@ One exclusive environment transition covers requirement-delta calculation, host 
 For local sans-R managed Python, the launch boundary constructs a separate native preparation sandbox with read-only host access, denied worker locations, and writes to uv-selected storage and preparation temporary files.
 The native launcher starts with a cleared environment and supplies the captured user environment only after enforcement.
 uv interprets user/system configuration and reports its storage paths; Console retains them for the session.
+Explicit config and storage paths retain their launch-directory meaning before preparation switches to `/`.
+Protected startup configuration may opt in to local wheel sources, but the resolver cannot read worker-writable locations.
 Resolver, inspection, and status results are read with size limits from the original open descriptors.
 Version discovery, uv resolution, cache warming, and native inspection all use it; the server owns ordinary child lifetime and requires successful native retirement before accepting a candidate.
 Interrupt and cancellation retire the preparation sandbox without changing the current worker.
