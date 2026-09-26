@@ -143,6 +143,8 @@ Per-execution transcript timings are recorded beside validation results in `case
 ### Boundary snapshots
 
 Transcript cases and default MCP client fixtures isolate Console with a temporary `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's tool environment.
+Run transcript cases, installation smoke evaluations, and R integration tests from temporary workspaces so existing checkout recording directories cannot capture test sessions.
+Remove test-owned workspaces and Console directories after their processes exit.
 Do not reconstruct runtime or provider defaults to isolate Console configuration.
 Home discovery cases select their environment explicitly and opt in to it with `use_home_configuration=True`.
 

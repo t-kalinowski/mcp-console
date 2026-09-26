@@ -362,6 +362,9 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_cases_isolate_console_home_and_preserve_host_environment(self) -> None:
         ambient_home = self.root / "ambient-home"
         console_home = self.root / "ambient-console"
+        project_console = self.root / ".agents/console"
+        project_console.mkdir(parents=True)
+        (project_console / "config.yaml").write_text("invalid: [", encoding="utf-8")
         config = console_home / "config.yaml"
         config.parent.mkdir(parents=True)
         config.write_text("invalid: [", encoding="utf-8")
@@ -390,6 +393,10 @@ class TranscriptRunnerTests(unittest.TestCase):
                     assert console.is_absolute()
                     assert console != root / "ambient-console"
                     assert not (console / "config.yaml").exists()
+                    workspace = Path.cwd()
+                    assert workspace != root.resolve(), workspace
+                    assert not (workspace / ".agents").exists()
+                    (root / "workspace.txt").write_text(str(workspace))
                     return record(binary, "selected")
                 """),
             encoding="utf-8",
@@ -428,6 +435,9 @@ class TranscriptRunnerTests(unittest.TestCase):
                     timeout=10,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(
+                    Path((self.root / "workspace.txt").read_text()).exists()
+                )
         self.assertEqual(config.read_text(), "invalid: [")
 
     def test_focused_cases_do_not_probe_r(self) -> None:

@@ -12,6 +12,8 @@ Smoke and focused updates preserve unselected snapshots.
 The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
 
 Each case gets a private `MCP_CONSOLE_HOME` for fallback configuration and records.
+Cases also run from a temporary workspace, so an existing checkout `.agents/console` cannot capture their recordings or supply configuration.
+The runner removes the workspace and Console home after the case exits.
 `HOME` and the caller's R, Python, uv, and Docker environment remain unchanged; test discovery does not probe runtimes to reconstruct their storage paths.
 `McpClient` also isolates Console home when used outside the runner and creates no project config file.
 Cases that exercise home discovery pass their chosen `HOME` or `MCP_CONSOLE_HOME` explicitly and use `use_home_configuration=True`; remove the inherited `MCP_CONSOLE_HOME` when testing the default `~/.agents/console` location.

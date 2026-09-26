@@ -246,6 +246,21 @@ class ReleaseScriptTests(unittest.TestCase):
                 with open(record, "a") as stream:
                     stream.write(json.dumps(sys.argv[1:]) + "\\n")
 
+            if record := os.environ.get("FAKE_MCP_LOCATIONS"):
+                if sys.argv[1] in ("serve", "sandbox"):
+                    with open(record, "a") as stream:
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "command": sys.argv[1],
+                                    "cwd": str(Path.cwd()),
+                                    "home": os.environ.get("HOME"),
+                                    "console": os.environ.get("MCP_CONSOLE_HOME"),
+                                }
+                            )
+                            + "\\n"
+                        )
+
             if sys.argv[1:] == ["--version"]:
                 print("mcp-console 0.0.2")
             elif sys.argv[1:] == ["--help"]:
@@ -460,6 +475,38 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn("private sandbox runner", result.stderr)
+
+    def test_smoke_wheel_isolates_console_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            record = directory / "locations.jsonl"
+            ambient = directory / "ambient-console"
+            ambient.mkdir()
+            (directory / ".agents/console").mkdir(parents=True)
+            environment |= {
+                "FAKE_MCP_LOCATIONS": str(record),
+                "MCP_CONSOLE_HOME": str(ambient),
+            }
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            launches = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertEqual(
+                [item["command"] for item in launches], ["sandbox", "sandbox", "serve"]
+            )
+            for launch in launches:
+                self.assertEqual(launch["home"], environment.get("HOME"))
+                self.assertNotEqual(launch["cwd"], str(directory.resolve()))
+                self.assertNotEqual(launch["console"], str(ambient))
+                self.assertTrue(Path(launch["console"]).is_absolute())
+                self.assertFalse(Path(launch["cwd"]).exists())
+                self.assertFalse(Path(launch["console"]).exists())
 
     def test_smoke_wheel_requires_runnable_cargo_binary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
