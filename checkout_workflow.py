@@ -28,14 +28,14 @@ FAILURE = re.compile(
 
 
 @contextmanager
-def exclusive(paths: list[Path], label: str) -> Iterator[None]:
-    """Refuse conflicting owners; sequential descendants inherit the active token."""
+def exclusive(paths: list[Path], label: str, *, wait: bool = False) -> Iterator[None]:
+    """Claim ownership, optionally waiting; descendants inherit the active token."""
     # Ownership and cleanup require this process to stay alive. The inherited
     # token admits synchronous children; it is not recovery after owner death.
     inherited = os.environ.get(LOCKS_ENV, "{}")
     tokens = json.loads(inherited)
     owner = ""
-    # A nested owner must find its inherited slot before claiming a free one.
+    # A nested owner must find its inherited lock before claiming a free one.
     for path in sorted(paths, key=lambda path: str(path) not in tokens):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as lock:
@@ -52,7 +52,10 @@ def exclusive(paths: list[Path], label: str) -> Iterator[None]:
                 ):
                     yield
                     return
-                continue
+                if not wait:
+                    continue
+                print(f"waiting for {label}", file=sys.stderr, flush=True)
+                fcntl.flock(lock, fcntl.LOCK_EX)
             token = uuid.uuid4().hex
             lock.seek(0)
             lock.truncate()
@@ -74,19 +77,6 @@ def exclusive(paths: list[Path], label: str) -> Iterator[None]:
 def checkout_owner(root: Path) -> Iterator[None]:
     # Installation tests rename target, so ownership must live outside it.
     with exclusive([root.resolve() / ".dev-workflow/checkout.lock"], "checkout"):
-        yield
-
-
-@contextmanager
-def full_check_slot() -> Iterator[None]:
-    slots = int(os.environ.get("MCP_CONSOLE_CHECK_SLOTS", "1"))
-    if slots < 1:
-        raise SystemExit("MCP_CONSOLE_CHECK_SLOTS must be at least 1")
-    paths = [
-        cache_directory() / "mcp-console/checks" / f"slot-{index}.lock"
-        for index in range(slots)
-    ]
-    with exclusive(paths, "full-check budget"):
         yield
 
 
@@ -367,8 +357,6 @@ def main() -> None:
 
     with ExitStack() as stack:
         stack.enter_context(checkout_owner(root))
-        if options.mode in {"check", "test"}:
-            stack.enter_context(full_check_slot())
         run = None if options.mode == "run" else Run(root, sys.argv[1:])
         status = 1
         try:

@@ -231,21 +231,18 @@ Commands invoked outside these entry points cannot be serialized by the wrapper.
 Keep separate Console checkouts' mutable build outputs separate; sharing download caches does not authorize sharing application `target` or wheel staging.
 The companion has separate source ownership at `<source-checkout>.stage.lock`, outside its Git checkout and Cargo output.
 That ownership covers fetch, build, and artifact copying, including when `MCP_CONSOLE_SANDBOX_SOURCE` selects the same source from different Console worktrees.
-A conflicting stage exits with `sandbox source is busy`; retry after its owner finishes.
+A concurrent stage waits for that owner, then checks Cargo freshness and stages the runner into its own checkout.
 The same cooperative owner-lifetime limits apply to source ownership.
 
-## Host concurrency
+## Concurrent worktrees
 
 `scripts/test --help`, `--list`, and `--locate` run before ownership or compilation; invalid test arguments also fail before building.
 Help and syntax-only validation use Python's standard library before invoking `uv`.
 Listing, location lookup, and semantic selector validation may prepare the script's dependency environment.
-Aggregate checks and transcript runs share a host budget of one active owner by default.
-Set `MCP_CONSOLE_CHECK_SLOTS` to a positive integer to select another budget, using the same setting for concurrent callers.
-When every slot is occupied, the command exits with `full-check budget is busy` before running a phase.
-Nested commands reuse their parent's slot.
-Slot locks live in `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/checks/`.
-An explicitly configured `XDG_CACHE_HOME` must be absolute; relative paths fail before phases run because they would make the budget checkout-local.
-Changing the budget does not change case assertions, deadlines, or transcript worker concurrency.
+Checks and transcript runs in separate worktrees can run concurrently.
+Each checkout owns its mutable build output, while staging serializes access to the shared pinned companion source and Cargo output.
+An explicitly configured `XDG_CACHE_HOME` must be absolute for companion staging.
+Transcript worker concurrency remains controlled by `scripts/test --jobs`.
 
 ## Completion records
 

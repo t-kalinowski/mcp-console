@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 
@@ -195,20 +196,35 @@ class StagingTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
+        second_process = None
         try:
             reached.wait("first checkout owns the shared source")
             source = self.describe(first)["source_checkout"]
             # The explicit override must use the same lock as automatic selection.
-            result = self.stage(second, MCP_CONSOLE_SANDBOX_SOURCE=source)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("sandbox source is busy", result.stderr)
+            second_process = subprocess.Popen(
+                self.command(second, "--target", "aarch64-apple-darwin"),
+                env=self.environment | {"MCP_CONSOLE_SANDBOX_SOURCE": source},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            assert second_process.stderr is not None
+            self.assertIn(
+                "waiting for sandbox source",
+                read_lines(second_process.stderr, 1, "shared source wait")[0],
+            )
             self.assertFalse((second / "wheel-data").exists())
         finally:
             release.release()
             stdout, stderr = process.communicate(timeout=10)
+            if second_process is not None:
+                second_stdout, second_stderr = second_process.communicate(timeout=10)
         self.assertEqual(process.returncode, 0, stdout + stderr)
-        result = self.stage(second)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(second_process.returncode, 0, second_stdout + second_stderr)
+        self.assertEqual(
+            (second / "wheel-data/data/libexec/mcp-console-sandbox").read_text(),
+            "initial",
+        )
 
     def test_relative_cache_path_is_rejected_before_preparation(self) -> None:
         result = self.stage(self.roots[0], XDG_CACHE_HOME="relative")
