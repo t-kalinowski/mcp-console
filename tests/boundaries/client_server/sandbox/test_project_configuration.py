@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
-import os
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,6 +12,7 @@ from support.assertions import last_tool_text
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
 from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
@@ -60,7 +61,11 @@ def _snapshot_survives_replacement(
         os.chdir(host / "CLI cache")
         print("captured grants, proxy selection, and restricted network verified")
         """)
-    with TemporaryDirectory() as directory, host_tcp_ports() as ports:
+    with (
+        TemporaryDirectory() as directory,
+        TemporaryDirectory() as home,
+        host_tcp_ports() as ports,
+    ):
         host = Path(directory).resolve()
         for name in ("output café 雪", "CLI cache", "neighbor"):
             (host / name).mkdir()
@@ -82,8 +87,27 @@ def _snapshot_survives_replacement(
                 encoding="utf-8",
             )
         capture = host / "payloads.jsonl"
+        environment, rscript = r_test_environment()
+        # Preserve host libraries when isolating configuration discovery from HOME.
+        libraries = subprocess.run(
+            [
+                rscript,
+                "--vanilla",
+                "-e",
+                # fmt: r
+                code("""
+                    cat(paste(.libPaths(), collapse = .Platform$path.sep))
+                    """),
+            ],
+            env=environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
         environment = {
-            **os.environ,
+            **environment,
+            "HOME": home,
+            "R_LIBS": libraries,
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_PROJECT": str(host),
@@ -94,8 +118,14 @@ def _snapshot_survives_replacement(
         environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
         expected = "captured grants, proxy selection, and restricted network verified\n"
         with McpClient(
-            binary, ("serve", "--writable-root", "CLI cache"), environment, host
+            binary,
+            ("serve", "--writable-root", "CLI cache"),
+            environment,
+            host,
+            # This case owns config creation; do not synthesize an empty file.
+            use_home_configuration=True,
         ) as client:
+            assert config.exists() == configured
             client.initialize_and_list_tools()
             # Configured startup probes the native sandbox without starting a worker.
             preflights = capture.read_text().splitlines() if capture.exists() else []
