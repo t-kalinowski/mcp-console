@@ -21,14 +21,16 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution
 from support.normalization import code
-from support.records import Transcript
+from support.records import Transcript, TranscriptWithCompanions
 from support.r import r_test_environment
 from support.requirements import SANDBOX, WORKER, requires
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
 
 
-def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcript:
+def _preinstalled_remote_runtime(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local = root / "controller"
@@ -119,6 +121,8 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
                         """)
                 )
                 assert last_result_text(client) == "[1] 42\n", last_result_text(client)
+                session = next((local / ".agents/console/sessions").iterdir())
+                initial_quarto = (session / "transcript.qmd").read_text()
                 client.send(
                     # fmt: r
                     r=code("""
@@ -271,19 +275,26 @@ def _preinstalled_remote_runtime(binary: Path, execution: Execution) -> Transcri
         assert len(artifacts) == 1, artifacts
         assert artifacts[0].read_bytes() == image_bytes
         qmd = (session / "transcript.qmd").read_text()
+        frontmatter = qmd.split("---", 2)[1]
         assert "root.dir" not in qmd, qmd
-        assert "eval: false" in qmd, qmd
+        assert "execute:" not in frontmatter, qmd
+        assert "# Run `ir render transcript.qmd`" in frontmatter, qmd
         # Keep literal wire output; only the incidental temporary paths vary.
-        return json.loads(json.dumps(transcript).replace(str(root), "<ssh-test>"))
+        return TranscriptWithCompanions(
+            transcript=json.loads(
+                json.dumps(transcript).replace(str(root), "<ssh-test>")
+            ),
+            companions={"qmd": initial_quarto.replace(str(root), "<ssh-test>")},
+        )
 
 
 @requires(SSH, WORKER)
-def test_preinstalled_remote_runtime(binary: Path) -> Transcript:
+def test_preinstalled_remote_runtime(binary: Path) -> TranscriptWithCompanions:
     return _preinstalled_remote_runtime(binary, DIRECT)
 
 
 @requires(SSH, WORKER, SANDBOX)
-def test_preinstalled_sandbox(binary: Path) -> Transcript:
+def test_preinstalled_sandbox(binary: Path) -> TranscriptWithCompanions:
     return _preinstalled_remote_runtime(binary, SANDBOXED)
 
 

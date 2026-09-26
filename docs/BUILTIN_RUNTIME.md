@@ -16,11 +16,11 @@ Console prepares managed R, Python, and DuckDB dependencies on that host as need
 Without a resolver bootstrap, the remote session uses available preinstalled packages and adapters with managed preparation disabled.
 Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
 The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
-Remote source-only Quarto projections default to evaluation disabled and omit the controller execution root.
+Remote source-only Quarto projections omit the controller execution root and execute captured cells when rendered.
 
 A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned Linux container for each generation, using a captured image and its preinstalled packages.
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
-Dynamic package preparation is disabled, and Docker Quarto projections follow the same non-executing convention.
+Dynamic package preparation is disabled, and Docker Quarto projections likewise execute captured cells when rendered.
 They do not reproduce the remote filesystem when rendered locally.
 With R available, each worker generation contains:
 
