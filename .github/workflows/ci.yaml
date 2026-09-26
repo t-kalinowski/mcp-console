@@ -314,7 +314,7 @@ jobs:
       - name: Run core checks
         env:
           GITHUB_PAT: ${{ github.token }}
-        run: scripts/check-core
+        run: scripts/check-core --full
 
       - name: Smoke-test Python package
         env:
@@ -390,7 +390,7 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         # Use the prepared executable; scripts/test also invokes Cargo.
-        run: uv run --script tests/boundaries/_run.py --jobs 6
+        run: uv run --script tests/boundaries/_run.py --full --jobs 6
 
       - name: Check uv source installations
         env:

@@ -167,6 +167,97 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_python_restores_managed_connection_before_r_reads_it(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    client = McpClient(binary, execution.serve(), environment)
+    client.initialize_and_list_tools()
+
+    client.send(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        lite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+        console_sql_connection(lite)
+        invisible()
+        """)
+    client.send(r=r, requirements={"r": ["RSQLite"]})
+    assert last_tool_text(client) == "[done]"
+
+    client.send(python="console_sql_connection(None)")
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: r
+    r = code(r"""
+        restored <- sql_connection()
+        DBI::dbDisconnect(lite)
+        cat(
+          c("managed: ", inherits(restored, "duckdb_connection"), "\n"),
+          c(
+            "value: ",
+            DBI::dbGetQuery(sql_connection(), "SELECT value FROM managed_values")$value,
+            "\n"
+          ),
+          sep = ""
+        )
+        """)
+    client.send(r=r)
+    output = last_tool_text(client)
+    assert output == "managed: TRUE\nvalue: 42\n", output
+
+    # fmt: python
+    python = code("""
+        import _mcp_console_sql
+        import sys
+
+        use_r_code = _mcp_console_sql.use_r.__code__
+
+
+        def reject_repeated_restore(frame, event, argument):
+            if event == "call" and frame.f_code is use_r_code:
+                raise SystemExit("repeated managed restoration")
+            return reject_repeated_restore
+
+
+        sys.settrace(reject_repeated_restore)
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+
+    client.send(sql="SELECT value FROM managed_values")
+    preview = last_tool_text(client)
+    assert "value" in preview and "42" in preview, preview
+    client.send(python="sys.settrace(None)")
+    assert last_tool_text(client) == "[done]"
+
+    # Python can call R again before its own cell finishes.
+    # fmt: r
+    r = code(r"""
+        another <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+        console_sql_connection(another)
+        managed_in_r <- function() inherits(sql_connection(), "duckdb_connection")
+        invisible()
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+
+    # fmt: python
+    python = code("""
+        console_sql_connection(None)
+        assert r.managed_in_r()
+        """)
+    client.send(python=python)
+    assert last_tool_text(client) == "[done]"
+    client.send(r="DBI::dbDisconnect(another); invisible()")
+    assert last_tool_text(client) == "[done]"
+    return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
     execution: Execution,

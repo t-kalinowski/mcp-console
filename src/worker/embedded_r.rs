@@ -13,6 +13,8 @@ use super::input::{finish_console_stdin_operation, read_console_stdin};
 use crate::cell::Language;
 use crate::worker_protocol::ConsoleChannel;
 
+mod parse;
+
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
@@ -77,6 +79,7 @@ struct REvents {
 }
 
 pub(super) struct Runtime {
+    parser: parse::Parser,
     graphics: crate::r_graphics::Bridge,
     environment: crate::r_environment::Bridge,
 }
@@ -84,6 +87,7 @@ pub(super) struct Runtime {
 impl Runtime {
     pub(super) fn initialize() -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            parser: parse::Parser::initialize()?,
             graphics: crate::r_graphics::Bridge::initialize()?,
             environment: crate::r_environment::Bridge::initialize()?,
         })
@@ -112,6 +116,11 @@ impl Runtime {
     }
 
     pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
+        // Console reads during preflight are interactive input, never cell source.
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
+        if !self.parser.complete(&source)? {
+            return Ok(());
+        }
         evaluate_r_cell(source)
     }
 }

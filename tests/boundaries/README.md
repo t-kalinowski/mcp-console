@@ -2,11 +2,13 @@
 
 For embedded programs, execution modes, and lifecycle receipts, start with the [authoring recipe](AUTHORING.md).
 
-`scripts/test --quick` runs ordinary cases while skipping `@requires(EXTENDED)` stress cases and real external SSH, Docker, and SBX integrations, even when their fixtures are configured.
-It retains direct and sandbox execution, localhost SSH, and fake-provider cases.
-Plain `scripts/test` includes all capability-applicable cases; CI uses this full profile.
-Use `scripts/test --quick --list` to inspect the quick selection.
-Mark only deliberate extended stress workloads with `EXTENDED` from `tests/support/requirements.py`; do not hide ordinary slow or failing regressions behind that requirement.
+`scripts/test` and its `--quick` alias run the explicit smoke selection in [`_profiles.py`](_profiles.py), using existing cases, execution modes, and snapshots.
+The selection uses exact case names so new cases do not silently expand the local gate.
+`scripts/test --full` includes all capability-applicable cases; CI explicitly uses this full profile.
+Explicit selectors retain their scope with any profile flag.
+Use `scripts/test --list` to inspect the smoke selection or `scripts/test --full --list` to discover all cases.
+Only full runs without a case, suite, or `--locate` selector audit orphan snapshots globally; use `scripts/test --full --update` for a complete snapshot update and orphan cleanup.
+Smoke and focused updates preserve unselected snapshots.
 The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
 
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
@@ -203,9 +205,11 @@ Run commands from the repository root:
 
 ```bash
 scripts/test
+scripts/test --full
 scripts/test client_server/server/test_tools
 scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --list
+scripts/test --full --list
 scripts/test --locate client_server/server/test_tools
 scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --jobs 1 client_server/python/test_runtime
@@ -222,7 +226,8 @@ The Python SDK integration dependencies retain the published lower bounds withou
 CI resolves current SDK releases when the weekly uv cache is empty and can reuse them for the rest of that UTC ISO week.
 Local runs reuse their uv environment until it needs updating; use `uv run --upgrade --script tests/boundaries/_run.py client_server/integrations/test_python` to refresh the SDKs explicitly after building the executable.
 CI also uses this release executable for the R package and installed-wheel integration checks; `scripts/check-core` keeps Rust unit tests in debug so their debug assertions remain enabled.
-With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
+With no selectors, `scripts/test` runs the smoke selection; `scripts/test --full` runs all capability-applicable cases.
+Each selected case runs in a separate process, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
 The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
@@ -246,10 +251,10 @@ This output belongs only to the test-runner user interface; it is not captured t
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
 `--locate SELECTOR` does not run cases.
 It prints every matching case, its source file and definition line, and its mechanically derived primary snapshot path.
-Collection fails before listing, locating, or running cases when a snapshot has no matching suite and case.
+With selector-free `--full`, collection fails before listing or running cases when a snapshot has no matching suite and case.
 Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
-A full `scripts/test --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
+`scripts/test --full --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
 Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
 
 ## Requirements and execution modes
@@ -259,7 +264,7 @@ Use `execution.serve()` to compose common arguments and let the fixture select `
 Sandbox-only policy arguments belong in a sandbox fixture, for example `SANDBOXED.serve("--writable-root", str(path))`.
 The direct fixture rejects writable roots with that example in its error.
 
-Cases run by default.
+Selected cases run by default.
 Declare only the capabilities a case needs, beside its definition, with `@requires(...)` from `support.requirements`.
 For example, `@requires(SANDBOX)` identifies a sandbox contract, `@requires(PROCESS_EVENTS)` identifies a test using shared process observation, and `@requires(command("quarto"))` identifies an optional executable.
 All platform availability decisions belong in test support.
@@ -298,7 +303,7 @@ This preserves differences as failures instead of letting the last mode overwrit
 The canonical initialization case is the exception: each available mode updates its own full and bare-runtime references (`.direct.yaml` and `.bare.direct.yaml` for direct mode).
 Full updates retain initialization references for unavailable modes.
 Multi-session transcripts reuse the same mode-aware handshake compaction.
-All cases remain discoverable with `--list` and `--locate`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
+All cases remain discoverable with `scripts/test --full --list` and `scripts/test --locate SELECTOR`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
 An explicitly selected unavailable case is reported as skipped.
 
 Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.

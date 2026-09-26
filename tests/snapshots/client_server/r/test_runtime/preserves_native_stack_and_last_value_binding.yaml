@@ -3,6 +3,15 @@
 ---
 send:
   r: |
+    str2expression <- suppressWarnings <- function(...) stop("masked parser")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
     user_calls <- function() {
       vapply(sys.calls(), deparse1, character(1))
     }

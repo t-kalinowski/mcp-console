@@ -116,7 +116,7 @@ This mode is local only; SSH and prepared Docker/SBX targets retain their existi
 A code-bearing `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
 It may instead contain only control or stdin, or contain none of those fields as an ordinary poll.
 The source is not an interactive fragment assembled across calls.
-R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
+R and Python parse the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
 
 Use a REPL-style workflow: submit one coherent cell, inspect its result, then submit the next cell based on what the result showed.
 One assistant turn can make several sequential calls.
@@ -247,10 +247,14 @@ A waiting `send` whose evaluation finishes before restart interrupts it receives
 
 ## R
 
-R cells run in persistent global state through R's native console loop.
+R cells must parse completely before any expression is evaluated.
+Incomplete or syntactically invalid source is rejected without applying earlier expressions from that cell.
+Validation reports R's parse diagnostics without invoking `options(error)` or changing `.Traceback`, task callbacks, history, or `.Last.value`.
+Rejected cells do not add internal helper calls to the diagnostic or traceback.
+Accepted cells run in persistent global state through R's native console loop.
 Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
-Because R consumes top-level expressions as a console does, earlier complete expressions may take effect before a later expression in the same cell fails or remains incomplete.
+An evaluation or print error still preserves the effects of expressions already evaluated in that cell.
 
 Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
 Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
@@ -258,6 +262,12 @@ Output produced while idle remains pending until a later response drains it; whe
 Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
 The built-in startup width is 200 columns; evaluated code may change its options.
 Packages prepared for the session are available but are not attached automatically.
+
+In sandboxed built-in R sessions, the first `.libPaths()` entry is a fresh writable directory inside R's `tempdir()`.
+`install.packages()` without a `lib` argument uses this directory, so packages installed by a cell are available to later cells in the same worker generation.
+The directory is temporary and is not retained across a worker restart; managed R libraries follow it in `.libPaths()` and remain available after restart.
+Until a package is installed there, R's `library()` listing call warns that the temporary library contains no packages.
+Downloads and package builds still depend on a configured repository, the sandbox's network policy, and installed system tools.
 
 ### On-demand R packages
 
@@ -274,13 +284,13 @@ They bypass automatic resolution for already available packages, `library()` hel
 
 Runtime discovery accepts plain package names only.
 Use `requirements.r` to stage a package before evaluation or to supply an explicit `ir` reference such as a remote source.
-The worker does not inspect R source before evaluation.
+The worker does not scan R source for package references.
 Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke `ir` and several new packages in one cell can cause several incremental `ir` calls in execution order.
 
 In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
 Installed packages work normally, missing packages retain their ordinary R behavior, and `requirements.r` is not available.
 
-When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
+When the server returns a candidate library, the worker places it first among the managed `.libPaths()` entries, after the sandbox's temporary library when present, and reports activation before resuming the original base call.
 The server retains the library only after that report.
 The worker is not replaced, so its PID, R globals, loaded namespaces, Python objects, DuckDB catalog, and unread input remain available.
 Once activation succeeds, the retained environment survives later namespace or cell errors and is reused by later cells and restart.
@@ -295,7 +305,7 @@ The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in 
 R can read Python globals through `py$name` and use the R-owned SQL connection through DBI or dplyr.
 `sql_connection()` returns that R-owned connection; it does not proxy a Python connection into R.
 In R, `console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
-In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` requests restoration of managed DuckDB for the next SQL cell.
+In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` restores managed DuckDB for subsequent SQL cells and R `sql_connection()` calls.
 The latest selection controls later SQL cells: selecting from R clears the Python provider, while selecting from Python leaves the R-owned connection available through `sql_connection()` without routing SQL cells to it.
 Do not disconnect the managed DuckDB connection.
 Restore it before disconnecting a custom connection that is still selected.
@@ -428,7 +438,7 @@ console_sql_connection(connection)
 The Python runtime retains the exact connection object.
 If it implements `execute()`, SQL cells execute directly on it so connection-local state is preserved; otherwise the adapter executes through `connection.cursor()`.
 The adapter reads result metadata and bounded rows through the returned cursor protocol, without converting the connection or its result rows through reticulate.
-`console_sql_connection(None)` restores managed DuckDB when the next SQL cell is dispatched.
+`console_sql_connection(None)` restores managed DuckDB for the next SQL cell or R `sql_connection()` call, whichever comes first.
 
 The R provider submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
 Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.

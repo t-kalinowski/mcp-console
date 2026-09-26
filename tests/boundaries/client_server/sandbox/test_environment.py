@@ -69,7 +69,7 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
                           identical(Sys.getenv("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION"), "1"),
                           identical(Sys.getenv("RETICULATE_PYTHON"), "managed"),
                           identical(Sys.getenv("MCP_CONSOLE_TEST_PROJECT_ENV"), "project"),
-                          identical(dirname(find.package("praise")), .libPaths()[[1L]]),
+                          identical(dirname(find.package("praise")), .libPaths()[[2L]]),
                           "py-yaml12" %in% reticulate::py_require()$packages
                         )
                         cat("managed R and Python requirements retained\n")

@@ -645,7 +645,26 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             }
             unloadNamespace("codetools")
 
-            listing <- library()
+            listing_warnings <- character()
+            listing <- withCallingHandlers(
+              library(),
+              warning = function(w) {
+                listing_warnings <<- c(listing_warnings, conditionMessage(w))
+                invokeRestart("muffleWarning")
+              }
+            )
+            expected_warnings <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") {
+              sprintf(
+                ngettext(
+                  1L,
+                  "library %s contains no packages",
+                  "libraries %s contain no packages"
+                ),
+                sQuote(.libPaths()[[1L]])
+              )
+            } else {
+              character()
+            }
             help_info <- library(help = base)
             restricted <- suppressWarnings(library(
               "fortunes",
@@ -670,6 +689,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             )
             stopifnot(
               inherits(listing, "libraryIQR"),
+              identical(listing_warnings, expected_warnings),
               inherits(help_info, "packageInfo"),
               identical(restricted, FALSE),
               partial_failed,

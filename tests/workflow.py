@@ -197,21 +197,27 @@ class WorkflowTests(unittest.TestCase):
             result.stderr,
         )
 
-    def test_quick_check_records_its_scope_and_keeps_the_full_gate_available(
+    def test_check_profiles_record_scope_and_forward_full_to_both_children(
         self,
     ) -> None:
-        self.write_script(
-            "scripts/test",
-            # fmt: python
-            """
-            import sys
+        for script in ("scripts/test", "scripts/check-core"):
+            self.write_script(
+                script,
+                # fmt: python
+                """
+                import sys
 
-            print(repr(sys.argv[1:]))
-            """,
-        )
+                print(repr(sys.argv[1:]))
+                """,
+            )
         for arguments, phases, test_arguments in (
-            (("--quick",), ["stage", "core", "transcripts"], "['--quick']"),
-            ((), ["stage", "core", "transcripts", "installation"], "[]"),
+            ((), ["stage", "core", "transcripts"], "[]"),
+            (("--quick",), ["stage", "core", "transcripts"], "[]"),
+            (
+                ("--full",),
+                ["stage", "core", "transcripts", "installation"],
+                "['--full']",
+            ),
         ):
             with self.subTest(arguments=arguments):
                 result = self.run_command("scripts/check", *arguments)
@@ -220,12 +226,65 @@ class WorkflowTests(unittest.TestCase):
                     r for r in self.records() if r["command"] == ["check", *arguments]
                 )
                 self.assertEqual([p["name"] for p in record["phases"]], phases)
-                transcript_phase = next(
-                    p for p in record["phases"] if p["name"] == "transcripts"
+                for phase in record["phases"]:
+                    if phase["name"] in {"core", "transcripts"}:
+                        self.assertEqual(
+                            Path(phase["log"]).read_text().strip(), test_arguments
+                        )
+
+    def test_core_profiles_keep_tooling_self_tests_in_full(self) -> None:
+        shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")
+        common = [
+            "runtime-sources",
+            "architecture",
+            "rust-format",
+            "clippy",
+            "rust-tests",
+        ]
+        tooling = [
+            "release-tests",
+            "staging-tests",
+            "runner-tests",
+            "workflow-tests",
+            "format-tests",
+            "development-tests",
+            "client-tests",
+        ]
+        for script in (
+            "scripts/validate_runtime_sources.py",
+            "tests/release.py",
+            "tests/staging.py",
+            "tests/transcript_runner.py",
+            "tests/workflow.py",
+            "tests/format.py",
+            "tests/development.py",
+            "tests/mcp_client.py",
+            "tests/architecture.py",
+            "scripts/cargo",
+        ):
+            self.write_script(script, 'print("checked")')
+        self.environment["PATH"] = (
+            f"{self.root / 'scripts'}{os.pathsep}{os.environ['PATH']}"
+        )
+        for arguments in ((), ("--quick",), ("--full",)):
+            with self.subTest(arguments=arguments):
+                result = self.run_command("scripts/check-core", *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = next(
+                    r
+                    for r in self.records()
+                    if r["command"] == ["check-core", *arguments]
                 )
-                self.assertEqual(
-                    Path(transcript_phase["log"]).read_text().strip(), test_arguments
+                expected = (
+                    common[:1] + tooling + common[1:]
+                    if arguments == ("--full",)
+                    else common
                 )
+                self.assertEqual([p["name"] for p in record["phases"]], expected)
+                architecture = "[architecture] tests/architecture.py"
+                if arguments != ("--full",):
+                    architecture += " SandboxProcessBoundaryTests"
+                self.assertIn(architecture + "\n", result.stderr)
 
     def test_validation_output_is_kept_in_advertised_phase_logs(self) -> None:
         self.write_script(

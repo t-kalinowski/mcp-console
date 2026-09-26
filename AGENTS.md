@@ -116,10 +116,11 @@ Run commands from the repository root:
 ```text
 scripts/preflight
 scripts/format
-scripts/check --quick
 scripts/check
+scripts/check --full
 scripts/test [BOUNDARY/SUITE[::CASE]]
-scripts/test --list
+scripts/test --full
+scripts/test --full --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
@@ -127,15 +128,20 @@ scripts/test --update BOUNDARY/SUITE[::CASE]
 A missing or failing formatter does not prevent the remaining formatters from running; the default exits successfully, while `--strict` returns failure if any formatter failed.
 Review its output and resulting changes.
 Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for ownership and the host concurrency budget.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
-During iteration, prefer a focused `scripts/test SELECTOR`, followed by `scripts/check --quick` for broader feedback.
-The quick gate retains core and ordinary transcript checks but skips packaging, `@requires(EXTENDED)` stress cases, and real external SSH/Docker/SBX integrations.
-It does not replace the full pre-PR gate or full CI.
+`scripts/check` is the ordinary final local gate: stage the companion, validate extracted runtime sources, check architecture, check Rust formatting and Clippy, run Rust tests in debug, and run the explicit smoke transcript profile against the release executable.
+`scripts/check --quick` is a backwards-compatible alias for this default.
+`scripts/check --full` adds repository-tooling self-tests, all capability-applicable transcripts, and uv source and wheel installation checks.
+Use the full local gate only when explicitly requested or when the changed area warrants exhaustive local validation.
+CI explicitly runs full core and transcript profiles plus installation checks and remains the comprehensive merge gate.
+Report the validation commands and scope actually run; the default gate is not exhaustive.
+Use `scripts/test SELECTOR` for red/green work and the owning focused tests when changing repository tooling.
+With no selectors, `scripts/test` and `scripts/test --quick` run the small explicit selection in `tests/boundaries/_profiles.py`; `scripts/test --full` runs the complete capability-applicable suite.
+Explicit case or suite selectors retain their scope with any profile flag.
 Per-execution transcript timings are recorded beside validation results in `case-timings.jsonl`.
 
 ### Boundary snapshots
 
-Cases run by default; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
+The full profile includes every case; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
 Keep platform availability in test support.
 Use `@executions(DIRECT, SANDBOXED)` and `execution.serve(...)` to reuse ordinary cases across applicable execution modes with a shared snapshot.
 Sandbox contracts use explicit sandbox fixtures and requirements.
@@ -212,7 +218,7 @@ Keep these invariants intact:
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
 - `src/worker.rs`, `src/worker/{coordinator,core,input,r_integration}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, interactive stdin buffering, and optional R event, graphics, and interrupt hooks.
 - `src/worker/interrupt.{rs,c}` — native signal distribution, blocking R-free waiting, managed-input wakeups, and Python acknowledgment through startup-supplied interrupt-state callbacks.
-- `src/worker/embedded_r.rs`, `src/r_repl.c` — R runtime, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
+- `src/worker/embedded_r.rs`, `src/worker/embedded_r/parse.{rs,R}`, `src/r_repl.c` — R runtime, complete-cell parsing, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
@@ -246,7 +252,7 @@ Keep these invariants intact:
 - `tests/boundaries/cli/` — direct CLI behavior.
 - `tests/boundaries/*/sandbox/` — sandbox-specific contracts within their owning boundary; ordinary cases remain under their runtime, protocol, or lifecycle subject.
 - `tests/boundaries/*/_harness.py` — boundary-specific process launch and capture mechanics.
-- `tests/boundaries/_run.py`, `tests/transcript_runner.py` — recursive transcript discovery, selection, location, snapshot checking, progress reporting, and runner regressions.
+- `tests/boundaries/_run.py`, `tests/boundaries/_profiles.py`, `tests/transcript_runner.py` — transcript discovery, explicit smoke selection, full and focused profiles, location, snapshot checking, progress reporting, and runner regressions.
 - `tests/architecture.py` — sandbox dependency-direction checks and their command-line regressions.
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
@@ -301,4 +307,5 @@ Keep these invariants intact:
 - Update design documents in the same PR only when they describe changed behavior.
   Update this file when repository-wide constraints or navigation change.
 - Run `scripts/format` unchanged and review its changes before every commit.
-  Run `scripts/check` before opening a PR.
+  Use `scripts/check` as the ordinary final local gate and report its scope.
+  A full local gate is not required before every PR; CI provides comprehensive validation before merge.

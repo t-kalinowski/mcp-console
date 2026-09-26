@@ -1,0 +1,71 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  r: |
+    library <- .libPaths()[[1L]]
+    stopifnot(
+      identical(Sys.getenv("MCP_CONSOLE_SANDBOX"), "1"),
+      startsWith(
+        library,
+        paste0(normalizePath(tempdir()), .Platform$file.sep)
+      ),
+      dir.exists(library),
+      file.access(library, 2L) == 0L
+    )
+    install.packages(
+      "mcpconsolelocalpkg_0.0.1.tar.gz",
+      repos = NULL,
+      type = "source"
+    )
+    stopifnot(
+      identical(dirname(find.package("mcpconsolelocalpkg")), library),
+      identical(mcpconsolelocalpkg::answer(), 42L)
+    )
+result:
+  content:
+    - type: text
+      text: |
+        Installing package into ‘<sandbox R library>’
+        (as ‘lib’ is unspecified)
+        * installing *source* package ‘mcpconsolelocalpkg’ ...
+        ** this is package ‘mcpconsolelocalpkg’ version ‘0.0.1’
+        ** using staged installation
+        ** R
+        ** byte-compile and prepare package for lazy loading
+        ** help
+        *** installing help indices
+        ** building package indices
+        ** testing if installed package can be loaded from temporary location
+        ** testing if installed package can be loaded from final location
+        ** testing if installed package keeps a record of temporary installation path
+        * DONE (mcpconsolelocalpkg)
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      startsWith(
+        .libPaths()[[1L]],
+        paste0(normalizePath(tempdir()), .Platform$file.sep)
+      ),
+      dir.exists(.libPaths()[[1L]])
+    )
+    cat("new sandbox library ready\n")
+result:
+  content:
+    - type: text
+      text: |
+        new sandbox library ready
+  isError: false

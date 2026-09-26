@@ -2,7 +2,9 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: initial_r_library <- .libPaths()[[1L]]
+  r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+    initial_r_library <- .libPaths()[[managed_index]]
 result:
   content:
     - type: text
@@ -21,7 +23,8 @@ result:
 ---
 send:
   r: |
-    cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+    cat(jsonlite::toJSON(.libPaths()[[managed_index]], auto_unbox = TRUE))
 result:
   content:
     - type: text
@@ -65,7 +68,8 @@ result:
 ---
 send:
   r: |
-    cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+    cat(jsonlite::toJSON(.libPaths()[[managed_index]], auto_unbox = TRUE))
 result:
   content:
     - type: text

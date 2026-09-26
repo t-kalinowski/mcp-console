@@ -284,11 +284,13 @@ def main() -> None:
     parser.add_argument("mode", choices=("check", "check-core", "test", "run", "phase"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     options = parser.parse_args()
-    if options.mode == "check" and options.arguments not in ([], ["--quick"]):
-        parser.error("check accepts only --quick (omit it for the full gate)")
-    if options.mode == "check-core" and options.arguments:
-        parser.error("check-core does not accept arguments")
-    quick = options.mode == "check" and options.arguments == ["--quick"]
+    if options.mode in {"check", "check-core"} and options.arguments not in (
+        [],
+        ["--quick"],
+        ["--full"],
+    ):
+        parser.error(f"{options.mode} accepts --full or --quick (the default)")
+    full = options.arguments == ["--full"]
     if options.mode in {"run", "phase"} and not options.arguments:
         parser.error("run requires a command")
     root = Path(__file__).resolve().parent
@@ -298,8 +300,7 @@ def main() -> None:
         # Nested workflows keep this group so the outer owner can retire it.
         os.environ[GROUP_ENV] = str(os.getpgrp())
         os.execvp(options.arguments[0], options.arguments)
-    core = [
-        ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
+    tooling = [
         ("release-tests", ["tests/release.py"]),
         ("staging-tests", ["python3", "tests/staging.py"]),
         ("runner-tests", ["tests/transcript_runner.py"]),
@@ -307,7 +308,17 @@ def main() -> None:
         ("format-tests", ["python3", "tests/format.py"]),
         ("development-tests", ["python3", "tests/development.py"]),
         ("client-tests", ["tests/mcp_client.py"]),
-        ("architecture", ["tests/architecture.py"]),
+    ]
+    core = [
+        ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
+        *(tooling if full else []),
+        (
+            "architecture",
+            [
+                "tests/architecture.py",
+                *([] if full else ["SandboxProcessBoundaryTests"]),
+            ],
+        ),
         ("rust-format", ["cargo", "fmt", "--all", "--check"]),
         (
             "clippy",
@@ -326,9 +337,9 @@ def main() -> None:
     plans = {
         "check": [
             ("stage", ["scripts/stage-sandbox-runner"]),
-            ("core", ["scripts/check-core"]),
-            ("transcripts", ["scripts/test", *(["--quick"] if quick else [])]),
-            *([] if quick else [("installation", ["python3", "tests/install.py"])]),
+            ("core", ["scripts/check-core", *(["--full"] if full else [])]),
+            ("transcripts", ["scripts/test", *(["--full"] if full else [])]),
+            *([("installation", ["python3", "tests/install.py"])] if full else []),
         ],
         "check-core": core,
         "test": [

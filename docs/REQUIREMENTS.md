@@ -272,7 +272,8 @@ The cancelled call does not retain pending candidates; a Python environment alre
 ### Live R preparation
 
 The server resolves a new library containing the complete retained R requirement set.
-The worker prepends that library to `.libPaths()`, removes the previous managed library entry, and preserves its other library paths and in-memory state.
+The worker places that library first among managed `.libPaths()` entries, removes the previous managed library entry, and preserves its other library paths and in-memory state.
+In a sandboxed built-in R session, its writable temporary library remains ahead of the managed library.
 The server retains the candidate only after the worker confirms the normalized library path.
 
 An ordinary live R preparation failure leaves the worker available for evaluation, because the caller may need to save in-memory state.

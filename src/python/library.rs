@@ -500,6 +500,13 @@ pub(super) fn use_r_sql() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
 }
 
+pub(super) fn take_sql_restore_request() -> Result<bool, String> {
+    let Some(api) = installed_sql_api()? else {
+        return Ok(false);
+    };
+    api.with_gil(PythonApi::call_take_sql_restore_request)
+}
+
 fn installed_sql_api() -> Result<Option<PythonApi>, String> {
     let library_slot = PYTHON_LIBRARY
         .lock()
@@ -848,6 +855,25 @@ impl PythonApi {
                     }
                     Err("Python SQL dispatch returned an invalid provider".to_string())
                 }
+            }
+        }
+    }
+
+    fn call_take_sql_restore_request(&self) -> Result<bool, String> {
+        // SAFETY: The GIL is held for the private Python call and reference release.
+        unsafe {
+            let function = self.function(c"_mcp_console_sql", c"take_managed_restore_request")?;
+            let result = (self.call_no_args)(function);
+            if result.is_null() {
+                self.display_pending_exception();
+                return Err("Python SQL restore request failed".to_string());
+            }
+            let requested = (self.long_as_long)(result);
+            (self.dec_ref)(result);
+            match requested {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err("Python SQL restore request returned an invalid value".to_string()),
             }
         }
     }
