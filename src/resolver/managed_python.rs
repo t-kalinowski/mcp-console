@@ -150,6 +150,10 @@ fn resolve_python_manifest_with_r(
     let resolved_python = versions
         .resolve(&requirements.python_version)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))?;
+    versions.validate_paths(&resolved_python, |path| {
+        configuration.ensure_safe_python_path(path)
+    })?;
+    validate_uv_storage(configuration, managed_r, &resolver, &mut on_started)?;
     let output_path = PythonPathOutput::create()?;
     let output = run_managed_python_resolver(
         &requirements,
@@ -186,11 +190,55 @@ fn resolve_python_manifest_with_r(
     }
     check_resolver_control(&resolver, "managed Python resolution")?;
     let python = output_path.python()?;
+    configuration.ensure_safe_python_path(&python)?;
     warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,
         requirements,
     })
+}
+
+fn validate_uv_storage<F>(
+    configuration: &super::ManagedPythonResolverConfiguration,
+    managed_r: Option<&super::ManagedR>,
+    resolver: &ResolverProcess,
+    on_started: &mut Option<F>,
+) -> Result<(), String>
+where
+    F: FnOnce(ResolverStopHandle) -> Result<(), String>,
+{
+    if !configuration.has_worker_writable_roots() {
+        return Ok(());
+    }
+    let program = Path::new(configuration.uv()?);
+    for (args, kind) in [
+        (["cache", "dir"], "uv cache"),
+        (["python", "dir"], "uv Python installation"),
+    ] {
+        let mut command = resolver_command(program);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        configure_python_resolver(&mut command, configuration, managed_r)?;
+        let output = run_resolver_command(command, resolver, on_started, program, kind)?;
+        if !output.status.success() {
+            return Err(format!("{kind} lookup failed: {}", resolver_error(&output)));
+        }
+        check_resolver_control(resolver, kind)?;
+        let value = String::from_utf8(output.stdout)
+            .map_err(|_| format!("{kind} returned a non-UTF-8 path"))?;
+        let path = Path::new(value.trim());
+        if !path.is_absolute() {
+            return Err(format!(
+                "{kind} returned a non-absolute path: {}",
+                path.display()
+            ));
+        }
+        configuration.ensure_safe_python_path(path)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_python_version(

@@ -9,6 +9,7 @@ pub(crate) struct ManagedPythonResolverConfiguration {
     explicit_uv: Option<OsString>,
     reticulate_uv: Option<OsString>,
     uv: Option<OsString>,
+    worker_writable: Vec<PathBuf>,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -30,12 +31,28 @@ impl ManagedPythonResolverConfiguration {
             explicit_uv,
             reticulate_uv,
             uv,
+            worker_writable: Vec::new(),
         }
     }
 
     pub(crate) fn without_r_bootstrap(mut self, blocked: &[PathBuf]) -> Result<Self, String> {
         // A prior worker may have replaced a project uv. Select and pin a
         // resolved executable before any resolver process starts.
+        self.worker_writable = blocked.to_vec();
+        if let Some(variable) = self.worker_writable_storage()? {
+            if self.explicit_uv.is_some() {
+                return Err(format!("selected uv cannot use worker-writable {variable}"));
+            }
+            self.uv = None;
+            self.reticulate_uv = None;
+            return Ok(self);
+        }
+        if !blocked.is_empty() && !self.environment.contains_key(OsStr::new("UV_CONFIG_FILE")) {
+            // A later worker can write project uv.toml files. Keep the host
+            // resolver on its captured environment instead of rediscovering them.
+            Arc::make_mut(&mut self.environment)
+                .insert(OsString::from("UV_NO_CONFIG"), OsString::from("1"));
+        }
         let uv = match self.explicit_uv.as_deref() {
             Some(value) if value != OsStr::new("managed") => {
                 let path = PathBuf::from(value);
@@ -57,6 +74,84 @@ impl ManagedPythonResolverConfiguration {
         self.uv = uv.clone().map(Into::into);
         self.reticulate_uv = self.uv.clone();
         Ok(self)
+    }
+
+    fn worker_writable_storage(&self) -> Result<Option<&'static str>, String> {
+        if self.worker_writable.is_empty() {
+            return Ok(None);
+        }
+        for name in [
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "UV_TOOL_DIR",
+            "UV_CONFIG_FILE",
+            "UV_PROJECT_ENVIRONMENT",
+        ] {
+            if let Some(value) = self.environment.get(OsStr::new(name))
+                && self.path_is_worker_writable(Path::new(value))?
+            {
+                return Ok(Some(name));
+            }
+        }
+        if let Some(value) = self.environment.get(OsStr::new("UV_PYTHON"))
+            && Path::new(value).components().count() > 1
+            && self.path_is_worker_writable(Path::new(value))?
+        {
+            return Ok(Some("UV_PYTHON"));
+        }
+        for (name, override_name) in [
+            ("XDG_CACHE_HOME", "UV_CACHE_DIR"),
+            ("XDG_DATA_HOME", "UV_PYTHON_INSTALL_DIR"),
+        ] {
+            if !self.environment.contains_key(OsStr::new(override_name))
+                && let Some(value) = std::env::var_os(name)
+                && self.path_is_worker_writable(Path::new(&value))?
+            {
+                return Ok(Some(name));
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME")
+            && self.path_is_worker_writable(Path::new(&home))?
+        {
+            return Ok(Some("HOME"));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn has_worker_writable_roots(&self) -> bool {
+        !self.worker_writable.is_empty()
+    }
+
+    pub(super) fn ensure_safe_python_path(&self, path: &Path) -> Result<(), String> {
+        if self.path_is_worker_writable(path)? {
+            return Err(format!(
+                "managed Python path is worker-writable: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn path_is_worker_writable(&self, path: &Path) -> Result<bool, String> {
+        if self.worker_writable.is_empty() {
+            return Ok(false);
+        }
+        let absolute =
+            std::path::absolute(path).map_err(|error| format!("cannot locate uv path: {error}"))?;
+        let (ancestor, resolved) = absolute
+            .ancestors()
+            .find_map(|ancestor| {
+                ancestor
+                    .canonicalize()
+                    .ok()
+                    .map(|resolved| (ancestor, resolved))
+            })
+            .ok_or_else(|| format!("cannot resolve uv path: {}", path.display()))?;
+        let resolved = resolved.join(absolute.strip_prefix(ancestor).expect("path ancestor"));
+        Ok(self
+            .worker_writable
+            .iter()
+            .any(|root| absolute.starts_with(root) || resolved.starts_with(root)))
     }
 
     pub(super) fn explicit_uv(&self) -> Option<&OsStr> {

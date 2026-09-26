@@ -19,6 +19,9 @@ if "run" in arguments and "py-yaml12" in arguments:
     if mode in ("inspection", "inspection-interrupt"):
         Path(arguments[-1]).write_text(str(root / "invalid-python"))
         sys.exit(0)
+    if mode == "unsafe-candidate":
+        Path(arguments[-1]).write_text(os.environ["MCP_CONSOLE_TEST_UNSAFE_PYTHON"])
+        sys.exit(0)
     if mode == "interrupt":
         signal.signal(
             signal.SIGINT, lambda *_: sys.exit("fixture Python resolution interrupted")

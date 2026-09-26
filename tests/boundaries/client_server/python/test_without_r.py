@@ -99,6 +99,148 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
 
 
 @executions(SANDBOXED)
+def test_full_write_policy_disables_managed_uv(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for filesystem in (
+        "kind: unrestricted",
+        """kind: restricted
+    entries:
+      - path: {type: special, value: {kind: root}}
+        access: write""",
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text("sandbox:\n  filesystem:\n    " + filesystem + "\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            marker = root / "uv-executed"
+            uv = bin_dir / "uv"
+            uv.write_text(
+                f"#!{sys.executable}\n"
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed')\n"
+                "raise SystemExit(87)\n"
+            )
+            uv.chmod(0o755)
+            (bin_dir / "python3").symlink_to(sys.executable)
+            with McpClient(
+                binary, execution.serve(), environment(bin_dir), workspace
+            ) as client:
+                client.initialize_and_list_tools()
+                schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
+                assert "requirements" not in schema["properties"]
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        print("PATH Python selected")
+                        """)
+                )
+                assert last_result_text(client) == "PATH Python selected\n"
+                client.finish()
+            assert not marker.exists()
+            records.append({filesystem.splitlines()[0]: "managed uv disabled"})
+    return records
+
+
+@executions(SANDBOXED)
+def test_worker_writable_uv_storage_disables_managed_uv(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for variable in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR"):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text('extends: ":workspace"\n')
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            marker = root / "uv-executed"
+            uv = bin_dir / "uv"
+            uv.write_text(
+                f"#!{sys.executable}\n"
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed')\n"
+                "raise SystemExit(87)\n"
+            )
+            uv.chmod(0o755)
+            (bin_dir / "python3").symlink_to(sys.executable)
+            env = environment(bin_dir)
+            env[variable] = str(workspace / "uv-storage")
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.initialize_and_list_tools()
+                schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
+                assert "requirements" not in schema["properties"]
+                client.finish()
+            assert not marker.exists()
+            records.append({variable: "managed uv disabled"})
+    return records
+
+
+@executions(SANDBOXED)
+def test_worker_writable_candidate_preserves_running_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        env = preparation_environment(root)
+        candidate = workspace / "candidate-python"
+        marker = workspace / "candidate-executed"
+        env["MCP_CONSOLE_TEST_UNSAFE_PYTHON"] = str(candidate)
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    import os
+                    from pathlib import Path
+
+                    identity = object()
+                    candidate = Path(os.environ["MCP_CONSOLE_TEST_UNSAFE_PYTHON"])
+                    candidate.write_text("#!/bin/sh\nprintf touched > candidate-executed\nexit 87\n")
+                    candidate.chmod(0o755)
+                    """)
+            )
+            assert not client.transcript[-1]["result"]["isError"]
+            assert candidate.is_file(), client.transcript[-1]
+            (root / "mode").write_text("unsafe-candidate")
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    open("replacement-ran", "w").close()
+                    """),
+            )
+            assert client.transcript[-1]["result"]["isError"]
+            assert "worker-writable" in last_result_text(client), client.transcript[-1]
+            assert not marker.exists()
+            assert not (workspace / "replacement-ran").exists()
+            client.send(
+                # fmt: python
+                python=code("""
+                    assert identity is not None
+                    print("old worker retained")
+                    """)
+            )
+            assert last_result_text(client) == "old worker retained\n"
+            return preparation_records(client.finish(), root)
+
+
+@executions(SANDBOXED)
 def test_skips_project_uv_left_by_a_writable_worker(
     binary: Path, execution: Execution
 ) -> Transcript:

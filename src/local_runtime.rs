@@ -129,6 +129,33 @@ impl Selection {
 pub(crate) fn blocked_uv_roots(
     settings: &crate::settings::SandboxSettings,
 ) -> Result<Vec<PathBuf>, String> {
+    let filesystem = settings.get("filesystem");
+    let kind = filesystem
+        .and_then(|filesystem| filesystem.get("kind"))
+        .and_then(crate::settings::native_variant_name);
+    let entries = filesystem
+        .and_then(|filesystem| filesystem.get("entries"))
+        .and_then(serde_json::Value::as_array);
+    let root_write = entries.is_some_and(|entries| {
+        entries.iter().any(|entry| {
+            entry
+                .get("access")
+                .and_then(crate::settings::native_variant_name)
+                == Some("write")
+                && entry
+                    .pointer("/path/type")
+                    .and_then(crate::settings::native_variant_name)
+                    == Some("special")
+                && entry
+                    .pointer("/path/value/kind")
+                    .and_then(crate::settings::native_variant_name)
+                    == Some("root")
+        })
+    });
+    if matches!(kind, Some("unrestricted" | "external-sandbox")) || root_write {
+        // Console cannot establish a protected host resolver path here.
+        return Ok(vec![PathBuf::from("/")]);
+    }
     let workspace = std::env::current_dir()
         .map_err(|error| format!("cannot find launch workspace: {error}"))?;
     let mut roots = vec![
@@ -136,11 +163,7 @@ pub(crate) fn blocked_uv_roots(
             .canonicalize()
             .map_err(|error| format!("cannot resolve launch workspace: {error}"))?,
     ];
-    if let Some(entries) = settings
-        .get("filesystem")
-        .and_then(|filesystem| filesystem.get("entries"))
-        .and_then(serde_json::Value::as_array)
-    {
+    if let Some(entries) = entries {
         for entry in entries {
             if entry
                 .get("access")

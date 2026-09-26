@@ -59,6 +59,10 @@ Its captured value is preserved when sandbox environment inheritance is disabled
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
 At sandboxed local sans-R launch, Console skips `uv` executables whose resolved path is inside the project or a configured worker write grant, then checks later PATH entries.
 An explicit `RETICULATE_UV` at such a path is rejected before execution.
+Full filesystem write policies, special root write grants, and externally enforced filesystem policies disable managed uv preparation; the session uses PATH Python when available.
+Worker-writable uv cache, installation, tool, or explicit config paths also disable implicit uv selection, while an explicit uv selection fails.
+Console checks uv's effective cache and Python installation directories before creating a new environment, then checks the selected interpreter before host-side warmup and native inspection.
+Sandboxed managed sessions do not discover project uv configuration files; a trusted explicit `UV_CONFIG_FILE` remains available outside worker-writable paths.
 The accepted executable path is retained for subsequent preparation, including across worker generations.
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
 In a Console-managed uv session, `requirements.python` can add packages before the first worker starts, alone or with a Python cell.
