@@ -407,7 +407,10 @@ The server waits, polls, or completes the MCP response without moving response o
 
 When a code-bearing `send` declares requirements, the server treats them as preconditions of that evaluation.
 One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
-For local sans-R managed Python, the launch boundary constructs a separate native preparation sandbox with a fixed environment allowlist and Console-owned storage.
+For local sans-R managed Python, the launch boundary constructs a separate native preparation sandbox with read-only host access, denied worker locations, and writes to uv-selected storage and preparation temporary files.
+The native launcher starts with a cleared environment and supplies the captured user environment only after enforcement.
+uv interprets user/system configuration and reports its storage paths; Console retains them for the session.
+Resolver, inspection, and status results are read with size limits from the original open descriptors.
 Version discovery, uv resolution, cache warming, and native inspection all use it; the server owns ordinary child lifetime and requires successful native retirement before accepting a candidate.
 Interrupt and cancellation retire the preparation sandbox without changing the current worker.
 The supported worker policies exclude custom filesystem and native extensions, so the resolver does not reconstruct effective worker write permissions.

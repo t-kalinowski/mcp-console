@@ -1,117 +1,160 @@
-//! One native boundary for sans-R preparation, separate from worker permissions.
+//! Captured uv configuration inside a native preparation boundary.
 
 use super::*;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub(super) struct Preparation {
-    pub(super) storage: PathBuf,
+    temporary: crate::local_runtime::TemporaryDirectory,
+    pub(super) storage: Vec<PathBuf>,
     runner: PathBuf,
-    policy: String,
+    policy: serde_json::Value,
 }
 
 impl Preparation {
+    pub(super) fn directory(&self) -> &Path {
+        self.temporary.path()
+    }
+
     pub(super) fn capture(
         policy: Option<&crate::settings::SandboxSettings>,
         explicit_uv: Option<&OsStr>,
+        on_started: &dyn Fn(super::super::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, PathBuf, BTreeMap<OsString, OsString>), String> {
         let workspace = std::env::current_dir()
             .and_then(|path| path.canonicalize())
             .map_err(|error| format!("cannot locate preparation workspace: {error}"))?;
-        let home = std::env::var_os("HOME").ok_or("managed Python requires HOME")?;
-        let storage = PathBuf::from(home).join(".cache/mcp-console/python");
-        std::fs::create_dir_all(&storage)
-            .map_err(|error| format!("cannot create Python preparation storage: {error}"))?;
-        let storage = storage.canonicalize().map_err(|error| error.to_string())?;
-        if storage.starts_with(&workspace) || workspace.starts_with(&storage) {
-            return Err("managed Python storage must be outside the workspace; set python in .agents/console/config.yaml to use an existing environment".into());
+        let temporary_parent = std::env::temp_dir()
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if temporary_parent.starts_with(&workspace) {
+            return Err("managed Python preparation temporary storage must be outside the workspace; set python in .agents/console/config.yaml to use an existing environment".into());
         }
+        // Supported worker policies grant only the workspace and private temporary
+        // storage. Deny its parent too, so preparation cannot consume worker files.
+        let blocked = [&workspace, &temporary_parent];
+        let temporary = crate::local_runtime::TemporaryDirectory::create()?;
+        let (runner, mut native) = crate::target_launch::preparation_sandbox(
+            policy,
+            &workspace,
+            temporary.path(),
+            &temporary_parent,
+        )?;
         let select = |path: PathBuf| {
             path.canonicalize()
                 .ok()
-                .filter(|path| path.is_file() && !path.starts_with(&workspace))
+                .filter(|path| path.is_file() && !blocked.iter().any(|root| path.starts_with(root)))
         };
         let uv = match explicit_uv.filter(|value| *value != OsStr::new("managed")) {
-            Some(path) => select(PathBuf::from(path)).ok_or("selected uv is in the project or unavailable")?,
+            Some(path) => select(PathBuf::from(path)).ok_or("selected uv is in the project or temporary storage, or unavailable; set python in .agents/console/config.yaml to use an existing environment")?,
             None => std::env::var_os("PATH").into_iter().flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
                 .find_map(|directory| select(directory.join("uv")))
                 .ok_or("R is unavailable and no protected `uv` executable was found on PATH; install uv or set python in .agents/console/config.yaml to select an existing environment")?,
         };
-        let mut environment = BTreeMap::new();
-        // Capture values, not configuration files or arbitrary build commands.
-        // uv interprets the supported options itself. The legacy index alias
-        // supplies a default only when its current spelling is absent.
-        for name in [
-            "UV_DEFAULT_INDEX",
-            "UV_EXTRA_INDEX_URL",
-            "UV_INDEX_STRATEGY",
-            "UV_EXCLUDE_NEWER",
-        ] {
-            if let Some(value) = std::env::var_os(name).or_else(|| {
-                (name == "UV_DEFAULT_INDEX")
-                    .then(|| std::env::var_os("UV_INDEX_URL"))
-                    .flatten()
-            }) {
-                if matches!(name, "UV_DEFAULT_INDEX" | "UV_EXTRA_INDEX_URL") {
-                    for url in value
-                        .to_str()
-                        .ok_or("Python index must be UTF-8")?
-                        .split_whitespace()
-                    {
-                        let parsed = pep508_rs::VerbatimUrl::parse_url(url)
-                            .map_err(|error| error.to_string())?;
-                        if !matches!(parsed.scheme(), "http" | "https") {
-                            return Err("managed Python indexes must use HTTP or HTTPS".into());
-                        }
-                    }
-                }
-                environment.insert(name.into(), value);
-            }
+        if blocked.iter().any(|root| runner.starts_with(root)) {
+            return Err("managed Python requires Console to be installed outside the project and worker temporary storage; set python in .agents/console/config.yaml to use an existing environment".into());
         }
+        let mut environment = std::env::vars_os().collect::<BTreeMap<_, _>>();
+        for name in ["VIRTUAL_ENV", "UV_MANAGED_PYTHON", "UV_NO_MANAGED_PYTHON"] {
+            environment.remove(OsStr::new(name));
+        }
+        // uv owns configuration parsing and precedence. These are Console's
+        // persistent, wheel-only, managed-interpreter lifecycle constraints.
         for (name, value) in [
-            ("PATH", "/usr/bin:/bin"),
-            ("UV_NO_CONFIG", "1"),
             ("UV_NO_BUILD", "1"),
+            ("UV_NO_CACHE", "0"),
+            ("UV_NO_ENV_FILE", "1"),
+            ("UV_NO_SOURCES", "1"),
             ("UV_PYTHON_PREFERENCE", "only-managed"),
-            ("UV_KEYRING_PROVIDER", "disabled"),
+            ("UV_WORKING_DIR", "/"),
+            ("UV_PROJECT", "/"),
         ] {
             environment.insert(name.into(), value.into());
         }
-        for (name, relative) in [
-            ("HOME", "home"),
-            ("UV_CACHE_DIR", "uv"),
-            ("UV_PYTHON_INSTALL_DIR", "python"),
-            ("XDG_CACHE_HOME", "cache"),
+        native["inherit_environment"] = false.into();
+        crate::settings::preserve_environment(
+            native.as_object_mut().expect("preparation policy"),
+            environment
+                .iter()
+                .map(|(name, value)| (name.as_os_str(), Some(value.as_os_str()))),
+        )?;
+        let mut preparation = Self {
+            temporary,
+            storage: Vec::new(),
+            runner,
+            policy: native,
+        };
+        let resolver =
+            super::super::process::ResolverProcess::for_preparation(Some(preparation.directory()))?;
+        let mut on_started = Some(on_started);
+        for (arguments, name) in [
+            (["cache", "dir"], "UV_CACHE_DIR"),
+            (["python", "dir"], "UV_PYTHON_INSTALL_DIR"),
         ] {
-            let path = storage.join(relative);
+            let mut command = preparation.command(&uv, &resolver.status_file()?)?;
+            command
+                .args(arguments)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let output = super::super::managed_python::run_resolver_command(
+                command,
+                &resolver,
+                &mut on_started,
+                &uv,
+                "uv storage discovery",
+            )?;
+            if !output.status.success() {
+                return Err(format!(
+                    "uv storage discovery failed: {}; set python in .agents/console/config.yaml to use an existing environment",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+            let path = PathBuf::from(
+                String::from_utf8(output.stdout)
+                    .map_err(|error| error.to_string())?
+                    .trim(),
+            );
+            if !path.is_absolute() {
+                return Err("uv returned a non-absolute storage directory".into());
+            }
             std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-            environment.insert(name.into(), path.into());
+            let path = path.canonicalize().map_err(|error| error.to_string())?;
+            if blocked
+                .iter()
+                .any(|root| path.starts_with(root) || root.starts_with(&path))
+            {
+                return Err("uv storage overlaps the workspace or worker temporary storage; set python in .agents/console/config.yaml to use an existing environment".into());
+            }
+            environment.insert(name.into(), path.clone().into());
+            preparation.storage.push(path);
         }
-        let (runner, policy) =
-            crate::target_launch::preparation_sandbox(policy, &workspace, &storage, &uv)?;
-        Ok((
-            Self {
-                storage,
-                runner,
-                policy,
-            },
-            uv,
-            environment,
-        ))
+        crate::target_launch::preparation_storage(&mut preparation.policy, &preparation.storage);
+        crate::settings::preserve_environment(
+            preparation
+                .policy
+                .as_object_mut()
+                .expect("preparation policy"),
+            environment
+                .iter()
+                .map(|(name, value)| (name.as_os_str(), Some(value.as_os_str()))),
+        )?;
+        Ok((preparation, uv, environment))
     }
 
-    pub(super) fn command(
-        &self,
-        program: &Path,
-        environment: &BTreeMap<OsString, OsString>,
-        status: &Path,
-    ) -> Command {
+    pub(super) fn command(&self, program: &Path, status: &Path) -> Result<Command, String> {
+        let mut policy = self.policy.clone();
+        policy["environment"]["MCP_CONSOLE_RESOLVER_STATUS"] = status
+            .to_str()
+            .ok_or("preparation status path must be UTF-8")?
+            .into();
         let mut command = crate::resolver::process::resolver_command(&self.runner);
-        command.env_clear().envs(environment).env("MCP_CONSOLE_PREPARATION_POLICY", &self.policy)
-            .current_dir(&self.storage)
-            .env("MCP_CONSOLE_RESOLVER_STATUS", status)
+        // Loader and shell configuration must reach only the isolated target,
+        // never the native launcher or its setup helpers.
+        command.env_clear().env("MCP_CONSOLE_PREPARATION_POLICY", policy.to_string())
+            .current_dir("/")
             .args(["--config-env", "MCP_CONSOLE_PREPARATION_POLICY", "--", "/bin/sh", "-c",
-                r#""$@"; result=$?; printf '%s' "$result" > "$MCP_CONSOLE_RESOLVER_STATUS"; exit 0"#,
+                r#"exec 9>"$MCP_CONSOLE_RESOLVER_STATUS"; "$@"; result=$?; printf '%s' "$result" >&9; exit 0"#,
                 "console-preparation"]).arg(program);
-        command
+        Ok(command)
     }
 }

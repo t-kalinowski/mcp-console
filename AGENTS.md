@@ -176,7 +176,9 @@ Keep these invariants intact:
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
-  Local sans-R managed Python uses a separate native preparation sandbox with Console-owned storage, a cleared environment, and registry wheels only; custom filesystem policies require explicit Python selection.
+  Local sans-R managed Python uses a separate native preparation sandbox with read-only host access, denied worker locations, uv-selected shared storage, and registry wheels only.
+  The launcher environment is cleared; captured user configuration reaches the resolver after isolation.
+  Custom filesystem policies require explicit Python selection.
   Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 registry requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   In R-present sessions, accepted installation or build code may execute with server permissions.
 - Treat submitted R, Python, and SQL as shell-class capability and enforce isolation at the worker-process boundary unless `serve --no-sandbox` is selected.

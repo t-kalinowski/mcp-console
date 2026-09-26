@@ -25,7 +25,7 @@ result:
   content:
     - type: text
       text: >-
-        [managed Python path is outside Console storage:
+        [managed Python path is outside uv storage:
         <workspace>/candidate-python]
   isError: true
 ---

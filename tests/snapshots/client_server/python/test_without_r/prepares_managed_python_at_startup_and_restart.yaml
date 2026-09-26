@@ -99,9 +99,7 @@ result:
     - type: text
       text: |-
         Traceback (most recent call last):
-          File "<string>", line 466, in _mcp_console_eval_cell
           File "<mcp-console:python:e5>", line 7, in <module>
-          File "<string>", line 49, in _console_input
         EOFError
         [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]

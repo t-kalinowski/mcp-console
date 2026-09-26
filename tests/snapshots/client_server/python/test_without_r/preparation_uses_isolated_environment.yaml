@@ -4,6 +4,9 @@ send:
     import os, sys
     from pathlib import Path
 
+    temporary = Path(os.environ["TMPDIR"]) / "worker-created"
+    temporary.write_text("worker code")
+    Path("temporary-path").write_text(str(temporary))
     Path(os.environ["CC"]).write_text("#!/bin/sh\nexit 85\n")
     if os.environ.get("MCP_CONSOLE_SANDBOX") == "1":
         for path in (

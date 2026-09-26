@@ -42,9 +42,9 @@ def selected_environment(path: Path) -> dict[str, str]:
 
 
 def preparation_directory():
-    storage = Path.home() / ".cache/mcp-console/python"
-    storage.mkdir(parents=True, exist_ok=True)
-    return tempfile.TemporaryDirectory(dir=storage)
+    return tempfile.TemporaryDirectory(
+        prefix=".console-preparation-test-", dir=Path.home()
+    )
 
 
 def preparation_environment(root: Path) -> dict[str, str]:
@@ -67,7 +67,7 @@ def preparation_environment(root: Path) -> dict[str, str]:
         }
     )
     (root / "invalid-inspection.json").write_text(json.dumps(description))
-    return environment(root)
+    return dict(environment(root), UV_CACHE_DIR=str(root))
 
 
 def preparation_records(records: Transcript, root: Path) -> Transcript:
@@ -95,7 +95,7 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
 def test_preparation_uses_isolated_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with preparation_directory() as directory:
         root = Path(directory)
         workspace = root / "workspace"
         workspace.mkdir()
@@ -107,23 +107,21 @@ def test_preparation_uses_isolated_environment(
         private = root / "private"
         private.write_text("unrelated user data")
         uv = root / "uv"
-        uv.write_text(
-            "#!/bin/sh\n"
-            'test -z "$CC$PYTHONPATH$UV_CONFIG_FILE" || exit 81\n'
-            'test "$UV_NO_CONFIG:$UV_NO_BUILD" = "1:1" || exit 82\n'
-            f'test ! -r "{secret}" || exit 83\n'
-            f'test ! -r "{private}" || exit 83\n'
-            f'if (echo escaped > "{workspace / "escaped"}") 2>/dev/null; then exit 84; fi\n'
-            f'exec "{shutil.which("uv")}" "$@"\n'
-        )
+        uv.write_text(f"""#!/bin/sh
+test "$UV_NO_BUILD" = 1 || exit 82
+test ! -r "{secret}" || exit 83
+test -r "{private}" || exit 83
+test ! -r "$CC" || exit 84
+if [ -f "{root / "worker-temporary"}" ]; then
+    test ! -r "$(/bin/cat "{root / "worker-temporary"}")" || exit 85
+fi
+exec "{shutil.which("uv")}" "$@"
+""")
         uv.chmod(0o755)
         env = environment(root)
         env.update(
             CC=str(workspace / "cc"),
             PYTHONPATH=str(workspace),
-            UV_CONFIG_FILE=str(workspace / "uv.toml"),
-            UV_CACHE_DIR=str(workspace / "untrusted-cache"),
-            UV_PYTHON_INSTALL_DIR=str(workspace / "untrusted-python"),
             MCP_CONSOLE_TEST_UV=str(uv),
         )
         (workspace / "uv.toml").write_text(
@@ -137,6 +135,9 @@ def test_preparation_uses_isolated_environment(
                     import os, sys
                     from pathlib import Path
 
+                    temporary = Path(os.environ["TMPDIR"]) / "worker-created"
+                    temporary.write_text("worker code")
+                    Path("temporary-path").write_text(str(temporary))
                     Path(os.environ["CC"]).write_text("#!/bin/sh\nexit 85\n")
                     if os.environ.get("MCP_CONSOLE_SANDBOX") == "1":
                         for path in (
@@ -154,6 +155,9 @@ def test_preparation_uses_isolated_environment(
                     """)
             )
             assert last_result_text(client) == "preparation inputs protected\n"
+            (root / "worker-temporary").write_text(
+                (workspace / "temporary-path").read_text()
+            )
             client.send(
                 control="restart",
                 requirements={"python": ["py-yaml12"]},
@@ -162,7 +166,6 @@ def test_preparation_uses_isolated_environment(
             assert last_result_text(client).endswith("42\n[done]"), client.transcript[
                 -1
             ]
-            assert not (workspace / "escaped").exists()
             return client.finish()[3:]
 
 
@@ -246,16 +249,29 @@ def test_rejects_unsupported_managed_inputs(
     binary: Path, execution: Execution
 ) -> Transcript:
     records = []
-    for name in ("UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "UV_INDEX_URL"):
-        with tempfile.TemporaryDirectory() as directory:
+    for name in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_CONFIG_FILE", "TMPDIR"):
+        with preparation_directory() as directory:
             root = Path(directory)
-            shutil.copy2(shutil.which("uv"), root / "uv")
-            env = dict(environment(root), **{name: "file:///workspace/packages"})
-            with McpClient(binary, execution.serve(), env) as client:
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (root / "uv").symlink_to(shutil.which("uv"))
+            value = (
+                workspace / "uv.toml"
+                if name == "UV_CONFIG_FILE"
+                else workspace / "storage"
+            )
+            if name == "UV_CONFIG_FILE":
+                value.write_text('index-url = "https://invalid.example/simple"\n')
+            if name == "TMPDIR":
+                value.mkdir()
+            env = dict(environment(root), **{name: str(value)})
+            with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.process.wait(timeout=30)
                 diagnostic = client.stderr.read()
-                assert "indexes must use HTTP or HTTPS" in diagnostic, diagnostic
-                records.append({"setting": name, "local index": "rejected"})
+                assert "set python in .agents/console/config.yaml" in diagnostic, (
+                    diagnostic
+                )
+                records.append({"setting": name, "worker-controlled input": "rejected"})
     return records
 
 
@@ -263,29 +279,48 @@ def test_rejects_unsupported_managed_inputs(
 def test_captures_user_uv_configuration(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
         root = Path(directory)
-        uv = root / "uv"
-        uv.write_text(
-            "#!/bin/sh\n"
-            'test "$UV_DEFAULT_INDEX" = "https://pypi.org/simple" || exit 81\n'
-            'test -z "$UV_INDEX_URL$UV_CONFIG_FILE" || exit 82\n'
-            f'exec "{shutil.which("uv")}" "$@"\n'
-        )
-        uv.chmod(0o755)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        cache = root / "cache"
         config = root / "uv.toml"
         config.write_text(
-            '[[index]]\ndefault = true\nurl = "https://invalid.example/simple"\n'
+            f'cache-dir = "{cache}"\nindex-url = "https://invalid.example/simple"\n'
         )
+        uv = root / "uv"
+        uv.write_text(f"""#!/bin/sh
+test "$UV_HTTP_TIMEOUT" = 37 || exit 81
+exec "{shutil.which("uv")}" "$@"
+""")
+        uv.chmod(0o755)
         env = dict(
             environment(root),
             UV_CONFIG_FILE=str(config),
             UV_INDEX_URL="https://pypi.org/simple",
+            UV_HTTP_TIMEOUT="37",
+            MCP_CONSOLE_TEST_CACHE=str(cache),
         )
-        with McpClient(binary, execution.serve(), env) as client:
+        # Project discovery must not override user configuration.
+        (workspace / "uv.toml").write_text(
+            'index-url = "https://invalid.example/project"\n'
+        )
+        with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
-            client.send(python="retained = 42")
-            config.write_text('invalid = "changed after capture"\n')
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, sys
+                    from pathlib import Path
+
+                    assert Path(sys.prefix).is_relative_to(Path(os.environ["MCP_CONSOLE_TEST_CACHE"]))
+                    os.environ["UV_CONFIG_FILE"] = str(Path.cwd() / "uv.toml")
+                    os.environ["UV_CACHE_DIR"] = str(Path.cwd() / "worker-cache")
+                    os.environ["UV_HTTP_TIMEOUT"] = "1"
+                    print("user cache selected")
+                    """)
+            )
+            assert last_result_text(client) == "user cache selected\n"
             client.send(
                 control="restart",
                 requirements={"python": ["py-yaml12"]},
@@ -294,7 +329,8 @@ def test_captures_user_uv_configuration(
             assert last_result_text(client).endswith("42\n[done]"), client.transcript[
                 -1
             ]
-            return client.finish()
+            assert not (workspace / "worker-cache").exists()
+            return client.finish()[3:]
 
 
 @executions(SANDBOXED)
@@ -528,7 +564,7 @@ def test_worker_writable_candidate_preserves_running_worker(
             diagnostic = last_result_text(client)
             assert (
                 diagnostic
-                == f"[managed Python path is outside Console storage: {candidate}]"
+                == f"[managed Python path is outside uv storage: {candidate}]"
             )
             client.transcript[-1]["result"]["content"][0]["text"] = diagnostic.replace(
                 str(candidate), "<workspace>/candidate-python"
@@ -610,7 +646,7 @@ def test_skips_project_uv_left_by_a_writable_worker(
         )
         assert rejected.returncode != 0
         assert "selected uv" in rejected.stderr
-        assert "project or unavailable" in rejected.stderr
+        assert "project or temporary storage, or unavailable" in rejected.stderr
         assert not (workspace / "project-uv-executed").exists()
         records.append({"explicit_project_uv": "rejected without execution"})
         explicit_python = dict(explicit, RETICULATE_PYTHON=sys.executable)
@@ -633,7 +669,7 @@ def test_skips_project_uv_left_by_a_writable_worker(
 def test_prepares_managed_python_at_startup_and_restart(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
-    with tempfile.TemporaryDirectory() as directory:
+    with preparation_directory() as directory:
         root = Path(directory)
         workspace = root / "workspace"
         workspace.mkdir()
@@ -960,6 +996,35 @@ def test_failed_managed_preparation_preserves_worker_and_input(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_preparation_pins_result_files(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as workspace,
+        preparation_directory() as directory,
+    ):
+        root = Path(directory)
+        env = preparation_environment(root)
+        unrelated = root / "unrelated"
+        unrelated.write_text("unrelated host contents")
+        with McpClient(binary, execution.serve(), env, Path(workspace)) as client:
+            client.initialize_and_list_tools()
+            client.send(python="retained = 42")
+            for mode in ("replace-output", "replace-inspection", "replace-status"):
+                (root / "mode").write_text(mode)
+                client.send(control="restart", requirements={"python": ["py-yaml12"]})
+                diagnostic = last_result_text(client)
+                assert "selected Python embedding library is missing" in diagnostic, (
+                    diagnostic
+                )
+                assert "unrelated host contents" not in diagnostic
+                assert unrelated.read_text() == "unrelated host contents"
+                client.send(python="retained")
+                assert last_result_text(client) == "42\n"
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
 def test_retries_failed_prestart_python_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1083,7 +1148,7 @@ def test_shutdown_cancels_sans_r_python_preparation(
 def test_resolves_default_python_without_r(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with preparation_directory() as directory:
         path = Path(directory)
         uv = shutil.which("uv")
         assert uv is not None
@@ -1303,7 +1368,7 @@ def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Tra
 def test_resolver_failure_does_not_fall_back(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with preparation_directory() as directory:
         path = Path(directory)
         uv = path / "uv"
         uv.write_text("#!/bin/sh\necho 'fixture uv resolution failed' >&2\nexit 47\n")

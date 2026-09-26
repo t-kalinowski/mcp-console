@@ -1,7 +1,4 @@
-use std::ffi::OsString;
-use std::fs::{self, File};
-use std::os::fd::FromRawFd as _;
-use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -57,14 +54,14 @@ pub(crate) fn inspect_prepared(
     let directory = preparation.map_or_else(std::env::temp_dir, |configuration| {
         configuration.output_directory()
     });
-    let result = InspectionOutput::create(&directory)?;
+    let result = crate::resolver::result_file::ResultFile::create(&directory)?;
     let resolver = ResolverProcess::for_preparation(
         preparation.and_then(|configuration| configuration.preparation_directory()),
     )?;
     let mut command = preparation.map_or_else(
-        || resolver_command(executable),
+        || Ok(resolver_command(executable)),
         |configuration| configuration.command(executable, &resolver),
-    );
+    )?;
     command
         // Inspect the selected installation without executing workspace,
         // PYTHONPATH, or user-site code with the host resolver's permissions.
@@ -101,11 +98,8 @@ pub(crate) fn inspect_prepared(
             output.status, ordinary, diagnostic
         ));
     }
-    let description: Description = serde_json::from_slice(
-        &fs::read(result.path())
-            .map_err(|error| format!("failed to read selected Python configuration: {error}"))?,
-    )
-    .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
+    let description: Description = serde_json::from_slice(&result.read(64 * 1024)?)
+        .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
     description.validate(executable)?;
     if let Some(configuration) = preparation {
         for path in [
@@ -188,41 +182,5 @@ impl Description {
             ));
         }
         Ok(())
-    }
-}
-
-struct InspectionOutput(PathBuf);
-
-impl InspectionOutput {
-    fn create(directory: &Path) -> Result<Self, String> {
-        let mut template = directory
-            .join("mcp-console-python-inspection-XXXXXX")
-            .as_os_str()
-            .as_bytes()
-            .to_vec();
-        template.push(0);
-        // SAFETY: mkstemp replaces the trailing Xs and returns a new owned fd.
-        let descriptor = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
-        if descriptor < 0 {
-            return Err(format!(
-                "failed to create Python inspection output: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        // SAFETY: the descriptor is uniquely owned here. The child opens the
-        // path itself, so close this descriptor before launching it.
-        drop(unsafe { File::from_raw_fd(descriptor) });
-        let path = OsString::from_vec(template[..template.len() - 1].to_vec());
-        Ok(Self(PathBuf::from(path)))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for InspectionOutput {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
     }
 }

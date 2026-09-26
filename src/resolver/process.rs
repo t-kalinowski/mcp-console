@@ -72,7 +72,7 @@ pub(crate) struct ResolverOutput {
 type OutputReceiver = Receiver<io::Result<Vec<u8>>>;
 
 pub(crate) struct ResolverProcess {
-    preparation: Option<crate::local_runtime::TemporaryDirectory>,
+    preparation: Option<Mutex<super::result_file::ResultFile>>,
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
@@ -96,15 +96,23 @@ impl ResolverProcess {
     pub(crate) fn for_preparation(directory: Option<&Path>) -> Result<Self, String> {
         let mut process = Self::new();
         process.preparation = directory
-            .map(crate::local_runtime::TemporaryDirectory::create_in)
+            .map(|directory| super::result_file::ResultFile::create(directory).map(Mutex::new))
             .transpose()?;
         Ok(process)
     }
 
-    pub(crate) fn status_file(&self) -> Option<std::path::PathBuf> {
-        self.preparation
+    pub(crate) fn status_file(&self) -> Result<std::path::PathBuf, String> {
+        let mut status = self
+            .preparation
             .as_ref()
-            .map(|directory| directory.path().join("status"))
+            .expect("preparation status")
+            .lock()
+            .expect("status lock");
+        // Each command gets a new file; a prior command may have unlinked its path.
+        *status = super::result_file::ResultFile::create(
+            status.path().parent().expect("result directory"),
+        )?;
+        Ok(status.path().to_owned())
     }
 
     pub(crate) fn spawn(&self, command: &mut Command) -> io::Result<(Child, [OutputReceiver; 2])> {
@@ -195,7 +203,11 @@ impl ResolverProcess {
         program: &Path,
         kind: &str,
     ) -> Result<(), String> {
-        let result = stop_resolver(child, program, kind, self.status_file().as_deref(), true);
+        let status = self
+            .preparation
+            .as_ref()
+            .map(|status| status.lock().expect("status lock"));
+        let result = stop_resolver(child, program, kind, status.as_deref(), true);
         self.cleanup.store(result.is_ok(), Ordering::SeqCst);
         let _ = self.finish_wait(kind);
         result.map(|_| ())
@@ -378,7 +390,7 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
     cleanup: &AtomicBool,
-    status_file: Option<&Path>,
+    status_file: Option<&super::result_file::ResultFile>,
 ) -> Result<ExitStatus, String> {
     let stop = |child: &mut Child, retiring| {
         let result = stop_resolver(child, program, kind, status_file, retiring);
@@ -450,13 +462,17 @@ fn wait_for_resolver(
     program: &Path,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
+    let status_file = resolver
+        .preparation
+        .as_ref()
+        .map(|status| status.lock().expect("status lock"));
     let status = wait_for_resolver_exit(
         child,
         &resolver.event_receiver,
         program,
         kind,
         &resolver.cleanup,
-        resolver.status_file().as_deref(),
+        status_file.as_deref(),
     );
     let phase_result = resolver.finish_wait(kind);
     let status = match status {
@@ -527,7 +543,7 @@ fn stop_resolver(
     child: &mut Child,
     program: &Path,
     kind: &str,
-    status_file: Option<&Path>,
+    status_file: Option<&super::result_file::ResultFile>,
     retiring: bool,
 ) -> Result<ExitStatus, String> {
     if let Some(status_file) = status_file {
@@ -552,7 +568,7 @@ fn stop_resolver(
             return Ok(status);
         }
         use std::os::unix::process::ExitStatusExt as _;
-        let code = std::fs::read_to_string(status_file)
+        let code = String::from_utf8(status_file.read(3)?)
             .map_err(|error| format!("cannot read preparation status: {error}"))?
             .parse::<u8>()
             .map_err(|error| format!("invalid preparation status: {error}"))?;

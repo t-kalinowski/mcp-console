@@ -1,9 +1,12 @@
 ---
-setting: UV_DEFAULT_INDEX
-local index: rejected
+setting: UV_CACHE_DIR
+worker-controlled input: rejected
 ---
-setting: UV_EXTRA_INDEX_URL
-local index: rejected
+setting: UV_PYTHON_INSTALL_DIR
+worker-controlled input: rejected
 ---
-setting: UV_INDEX_URL
-local index: rejected
+setting: UV_CONFIG_FILE
+worker-controlled input: rejected
+---
+setting: TMPDIR
+worker-controlled input: rejected

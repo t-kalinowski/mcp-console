@@ -40,9 +40,10 @@ impl ManagedPythonResolverConfiguration {
     pub(crate) fn without_r_bootstrap(
         mut self,
         policy: Option<&crate::settings::SandboxSettings>,
+        on_started: &dyn Fn(super::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let (preparation, uv, environment) =
-            managed::Preparation::capture(policy, self.explicit_uv.as_deref())?;
+            managed::Preparation::capture(policy, self.explicit_uv.as_deref(), on_started)?;
         self.uv = Some(uv.into());
         self.reticulate_uv = self.uv.clone();
         self.environment = Arc::new(environment);
@@ -57,14 +58,14 @@ impl ManagedPythonResolverConfiguration {
     pub(crate) fn preparation_directory(&self) -> Option<&Path> {
         self.preparation
             .as_ref()
-            .map(|preparation| preparation.storage.as_path())
+            .map(|preparation| preparation.directory())
     }
 
     pub(crate) fn output_directory(&self) -> PathBuf {
         self.preparation
             .as_ref()
             .map_or_else(std::env::temp_dir, |preparation| {
-                preparation.storage.clone()
+                preparation.directory().to_owned()
             })
     }
 
@@ -72,14 +73,10 @@ impl ManagedPythonResolverConfiguration {
         &self,
         program: &Path,
         resolver: &super::process::ResolverProcess,
-    ) -> std::process::Command {
+    ) -> Result<std::process::Command, String> {
         match &self.preparation {
-            Some(preparation) => preparation.command(
-                program,
-                &self.environment,
-                &resolver.status_file().expect("preparation status"),
-            ),
-            None => super::process::resolver_command(program),
+            Some(preparation) => preparation.command(program, &resolver.status_file()?),
+            None => Ok(super::process::resolver_command(program)),
         }
     }
 
@@ -88,9 +85,13 @@ impl ManagedPythonResolverConfiguration {
             let resolved = path
                 .canonicalize()
                 .map_err(|error| format!("cannot resolve managed Python path: {error}"))?;
-            if !resolved.starts_with(&preparation.storage) {
+            if !preparation
+                .storage
+                .iter()
+                .any(|root| resolved.starts_with(root))
+            {
                 return Err(format!(
-                    "managed Python path is outside Console storage: {}",
+                    "managed Python path is outside uv storage: {}",
                     path.display()
                 ));
             }
@@ -153,6 +154,9 @@ impl ManagedPythonResolverConfiguration {
         &self,
         command: &mut std::process::Command,
     ) -> Result<(), String> {
+        if self.sans_r() {
+            return Ok(());
+        }
         let uv = self.reticulate_uv()?;
         self.configure_uv(command, uv);
         if uv == OsStr::new("managed") {

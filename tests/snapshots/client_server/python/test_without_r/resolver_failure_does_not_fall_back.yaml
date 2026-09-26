@@ -1,4 +1,4 @@
 ---
 stderr: >
-  managed Python version resolution failed with exit status: 47: fixture
-  uv resolution failed
+  uv storage discovery failed: fixture uv resolution failed; set python in
+  .agents/console/config.yaml to use an existing environment

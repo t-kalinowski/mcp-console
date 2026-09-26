@@ -352,8 +352,8 @@ pub(crate) fn preparation_sandbox(
     policy: Option<&crate::settings::SandboxSettings>,
     workspace: &std::path::Path,
     storage: &std::path::Path,
-    uv: &std::path::Path,
-) -> Result<(std::path::PathBuf, String), String> {
+    temporary_parent: &std::path::Path,
+) -> Result<(std::path::PathBuf, serde_json::Value), String> {
     use serde_json::json;
     if let Some(policy) = policy {
         let mut baseline = crate::settings::SandboxSettings::new();
@@ -373,20 +373,33 @@ pub(crate) fn preparation_sandbox(
     }
     let (runner, version) = crate::sandbox::preparation_runner()?;
     let runner = runner.canonicalize().map_err(|error| error.to_string())?;
-    if runner.starts_with(workspace) {
-        return Err("managed Python requires Console to be installed outside the project; set python in .agents/console/config.yaml to use an existing environment".into());
-    }
-    let policy = json!({
+    let mut policy = json!({
         "version": version,
         "filesystem": {"kind": "restricted", "entries": [
-            {"path": {"type": "special", "value": {"kind": "minimal"}}, "access": "read"},
-            {"path": {"type": "path", "path": uv}, "access": "read"},
-            {"path": {"type": "path", "path": runner}, "access": "read"},
-            {"path": {"type": "path", "path": storage}, "access": "write"},
-            {"path": {"type": "path", "path": workspace}, "access": "deny"}
+            {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"},
+            {"path": {"type": "path", "path": temporary_parent}, "access": "deny"},
+            {"path": {"type": "path", "path": storage}, "access": "write"}
         ]},
         "network": "enabled",
         "lifecycle": {"parent_pid": std::process::id(), "sigterm": "retire", "private_tmp": {"environment": ["TMPDIR"]}}
     });
-    Ok((runner, policy.to_string()))
+    // A workspace below the denied temporary parent is already hidden. Avoid
+    // asking the runner to mount another mask inside that hidden directory.
+    if !workspace.starts_with(temporary_parent) {
+        policy["filesystem"]["entries"]
+            .as_array_mut()
+            .expect("preparation entries")
+            .push(json!({"path": {"type": "path", "path": workspace}, "access": "deny"}));
+    }
+    Ok((runner, policy))
+}
+
+/// Add only the captured uv-owned directories to the preparation write grants.
+pub(crate) fn preparation_storage(policy: &mut serde_json::Value, storage: &[std::path::PathBuf]) {
+    let entries = policy["filesystem"]["entries"]
+        .as_array_mut()
+        .expect("preparation entries");
+    entries.extend(storage.iter().map(
+        |path| serde_json::json!({"path": {"type": "path", "path": path}, "access": "write"}),
+    ));
 }

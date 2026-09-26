@@ -26,7 +26,7 @@ pub(super) fn configure(
                 .find("Dependency resolution, when available,")
                 .expect("local dependency description"),
         );
-        description.push_str("Python preparation uses a separate native sandbox with network access and Console-owned storage. Only registry wheels are supported; use trusted dependencies.");
+        description.push_str("Python preparation uses a separate native sandbox with network access and the user's protected uv configuration and storage. Only registry wheels are supported; use trusted dependencies.");
     }
     for (field, description) in [
         (
@@ -74,7 +74,7 @@ pub(super) fn configure(
             .expect("requirement properties");
         fields.shift_remove("r");
         fields.shift_remove("duckdb");
-        fields.get_mut("python").expect("Python requirements")["description"] = "Named PEP 508 registry requirements added to the retained Python manifest. Local paths, URLs, editable requirements, and archives are rejected. Preparation uses uv in a separate native sandbox and Console-owned storage. Only compatible registry wheels are supported; source builds are unavailable. Live changes require control: restart.".into();
+        fields.get_mut("python").expect("Python requirements")["description"] = "Named PEP 508 registry requirements added to the retained Python manifest. Local paths, URLs, editable requirements, and archives are rejected. Preparation uses uv in a separate native sandbox with protected shared uv storage. Only compatible registry wheels are supported; source builds are unavailable. Live changes require control: restart.".into();
     } else {
         properties.shift_remove("requirements");
     }

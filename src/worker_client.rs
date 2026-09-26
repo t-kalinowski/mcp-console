@@ -406,7 +406,10 @@ impl Client {
                 } else {
                     Some(
                         crate::resolver::ManagedPythonResolverConfiguration::capture()
-                            .without_r_bootstrap((!no_sandbox).then_some(&sandbox_settings))?,
+                            .without_r_bootstrap(
+                                (!no_sandbox).then_some(&sandbox_settings),
+                                on_started,
+                            )?,
                     )
                 };
                 let (selection, managed) = crate::local_runtime::Selection::python(

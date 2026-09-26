@@ -66,30 +66,33 @@ Selection is captured at server startup, including when sandbox environment cont
 Without an explicit selection, uv is required; there is no automatic PATH-Python fallback.
 The local `python` setting is unavailable with custom workers or execution targets.
 
-Managed sessions use the installed uv executable with a deliberately small configuration surface.
-They capture `UV_DEFAULT_INDEX` (or legacy `UV_INDEX_URL` when the current spelling is absent), `UV_EXTRA_INDEX_URL`, `UV_INDEX_STRATEGY`, and `UV_EXCLUDE_NEWER` at startup.
-Indexes must use HTTP or HTTPS.
-Other inherited resolver settings and uv configuration files are ignored, including project configuration, compiler commands, Python startup hooks, and loader overrides.
-Use an explicitly selected environment for custom uv configuration, source builds, local packages, or other interpreter installations.
+Managed sessions use the user's installed uv, normal user/system configuration, cache, and managed Python installation directory.
+Console captures the startup environment and asks uv for its effective storage paths; uv owns configuration parsing and precedence.
+Preparation runs from `/` to avoid workspace configuration discovery.
+File-valued settings must refer to protected host files; workspace and worker temporary files are inaccessible.
+Worker environment changes do not configure later preparation.
+Console pins the selected storage paths for the session and never removes shared uv cache contents.
 
-Preparation runs in a separate native sandbox, including uv version discovery, resolution, cache warming, and native Python inspection.
+Preparation runs in a separate native sandbox, including storage/version discovery, resolution, cache warming, and native Python inspection.
 It requires the native runner even with `serve --no-sandbox`; that flag removes worker isolation only.
-The preparation process can access native platform runtime files, the selected uv executable, Console's storage, and its own temporary directory.
-It has network access but cannot read the project or unrelated user files.
-Console clears the child environment and runs from Console-owned storage.
-Only registry wheels are installed; source builds and keyring subprocesses are disabled.
-Console retains its cache and managed Python installations under `~/.cache/mcp-console/python`, independently of user uv caches.
-Workers can read those environments but cannot write them under the supported sandbox policies.
-Direct workers have the ordinary `--no-sandbox` trust contract.
+The resolver has network access and a read-only host filesystem view, with writes to uv's selected storage and preparation temporary files.
+It cannot access the workspace or worker temporary storage.
+The native launcher starts with a cleared environment; captured user configuration reaches the resolver only after isolation is established.
+Console requires managed Python, retained cache environments, and wheels, and disables project sources and environment-file loading.
+Package requests remain named PEP 508 registry requirements; source builds, local paths, editable requirements, and direct URLs are unavailable.
+Trusted uv and package code are part of this mode's trust model.
+The boundary prevents worker-created files from becoming executable inputs to preparation.
 
 Managed sessions support the default policy and the unmodified `:workspace` and `:read-only` filesystem policies.
 Custom filesystem grants, temporary-directory grants, native backend overrides, and Seatbelt extensions require an explicitly selected Python environment.
 This boundary avoids reconstructing effective native permissions in the resolver.
-Console itself must be installed outside the project, and its verified native companion is readable inside preparation.
-Console skips project uv executables while searching PATH and retains the selected canonical path.
-An explicitly selected project uv is rejected, and Console storage must not overlap the project.
-The selected uv and native companion are trusted launch inputs.
-Shared resolver caches are never deleted when retiring a worker or discarding a candidate.
+Console, its native companion, and uv must be installed outside the project and worker temporary storage.
+Console skips unsafe uv executables while searching PATH and retains the selected canonical path.
+An explicit unsafe uv selection is rejected.
+uv storage that overlaps the workspace or the parent of worker temporary storage is rejected with guidance to select an existing environment using `python`.
+Preparation temporary storage must also be outside the workspace.
+Under supported worker sandbox policies, workers can read the accepted Python environment but cannot modify it.
+Direct workers retain the ordinary `--no-sandbox` contract.
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
 In a Console-managed uv session, `requirements.python` can add packages before the first worker starts, alone or with a Python cell.
