@@ -149,6 +149,7 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        python,
         source,
         policy,
         target,
@@ -156,6 +157,9 @@ fn run_server(
     } = settings::discover(overrides)?;
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
+    }
+    if python.is_some() && (target.is_some() || worker.is_some() || relay.is_some()) {
+        return Err("python selection requires a local built-in session".into());
     }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {
@@ -171,7 +175,9 @@ fn run_server(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings, target));
+    let result = runtime.block_on(server::run(
+        worker, relay, no_sandbox, settings, target, python,
+    ));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

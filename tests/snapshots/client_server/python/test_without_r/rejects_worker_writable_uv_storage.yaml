@@ -1,0 +1,10 @@
+---
+write grant: storage
+startup: rejected
+---
+write grant: lib
+startup: rejected
+---
+raw policy extensions: unsupported
+---
+project-installed companion: rejected

@@ -1,5 +1,6 @@
-use std::io::{self, Write};
+use std::io::{self, PipeReader, PipeWriter, Write};
 use std::mem::MaybeUninit;
+use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, ExitStatus};
@@ -68,7 +69,10 @@ pub(crate) struct ResolverOutput {
     pub(crate) stderr: Vec<u8>,
 }
 
+type OutputReceiver = Receiver<io::Result<Vec<u8>>>;
+
 pub(crate) struct ResolverProcess {
+    preparation: Option<Mutex<super::result_file::ResultFile>>,
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
@@ -80,12 +84,64 @@ impl ResolverProcess {
     pub(crate) fn new() -> Self {
         let (events, event_receiver) = mpsc::channel();
         Self {
+            preparation: None,
             events,
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
             cleanup: Arc::new(AtomicBool::new(false)),
             waiting: Arc::new(Mutex::new(false)),
         }
+    }
+
+    pub(crate) fn for_preparation(directory: Option<&Path>) -> Result<Self, String> {
+        let mut process = Self::new();
+        process.preparation = directory
+            .map(|directory| super::result_file::ResultFile::create(directory).map(Mutex::new))
+            .transpose()?;
+        Ok(process)
+    }
+
+    pub(crate) fn status_file(&self) -> Result<std::path::PathBuf, String> {
+        let mut status = self
+            .preparation
+            .as_ref()
+            .expect("preparation status")
+            .lock()
+            .expect("status lock");
+        // Each command gets a new file; a prior command may have unlinked its path.
+        *status = super::result_file::ResultFile::create(
+            status.path().parent().expect("result directory"),
+        )?;
+        Ok(status.path().to_owned())
+    }
+
+    pub(crate) fn spawn(&self, command: &mut Command) -> io::Result<(Child, [OutputReceiver; 2])> {
+        // Allocate exit notifications before spawning: setup failure must not
+        // leave an unowned resolver. Native errors may leave inherited writers.
+        let notifications = self
+            .preparation
+            .as_ref()
+            .map(|_| Ok::<_, io::Error>([io::pipe()?, io::pipe()?]))
+            .transpose()?;
+        let (readers, writers) = match notifications {
+            Some([(stdout, notify_stdout), (stderr, notify_stderr)]) => (
+                [Some(stdout), Some(stderr)],
+                vec![notify_stdout, notify_stderr],
+            ),
+            None => ([None, None], Vec::new()),
+        };
+        let mut child = command.spawn()?;
+        let [stdout_exit, stderr_exit] = readers;
+        let stdout = read_bounded_output(
+            child.stdout.take().expect("piped resolver stdout"),
+            stdout_exit,
+        );
+        let stderr = read_bounded_output(
+            child.stderr.take().expect("piped resolver stderr"),
+            stderr_exit,
+        );
+        self.watch_exit_with(child.id(), writers);
+        Ok((child, [stdout, stderr]))
     }
 
     pub(crate) fn stop_handle(&self) -> ResolverStopHandle {
@@ -100,9 +156,13 @@ impl ResolverProcess {
     // Mark the spawned child active before publishing its stop handle. An
     // interrupt in that gap must wait for the child's actual signal result.
     pub(crate) fn watch_exit(&self, pid: u32) {
+        self.watch_exit_with(pid, Vec::new());
+    }
+
+    fn watch_exit_with(&self, pid: u32, notifications: Vec<PipeWriter>) {
         self.cleanup.store(false, Ordering::SeqCst);
         *self.waiting.lock().expect("resolver phase lock") = true;
-        watch_resolver_exit(pid, self.events.clone());
+        watch_resolver_exit(pid, self.events.clone(), notifications);
     }
 
     fn finish_wait(&self, kind: &str) -> Result<(), String> {
@@ -143,7 +203,11 @@ impl ResolverProcess {
         program: &Path,
         kind: &str,
     ) -> Result<(), String> {
-        let result = stop_resolver(child, program, kind);
+        let status = self
+            .preparation
+            .as_ref()
+            .map(|status| status.lock().expect("status lock"));
+        let result = stop_resolver(child, program, kind, status.as_deref(), true);
         self.cleanup.store(result.is_ok(), Ordering::SeqCst);
         let _ = self.finish_wait(kind);
         result.map(|_| ())
@@ -241,6 +305,16 @@ pub(crate) fn read_output(
     receiver
 }
 
+fn read_bounded_output(
+    output: impl io::Read + AsRawFd + Send + 'static,
+    exited: Option<PipeReader>,
+) -> Receiver<io::Result<Vec<u8>>> {
+    match exited {
+        Some(exited) => read_output(crate::process_output::RelayOutput::new(output, exited)),
+        None => read_output(output),
+    }
+}
+
 pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io::Result<()>> {
     let (sender, receiver) = mpsc::channel();
     let _ = thread::spawn(move || {
@@ -273,7 +347,7 @@ pub(crate) fn resolver_command(program: &Path) -> Command {
     command
 }
 
-fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
+fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>, notifications: Vec<PipeWriter>) {
     let _ = thread::spawn(move || {
         let result = loop {
             let mut status = MaybeUninit::<libc::siginfo_t>::uninit();
@@ -295,6 +369,7 @@ fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
                 break Err(error);
             }
         };
+        drop(notifications);
         let _ = events.send(ResolverEvent::Exited(result));
     });
 }
@@ -315,17 +390,27 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
     cleanup: &AtomicBool,
+    status_file: Option<&super::result_file::ResultFile>,
 ) -> Result<ExitStatus, String> {
-    let stop = |child: &mut Child| {
-        let result = stop_resolver(child, program, kind);
+    let stop = |child: &mut Child, retiring| {
+        let result = stop_resolver(child, program, kind, status_file, retiring);
         cleanup.store(result.is_ok(), Ordering::SeqCst);
         result
     };
     loop {
         match events.recv() {
             Ok(ResolverEvent::Cancel) => {
-                stop(child)?;
+                stop(child, true)?;
                 return Err(format!("{kind} resolution cancelled"));
+            }
+            Ok(ResolverEvent::Interrupt { reply, .. }) if status_file.is_some() => {
+                // Managed preparation is disposable. Retire the whole native
+                // launch rather than forwarding a cooperative signal through
+                // uv and its subprocesses; keep the current worker untouched.
+                let result = stop(child, true);
+                let _ = reply.send(result.as_ref().map(|_| ()).map_err(Clone::clone));
+                result?;
+                return Err(format!("{kind} resolution interrupted"));
             }
             Ok(ResolverEvent::Interrupt {
                 reply,
@@ -346,22 +431,22 @@ fn wait_for_resolver_exit(
                         program.display()
                     );
                     let _ = reply.send(Err(message.clone()));
-                    let _ = stop(child);
+                    let _ = stop(child, true);
                     return Err(message);
                 }
             },
             Ok(ResolverEvent::Exited(Ok(()))) => {
-                return stop(child);
+                return stop(child, false);
             }
             Ok(ResolverEvent::Exited(Err(error))) => {
-                let _ = stop(child);
+                let _ = stop(child, true);
                 return Err(format!(
                     "failed to wait for {kind} resolver `{}`: {error}",
                     program.display()
                 ));
             }
             Err(_) => {
-                let _ = stop(child);
+                let _ = stop(child, true);
                 return Err(format!("{kind} resolver exit task stopped"));
             }
         }
@@ -377,15 +462,33 @@ fn wait_for_resolver(
     program: &Path,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
+    let status_file = resolver
+        .preparation
+        .as_ref()
+        .map(|status| status.lock().expect("status lock"));
     let status = wait_for_resolver_exit(
         child,
         &resolver.event_receiver,
         program,
         kind,
         &resolver.cleanup,
+        status_file.as_deref(),
     );
     let phase_result = resolver.finish_wait(kind);
-    let status = status?;
+    let status = match status {
+        Err(error) if resolver.preparation.is_some() => {
+            let diagnostic = receive_result(stderr, "stderr reader", kind)?
+                .map_err(|read_error| format!("{error}; {read_error}"))?;
+            if diagnostic.is_empty() {
+                return Err(error);
+            }
+            return Err(format!(
+                "{error}: {}",
+                String::from_utf8_lossy(&diagnostic).trim()
+            ));
+        }
+        result => result?,
+    };
     phase_result?;
     let write_result = receive_result(input, "stdin writer", kind)?;
     let stdout = receive_result(stdout, "stdout reader", kind)?
@@ -436,7 +539,42 @@ fn resolver_has_exited(pid: u32) -> io::Result<bool> {
     Ok(unsafe { status.assume_init().si_pid() } == pid as libc::pid_t)
 }
 
-fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
+fn stop_resolver(
+    child: &mut Child,
+    program: &Path,
+    kind: &str,
+    status_file: Option<&super::result_file::ResultFile>,
+    retiring: bool,
+) -> Result<ExitStatus, String> {
+    if let Some(status_file) = status_file {
+        // Let the existing native supervisor retire its descendants and storage.
+        // Only successful runner exit confirms cleanup. A tiny shell wrapper
+        // reports the resolver's exit separately, so package failures still have
+        // a confirmed retirement and preserve the current worker transaction.
+        if retiring {
+            unsafe {
+                libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+            }
+        }
+        let status = child
+            .wait()
+            .map_err(|error| format!("cannot reap preparation runner: {error}"))?;
+        if !status.success() {
+            return Err(format!(
+                "{kind} preparation runner failed ({status}); cleanup is unconfirmed"
+            ));
+        }
+        if retiring {
+            return Ok(status);
+        }
+        use std::os::unix::process::ExitStatusExt as _;
+        let code = String::from_utf8(status_file.read(3)?)
+            .map_err(|error| format!("cannot read preparation status: {error}"))?
+            .parse::<u8>()
+            .map_err(|error| format!("invalid preparation status: {error}"))?;
+        return Ok(ExitStatus::from_raw(i32::from(code) << 8));
+    }
+
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     if result < 0 {

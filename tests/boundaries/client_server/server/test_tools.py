@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -111,6 +112,9 @@ def test_initializes_and_lists_tools(
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
         ),
+        "python-managed.yaml": _initializes_and_lists_tools(
+            binary, execution, python_only=True, python_managed=True
+        ),
     }
     if execution == SANDBOXED:
         companions["proxy.yaml"] = _initializes_and_lists_tools(
@@ -138,6 +142,7 @@ def _initializes_and_lists_tools(
     *,
     bare: bool = False,
     python_only: bool = False,
+    python_managed: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
     ssh: bool = False,
@@ -153,7 +158,17 @@ def _initializes_and_lists_tools(
         if python_only:
             python_bin = Path(library) / "bin"
             python_bin.mkdir()
-            (python_bin / "python3").symlink_to(sys.executable)
+            if python_managed:
+                (python_bin / "uv").symlink_to(shutil.which("uv"))
+                # Installation metadata from setup-uv is not resolver configuration.
+                environment["UV_VERSION"] = "0.0.0"
+                loader_path = Path(library).resolve() / "lib"
+                loader_path.mkdir()
+                environment["LD_LIBRARY_PATH"] = os.pathsep.join(
+                    [environment.get("LD_LIBRARY_PATH") or "/usr/lib", str(loader_path)]
+                )
+            else:
+                (python_bin / "python3").symlink_to(sys.executable)
             environment["PATH"] = str(python_bin)
             for name in (
                 "R_HOME",
@@ -163,6 +178,8 @@ def _initializes_and_lists_tools(
                 "RETICULATE_UV",
             ):
                 environment.pop(name, None)
+            if not python_managed:
+                environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
         workspace = Path(library) / "workspace"
         workspace.mkdir()
         if ssh:
@@ -207,9 +224,12 @@ def _initializes_and_lists_tools(
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
-                assert {"r", "sql", "requirements"}.isdisjoint(
-                    send["inputSchema"]["properties"]
-                )
+                assert {"r", "sql"}.isdisjoint(send["inputSchema"]["properties"])
+            if python_managed:
+                assert set(
+                    send["inputSchema"]["properties"]["requirements"]["properties"]
+                ) == {"python"}
+                return client.finish()
             if bare or python_only:
                 assert "requirements" not in send["inputSchema"]["properties"]
                 transcript = client.finish()

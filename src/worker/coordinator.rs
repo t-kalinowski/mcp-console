@@ -28,7 +28,10 @@ fn run_session() -> Result<(), Box<dyn Error>> {
     let selection = crate::local_runtime::Selection::from_environment()?;
     interrupt::normalize_signal()?;
     let (r, python, sql) =
-        if let Some(crate::local_runtime::Selection::Python { selected, .. }) = selection {
+        if let Some(crate::local_runtime::Selection::Python {
+            selected, managed, ..
+        }) = selection
+        {
             // Native sandbox launches supply runner-owned private storage. Direct
             // launches supply a directory retained by the server's relay lifetime.
             let temporary = std::env::var_os("TMPDIR")
@@ -36,7 +39,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
             crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
             core::initialize(reader, writer.clone())?;
             let r = Integration::new(None)?;
-            let python = crate::python::Runtime::native(&selected)?;
+            let python = crate::python::Runtime::native(&selected, managed)?;
             (r, python, None)
         } else {
             let r_home = crate::local_runtime::r_home()?;

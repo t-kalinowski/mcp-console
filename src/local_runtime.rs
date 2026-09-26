@@ -7,10 +7,12 @@ use std::process::Command;
 use crate::resolver::{ManagedPython, ManagedPythonResolverConfiguration, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
-pub(crate) const PREPARATION_DISABLED: &str = "live requirements are unavailable in Python sessions without R; install packages before starting the session";
+pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
+pub(crate) const LIVE_PREPARATION_DISABLED: &str = "live Python requirements are unavailable without R; use requirements.python with control: restart to prepare a new environment";
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
+pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart";
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Selection {
     R {
@@ -19,9 +21,8 @@ pub(crate) enum Selection {
     Python {
         selected: Box<crate::python::NativePython>,
         explicit: Option<OsString>,
-        // Retain the resolver result as a managed environment, without turning
-        // its executable into a RETICULATE_PYTHON user selection.
-        managed: Option<ManagedPython>,
+        // Capability only. The session environment owns the retained manifest.
+        managed: bool,
     },
 }
 
@@ -34,9 +35,9 @@ impl Selection {
 
     pub(crate) fn python(
         configured: Option<OsString>,
-        resolver: &ManagedPythonResolverConfiguration,
+        resolver: Option<&ManagedPythonResolverConfiguration>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, Option<ManagedPython>), String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
         let (executable, managed) = if let Some(explicit) = &explicit {
             let executable = PathBuf::from(explicit);
@@ -51,29 +52,25 @@ impl Selection {
                 executable
             };
             (executable, None)
-        } else if resolver.has_uv() {
+        } else {
             let managed = crate::resolver::resolve_python_manifest(
                 crate::worker_protocol::default_python_requirement_manifest(),
-                resolver,
+                resolver.expect("managed Python selection requires a resolver"),
                 on_started,
             )?;
             (managed.python().to_path_buf(), Some(managed))
-        } else {
-            let executable = crate::resolver::find_path_entry("python3")
-                .or_else(|| crate::resolver::find_path_entry("python"))
-                .ok_or("R is unavailable and neither `uv`, `python3`, nor `python` was found on PATH; install uv or CPython with a shared libpython and restart MCP Console")?;
-            (executable, None)
         };
         // Preserve virtualenv symlinks: canonicalizing here would lose the
         // environment even though its base executable has the same identity.
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
-        let selected = crate::python::inspect_native(&executable, on_started)?;
-        Ok(Self::Python {
+        let selected = crate::python::inspect_prepared(&executable, resolver, on_started)?;
+        let selection = Self::Python {
             selected: Box::new(selected),
             explicit,
-            managed,
-        })
+            managed: managed.is_some(),
+        };
+        Ok((selection, managed))
     }
 
     pub(crate) fn python_only(&self) -> bool {
@@ -148,8 +145,12 @@ pub(crate) struct TemporaryDirectory(Option<PathBuf>);
 
 impl TemporaryDirectory {
     pub(crate) fn create() -> Result<Self, String> {
+        Self::create_in(&std::env::temp_dir())
+    }
+
+    pub(crate) fn create_in(directory: &Path) -> Result<Self, String> {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        let template = std::env::temp_dir().join("mcp-console-worker-XXXXXX");
+        let template = directory.join("mcp-console-worker-XXXXXX");
         let mut bytes = template.as_os_str().as_bytes().to_vec();
         bytes.push(0);
         // mkdtemp creates a private, unique directory with mode 0700.

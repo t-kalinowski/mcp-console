@@ -22,6 +22,8 @@ pub(super) enum Event<'a> {
         session: &'a str,
         working_directory: &'a str,
         dynamic_resolution: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        python_preparation: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         target: Option<&'a Value>,
     },
@@ -30,6 +32,9 @@ pub(super) enum Event<'a> {
         container_id: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox: Option<&'a crate::target_launch::SandboxIdentity>,
+    },
+    PythonEnvironmentAccepted {
+        packages: &'a [String],
     },
     ToolCall {
         call_id: u64,

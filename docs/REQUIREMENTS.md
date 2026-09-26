@@ -7,12 +7,17 @@ The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timin
 This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
-Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
-When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
-This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
-Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
-Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
-Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
+Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
+The default uses protected uv and uv-managed CPython; setting `python` in the Console config selects a non-managed environment without invoking uv.
+The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) defines supported uv settings and the separate native preparation boundary.
+There is no automatic PATH-Python fallback.
+`requirements.python` alone or with a Python cell prepares additions before the first worker starts.
+After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
+The existing prestart/restart transaction resolves the complete candidate manifest and inspects its executable before retirement, using the captured resolver configuration and existing cancellation and child cleanup.
+Resolution or inspection failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
+Plain restarts and crash replacement reuse that accepted environment without another resolution.
+Explicit Python selections do not enable preparation.
+Live requirement additions, automatic import resolution, R requirements, and DuckDB requirements are unavailable in this mode.
 The remaining preparation and SQL behavior in this document applies to sessions with R.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
@@ -416,7 +421,7 @@ Paths, URLs, repository selectors, version expressions, and SQL fragments are no
 
 ## Python environment selection
 
-The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
+The local built-in server uses the top-level `python` setting when present; otherwise it reads inherited `RETICULATE_PYTHON` when it starts:
 
 - unset, empty, or exactly `managed` selects the server-managed environment;
 - any other nonempty value selects that existing Python environment.
@@ -487,6 +492,9 @@ Evaluated Python imports and reticulate APIs can trigger managed Python resoluti
 Host resolution and managed-environment startup may run accepted distributions' installation, build, or initialization code with server permissions; use only packages you trust.
 
 ### Server-owned `uv` configuration
+
+This section describes R-present sessions.
+Sans-R sessions use the smaller [managed Python contract](BUILTIN_RUNTIME.md#python-sessions-without-r).
 
 An explicit `RETICULATE_UV` startup value is retained.
 Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.

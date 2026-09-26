@@ -8,8 +8,8 @@ send:
     import subprocess
 
     assert "PYTHONHOME" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
-    assert os.path.samefile(sys.prefix, "environment")
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
         [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
@@ -31,8 +31,8 @@ send:
     import subprocess
 
     assert "PYTHONHOME" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
-    assert os.path.samefile(sys.prefix, "environment")
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
         [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
@@ -58,8 +58,8 @@ send:
     import subprocess
 
     assert "PYTHONHOME" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
-    assert os.path.samefile(sys.prefix, "environment")
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
         [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
@@ -81,8 +81,8 @@ send:
     import subprocess
 
     assert "PYTHONHOME" not in os.environ
-    assert "RETICULATE_PYTHON" not in os.environ
-    assert os.path.samefile(sys.prefix, "environment")
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+    assert os.path.samefile(sys.prefix, "../environment")
     assert sys.prefix != sys.base_prefix
     child = subprocess.check_output(
         [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True

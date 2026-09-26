@@ -1,0 +1,154 @@
+---
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+result:
+  protocolVersion: 2025-11-25
+  capabilities:
+    tools: {}
+  serverInfo:
+    name: mcp-console
+    version: 0.0.4
+---
+input:
+  method: notifications/initialized
+---
+input:
+  method: tools/list
+result:
+  tools:
+    - name: send
+      description: >-
+        Persistent local Python workbench. State persists across calls. R and
+        SQL cells, live requirements, and automatic package installation are
+        unavailable in this session. Console manages Python through uv. Explicit
+        requirements.python can prepare packages before the first worker starts
+        or with control: restart. Changed requirements on a running worker
+        require an explicit restart; already retained requirements are a no-op.
+        Restart resets objects and retains the accepted environment.
+
+
+        Send one complete `python` cell per call. Code-bearing calls must be
+        sequential; a control-only interrupt may overlap a pending `send`.
+        Inspect intermediate results before submitting dependent cells. Cells
+        are not transactional; changes made before an error may remain.
+
+
+        Omit code to poll, supply stdin, control the session, or prepare
+        requirements when available. If a response ends in `[running; poll with
+        an empty send]`, call `send` again without code or stdin; do not
+        resubmit the cell. Send `stdin` alone to answer an active prompt or
+        debugger. Field descriptions specify preparation, control, and timeout
+        ordering.
+
+
+        Each result has at most 8 KiB of UTF-8 text, including notices;
+        oversized output keeps its beginning and latest tail. Images have
+        separate limits. Retained raw-log paths are relative to the Console
+        server recording workspace (the controller for remote targets). Full
+        retained text requires filesystem access there through existing tools;
+        Console provides no read/search interface.
+
+
+        Evaluated code runs without a sandbox, with the server's permissions,
+        including filesystem and network access. Python preparation uses a
+        separate native sandbox with network access and the user's protected uv
+        configuration and storage. Only registry wheels are supported; use
+        trusted dependencies.
+      inputSchema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        additionalProperties: false
+        type: object
+        properties:
+          python:
+            description: >-
+              One complete Python cell in persistent state. The final expression
+              displays automatically. Use input() for managed stdin; Matplotlib plots
+              return as PNG images when installed. requirements.python prepares
+              packages before first use, or with control: restart before the
+              replacement runs this cell. Live package updates, automatic package
+              installation, R integration, and SQL are unavailable. Use timeout_ms: 0
+              then poll for background execution.
+            type:
+              - string
+              - "null"
+          control:
+            description: >-
+              Applies lifecycle control alone or before compatible same-call fields.
+              interrupt requests SIGINT from the live worker and preserves Python
+              state; during preparation it retires the candidate sandbox. Same-call
+              stdin is queued before the interrupt grace. Python requirements with
+              interrupt are rejected before signaling or queuing input. restart
+              discards objects and unread stdin, then sends same-call stdin and code
+              only to the replacement. With requirements.python, the complete
+              candidate environment is resolved and inspected before stopping the
+              current worker. Preparation failure preserves the current worker,
+              retained requirements, and queued input; same-call code and stdin are
+              not sent. Retirement or replacement failure follows the ordinary restart
+              contract. Plain restart reuses the accepted environment.
+            type: string
+            enum:
+              - interrupt
+              - restart
+          requirements:
+            description: >-
+              Explicit Python package requirements for a Console-managed uv
+              environment. Supported before the first worker starts, alone or with a
+              Python cell, and with control: restart, with or without code. Additions
+              are merged with defaults and retained requirements. A changed live
+              environment requires restart; retained requirements are a no-op.
+              Resolution and native inspection finish before retirement. Automatic
+              installation is unavailable. Standalone preparation cannot queue stdin.
+            type:
+              - object
+              - "null"
+            properties:
+              python:
+                description: >-
+                  Named PEP 508 registry requirements added to the retained Python
+                  manifest. Local paths, URLs, editable requirements, and archives are
+                  rejected. Preparation uses uv in a separate native sandbox with
+                  protected shared uv storage. Only compatible registry wheels are
+                  supported; source builds are unavailable. Live changes require control:
+                  restart.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+                maxItems: 64
+                default: []
+            additionalProperties: false
+          stdin:
+            description: >-
+              Input for an active read, prompt, or debugger. When responding to active
+              input, omit code and send stdin on its own. Its UTF-8 encoding is queued
+              exactly; no newline is added. Line-oriented input normally needs a
+              trailing `\n`. After interrupt, nonempty stdin is queued before the
+              100-millisecond grace and may be consumed while the earlier operation
+              unwinds. After restart, same-call stdin goes only to the replacement.
+              When sent with a cell, nonempty text is queued before code runs. Empty
+              text queues nothing. If output ends in [waiting for stdin], send the
+              requested input here. Unread text can satisfy later reads and is
+              discarded by restart.
+            type:
+              - string
+              - "null"
+          timeout_ms:
+            description: >-
+              Omit for normal calls and polls. Defaults to 60,000 milliseconds. This
+              limits the wait after cell dispatch or attachment to an active
+              evaluation and includes one automatic worker replacement attempt.
+              Reaching the timeout does not cancel execution or startup. Inline
+              control, interrupt grace, and restart happen before dispatch and may
+              make the complete call take longer. Use 0 for background execution, then
+              poll with an empty send. If a response ends with [running; poll with an
+              empty send] or [worker starting], poll without resubmitting the cell.
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 60000

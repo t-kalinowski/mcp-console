@@ -474,6 +474,21 @@ class TranscriptRunnerTests(unittest.TestCase):
         )
         commands = self.root / "commands"
         commands.mkdir()
+        # Dependency installation is outside this discovery contract. Keep the
+        # scripts/test bootstrap, using the interpreter running this test.
+        uv = commands / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import sys
+
+                assert sys.argv[1:3] == ["run", "--script"], sys.argv
+                os.execv(sys.executable, [sys.executable, *sys.argv[3:]])
+                """)
+        )
+        uv.chmod(0o755)
         sbx = commands / "sbx"
         sbx.write_text(
             f"#!{sys.executable}\n"

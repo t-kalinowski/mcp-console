@@ -31,7 +31,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
-    managed_python_defaults: bool,
+    python_preparation: bool,
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
@@ -70,14 +70,14 @@ impl Transcript {
     pub(crate) fn with_target(
         working_directory: std::io::Result<PathBuf>,
         dynamic_resolution: bool,
-        managed_python_defaults: bool,
+        python_preparation: bool,
         target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
-            managed_python_defaults,
+            python_preparation,
             target,
             active: None,
             failure: None,
@@ -97,6 +97,14 @@ impl Transcript {
                 },
                 Utc::now(),
             )
+        });
+    }
+
+    pub(crate) fn python_environment_accepted(&self, packages: &[String]) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::PythonEnvironmentAccepted { packages }, Utc::now())
         });
     }
 
@@ -232,7 +240,7 @@ impl TranscriptState {
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
                 self.dynamic_resolution,
-                self.managed_python_defaults,
+                self.python_preparation,
                 self.target.as_ref(),
             )?);
         }
@@ -259,7 +267,7 @@ impl ActiveTranscript {
     fn create(
         working_directory: &Path,
         dynamic_resolution: bool,
-        managed_python_defaults: bool,
+        python_preparation: bool,
         target: Option<&serde_json::Value>,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
@@ -312,7 +320,7 @@ impl ActiveTranscript {
                 quarto_path,
                 working_directory,
                 dynamic_resolution,
-                managed_python_defaults,
+                python_preparation,
                 target,
             ))
         })();
@@ -336,6 +344,7 @@ impl ActiveTranscript {
                 session: "default",
                 working_directory: &working_directory_text,
                 dynamic_resolution,
+                python_preparation,
                 target,
             },
             started_at,

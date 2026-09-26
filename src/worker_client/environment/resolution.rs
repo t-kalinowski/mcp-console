@@ -63,7 +63,7 @@ impl Client {
         let early_resolver = match &environment.r_resolver {
             RResolver::Pending(setup) => Some(&setup.python_resolver),
             _ => match environment.python.as_ref() {
-                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver),
+                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver.as_ref()),
                 _ => None,
             },
         };
@@ -163,12 +163,48 @@ impl Client {
                     environment.r.as_ref(),
                 )?
             };
-            environment.python = Some(PythonEnvironment::Managed { selected, resolver });
+            if let Some(crate::local_runtime::Selection::Python {
+                selected: inspected,
+                ..
+            }) = &mut environment.local_runtime
+            {
+                // Inspect the resolved candidate before retirement. Both launch
+                // configuration and manifest stay provisional in this clone.
+                **inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
+            }
+            environment.python = Some(PythonEnvironment::Managed {
+                selected,
+                resolver: Box::new(resolver),
+            });
         }
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         environment.duckdb_extensions = duckdb_extensions;
         Ok(environment)
+    }
+
+    fn inspect_managed_python(
+        &self,
+        generation: &WorkerGeneration,
+        candidate: &crate::resolver::ManagedPython,
+        resolver: &crate::resolver::execution::PythonConfiguration,
+    ) -> Result<crate::python::NativePython, EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        let mut stop_handle = None;
+        let crate::resolver::execution::PythonConfiguration::Local(configuration) = resolver else {
+            unreachable!("native inspection belongs to local Python sessions")
+        };
+        let result =
+            crate::python::inspect_prepared(candidate.python(), Some(configuration), |handle| {
+                stop_handle = Some(handle.clone());
+                self.register_resolver_stop_handle(generation, handle)
+            });
+        self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        classify_resolver_result(result, stop_handle.as_ref())
     }
 
     pub(super) fn resolve_managed_r(

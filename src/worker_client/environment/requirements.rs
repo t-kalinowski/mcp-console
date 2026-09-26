@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use super::state::{Environment, PythonEnvironment, ensure_python_additions_available};
 
+#[derive(Clone)]
 pub(crate) struct Requirements {
     pub(crate) duckdb: Vec<String>,
     pub(crate) python: Vec<String>,

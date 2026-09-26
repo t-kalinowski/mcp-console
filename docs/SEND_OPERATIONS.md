@@ -16,6 +16,14 @@ These checks reject unknown fields, wrong field types, multiple code fields, dis
 [SSH targets](SSH.md) discover capability on the execution host before advertising the schema.
 Managed targets use the same preparation ordering below; bare targets omit `requirements` and reject supplied preparation before control, stdin, or evaluation side effects.
 
+Local sans-R sessions managed through uv expose only `requirements.python`.
+They support standalone preparation and preparation with a Python cell before first worker startup, and explicit restart preparation with or without a cell.
+Changed requirements on a running worker are rejected before preparation or same-call code and input; exact retained requirements remain a no-op.
+Restart resolves the cumulative candidate and inspects its embedding configuration before retirement.
+Failure before retirement preserves the current worker, retained requirements, and queued input; same-call code and input are sent only after successful replacement.
+Combining interrupt with Python requirements is rejected before signaling or queuing stdin, including retained requirements.
+The retirement/replacement failure semantics below still apply.
+
 Requirement-content errors normally also reject the call before those actions.
 For interrupt plus a cell, reporting those errors is deferred until after interrupt delivery, stdin enqueue, the 100-millisecond grace, and settlement of the previous evaluation.
 If that evaluation remains active, the call instead reports that the new cell was not run.

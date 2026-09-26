@@ -20,8 +20,10 @@ MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 Local sessions can run Python without R.
-When R is absent, Console uses `uv` to resolve its default Python environment, or uses `python3` then `python` from `PATH` when `uv` is absent.
+When R is absent, Console uses system-installed `uv` and uv-managed CPython to resolve its default environment.
+To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; that mode never invokes uv and disables package preparation.
 These sessions support Python execution, input, plots, interrupts, restart, and recording; live requirements, automatic package installation, and SQL are unavailable.
+When Console manages Python through uv, `requirements.python` prepares packages before first use or with an explicit restart.
 With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
 See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 

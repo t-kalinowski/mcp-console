@@ -1,0 +1,41 @@
+---
+send:
+  python: |
+    import os
+    from pathlib import Path
+
+    identity = object()
+    candidate = Path(os.environ["MCP_CONSOLE_TEST_UNSAFE_PYTHON"])
+    candidate.write_text("#!/bin/sh\nprintf touched > candidate-executed\nexit 87\n")
+    candidate.chmod(0o755)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  python: |
+    open("replacement-ran", "w").close()
+result:
+  content:
+    - type: text
+      text: >-
+        [managed Python path is outside uv storage:
+        <workspace>/candidate-python]
+  isError: true
+---
+send:
+  python: |
+    assert identity is not None
+    print("old worker retained")
+result:
+  content:
+    - type: text
+      text: |
+        old worker retained
+  isError: false

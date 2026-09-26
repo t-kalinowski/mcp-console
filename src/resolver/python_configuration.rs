@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+mod managed;
 
 #[derive(Clone)]
 pub(crate) struct ManagedPythonResolverConfiguration {
@@ -8,6 +11,7 @@ pub(crate) struct ManagedPythonResolverConfiguration {
     explicit_uv: Option<OsString>,
     reticulate_uv: Option<OsString>,
     uv: Option<OsString>,
+    preparation: Option<Arc<managed::Preparation>>,
 }
 
 impl ManagedPythonResolverConfiguration {
@@ -29,17 +33,70 @@ impl ManagedPythonResolverConfiguration {
             explicit_uv,
             reticulate_uv,
             uv,
+            preparation: None,
         }
     }
 
-    pub(crate) fn without_r_bootstrap(mut self) -> Self {
-        // `managed` asks reticulate to obtain uv. Without R, use the uv on
-        // PATH if present and retain the captured UV_* configuration unchanged.
-        if self.reticulate_uv.as_deref() == Some(OsStr::new("managed")) {
-            self.uv = super::find_path_entry("uv").map(Into::into);
-            self.reticulate_uv = self.uv.clone();
+    pub(crate) fn without_r_bootstrap(
+        mut self,
+        policy: Option<&crate::settings::SandboxSettings>,
+        on_started: &dyn Fn(super::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        let (preparation, uv, environment) =
+            managed::Preparation::capture(policy, self.explicit_uv.as_deref(), on_started)?;
+        self.uv = Some(uv.into());
+        self.reticulate_uv = self.uv.clone();
+        self.environment = Arc::new(environment);
+        self.preparation = Some(Arc::new(preparation));
+        Ok(self)
+    }
+
+    pub(crate) fn sans_r(&self) -> bool {
+        self.preparation.is_some()
+    }
+
+    pub(crate) fn preparation_directory(&self) -> Option<&Path> {
+        self.preparation
+            .as_ref()
+            .map(|preparation| preparation.directory())
+    }
+
+    pub(crate) fn output_directory(&self) -> PathBuf {
+        self.preparation
+            .as_ref()
+            .map_or_else(std::env::temp_dir, |preparation| {
+                preparation.directory().to_owned()
+            })
+    }
+
+    pub(crate) fn command(
+        &self,
+        program: &Path,
+        resolver: &super::process::ResolverProcess,
+    ) -> Result<std::process::Command, String> {
+        match &self.preparation {
+            Some(preparation) => preparation.command(program, &resolver.status_file()?),
+            None => Ok(super::process::resolver_command(program)),
         }
-        self
+    }
+
+    pub(crate) fn ensure_safe_python_path(&self, path: &Path) -> Result<(), String> {
+        if let Some(preparation) = &self.preparation {
+            let resolved = path
+                .canonicalize()
+                .map_err(|error| format!("cannot resolve managed Python path: {error}"))?;
+            if !preparation
+                .storage
+                .iter()
+                .any(|root| resolved.starts_with(root))
+            {
+                return Err(format!(
+                    "managed Python path is outside uv storage: {}",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn explicit_uv(&self) -> Option<&OsStr> {
@@ -97,6 +154,9 @@ impl ManagedPythonResolverConfiguration {
         &self,
         command: &mut std::process::Command,
     ) -> Result<(), String> {
+        if self.sans_r() {
+            return Ok(());
+        }
         let uv = self.reticulate_uv()?;
         self.configure_uv(command, uv);
         if uv == OsStr::new("managed") {

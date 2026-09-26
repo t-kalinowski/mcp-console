@@ -3,7 +3,7 @@ mod requirements;
 mod reticulate;
 mod startup;
 
-pub(crate) use inspection::{NativePython, inspect_native, inspect_selected};
+pub(crate) use inspection::{NativePython, inspect_prepared, inspect_selected};
 pub(crate) use startup::{
     SelectedPython, finish_initialization, initialize_selected, setup_runtime,
 };
@@ -60,9 +60,9 @@ impl Runtime {
         })
     }
 
-    pub(crate) fn native(selected: &NativePython) -> Result<Self, String> {
+    pub(crate) fn native(selected: &NativePython, managed: bool) -> Result<Self, String> {
         Ok(Self {
-            startup: startup::Runtime::native(selected)?,
+            startup: startup::Runtime::native(selected, managed)?,
             next_evaluation_id: 1,
         })
     }

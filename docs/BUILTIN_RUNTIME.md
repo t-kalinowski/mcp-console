@@ -51,17 +51,63 @@ Local sessions discover R through `R_HOME` or `R` on `PATH`.
 If neither exists, ordinary `mcp-console serve` starts a Python session without requiring an interpreter-selection variable or another launch flag.
 An invalid explicit `R_HOME` or a broken discovered R installation reports an R error; it does not select Python instead.
 
-With `uv` available, the server uses its existing host resolver and default Python manifest (`numpy` and `pandas`) to select and retain an ephemeral environment.
-Resolution honors the captured resolver configuration, cache handling, and Python version ranking.
-It runs outside the worker sandbox and may install packages with server permissions.
-An available resolver that fails reports the failure without trying a different interpreter.
-With no `uv`, selection checks `python3` then `python` on `PATH`; the selected CPython must provide a usable shared embedding library.
-If no interpreter is available, the error asks the user to install `uv` or CPython and restart the server.
-Existing explicit `RETICULATE_PYTHON` selection remains supported.
-Its captured value is preserved when sandbox environment inheritance is disabled or project environment settings provide a different value.
+There are two environment modes:
 
-The session retains the selected environment and executable across cells, restarts, and worker replacement.
-A restart clears Python objects, but does not resolve another environment.
+- By default, Console selects a protected `uv` on `PATH` and resolves its default manifest (`numpy` and `pandas`) using only uv-managed CPython.
+  It retains the environment for subsequent workers.
+  Resolution failure is reported without trying another interpreter.
+- Set `python: .venv/bin/python` in `.agents/console/config.yaml`, or pass `-c python=.venv/bin/python`, to use an existing environment.
+  Relative paths are relative to the launch directory.
+  Console does not discover or invoke uv in this mode, and package preparation is disabled.
+  The selected CPython must provide a usable shared embedding library.
+
+The `python` setting takes precedence over inherited `RETICULATE_PYTHON`, which remains supported for compatibility.
+Selection is captured at server startup, including when sandbox environment controls provide different values.
+Without an explicit selection, uv is required; there is no automatic PATH-Python fallback.
+The local `python` setting is unavailable with custom workers or execution targets.
+
+Managed sessions use the user's installed uv, normal user/system configuration, cache, and managed Python installation directory.
+Console captures the startup environment and asks uv for its effective storage paths; uv owns configuration parsing and precedence.
+Preparation runs from `/` to avoid workspace configuration discovery.
+File-valued settings must refer to protected host files; workspace and worker temporary files are inaccessible.
+Worker environment changes do not configure later preparation.
+Console pins the selected storage paths for the session and never removes shared uv cache contents.
+
+Preparation runs in a separate native sandbox, including storage/version discovery, resolution, cache warming, and native Python inspection.
+It requires the native runner even with `serve --no-sandbox`; that flag removes worker isolation only.
+The resolver has network access and a read-only host filesystem view, with writes to uv's selected storage and preparation temporary files.
+It cannot access the workspace or worker temporary storage.
+The native launcher starts with a cleared environment; captured user configuration reaches the resolver only after isolation is established.
+Console requires managed Python, retained cache environments, and wheels, and disables project sources and environment-file loading.
+Package requests remain named PEP 508 registry requirements; source builds, local paths, editable requirements, and direct URLs are unavailable.
+Trusted uv and package code are part of this mode's trust model.
+The boundary prevents worker-created files from becoming executable inputs to preparation.
+
+Managed sessions support the default policy and the unmodified `:workspace` and `:read-only` filesystem policies.
+Custom filesystem grants, temporary-directory grants, native backend overrides, and Seatbelt extensions require an explicitly selected Python environment.
+This boundary avoids reconstructing effective native permissions in the resolver.
+Console, its native companion, and uv must be installed outside the project and worker temporary storage.
+Console skips unsafe uv executables while searching PATH and retains the selected canonical path.
+An explicit unsafe uv selection is rejected.
+uv storage that overlaps the workspace or the parent of worker temporary storage is rejected with guidance to select an existing environment using `python`.
+Preparation temporary storage must also be outside the workspace.
+Under supported worker sandbox policies, workers can read the accepted Python environment but cannot modify it.
+Direct workers retain the ordinary `--no-sandbox` contract.
+
+A plain restart clears Python objects and reuses the accepted environment without resolving again.
+In a Console-managed uv session, `requirements.python` can add packages before the first worker starts, alone or with a Python cell.
+Once a worker is running, changed requirements require `control: "restart"`, with or without accompanying code.
+Requirements already retained are a no-op, including on a running worker.
+Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
+Live additions are rejected without changing the environment or silently restarting.
+
+Restart preparation resolves the complete candidate manifest, including defaults and earlier additions, and inspects the resulting executable before retiring the current worker.
+Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
+Interrupting preparation retires its sandbox and discards the candidate before any worker retirement.
+Same-call code and input are sent only after successful replacement.
+After retirement begins, ordinary retirement and replacement failure semantics apply; the retired worker cannot be restored.
+The mutable session environment commits the manifest, executable, and inspected embedding configuration together.
+Discarding a candidate does not delete shared resolver caches or mutate the accepted environment in place.
 The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
 The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME` and `PYTHONPLATLIBDIR`.
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
@@ -72,10 +118,10 @@ Retirement does not delete resolver caches or the retained environment.
 
 Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
 Interrupts received while the worker is idle do not interrupt the next Python cell.
-When `uv` resolved the initial environment, the generated Quarto document declares its NumPy and pandas defaults without enabling live requirements.
+When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, and accepted package additions without R defaults or rejected requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
-To use additional packages, prepare a Python environment before starting Console and make it available through the PATH fallback or existing explicit-selection interface.
-Live `requirements`, automatic missing-import installation, R cells, and SQL cells are unavailable.
+Explicitly selected environments remain non-managed; prepare their packages before starting Console.
+Live environment updates, automatic missing-import installation, R and DuckDB requirements, R cells, and SQL cells are unavailable.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
 This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
 

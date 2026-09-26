@@ -1,0 +1,22 @@
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  python: |
+    import yaml12
+
+    print("safe uv prepared Python")
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        safe uv prepared Python
+        [done]
+  isError: false
+---
+explicit_project_uv: rejected without execution
+---
+explicit_python_selection: kept without uv execution

@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 #[cfg(unix)]
 mod launch;
 #[cfg(unix)]
+pub(crate) use launch::{preparation_sandbox, preparation_storage};
+#[cfg(unix)]
 pub(crate) mod owner;
 #[cfg(unix)]
 pub(crate) mod process;

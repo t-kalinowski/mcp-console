@@ -1,4 +1,4 @@
-//! The remote parent owns ordinary launcher lifetime, never native supervision.
+//! Native launch configuration and ordinary child ownership, never native supervision.
 
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
@@ -344,4 +344,62 @@ fn supervise(
         let _ = task.join();
     }
     result
+}
+
+/// Capture the fixed local preparation sandbox through the native launch boundary.
+/// Resolver code sees only ordinary child argv, environment, and exit status.
+pub(crate) fn preparation_sandbox(
+    policy: Option<&crate::settings::SandboxSettings>,
+    workspace: &std::path::Path,
+    storage: &std::path::Path,
+    temporary_parent: &std::path::Path,
+) -> Result<(std::path::PathBuf, serde_json::Value), String> {
+    use serde_json::json;
+    if let Some(policy) = policy {
+        let mut baseline = crate::settings::SandboxSettings::new();
+        if let Some(profile) = policy.get("extends") {
+            baseline.insert("extends".into(), profile.clone());
+        }
+        let mut baseline = crate::sandbox::materialize_settings(baseline, Vec::new(), workspace)?;
+        let mut actual = policy.clone();
+        // These cannot grant filesystem access or change native enforcement.
+        for key in ["network", "proxy", "environment", "inherit_environment"] {
+            baseline.remove(key);
+            actual.remove(key);
+        }
+        if actual != baseline {
+            return Err("managed Python requires the default, :workspace, or :read-only sandbox policy without filesystem or native extensions; set python in .agents/console/config.yaml to use an existing environment".into());
+        }
+    }
+    let (runner, version) = crate::sandbox::preparation_runner()?;
+    let runner = runner.canonicalize().map_err(|error| error.to_string())?;
+    let mut policy = json!({
+        "version": version,
+        "filesystem": {"kind": "restricted", "entries": [
+            {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"},
+            {"path": {"type": "path", "path": temporary_parent}, "access": "deny"},
+            {"path": {"type": "path", "path": storage}, "access": "write"}
+        ]},
+        "network": "enabled",
+        "lifecycle": {"parent_pid": std::process::id(), "sigterm": "retire", "private_tmp": {"environment": ["TMPDIR"]}}
+    });
+    // A workspace below the denied temporary parent is already hidden. Avoid
+    // asking the runner to mount another mask inside that hidden directory.
+    if !workspace.starts_with(temporary_parent) {
+        policy["filesystem"]["entries"]
+            .as_array_mut()
+            .expect("preparation entries")
+            .push(json!({"path": {"type": "path", "path": workspace}, "access": "deny"}));
+    }
+    Ok((runner, policy))
+}
+
+/// Add only the captured uv-owned directories to the preparation write grants.
+pub(crate) fn preparation_storage(policy: &mut serde_json::Value, storage: &[std::path::PathBuf]) {
+    let entries = policy["filesystem"]["entries"]
+        .as_array_mut()
+        .expect("preparation entries");
+    entries.extend(storage.iter().map(
+        |path| serde_json::json!({"path": {"type": "path", "path": path}, "access": "write"}),
+    ));
 }

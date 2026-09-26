@@ -16,10 +16,11 @@ from support.assertions import (
     wait_for_evaluation_output,
 )
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import UNPRIVILEGED, requires
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 
 
@@ -36,21 +37,1127 @@ def environment(path: Path) -> dict[str, str]:
     return env
 
 
+def selected_environment(path: Path) -> dict[str, str]:
+    return dict(environment(path), RETICULATE_PYTHON=str(path / "python3"))
+
+
+def preparation_directory():
+    return tempfile.TemporaryDirectory(
+        prefix=".console-preparation-test-", dir=Path.home()
+    )
+
+
+def preparation_environment(root: Path) -> dict[str, str]:
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/sans_r_uv.sh"
+    for name in ("uv", "invalid-python"):
+        program = root / name
+        program.write_text(fixture.read_text())
+        program.chmod(0o755)
+    shutil.copy2(shutil.which("uv"), root / "real-uv")
+    os.mkfifo(root / "wait")
+    # A resolver may succeed while its selected executable is not embeddable.
+    description = {
+        "executable": str(root / "invalid-python"),
+        "libpython": str(root / "missing-libpython"),
+    }
+    description.update(
+        {
+            name: str(root)
+            for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix")
+        }
+    )
+    (root / "invalid-inspection.json").write_text(json.dumps(description))
+    return dict(environment(root), UV_CACHE_DIR=str(root))
+
+
+def preparation_records(records: Transcript, root: Path) -> Transcript:
+    for record in records:
+        for content in record.get("result", {}).get("content", []):
+            if content.get("type") != "text":
+                continue
+            text = (
+                content["text"]
+                .replace(str(root.resolve()), "<preparation>")
+                .replace(str(root), "<preparation>")
+            )
+            if text.startswith(
+                (
+                    "managed Python resolution failed:",
+                    "[managed Python resolution failed:",
+                )
+            ):
+                text = normalize_python_resolution_error(text)
+            content["text"] = text
+    return records[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preparation_uses_isolated_environment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        secret = workspace / "secret"
+        secret.write_text("worker-controlled input")
+        private = root / "private"
+        private.write_text("unrelated user data")
+        uv = root / "uv"
+        uv.write_text(f"""#!/bin/sh
+test "$UV_NO_BUILD" = 1 || exit 82
+test ! -r "{secret}" || exit 83
+test -r "{private}" || exit 83
+test ! -r "$CC" || exit 84
+if [ -f "{root / "worker-temporary"}" ]; then
+    test ! -r "$(/bin/cat "{root / "worker-temporary"}")" || exit 85
+fi
+exec "{shutil.which("uv")}" "$@"
+""")
+        uv.chmod(0o755)
+        env = environment(root)
+        env.update(
+            CC=str(workspace / "cc"),
+            PYTHONPATH=str(workspace),
+            MCP_CONSOLE_TEST_UV=str(uv),
+        )
+        (workspace / "uv.toml").write_text(
+            'index-url = "https://invalid.example/simple"\n'
+        )
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    import os, sys
+                    from pathlib import Path
+
+                    temporary = Path(os.environ["TMPDIR"]) / "worker-created"
+                    temporary.write_text("worker code")
+                    Path("temporary-path").write_text(str(temporary))
+                    Path(os.environ["CC"]).write_text("#!/bin/sh\nexit 85\n")
+                    if os.environ.get("MCP_CONSOLE_SANDBOX") == "1":
+                        for path in (
+                            Path(os.environ["MCP_CONSOLE_TEST_UV"]),
+                            Path(sys.base_prefix) / "lib/worker-write",
+                        ):
+                            try:
+                                with path.open("ab") as stream:
+                                    stream.write(b"worker modification")
+                            except OSError:
+                                pass
+                            else:
+                                raise AssertionError("worker modified preparation inputs")
+                    print("preparation inputs protected")
+                    """)
+            )
+            assert last_result_text(client) == "preparation inputs protected\n"
+            (root / "worker-temporary").write_text(
+                (workspace / "temporary-path").read_text()
+            )
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                python="import yaml12; 42",
+            )
+            assert last_result_text(client).endswith("42\n[done]"), client.transcript[
+                -1
+            ]
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_configured_python_bypasses_uv(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", workspace / ".venv"],
+            check=True,
+        )
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text("python: .venv/bin/python\n")
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        uv = bin_dir / "uv"
+        uv.write_text("#!/bin/sh\nexit 87\n")
+        uv.chmod(0o755)
+        env = environment(bin_dir)
+        # Explicit selection bypasses even unsupported resolver configuration.
+        env["UV_ENV_FILE"] = str(workspace / "missing.env")
+        env["RETICULATE_PYTHON"] = str(root / "missing-python")
+        with McpClient(
+            binary, execution.serve(), env, current_directory=workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import subprocess, sys
+                    from pathlib import Path
+
+                    assert Path(sys.prefix) == Path.cwd() / ".venv"
+                    assert (
+                        subprocess.check_output(
+                            [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
+                        ).strip()
+                        == sys.prefix
+                    )
+                    identity = object()
+                    identity_id = id(identity)
+                    42
+                    """)
+            )
+            assert last_result_text(client) == "42\n"
+            result = client.send(
+                control="restart",
+                requirements={"python": ["six"]},
+                python="identity = None",
+            )
+            assert result["isError"]
+            client.send(python="assert id(identity) == identity_id; 42")
+            assert last_result_text(client) == "42\n"
+            config.write_text("python: missing-after-startup\n")
+            client.send(
+                control="restart",
+                python="import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd() / '.venv'; 42",
+            )
+            assert last_result_text(client).endswith("42\n[done]")
+            records = client.finish()
+        # The CLI uses the same config layer and overrides the now-invalid file.
+        with McpClient(
+            binary, execution.serve("-c", "python=.venv/bin/python"), env, workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd() / '.venv'; 42"
+            )
+            assert last_result_text(client) == "42\n"
+            records.extend(client.finish())
+        return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_rejects_unsupported_managed_inputs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for name in ("UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_CONFIG_FILE", "TMPDIR"):
+        with preparation_directory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (root / "uv").symlink_to(shutil.which("uv"))
+            value = (
+                workspace / "uv.toml"
+                if name == "UV_CONFIG_FILE"
+                else workspace / "storage"
+            )
+            if name == "UV_CONFIG_FILE":
+                value.write_text('index-url = "https://invalid.example/simple"\n')
+            if name == "TMPDIR":
+                value.mkdir()
+            env = dict(environment(root), **{name: str(value)})
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.process.wait(timeout=30)
+                diagnostic = client.stderr.read()
+                assert "set python in .agents/console/config.yaml" in diagnostic, (
+                    diagnostic
+                )
+                records.append({"setting": name, "worker-controlled input": "rejected"})
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_captures_user_uv_configuration(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory(dir=Path.home()) as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        cache = root / "cache"
+        config = root / "uv.toml"
+        config.write_text(
+            f'cache-dir = "{cache}"\nindex-url = "https://invalid.example/simple"\n'
+        )
+        uv = root / "uv"
+        uv.write_text(f"""#!/bin/sh
+test "$UV_HTTP_TIMEOUT" = 37 || exit 81
+exec "{shutil.which("uv")}" "$@"
+""")
+        uv.chmod(0o755)
+        env = dict(
+            environment(root),
+            UV_CONFIG_FILE=str(config),
+            UV_INDEX_URL="https://pypi.org/simple",
+            UV_HTTP_TIMEOUT="37",
+            MCP_CONSOLE_TEST_CACHE=str(cache),
+        )
+        # Project discovery must not override user configuration.
+        (workspace / "uv.toml").write_text(
+            'index-url = "https://invalid.example/project"\n'
+        )
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, sys
+                    from pathlib import Path
+
+                    assert Path(sys.prefix).is_relative_to(Path(os.environ["MCP_CONSOLE_TEST_CACHE"]))
+                    os.environ["UV_CONFIG_FILE"] = str(Path.cwd() / "uv.toml")
+                    os.environ["UV_CACHE_DIR"] = str(Path.cwd() / "worker-cache")
+                    os.environ["UV_HTTP_TIMEOUT"] = "1"
+                    print("user cache selected")
+                    """)
+            )
+            assert last_result_text(client) == "user cache selected\n"
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                python="import yaml12; 42",
+            )
+            assert last_result_text(client).endswith("42\n[done]"), client.transcript[
+                -1
+            ]
+            assert not (workspace / "worker-cache").exists()
+            return client.finish()[3:]
+
+
+@executions(SANDBOXED)
+def test_rejects_full_write_policy(binary: Path, execution: Execution) -> Transcript:
+    records = []
+    for filesystem in (
+        "kind: unrestricted",
+        """kind: restricted
+    entries:
+      - path: {type: special, value: {kind: root}}
+        access: write""",
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text("sandbox:\n  filesystem:\n    " + filesystem + "\n")
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            marker = root / "uv-executed"
+            uv = bin_dir / "uv"
+            uv.write_text(
+                f"#!{sys.executable}\n"
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed')\n"
+                "raise SystemExit(87)\n"
+            )
+            uv.chmod(0o755)
+            (bin_dir / "python3").symlink_to(sys.executable)
+            result = subprocess.run(
+                [binary, *execution.serve()],
+                cwd=workspace,
+                env=environment(bin_dir),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode != 0
+            assert "managed Python requires the default" in result.stderr, result.stderr
+            assert not marker.exists()
+            records.append({filesystem.splitlines()[0]: "automatic selection rejected"})
+    return records
+
+
+@executions(SANDBOXED)
+def test_rejects_worker_writable_uv_storage(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    with tempfile.TemporaryDirectory() as directory, preparation_directory() as storage:
+        root = Path(directory)
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        bin_dir = Path(storage) / "bin"
+        bin_dir.mkdir()
+        shutil.copy2(shutil.which("uv"), bin_dir / "uv")
+        for grant in (Path(storage), Path(storage) / "lib"):
+            grant.mkdir(exist_ok=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "filesystem": {
+                                "entries": [
+                                    {
+                                        "path": {"type": "path", "path": str(grant)},
+                                        "access": "write",
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                )
+            )
+            with McpClient(
+                binary, execution.serve(), environment(bin_dir), root
+            ) as client:
+                client.process.wait(timeout=30)
+                diagnostic = client.stderr.read()
+                assert "managed Python requires the default" in diagnostic, diagnostic
+                records.append(
+                    {
+                        "write grant": grant.name if grant.name == "lib" else "storage",
+                        "startup": "rejected",
+                    }
+                )
+        if sys.platform == "darwin":
+            config.write_text(
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "macos_seatbelt_profile_extension": '(allow file-write* (subpath "'
+                            + storage
+                            + '"))'
+                        }
+                    }
+                )
+            )
+            with McpClient(
+                binary, execution.serve(), environment(bin_dir), root
+            ) as client:
+                client.process.wait(timeout=30)
+                assert "managed Python requires the default" in client.stderr.read()
+        records.append({"raw policy extensions": "unsupported"})
+        with McpClient(
+            binary, execution.serve(), environment(bin_dir), binary.parent.parent
+        ) as client:
+            client.process.wait(timeout=30)
+            assert "Console to be installed outside the project" in client.stderr.read()
+        records.append({"project-installed companion": "rejected"})
+    return records
+
+
+@executions(SANDBOXED)
+def test_temporary_write_grants_exclude_host_uv(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for options, special, temporary_root in (
+        ({"exclude_tmpdir_env_var": False}, None, "/var/tmp"),
+        ({"exclude_slash_tmp": False}, None, "/tmp"),
+        (None, None, "/var/tmp"),
+        (None, None, "/tmp"),
+        ({}, "tmpdir", "/var/tmp"),
+        ({}, "slash_tmp", "/tmp"),
+    ):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory(dir=temporary_root) as inherited,
+        ):
+            workspace = Path(directory)
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            sandbox = {"workspace_options": options}
+            if special:
+                sandbox["filesystem"] = {
+                    "entries": [
+                        {
+                            "path": {"type": "special", "value": {"kind": special}},
+                            "access": "write",
+                        }
+                    ]
+                }
+            config.write_text(
+                json.dumps(
+                    {
+                        "extends": ":workspace",
+                        "sandbox": sandbox,
+                    }
+                )
+            )
+            uv = Path(inherited) / "uv"
+            marker = workspace / "uv-executed"
+            uv.write_text(
+                f"#!{sys.executable}\n"
+                # fmt: python
+                + code(f"""
+                    from pathlib import Path
+
+                    Path({str(marker)!r}).touch()
+                    raise SystemExit(87)
+                    """)
+            )
+            uv.chmod(0o755)
+            env = environment(Path(inherited))
+            env.update(RETICULATE_UV=str(uv), TMPDIR=inherited)
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.process.wait(timeout=30)
+                diagnostic = client.stderr.read()
+                assert "managed Python requires the default" in diagnostic, diagnostic
+                assert not marker.exists()
+                records.append(
+                    {
+                        "options": options,
+                        "special": special,
+                        "temporary_root": temporary_root,
+                        "stderr": diagnostic.replace(str(uv), "<temporary>/uv"),
+                    }
+                )
+    return records
+
+
+@executions(SANDBOXED)
+def test_worker_writable_candidate_preserves_running_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        preparation_directory() as fixture_directory,
+    ):
+        root = Path(fixture_directory)
+        workspace = Path(directory) / "workspace"
+        workspace.mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        env = preparation_environment(root)
+        candidate = workspace / "candidate-python"
+        marker = workspace / "candidate-executed"
+        env["MCP_CONSOLE_TEST_UNSAFE_PYTHON"] = str(candidate)
+        (root / "candidate").write_text(str(candidate))
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    import os
+                    from pathlib import Path
+
+                    identity = object()
+                    candidate = Path(os.environ["MCP_CONSOLE_TEST_UNSAFE_PYTHON"])
+                    candidate.write_text("#!/bin/sh\nprintf touched > candidate-executed\nexit 87\n")
+                    candidate.chmod(0o755)
+                    """)
+            )
+            assert not client.transcript[-1]["result"]["isError"]
+            assert candidate.is_file(), client.transcript[-1]
+            (root / "mode").write_text("unsafe-candidate")
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    open("replacement-ran", "w").close()
+                    """),
+            )
+            assert client.transcript[-1]["result"]["isError"]
+            diagnostic = last_result_text(client)
+            assert (
+                diagnostic
+                == f"[managed Python path is outside uv storage: {candidate}]"
+            )
+            client.transcript[-1]["result"]["content"][0]["text"] = diagnostic.replace(
+                str(candidate), "<workspace>/candidate-python"
+            )
+            assert not marker.exists()
+            assert not (workspace / "replacement-ran").exists()
+            client.send(
+                # fmt: python
+                python=code("""
+                    assert identity is not None
+                    print("old worker retained")
+                    """)
+            )
+            assert last_result_text(client) == "old worker retained\n"
+            return preparation_records(client.finish(), root)
+
+
+@executions(SANDBOXED)
+def test_skips_project_uv_left_by_a_writable_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        safe_bin = root / "safe-bin"
+        safe_bin.mkdir()
+        (safe_bin / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            binary, execution.serve(), environment(safe_bin), workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code(r"""
+                    from pathlib import Path
+
+                    candidate = Path(".venv/bin/uv")
+                    candidate.parent.mkdir(parents=True)
+                    candidate.write_text("#!/bin/sh\nprintf touched > project-uv-executed\nexit 87\n")
+                    candidate.chmod(0o755)
+                    """)
+            )
+            assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
+            client.finish()
+        project_uv = workspace / ".venv/bin/uv"
+        assert project_uv.is_file()
+        env = environment(project_uv.parent)
+        env["PATH"] = os.pathsep.join((str(project_uv.parent), str(safe_bin)))
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                control="restart",
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    import yaml12
+
+                    print("safe uv prepared Python")
+                    """),
+            )
+            assert last_result_text(client).endswith(
+                "safe uv prepared Python\n[done]"
+            ), client.transcript[-1]
+            assert not (workspace / "project-uv-executed").exists()
+            records = client.finish()[3:]
+        explicit = dict(env, RETICULATE_UV=str(project_uv))
+        rejected = subprocess.run(
+            [binary, *execution.serve()],
+            cwd=workspace,
+            env=explicit,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert rejected.returncode != 0
+        assert "selected uv" in rejected.stderr
+        assert "project or temporary storage, or unavailable" in rejected.stderr
+        assert not (workspace / "project-uv-executed").exists()
+        records.append({"explicit_project_uv": "rejected without execution"})
+        explicit_python = dict(explicit, RETICULATE_PYTHON=sys.executable)
+        with McpClient(binary, execution.serve(), explicit_python, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    print("explicit Python retained")
+                    """)
+            )
+            assert "explicit Python retained\n" in last_result_text(client)
+            client.finish()
+        assert not (workspace / "project-uv-executed").exists()
+        records.append({"explicit_python_selection": "kept without uv execution"})
+        return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_prepares_managed_python_at_startup_and_restart(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        env = environment(root)
+        env["PYTHONPATH"] = str(workspace)
+        uv = root / "uv"
+        shutil.copy2(shutil.which("uv"), uv)
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text('extends: ":workspace"\n')
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    import yaml12
+
+                    print("startup package available")
+                    """),
+            )
+            assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
+            schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
+            assert {"r", "sql"}.isdisjoint(schema["properties"])
+            requirement_schema = schema["properties"]["requirements"]
+            assert set(requirement_schema["properties"]) == {"python"}
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, subprocess, sys, numpy, pandas, yaml12
+
+                    assert "RETICULATE_PYTHON" not in os.environ
+                    subprocess.run([sys.executable, "-c", "import numpy, pandas, yaml12"], check=True)
+                    identity = object()
+                    identity_id = id(identity)
+                    print("startup packages available")
+                    """)
+            )
+            assert last_result_text(client) == "startup packages available\n"
+            # A no-op must not invoke uv or replace the running interpreter.
+            uv.unlink()
+            client.send(requirements={"python": ["py-yaml12", "numpy"]})
+            assert last_result_text(client) == "[prepared]"
+            client.send(
+                # fmt: python
+                python=code("""
+                    assert id(identity) == identity_id
+                    print("same worker")
+                    """)
+            )
+            assert last_result_text(client) == "same worker\n"
+            client.send(
+                requirements={"python": ["py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    assert id(identity) == identity_id
+                    print("no-op cell")
+                    """),
+            )
+            assert last_result_text(client) == "no-op cell\n"
+            client.send(
+                # fmt: python
+                python=code("""
+                    from pathlib import Path
+
+                    Path("sitecustomize.py").write_text(
+                        "import os; from pathlib import Path; "
+                        "'MCP_CONSOLE_LOCAL_RUNTIME' in os.environ or Path('../host-hook-ran').touch()"
+                    )
+                    input("old worker> ")
+                    open("old-worker-consumed-input", "w").close()
+                    """)
+            )
+            assert "[waiting for stdin]" in last_result_text(client)
+            shutil.copy2(shutil.which("uv"), uv)
+            client.send(
+                control="restart",
+                requirements={"python": ["more-itertools"]},
+                stdin="replacement input\n",
+                # fmt: python
+                python=code("""
+                    assert "identity" not in globals()
+                    print(input())
+                    """),
+            )
+            assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
+            assert "replacement input\n" in last_result_text(client)
+            assert not (workspace / "old-worker-consumed-input").exists()
+            assert not (root / "host-hook-ran").exists(), (
+                "resolver executed worker startup hook"
+            )
+            (workspace / "sitecustomize.py").unlink()
+            # Plain restart and crash replacement retain the accepted result.
+            uv.unlink()
+            for control in ({}, {"control": "restart"}, {"crash": True}):
+                if control.pop("crash", False):
+                    client.send(
+                        # fmt: python
+                        python=code("""
+                            import os
+
+                            os._exit(47)
+                            """)
+                    )
+                    assert "status 47" in last_result_text(client), client.transcript[
+                        -1
+                    ]
+                client.send(
+                    **control,
+                    # fmt: python
+                    python=code("""
+                        import os, subprocess, sys, numpy, pandas, yaml12, more_itertools
+
+                        assert "RETICULATE_PYTHON" not in os.environ
+                        probe = "import numpy, pandas, yaml12, more_itertools"
+                        subprocess.run([sys.executable, "-c", probe], check=True)
+                        subprocess.run(["python", "-c", probe], check=True)
+                        print("cumulative packages retained")
+                        """),
+                )
+                assert "cumulative packages retained\n" in last_result_text(client), (
+                    client.transcript[-1]
+                )
+            client.send(requirements={"python": ["more-itertools", "py-yaml12"]})
+            assert last_result_text(client) == "[prepared]"
+            client.send(
+                control="restart",
+                requirements={"python": ["more-itertools", "py-yaml12"]},
+                # fmt: python
+                python=code("""
+                    import yaml12, more_itertools
+
+                    print("retained restart")
+                    """),
+            )
+            assert "retained restart\n" in last_result_text(client), client.transcript[
+                -1
+            ]
+            # Restart without code prepares immediately and retains cumulative requirements.
+            shutil.copy2(shutil.which("uv"), uv)
+            client.send(control="restart", requirements={"python": ["six"]})
+            assert not client.transcript[-1]["result"]["isError"]
+            client.send(
+                # fmt: python
+                python=code("""
+                    import six, yaml12, more_itertools
+
+                    42
+                    """)
+            )
+            assert last_result_text(client) == "42\n"
+            records = client.finish()[3:]
+        (session,) = (workspace / ".agents/console/sessions").iterdir()
+        quarto = (session / "transcript.qmd").read_text()
+        assert "  packages: []\n" in quarto
+        for package in ("numpy", "pandas", "py-yaml12", "more-itertools"):
+            assert f"    - {package}\n" in quarto
+    return TranscriptWithCompanions(
+        records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+    )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_failed_managed_preparation_preserves_worker_and_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        preparation_directory() as fixture_directory,
+    ):
+        root = Path(fixture_directory)
+        workspace = Path(directory) / "workspace"
+        workspace.mkdir()
+        env = preparation_environment(root)
+        started = FifoCheckpoint.create(root / "started")
+        os.mkfifo(root / "alive")
+        alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        identity = object()
+                        identity_id = id(identity)
+                        42
+                        """),
+                    stdin="retained input\n",
+                )
+                assert last_result_text(client) == "42\n"
+                for mode, expected in (
+                    ("failure", "fixture Python resolution failed"),
+                    ("inspection", "selected Python embedding library is missing"),
+                    ("interrupt", "Python resolution interrupted"),
+                    (
+                        "inspection-interrupt",
+                        "Python inspection resolution interrupted",
+                    ),
+                ):
+                    (root / "mode").write_text(mode)
+                    arguments = dict(
+                        control="restart",
+                        requirements={"python": ["py-yaml12"]},
+                        stdin="must not reach old worker\n",
+                        # fmt: python
+                        python=code("""
+                            raise AssertionError("failed restart ran code")
+                            """),
+                    )
+                    if mode in ("interrupt", "inspection-interrupt"):
+                        pending = client.start_send(**arguments)
+                        started.wait("candidate resolver entered")
+                        assert os.read(alive, 1) == b"1"
+                        interrupt = client.start_send(control="interrupt")
+                        client.receive_many([pending, interrupt])
+                        response = pending["result"]
+                        assert os.read(alive, 1) == b"", (
+                            "resolver survived interruption"
+                        )
+                    else:
+                        response = client.send(**arguments)
+                    assert response["isError"], response
+                    text = "".join(item.get("text", "") for item in response["content"])
+                    assert expected in text, response
+                    client.send(
+                        # fmt: python
+                        python=code("""
+                            assert id(identity) == identity_id
+                            print("objects intact")
+                            """)
+                    )
+                    assert last_result_text(client) == "objects intact\n"
+                before = (root / "resolutions.log").read_text()
+                for request in (
+                    {"requirements": {"python": ["py-yaml12"]}},
+                    {
+                        "requirements": {"python": ["py-yaml12"]},
+                        # fmt: python
+                        "python": code("""
+                            identity = None
+                            """),
+                        "stdin": "rejected live input\n",
+                    },
+                    {
+                        "control": "restart",
+                        "requirements": {"python": ["./local-package"]},
+                        "stdin": "invalid input\n",
+                    },
+                    {"requirements": {"r": ["cli"]}},
+                    {"requirements": {"duckdb": ["json"]}},
+                ):
+                    response = client.send(**request)
+                    assert response.get("isError", True), response
+                assert (root / "resolutions.log").read_text() == before
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        assert id(identity) == identity_id
+                        print(input())
+                        """)
+                )
+                assert (
+                    last_result_text(client)
+                    == '[input requested: ""]\nretained input\n'
+                ), client.transcript[-1]
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        print(input("remaining> "))
+                        """)
+                )
+                assert "[waiting for stdin]" in last_result_text(client)
+                client.send(
+                    control="interrupt",
+                    requirements={"python": ["numpy"]},
+                    # fmt: python
+                    python=code("""
+                        identity = None
+                        """),
+                    stdin="rejected interrupt input\n",
+                )
+                assert client.transcript[-1]["result"]["isError"], client.transcript[-1]
+                client.send()
+                assert "[waiting for stdin]" in last_result_text(client), (
+                    client.transcript[-1]
+                )
+                wait_for_evaluation_output(
+                    client,
+                    "fresh input\n",
+                    "queue remained empty",
+                    stdin="fresh input\n",
+                )
+                # Failed candidates were never retained: the addition still needs resolution.
+                (root / "mode").write_text("success")
+                client.send(
+                    control="restart",
+                    requirements={"python": ["py-yaml12"]},
+                    # fmt: python
+                    python=code("""
+                        import yaml12
+
+                        print("accepted")
+                        """),
+                )
+                assert "accepted\n" in last_result_text(client), client.transcript[-1]
+                assert (root / "resolutions.log").read_text() != before
+                records = preparation_records(client.finish(), root)
+            (session,) = (workspace / ".agents/console/sessions").iterdir()
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            accepted = [
+                event
+                for event in events
+                if event["event"] == "python_environment_accepted"
+            ]
+            assert len(accepted) == 1, accepted
+            assert set(accepted[0]["packages"]) == {"numpy", "pandas", "py-yaml12"}
+            return records
+        finally:
+            started.close()
+            os.close(alive)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preparation_pins_result_files(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as workspace,
+        preparation_directory() as directory,
+    ):
+        root = Path(directory)
+        env = preparation_environment(root)
+        unrelated = root / "unrelated"
+        unrelated.write_text("unrelated host contents")
+        with McpClient(binary, execution.serve(), env, Path(workspace)) as client:
+            client.initialize_and_list_tools()
+            client.send(python="retained = 42")
+            for mode in ("replace-output", "replace-inspection", "replace-status"):
+                (root / "mode").write_text(mode)
+                client.send(control="restart", requirements={"python": ["py-yaml12"]})
+                diagnostic = last_result_text(client)
+                assert "selected Python embedding library is missing" in diagnostic, (
+                    diagnostic
+                )
+                assert "unrelated host contents" not in diagnostic
+                assert unrelated.read_text() == "unrelated host contents"
+                client.send(python="retained")
+                assert last_result_text(client) == "42\n"
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retries_failed_prestart_python_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        preparation_directory() as fixture_directory,
+    ):
+        root = Path(fixture_directory)
+        workspace = Path(directory) / "workspace"
+        workspace.mkdir()
+        env = preparation_environment(root)
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            for mode in ("failure", "inspection"):
+                (root / "mode").write_text(mode)
+                client.send(
+                    requirements={"python": ["py-yaml12"]},
+                    # fmt: python
+                    python=code("""
+                        raise AssertionError("failed preparation ran code")
+                        """),
+                    stdin="rejected input\n",
+                )
+                assert client.transcript[-1]["result"]["isError"], client.transcript[-1]
+            (root / "mode").write_text("success")
+            client.send(requirements={"python": ["py-yaml12"]})
+            assert last_result_text(client) == "[prepared]"
+            client.send(
+                # fmt: python
+                python=code("""
+                    import yaml12
+
+                    print(input("prepared> "))
+                    """)
+            )
+            assert "[waiting for stdin]" in last_result_text(client), client.transcript[
+                -1
+            ]
+            wait_for_evaluation_output(
+                client,
+                "fresh input\n",
+                "failed prestart did not queue input",
+                stdin="fresh input\n",
+            )
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_shutdown_cancels_sans_r_python_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for restart, mode in (
+        (False, "interrupt"),
+        (True, "interrupt"),
+        (False, "inspection-interrupt"),
+        (True, "inspection-interrupt"),
+    ):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            preparation_directory() as fixture_directory,
+        ):
+            root = Path(fixture_directory)
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            env = preparation_environment(root)
+            (root / "mode").write_text(mode)
+            started = FifoCheckpoint.create(root / "started")
+            os.mkfifo(root / "alive")
+            alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                with McpClient(binary, execution.serve(), env, workspace) as client:
+                    client.initialize_and_list_tools()
+                    if restart:
+                        client.send(
+                            # fmt: python
+                            python=code("""
+                                retained = 42
+                                retained
+                                """)
+                        )
+                        assert last_result_text(client) == "42\n"
+                    client.start_send(
+                        requirements={"python": ["py-yaml12"]},
+                        # fmt: python
+                        python=code("""
+                            raise AssertionError("cancelled preparation ran code")
+                            """),
+                        **({"control": "restart"} if restart else {}),
+                    )
+                    started.wait("resolver entered before input closure")
+                    assert os.read(alive, 1) == b"1"
+                    client.stdin.close()
+                    assert client.process.wait(timeout=10) == 0
+                    assert os.read(alive, 1) == b"", "resolver survived shutdown"
+                    records.append(
+                        {
+                            "restart": restart,
+                            "phase": mode,
+                            "stdout": client.stdout.read(),
+                            "stderr": client.stderr.read(),
+                        }
+                    )
+                (session,) = (workspace / ".agents/console/sessions").iterdir()
+                events = [
+                    json.loads(line)
+                    for line in (session / "internal/events.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+                assert all(
+                    event["event"] != "python_environment_accepted" for event in events
+                )
+            finally:
+                started.close()
+                os.close(alive)
+    return records
+
+
 @executions(DIRECT, SANDBOXED)
 def test_resolves_default_python_without_r(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with preparation_directory() as directory:
         path = Path(directory)
         uv = shutil.which("uv")
         assert uv is not None
-        (path / "uv").symlink_to(uv)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
+        shutil.copy2(uv, path / "uv")
+        env = environment(path)
+        with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             schema = client.transcript[-1]["result"]["tools"][0]
-            assert {"r", "sql", "requirements"}.isdisjoint(
-                schema["inputSchema"]["properties"]
-            )
+            assert {"r", "sql"}.isdisjoint(schema["inputSchema"]["properties"])
             assert (
                 "without R" in schema["description"]
                 or "R and SQL" in schema["description"]
@@ -148,7 +1255,7 @@ def test_resolves_default_python_without_r(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_uses_path_python_without_uv(binary: Path, execution: Execution) -> Transcript:
+def test_uses_selected_virtualenv(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         venv = root / "environment"
@@ -163,7 +1270,7 @@ def test_uses_path_python_without_uv(binary: Path, execution: Execution) -> Tran
             check=True,
             capture_output=True,
         )
-        env = environment(venv / "bin")
+        env = selected_environment(venv / "bin")
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             client.send(
@@ -175,7 +1282,7 @@ def test_uses_path_python_without_uv(binary: Path, execution: Execution) -> Tran
                     from pathlib import Path
                     import matplotlib.pyplot as plt
 
-                    assert "RETICULATE_PYTHON" not in os.environ
+                    assert os.environ["RETICULATE_PYTHON"] == sys.executable
                     assert sys.prefix != sys.base_prefix
                     value = 40
                     temporary = Path(tempfile.gettempdir())
@@ -243,6 +1350,7 @@ False
 @executions(DIRECT, SANDBOXED)
 def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
+        (Path(directory) / "python3").symlink_to(sys.executable)
         result = subprocess.run(
             [binary, *execution.serve()],
             env=environment(Path(directory)),
@@ -252,7 +1360,7 @@ def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Tra
             timeout=30,
         )
         assert result.returncode != 0
-        assert "neither `uv`, `python3`, nor `python`" in result.stderr, result.stderr
+        assert "no protected `uv` executable" in result.stderr, result.stderr
         return [{"stderr": result.stderr}]
 
 
@@ -260,37 +1368,21 @@ def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Tra
 def test_resolver_failure_does_not_fall_back(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with preparation_directory() as directory:
         path = Path(directory)
-        (path / "uv").symlink_to(shutil.which("uv"))
+        uv = path / "uv"
+        uv.write_text("#!/bin/sh\necho 'fixture uv resolution failed' >&2\nexit 47\n")
+        uv.chmod(0o755)
         (path / "python3").symlink_to(sys.executable)
         env = environment(path)
-        env["UV_PYTHON_PREFERENCE"] = "invalid-console-acceptance-preference"
         # Keep MCP input open: the resolver failure, rather than input-owner
         # cancellation, must determine the outcome.
         with McpClient(binary, execution.serve(), env) as client:
             client.process.wait(timeout=30)
             diagnostic = client.stderr.read()
             assert client.process.returncode != 0
-            assert "managed Python version resolution failed" in diagnostic, diagnostic
-            assert "invalid-console-acceptance-preference" in diagnostic, diagnostic
+            assert "fixture uv resolution failed" in diagnostic, diagnostic
             return [{"stderr": diagnostic}]
-
-
-@executions(DIRECT, SANDBOXED)
-def test_uses_python_when_python3_is_absent(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory)
-        (path / "python").symlink_to(sys.executable)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
-            client.initialize_and_list_tools()
-            client.send(
-                python="import sys; assert sys.executable.endswith('/python'); 42"
-            )
-            assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -373,9 +1465,9 @@ def test_cleans_temporary_storage_after_startup_failure(
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(
-            binary, arguments, environment(venv / "bin"), current_directory=root
-        ) as client:
+        env = selected_environment(venv / "bin")
+        env["RETICULATE_PYTHON"] = str(selected)
+        with McpClient(binary, arguments, env, current_directory=root) as client:
             client.initialize_and_list_tools()
             result = client.send(
                 python="raise AssertionError('startup failure ran the cell')"
@@ -405,7 +1497,7 @@ def describe_session(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
         (path / "python3").symlink_to(sys.executable)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
+        with McpClient(binary, execution.serve(), selected_environment(path)) as client:
             client.initialize_and_list_tools()
             return client.finish()
 
@@ -415,10 +1507,12 @@ def test_records_python_execution(binary: Path, execution: Execution) -> Transcr
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
         (workspace / "python3").symlink_to(sys.executable)
+        env = selected_environment(workspace)
+        env["RETICULATE_PYTHON"] = sys.executable
         with McpClient(
             binary,
             execution.serve(),
-            environment(workspace),
+            env,
             current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
@@ -470,9 +1564,15 @@ def test_preserves_explicit_python_selection(
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             client.send(
-                python="import os, sys; assert sys.executable == os.environ['RETICULATE_PYTHON']; 42"
+                python="import os, sys; assert sys.executable == os.environ['RETICULATE_PYTHON']; identity = object(); identity_id = id(identity); 42"
             )
             assert last_result_text(client) == "42\n", client.transcript[-1]
+            for control in ({}, {"control": "restart"}):
+                result = client.send(**control, requirements={"python": ["py-yaml12"]})
+                assert result["isError"], result
+                assert "non-managed Python session" in last_result_text(client)
+                client.send(python="assert id(identity) == identity_id; 42")
+                assert last_result_text(client) == "42\n"
             return client.finish()
 
 
@@ -483,7 +1583,7 @@ def test_interrupts_python_and_replaces_a_failed_worker(
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
         (path / "python3").symlink_to(sys.executable)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
+        with McpClient(binary, execution.serve(), selected_environment(path)) as client:
             client.initialize_and_list_tools()
             client.send(python="retained = 41")
             wait_for_evaluation_output(
@@ -519,22 +1619,6 @@ def test_interrupts_python_and_replaces_a_failed_worker(
                             str(temporary), "<worker temporary>"
                         )
             return records
-
-
-@executions(DIRECT, SANDBOXED)
-def test_uses_path_uv_with_legacy_managed_uv_selection(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory)
-        (path / "uv").symlink_to(shutil.which("uv"))
-        env = environment(path)
-        env["RETICULATE_UV"] = "managed"
-        with McpClient(binary, execution.serve(), env) as client:
-            client.initialize_and_list_tools()
-            client.send(python="import numpy, pandas; 42")
-            assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()
 
 
 @executions(SANDBOXED)
@@ -598,7 +1682,8 @@ def test_inspection_excludes_workspace_and_pythonpath(
             """)
         (workspace / "ctypes.py").write_text(payload)
         (poisoned_path / "sitecustomize.py").write_text(payload)
-        env = environment(workspace)
+        env = selected_environment(workspace)
+        env["RETICULATE_PYTHON"] = sys.executable
         env["PYTHONPATH"] = str(poisoned_path)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
@@ -649,9 +1734,9 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(
-            binary, arguments, environment(venv / "bin"), workspace
-        ) as client:
+        env = selected_environment(venv / "bin")
+        env["RETICULATE_PYTHON"] = str(selected)
+        with McpClient(binary, arguments, env, workspace) as client:
             client.initialize_and_list_tools()
             result = client.send(
                 python="raise AssertionError('failed startup ran cell')"
@@ -713,7 +1798,7 @@ def test_uses_environment_through_directory_alias(
         )
         alias = workspace / "alias"
         alias.symlink_to(original, target_is_directory=True)
-        env = environment(alias / "environment/bin")
+        env = selected_environment(alias / "environment/bin")
         env["MCP_CONSOLE_TEST_ENVIRONMENT"] = str(venv)
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
@@ -724,7 +1809,7 @@ def test_uses_environment_through_directory_alias(
                     import sys
                     import subprocess
 
-                    assert "RETICULATE_PYTHON" not in os.environ
+                    assert os.environ["RETICULATE_PYTHON"] == sys.executable
                     assert os.path.samefile(sys.prefix, os.environ["MCP_CONSOLE_TEST_ENVIRONMENT"])
                     assert os.path.samefile(sys.exec_prefix, sys.prefix)
                     child = subprocess.check_output(
@@ -748,7 +1833,7 @@ def test_consumes_idle_interrupt_before_next_python_cell(
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
         (path / "python3").symlink_to(sys.executable)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
+        with McpClient(binary, execution.serve(), selected_environment(path)) as client:
             client.initialize_and_list_tools()
             client.send(python="retained = 40")
             client.send(control="interrupt")
@@ -766,8 +1851,10 @@ def test_imports_workspace_modules_without_pythonpath(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
-        (workspace / "python3").symlink_to(sys.executable)
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (root / "python3").symlink_to(sys.executable)
         (workspace / "workspace_module.py").write_text("value = 20\n")
         package = workspace / "workspace_package"
         package.mkdir()
@@ -775,7 +1862,7 @@ def test_imports_workspace_modules_without_pythonpath(
         subdirectory = workspace / "subdirectory"
         subdirectory.mkdir()
         (subdirectory / "after_chdir.py").write_text("value = 43\n")
-        env = environment(workspace)
+        env = selected_environment(root)
         env.pop("PYTHONPATH", None)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
@@ -823,8 +1910,10 @@ def ignores_python_layout_override(
     records = []
     for inherit in (True, False):
         with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            venv = workspace / "environment"
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            venv = root / "environment"
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", venv],
                 check=True,
@@ -842,7 +1931,7 @@ def ignores_python_layout_override(
                     }
                 )
             )
-            env = environment(venv / "bin")
+            env = selected_environment(venv / "bin")
             env[variable] = "unavailable-inherited-layout"
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
@@ -856,8 +1945,8 @@ def ignores_python_layout_override(
                             import subprocess
 
                             assert "{variable}" not in os.environ
-                            assert "RETICULATE_PYTHON" not in os.environ
-                            assert os.path.samefile(sys.prefix, "environment")
+                            assert os.environ["RETICULATE_PYTHON"] == sys.executable
+                            assert os.path.samefile(sys.prefix, "../environment")
                             assert sys.prefix != sys.base_prefix
                             child = subprocess.check_output(
                                 [sys.executable, "-c", "import sys; print(sys.prefix)"], text=True
@@ -926,8 +2015,10 @@ def test_excludes_executable_directory_from_imports(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
-        venv = workspace / "environment"
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        venv = root / "environment"
         subprocess.run(
             [sys.executable, "-m", "venv", "--copies", "--without-pip", venv],
             check=True,
@@ -945,7 +2036,7 @@ def test_excludes_executable_directory_from_imports(
             "raise RuntimeError('imported executable directory')\n"
         )
         (venv / "bin/selected_package.py").write_text("value = -1\n")
-        env = environment(venv / "bin")
+        env = selected_environment(venv / "bin")
         env.pop("PYTHONPATH", None)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
@@ -1014,6 +2105,7 @@ def test_records_managed_python_defaults(
             for line in (session / "internal/events.jsonl").read_text().splitlines()
         ]
         assert events[0]["dynamic_resolution"] is False
+        assert events[0]["python_preparation"] is True
         return TranscriptWithCompanions(
             records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
         )
@@ -1075,7 +2167,10 @@ def test_reports_direct_storage_retirement_failure(
                 (site / "sitecustomize.py").write_text(hook)
             try:
                 with McpClient(
-                    binary, execution.serve(), environment(venv / "bin"), workspace
+                    binary,
+                    execution.serve(),
+                    selected_environment(venv / "bin"),
+                    workspace,
                 ) as client:
                     client.initialize_and_list_tools()
                     client.send(python=restrict if stage != "startup failure" else "42")

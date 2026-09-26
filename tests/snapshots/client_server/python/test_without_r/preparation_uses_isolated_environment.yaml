@@ -1,0 +1,45 @@
+---
+send:
+  python: |
+    import os, sys
+    from pathlib import Path
+
+    temporary = Path(os.environ["TMPDIR"]) / "worker-created"
+    temporary.write_text("worker code")
+    Path("temporary-path").write_text(str(temporary))
+    Path(os.environ["CC"]).write_text("#!/bin/sh\nexit 85\n")
+    if os.environ.get("MCP_CONSOLE_SANDBOX") == "1":
+        for path in (
+            Path(os.environ["MCP_CONSOLE_TEST_UV"]),
+            Path(sys.base_prefix) / "lib/worker-write",
+        ):
+            try:
+                with path.open("ab") as stream:
+                    stream.write(b"worker modification")
+            except OSError:
+                pass
+            else:
+                raise AssertionError("worker modified preparation inputs")
+    print("preparation inputs protected")
+result:
+  content:
+    - type: text
+      text: |
+        preparation inputs protected
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  python: import yaml12; 42
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        42
+        [done]
+  isError: false
