@@ -12,11 +12,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
 from support.suites import run_this_suite
 from support.requirements import command, requires
-from support.resolvers import checkpoint_uv_environment, ir_run_records
+from support.resolvers import (
+    checkpoint_uv_environment,
+    ir_run_records,
+    recording_uv_environment,
+    uv_python_row,
+    write_uv_python_inventories,
+)
 from boundaries.client_server.requirements.test_r_automatic import (
     recording_fixture_r_environment,
 )
@@ -248,10 +254,11 @@ def test_interrupted_replacement_preserves_worker(
             client.receive(pending)
             client.receive(interrupt)
             assert pending["result"].get("isError"), pending
-            assert (
-                "managed Python resolution failed"
-                in pending["result"]["content"][0]["text"]
-            ), pending
+            error = pending["result"]["content"][0]["text"]
+            assert "managed Python resolution failed" in error, pending
+            pending["result"]["content"][0]["text"] = normalize_python_resolution_error(
+                error
+            )
             assert inspect(client) == old
             client.send(python="marker, os.getpid() == pid")
             assert last_tool_text(client) == "(42, True)\n"
@@ -387,8 +394,11 @@ def test_records_requirement_boundaries(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
+        environment, _ = recording_uv_environment(workspace)
+        inventories = workspace / "uv-python-inventories.json"
+        environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
         with McpClient(
-            binary, execution.serve(), current_directory=workspace
+            binary, execution.serve(), environment, current_directory=workspace
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"}, python="first_environment = 1")
@@ -397,11 +407,19 @@ def test_records_requirement_boundaries(
                 requirements={"action": "set", "python": ["six"]},
                 python="second_environment = 2",
             )
+            # Keep the complete failure diagnostic independent of uv's changing
+            # installed/downloadable version inventory. Successful preparation
+            # continues to use the real resolver.
+            write_uv_python_inventories(
+                inventories,
+                {"only-managed": [uv_python_row("3.12.12"), uv_python_row("3.11.14")]},
+            )
             result = client.send(
                 control="restart",
                 requirements={"action": "set", "python_version": [">3", "<2"]},
             )
             assert result.get("isError"), result
+            inventories.unlink()
             client.send(control="restart", requirements={"action": "reset"})
             transcript = client.finish()
         session = next((workspace / ".agents/console/sessions").iterdir())
