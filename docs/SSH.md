@@ -112,7 +112,8 @@ The transport starts the same safe-environment resolver broker used locally.
 Trusted launch settings are separate from operation requirements; requirements carry no shell programs, source code, executable choices, or environment overrides.
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
-Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
+Results use bounded chunks followed by the cleanup receipt, with a 1 MiB assembled limit.
+Installer diagnostics retain bounded beginning and end previews without changing the failure classification.
 Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 4 carries the broker launch context and complete inspected candidates.
 Both require a matching Console package version.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.
@@ -122,7 +123,7 @@ Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`,
 The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations.
 The preparation owner retains trusted resolver configuration, not session manifests or activation decisions.
 Each operation runs inside the native resolver sandbox and reports its result only after trusted native cleanup, before the server can commit a candidate.
-An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver.
+An interrupt accepted between resolver stages remains owned by that preparation operation and prevents its next resolver from starting.
 An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation.
 Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session.
 Preparation is never automatically replayed after uncertain completion.

@@ -115,6 +115,7 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
                     "MCP_CONSOLE_TEST_SPAWN_ORDINAL": "2",
                     "MCP_CONSOLE_TEST_SPAWN_STARTED": str(started.path),
                     "MCP_CONSOLE_TEST_SPAWN_RELEASE": str(release.path),
+                    "MCP_CONSOLE_TEST_SPAWN_EXECUTED": str(remote / "executed"),
                 }
             }
         prefix = remote_command(remote, binary, environment)
@@ -286,9 +287,11 @@ def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
         started.wait("workload reached its next resolver spawn", timeout=180)
         client.request("ping")
         interrupt = client.start_send(control="interrupt", timeout_ms=0)
-        client.receive_many([preparation, interrupt])
+        client.receive(interrupt)
         assert not interrupt["result"].get("isError"), interrupt
         release.release()
+        client.receive(preparation)
+        assert not (remote / "executed").exists(), (remote / "executed").read_text()
         assert preparation["result"]["isError"], preparation
         assert "dependency resolution interrupted" in json.dumps(preparation), (
             preparation

@@ -3,10 +3,20 @@
 use crate::resolver::preparation::{Discovery, Operation, Selections};
 use crate::resolver::{self, ResolverStopHandle};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-static ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 pub(super) fn active() -> bool {
-    ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
+    ACTIVE.load(Ordering::Relaxed)
+}
+
+pub(super) fn interrupted() -> bool {
+    INTERRUPTED.load(Ordering::Relaxed)
+}
+
+extern "C" fn interrupt(_: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -26,11 +36,12 @@ pub(super) struct Response {
 }
 
 pub(crate) fn run() -> Result<(), String> {
-    ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
+    ACTIVE.store(true, Ordering::Relaxed);
     // Direct-mode interruption belongs to the active interpreter. Keep this
-    // coordinator alive to collect its result; resolver_command restores the
-    // default disposition in each child. Native mode retires the whole sandbox.
-    if unsafe { libc::signal(libc::SIGINT, libc::SIG_IGN) } == libc::SIG_ERR {
+    // coordinator alive to collect its result and prevent a later stage from
+    // starting. resolver_command restores each child's default disposition.
+    // Native mode retires the whole sandbox.
+    if unsafe { libc::signal(libc::SIGINT, interrupt as libc::sighandler_t) } == libc::SIG_ERR {
         return Err(std::io::Error::last_os_error().to_string());
     }
     use std::io::{Read, Write};

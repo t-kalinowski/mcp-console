@@ -103,6 +103,9 @@ impl ResolverProcess {
         &self,
         command: &mut Command,
     ) -> io::Result<(Child, OutputReader, OutputReader)> {
+        if super::workload::interrupted() {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         let (stdout_exit, stdout_done) = io::pipe()?;
         let (stderr_exit, stderr_done) = io::pipe()?;
         let mut child = command.spawn()?;
@@ -307,13 +310,18 @@ pub(crate) fn resolver_command(program: &Path) -> Command {
     if !super::workload::active() {
         command.process_group(0);
     }
-    // SAFETY: the closure calls only libc signal functions after fork and
-    // before exec. Resolver programs must not inherit an ignored or blocked
-    // SIGINT from the MCP host.
+    // SAFETY: the closure uses only an atomic load and libc signal functions
+    // after fork and before exec. Resolver programs must not inherit an ignored
+    // or blocked SIGINT from the MCP host.
     unsafe {
         command.pre_exec(|| {
             if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
                 return Err(io::Error::last_os_error());
+            }
+            // An interrupt between admission and fork must also prevent exec.
+            // After restoring SIG_DFL, a new signal cannot be lost in this check.
+            if super::workload::interrupted() {
+                return Err(io::ErrorKind::Interrupted.into());
             }
             let mut signals = std::mem::zeroed();
             if libc::sigemptyset(&mut signals) != 0

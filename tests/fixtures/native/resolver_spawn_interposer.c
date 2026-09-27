@@ -5,10 +5,12 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 static atomic_uint fork_count = 0;
 static pid_t owner;
+static int gated;
 
 static int is_server(void) {
     return owner == getpid();
@@ -47,11 +49,28 @@ static pid_t checkpoint_fork(void) {
         }
         close(started);
         close(release);
+        gated = 1;
     }
 #ifdef __APPLE__
     return fork();
 #else
     return ((pid_t (*)(void))dlsym(RTLD_NEXT, "fork"))();
+#endif
+}
+
+static int checkpoint_execvp(const char *path, char *const arguments[]) {
+    const char *executed = getenv("MCP_CONSOLE_TEST_SPAWN_EXECUTED");
+    if (gated && executed != NULL) {
+        int descriptor = open(executed, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (descriptor < 0 || write(descriptor, path, strlen(path)) < 0) {
+            _exit(123);
+        }
+        close(descriptor);
+    }
+#ifdef __APPLE__
+    return execvp(path, arguments);
+#else
+    return ((int (*)(const char *, char *const[]))dlsym(RTLD_NEXT, "execvp"))(path, arguments);
 #endif
 }
 
@@ -63,7 +82,17 @@ __attribute__((used)) static struct {
     (const void *)(uintptr_t)&checkpoint_fork,
     (const void *)(uintptr_t)&fork,
 };
+__attribute__((used)) static struct {
+    const void *replacement;
+    const void *original;
+} execvp_interposer __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)(uintptr_t)&checkpoint_execvp,
+    (const void *)(uintptr_t)&execvp,
+};
 
 #else
 pid_t fork(void) { return checkpoint_fork(); }
+int execvp(const char *path, char *const arguments[]) {
+    return checkpoint_execvp(path, arguments);
+}
 #endif
