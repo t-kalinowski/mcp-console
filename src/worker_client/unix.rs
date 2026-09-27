@@ -198,11 +198,11 @@ impl WorkerRuntime {
         if target.is_none() {
             // Never accept an ambient internal selection for custom workers.
             command.env_remove(crate::local_runtime::ENVIRONMENT);
-            if let Some(runtime) = local_runtime {
-                runtime.configure(&mut command)?;
-            }
             if let Some(python) = python {
                 python.configure_worker(&mut command);
+            }
+            if let Some(runtime) = local_runtime {
+                runtime.configure(&mut command)?;
             }
             if let Some(managed_r) = managed_r {
                 managed_r.configure_worker(&mut command)?;

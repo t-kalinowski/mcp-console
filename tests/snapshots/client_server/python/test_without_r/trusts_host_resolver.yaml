@@ -1,0 +1,12 @@
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+  python: import yaml12; 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

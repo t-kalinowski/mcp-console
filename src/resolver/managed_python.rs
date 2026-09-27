@@ -1,8 +1,6 @@
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
@@ -17,7 +15,6 @@ import sys
 with open(sys.argv[-1], "w", encoding="utf-8") as stream:
     stream.write(sys.executable)
 "#;
-static PYTHON_PATH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -34,60 +31,6 @@ struct ResolverInput<'a> {
     python_version: Vec<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exclude_newer: Option<&'a str>,
-}
-
-struct PythonPathOutput(PathBuf);
-
-impl PythonPathOutput {
-    fn create() -> Result<Self, String> {
-        for _ in 0..100 {
-            let sequence = PYTHON_PATH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "mcp-console-managed-python-{}-{sequence}",
-                process::id()
-            ));
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(_) => return Ok(Self(path)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(error) => {
-                    return Err(format!(
-                        "failed to create managed Python resolver output `{}`: {error}",
-                        path.display()
-                    ));
-                }
-            }
-        }
-        Err("failed to allocate managed Python resolver output path".to_string())
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-
-    fn python(&self) -> Result<PathBuf, String> {
-        let output = fs::read(&self.0).map_err(|error| {
-            format!(
-                "failed to read managed Python resolver output `{}`: {error}",
-                self.0.display()
-            )
-        })?;
-        let output = String::from_utf8(output)
-            .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
-        let python = PathBuf::from(output.trim());
-        if !python.is_absolute() || !python.is_file() {
-            return Err(format!(
-                "managed Python resolver returned invalid interpreter `{}`",
-                python.display()
-            ));
-        }
-        Ok(python)
-    }
-}
-
-impl Drop for PythonPathOutput {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
 }
 
 impl ManagedPython {
@@ -151,7 +94,7 @@ fn resolve_python_manifest_with_r(
     let resolved_python = versions
         .resolve(&requirements.python_version)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))?;
-    let output_path = PythonPathOutput::create()?;
+    let output_path = super::result_file::ResultFile::create(&std::env::temp_dir())?;
     let output = run_managed_python_resolver(
         &requirements,
         &resolved_python,
@@ -190,7 +133,15 @@ uv output:
         ));
     }
     check_resolver_control(&resolver, "managed Python resolution")?;
-    let python = output_path.python()?;
+    let output = String::from_utf8(output_path.read(4096)?)
+        .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
+    let python = PathBuf::from(output.trim());
+    if !python.is_absolute() || !python.is_file() {
+        return Err(format!(
+            "managed Python resolver returned invalid interpreter `{}`",
+            python.display()
+        ));
+    }
     warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,

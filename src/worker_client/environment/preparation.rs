@@ -81,6 +81,9 @@ impl Client {
             if delta.is_empty() {
                 return Ok(PrepareResult::Prepared);
             }
+            if self.python_only() {
+                return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
+            }
             self.require_explicit_restart(&delta)?;
             if matches!(intent, PreparationIntent::Standalone)
                 && self.requirement_change_state(generation)?
@@ -118,6 +121,24 @@ impl Client {
             .worker
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
+        if self.python_only() && !matches!(*worker, WorkerState::Initial) {
+            // The fast path already returned for retained requirements. If
+            // startup held the environment lock, recheck after acquiring it.
+            if available_environment.is_none() {
+                let environment = environment
+                    .lock()
+                    .map_err(|_| "worker environment lock poisoned".to_string())?;
+                self.ensure_generation(generation)?;
+                let delta = RequirementDelta::calculate(
+                    &environment,
+                    pending_requirements.take().expect("pending requirements"),
+                )?;
+                if delta.is_empty() {
+                    return Ok(PrepareResult::Prepared);
+                }
+            }
+            return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
+        }
         let environment_preparation = if let WorkerState::Running(running) = &*worker {
             match running.reserve_environment_preparation() {
                 Ok(reservation) => Ok(Some(reservation)),
@@ -256,6 +277,7 @@ impl Client {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.processes.resolver = None;
                 *environment = resolved;
+                self.record_accepted_python(&environment);
                 self.publish_requirements(&environment);
                 self.record_requirements(action, call_id, &environment);
                 Ok(PrepareResult::Prepared)

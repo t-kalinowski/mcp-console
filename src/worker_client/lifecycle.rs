@@ -606,6 +606,7 @@ impl Client {
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
         *environment = resolved;
+        self.record_accepted_python(environment);
         self.publish_requirements(environment);
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);

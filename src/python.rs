@@ -60,9 +60,9 @@ impl Runtime {
         })
     }
 
-    pub(crate) fn native(selected: &NativePython) -> Result<Self, String> {
+    pub(crate) fn native(selected: &NativePython, managed: bool) -> Result<Self, String> {
         Ok(Self {
-            startup: startup::Runtime::native(selected)?,
+            startup: startup::Runtime::native(selected, managed)?,
             next_evaluation_id: 1,
         })
     }

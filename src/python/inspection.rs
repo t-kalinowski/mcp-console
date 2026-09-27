@@ -1,7 +1,4 @@
-use std::ffi::OsString;
-use std::fs::{self, File};
-use std::os::fd::FromRawFd as _;
-use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -13,7 +10,7 @@ use super::startup::SelectedPython;
 const INSPECTION_SOURCE: &str = include_str!("inspection.py");
 
 /// Executable and environment identity observed together on the host.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativePython {
     pub(crate) embedding: SelectedPython,
@@ -46,7 +43,7 @@ pub(crate) fn inspect_native(
     let selected = executable
         .to_str()
         .ok_or_else(|| "selected Python executable is not UTF-8".to_string())?;
-    let result = InspectionOutput::create()?;
+    let result = crate::resolver::result_file::ResultFile::create(&std::env::temp_dir())?;
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
     command
@@ -88,11 +85,8 @@ pub(crate) fn inspect_native(
             output.status, ordinary, diagnostic
         ));
     }
-    let description: Description = serde_json::from_slice(
-        &fs::read(result.path())
-            .map_err(|error| format!("failed to read selected Python configuration: {error}"))?,
-    )
-    .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
+    let description: Description = serde_json::from_slice(&result.read(64 * 1024)?)
+        .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
     description.validate(executable)?;
     let python_home = if description.base_prefix == description.base_exec_prefix {
         description.base_prefix.clone()
@@ -163,41 +157,5 @@ impl Description {
             ));
         }
         Ok(())
-    }
-}
-
-struct InspectionOutput(PathBuf);
-
-impl InspectionOutput {
-    fn create() -> Result<Self, String> {
-        let mut template = std::env::temp_dir()
-            .join("mcp-console-python-inspection-XXXXXX")
-            .as_os_str()
-            .as_bytes()
-            .to_vec();
-        template.push(0);
-        // SAFETY: mkstemp replaces the trailing Xs and returns a new owned fd.
-        let descriptor = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
-        if descriptor < 0 {
-            return Err(format!(
-                "failed to create Python inspection output: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        // SAFETY: the descriptor is uniquely owned here. The child opens the
-        // path itself, so close this descriptor before launching it.
-        drop(unsafe { File::from_raw_fd(descriptor) });
-        let path = OsString::from_vec(template[..template.len() - 1].to_vec());
-        Ok(Self(PathBuf::from(path)))
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for InspectionOutput {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
     }
 }

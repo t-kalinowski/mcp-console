@@ -22,6 +22,7 @@ pub(crate) mod process;
 mod python_configuration;
 #[cfg(unix)]
 mod python_version;
+pub(crate) mod result_file;
 #[cfg(not(unix))]
 mod unsupported;
 

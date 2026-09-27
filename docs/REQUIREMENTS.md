@@ -7,12 +7,17 @@ The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timin
 This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
-Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
-When `uv` is available, the local `mcp-console resolve` process prepares the default Python manifest before MCP readiness, and the server retains the result for replacement workers.
-This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
-Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
-Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
-Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
+Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
+The default uses uv from `PATH`; setting `python` in the Console config selects a non-managed environment without invoking uv.
+The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) uses the same trusted host resolver as mixed-language sessions.
+There is no automatic PATH-Python fallback.
+`requirements.python` alone or with a Python cell prepares additions before the first worker starts.
+After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
+The existing prestart/restart transaction resolves the complete candidate manifest and inspects its executable before retirement, using the captured resolver configuration and existing cancellation and child cleanup.
+Resolution or inspection failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
+Plain restarts and crash replacement reuse that accepted environment without another resolution.
+Explicit Python selections do not enable preparation.
+Live requirement additions, automatic import resolution, R requirements, and DuckDB requirements are unavailable in this mode.
 The remaining preparation and SQL behavior in this document applies to sessions with R.
 
 Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
@@ -148,7 +153,8 @@ An unchanged replacement requires no preparation, but an explicitly requested re
 Changing these constraints with a live worker requires restart.
 `set` clears omitted constraints; `reset` restores startup constraints (currently none).
 Captured resolver settings such as `UV_*` remain startup configuration and are not rewritten by these session operations.
-User-selected Python, Python sessions without R, bare runtimes, Docker, and Docker Sandbox retain their existing preparation limits; inspection does not enable new preparation paths.
+Sans-R managed sessions support these actions for Python only, with restart required for all live changes.
+User-selected Python, bare runtimes, Docker, and Docker Sandbox support inspection without enabling preparation.
 
 Committed replacements are recorded with their declaration and call ID in the event journal and Markdown transcript.
 Quarto records the environment boundaries, including Python constraints, and disables automatic execution after a replacement.
@@ -488,7 +494,7 @@ Paths, URLs, repository selectors, version expressions, and SQL fragments are no
 
 ## Python environment selection
 
-The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
+The local built-in server uses the top-level `python` setting when present; otherwise it reads inherited `RETICULATE_PYTHON` when it starts:
 
 - unset, empty, or exactly `managed` selects the server-managed environment;
 - any other nonempty value selects that existing Python environment.
@@ -544,6 +550,15 @@ Managed Python environment startup and Matplotlib font-cache warming can also im
 Use only trusted requirements and trusted resolver configuration.
 `IR_NO_LOCAL_SOURCES` and the Python and DuckDB validation rules reduce the accepted input surface; they do not make arbitrary remote packages safe.
 
+The resolver is a trusted component, not a sandbox boundary.
+Console does not check whether the worker can modify its executable, configuration files, caches, Python installations, or configured local package sources.
+Capturing environment values and executable paths does not freeze the files they name.
+For example, if the startup `PATH` selects a uv wrapper in a writable workspace, a client can use a Python cell to replace that wrapper, then request a new named package with `control: "restart"`.
+The resolver invokes the retained path outside the worker sandbox, so the replacement runs with full host permissions before the old worker is retired.
+A writable wheel directory selected by startup `UV_FIND_LINKS` or uv configuration provides another route: a client-created wheel can supply startup code executed during preparation.
+These crafted paths can execute client-controlled code outside the worker sandbox even though the submitted requirement contains no path or URL.
+This implementation does not close those paths; isolation of the resolver is a separate concern.
+
 Resolver inputs do not contain submitted cells or `send` stdin:
 
 - Explicit R requirements and validated automatic package names become individual process arguments to `ir`, which receives a constant R program.
@@ -560,7 +575,8 @@ Host resolution and managed-environment startup may run accepted distributions' 
 
 ### Host resolver `uv` configuration
 
-An explicit `RETICULATE_UV` startup value is retained.
+Sans-R sessions select uv from the startup `PATH` and ignore `RETICULATE_UV`.
+In R-present sessions, an explicit `RETICULATE_UV` startup value is retained.
 Otherwise the host resolver selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
 An invalid explicit executable fails when invoked; the server does not replace it with a `PATH` executable.
 Direct Python version inventory and managed-environment creation receive that stable selection.

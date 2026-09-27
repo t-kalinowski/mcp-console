@@ -9,7 +9,7 @@ send:
     from pathlib import Path
     import matplotlib.pyplot as plt
 
-    assert "RETICULATE_PYTHON" not in os.environ
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
     assert sys.prefix != sys.base_prefix
     value = 40
     temporary = Path(tempfile.gettempdir())

@@ -184,7 +184,9 @@ Keep these invariants intact:
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
-  Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 registry requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
+  Local sans-R preparation uses the trusted `resolve` subcommand with full host permissions, without a resolver sandbox or worker-policy/storage checks.
+  Resolver isolation is outside this feature's scope; document client-controlled executable and local-source escape paths in `docs/REQUIREMENTS.md`.
+  Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   Accepted installation or build code may execute with server permissions.
 - Treat submitted R, Python, and SQL as shell-class capability and enforce isolation at the worker-process boundary unless `serve --no-sandbox` is selected.
   Keep complete code cells separate from interactive `stdin`, and keep the MCP adapter independent of interpreter implementation details.
@@ -236,7 +238,9 @@ Keep these invariants intact:
 - `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — native interpreter startup, inspection of an already-selected executable, shared post-initialization setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
 - `src/python/requirements.rs`, `src/python/requirements/r.rs` — native requirement values, declaration transitions, preparation orchestration, live activation through the CPython library, and pending activation key, with R field layout, attributes, encodings, history, identity comparison, and notification conversion confined to the active-binding adapter.
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate selection and attachment adapter, Console embedding-configuration handoff, candidate lookup, declaration checks, and automatic-resolution forwarding.
-  R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator, with initial host resolution only.
+  R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator.
+  Sans-R defaults require uv on the startup PATH; top-level `python` selects an existing environment without invoking uv.
+  Managed environments support explicit prestart/restart Python preparation, with native inspection and launch configuration committed through the mutable session environment; live activation and automatic import installation remain disabled.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.

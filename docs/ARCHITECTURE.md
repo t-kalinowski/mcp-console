@@ -419,6 +419,12 @@ The server waits, polls, or completes the MCP response without moving response o
 
 When a code-bearing `send` declares requirements, the server treats them as preconditions of that evaluation.
 One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
+Local sans-R managed Python uses the same trusted `resolve` subprocess as other local preparation.
+It runs with full host permissions, independently of worker policy; it does not isolate worker-writable resolver inputs.
+The [requirements trust boundary](REQUIREMENTS.md#host-resolution-and-trust) documents the resulting escape paths.
+The mutable session environment owns the accepted manifest, executable, and embedding configuration together.
+Candidate inspection completes before worker retirement; failure or cancellation preserves the old selection and worker.
+Resolver and inspection results use bounded reads from the original open descriptors.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
 
@@ -551,6 +557,7 @@ Otherwise it writes under `~/.agents/console/sessions/` without creating a proje
 Raw-log paths returned to clients are relative to the launch directory for project recordings and absolute for home recordings.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available.
+Sans-R uv-managed sessions separately record `python_preparation: true` while dynamic resolution remains disabled.
 The Quarto projection uses that capability and the captured Python-only managed selection separately to declare initial requirements.
 For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local launch `working_directory`.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
@@ -571,10 +578,12 @@ It is a chronological call ledger: a timed-out cell, later polls, and eventual r
 The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
-Python-only managed sessions declare NumPy and pandas without R defaults or rejected live requirements.
+Python-only managed sessions declare NumPy and pandas plus packages from `python_environment_accepted` events emitted at the prestart/restart environment commit.
+They omit R defaults and rejected or discarded candidate requirements; accepted manifests remain recorded even if later worker replacement fails.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.
-The declarations are submitted inputs, not a lockfile or an exact record of successful retained and automatically inferred requirements.
+In R-present sessions the declarations are submitted inputs, not an exact record of successful retained and automatically inferred requirements.
+Neither mode records a dependency lockfile.
 For local sessions, rendering executes the captured client-authored cells in order in a fresh Quarto/knitr runtime outside the MCP Console worker sandbox and exports their new output.
 Rendering does not reconstruct session control, stdin, recorded results, or artifacts.
 SQL chunks require a DBI connection supplied by the document user.

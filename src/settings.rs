@@ -82,6 +82,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    python: Option<std::path::PathBuf>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
     target: Option<Target>,
@@ -89,6 +90,7 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
+    pub python: Option<std::path::PathBuf>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
     pub target: Option<Target>,
@@ -163,6 +165,16 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     }
     let target = project.target.filter(|target| !target.is_local_host());
     Ok(Captured {
+        python: project
+            .python
+            .map(|path| {
+                if path.as_os_str().is_empty() {
+                    return Err("python must name an executable; omit it to use uv".to_string());
+                }
+                std::path::absolute(path)
+                    .map_err(|error| format!("cannot locate configured Python: {error}"))
+            })
+            .transpose()?,
         source: Some(name),
         policy: project.sandbox,
         target,

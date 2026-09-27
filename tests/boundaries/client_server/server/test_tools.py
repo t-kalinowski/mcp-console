@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -111,6 +112,9 @@ def test_initializes_and_lists_tools(
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
         ),
+        "python-managed.yaml": _initializes_and_lists_tools(
+            binary, execution, python_only=True, python_managed=True
+        ),
     }
     if execution == SANDBOXED:
         companions["proxy.yaml"] = _initializes_and_lists_tools(
@@ -138,6 +142,7 @@ def _initializes_and_lists_tools(
     *,
     bare: bool = False,
     python_only: bool = False,
+    python_managed: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
     ssh: bool = False,
@@ -153,7 +158,10 @@ def _initializes_and_lists_tools(
         if python_only:
             python_bin = Path(library) / "bin"
             python_bin.mkdir()
-            (python_bin / "python3").symlink_to(sys.executable)
+            if python_managed:
+                (python_bin / "uv").symlink_to(shutil.which("uv"))
+            else:
+                (python_bin / "python3").symlink_to(sys.executable)
             environment["PATH"] = str(python_bin)
             for name in (
                 "R_HOME",
@@ -163,6 +171,8 @@ def _initializes_and_lists_tools(
                 "RETICULATE_UV",
             ):
                 environment.pop(name, None)
+            if not python_managed:
+                environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
         workspace = Path(library) / "workspace"
         workspace.mkdir()
         if ssh:
@@ -214,6 +224,11 @@ def _initializes_and_lists_tools(
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
                 assert {"r", "sql"}.isdisjoint(send["inputSchema"]["properties"])
+            if python_managed:
+                assert set(
+                    send["inputSchema"]["properties"]["requirements"]["properties"]
+                ) == {"python", "action", "python_version", "exclude_newer"}
+                return client.finish()
             if bare or python_only:
                 assert send["inputSchema"]["properties"]["requirements"]["properties"][
                     "action"
