@@ -24,22 +24,22 @@ result:
 ---
 send:
   control: interrupt
-  timeout_ms: 600000
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: "[worker startup interrupted]"
-  isError: true
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
 ---
 send:
   timeout_ms: 600000
 result:
   content:
     - type: text
-      text: |-
-
-        [idle]
-  isError: false
+      text: "[worker startup interrupted]"
+  isError: true
 ---
 send:
   r: exists("startup_cell_ran", inherits = FALSE)

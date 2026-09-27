@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import sys
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -12,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, last_tool_text
+from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -21,6 +22,8 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.resolvers import resolver_fixture_arguments, resolver_fixture_directory
+from support.processes import capture_process_identity, child_process_identities
+from boundaries.client_server._harness import wait_for_stopped_process
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -88,9 +91,35 @@ def before_resolver_spawn(
             release.release()
 
 
+def interrupt_paused_preparation(
+    client: McpClient, execution: Execution, release: FifoCheckpoint
+) -> None:
+    launcher = None
+    if execution == SANDBOXED:
+        brokers = child_process_identities(capture_process_identity(client.process.pid))
+        assert len(brokers) == 1, brokers
+        launchers = child_process_identities(brokers[0])
+        assert len(launchers) == 1, launchers
+        launcher = launchers[0][0]
+        # Native interruption retires the entire workload, including its paused
+        # fork. Hold that cleanup barrier until delivery has been acknowledged.
+        os.kill(launcher, signal.SIGSTOP)
+    try:
+        if launcher is not None:
+            wait_for_stopped_process(
+                launcher, os.getpgid(launcher), client, "resolver launcher"
+            )
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == RUNNING
+    finally:
+        release.release()
+        if launcher is not None:
+            os.kill(launcher, signal.SIGCONT)
+
+
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
-def test_interrupts_first_cell_before_resolver_registration(
+def test_interrupts_first_cell_before_resolver_spawn(
     binary: Path, execution: Execution
 ) -> Transcript:
     with before_resolver_spawn(binary, execution, 1) as (
@@ -103,10 +132,7 @@ def test_interrupts_first_cell_before_resolver_registration(
         assert last_tool_text(client) == RUNNING
         started.wait("first resolver has not been spawned")
         assert not (root / "resolver.jsonl").exists()
-        client.response_timeout = 600
-        client.send(control="interrupt", timeout_ms=600_000)
-        assert last_result_text(client) == "[worker startup interrupted]"
-        release.release()
+        interrupt_paused_preparation(client, execution, release)
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
         client.send(
@@ -137,10 +163,7 @@ def test_interrupts_first_cell_between_resolver_phases(
         assert len(invocations) == 1, invocations
         assert invocations[0]["program"] == "uv", invocations
         assert invocations[0]["arguments"][:2] == ["python", "list"], invocations
-        client.response_timeout = 600
-        client.send(control="interrupt", timeout_ms=600_000)
-        assert last_result_text(client) == "[worker startup interrupted]"
-        release.release()
+        interrupt_paused_preparation(client, execution, release)
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
         client.send(
@@ -167,11 +190,9 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         assert not (root / "resolver.jsonl").exists()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        interrupt_paused_preparation(client, execution, release)
         client.response_timeout = 600
-        interrupt = client.start_send(control="interrupt", timeout_ms=600_000)
-        client.receive_many([stdin, interrupt])
-        release.release()
-        client.response_timeout = 600
+        client.receive(stdin)
         assert stdin["result"]["isError"] is True, stdin
         client.send(timeout_ms=600_000)
         client.send(
