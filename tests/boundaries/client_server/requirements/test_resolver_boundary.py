@@ -65,7 +65,9 @@ def source_repository(root: Path, backend: str):
     server_thread = threading.Thread(target=server.serve_forever)
     server_thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/"
+        # Use the proxy even though renv's local IPC allowance sets NO_PROXY
+        # for bare localhost. On Linux the server is outside the private netns.
+        yield f"http://localhost.:{server.server_port}/"
     finally:
         server.shutdown()
         server.server_close()
@@ -607,7 +609,7 @@ def test_real_build_hook_and_result_substitution(binary: Path) -> Transcript:
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
             config.write_text(
-                json.dumps({"resolver": {"allowed_hosts": ["127.0.0.1"]}})
+                json.dumps({"resolver": {"allowed_hosts": ["localhost"]}})
             )
             with McpClient(
                 binary, ("serve",), environment, current_directory=workspace
@@ -682,7 +684,7 @@ def test_interrupt_and_server_death_retire_build_descendants(
                 environment = dict(managed_python_environment(root), UV_FIND_LINKS=url)
                 with McpClient(
                     binary,
-                    ("serve", "-c", 'resolver.allowed_hosts=["127.0.0.1"]'),
+                    ("serve", "-c", 'resolver.allowed_hosts=["localhost"]'),
                     environment,
                 ) as client:
                     client.initialize_and_list_tools()

@@ -16,7 +16,7 @@ send:
 result:
   content:
     - type: text
-      text: "[SSH preparation message exceeds 1 MiB]"
+      text: "[resolver preparation message exceeds 1 MiB]"
   isError: true
 ---
 send:
