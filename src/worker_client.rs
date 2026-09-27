@@ -415,11 +415,18 @@ impl Client {
                         .local_has_uv
                         .ok_or("local Python discovery has no uv result")?,
                 };
-                local_runtime = Some(crate::local_runtime::Selection::python(
+                let selected = crate::local_runtime::Selection::python(
                     configured_python,
                     &resolver,
                     on_started,
-                )?);
+                );
+                local_runtime = Some(match selected {
+                    Ok(selection) => selection,
+                    Err(error) => {
+                        let _ = preparation.close();
+                        return Err(error);
+                    }
+                });
                 local_preparation = Some(preparation);
                 (None, Default::default(), None, RResolver::Disabled)
             } else {
