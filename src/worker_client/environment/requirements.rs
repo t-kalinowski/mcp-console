@@ -245,11 +245,8 @@ impl RequirementDelta {
             && !self.r_changed
     }
 
-    pub(super) fn is_live_python_only(&self) -> bool {
-        self.python_candidate.is_some()
-            && !self.restart_required
-            && !self.duckdb_changed
-            && !self.r_changed
+    pub(super) fn has_live_python_additions(&self) -> bool {
+        self.python_candidate.is_some() && !self.restart_required && !self.r_changed
     }
 
     pub(super) fn validate_live_python_additions(
@@ -358,8 +355,7 @@ pub(super) fn validate_python_import_resolution(
         && distribution
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.'));
-    if resolution.module == resolution.distribution
-        || !valid_module
+    if !valid_module
         || !valid_distribution
         || !requirements.packages.contains(&resolution.distribution)
     {

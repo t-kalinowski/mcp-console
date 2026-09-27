@@ -12,8 +12,8 @@ The default uses uv from `PATH`; setting `python` in the Console config selects 
 The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) uses the same trusted host resolver as mixed-language sessions.
 There is no automatic PATH-Python fallback.
 `requirements.python` and `requirements.duckdb` prepare additions before the first worker starts, alone or with a Python or SQL cell.
-After startup, an idle worker accepts `action: "add"` for new Python distributions or DuckDB extensions; already retained declarations can accompany either as no-ops.
-Simultaneous effective additions to both fields, changes to a declared distribution or constraint, and changed `set` or `reset` declarations still need `control: "restart"`.
+After startup, an idle worker accepts `action: "add"` for new Python distributions and DuckDB extensions in the same request; already retained declarations are no-ops.
+Changes to a declared distribution or constraint and changed `set` or `reset` declarations still need `control: "restart"`.
 Unchanged declarations are a no-op.
 The existing prestart/restart transaction resolves the complete Python candidate and inspects its executable before preparing all retained extensions with that candidate's DuckDB.
 The hidden local `resolve` subprocess owns cancellation, output, and child cleanup for the Python-backed extension operation.
@@ -24,7 +24,7 @@ Live Python preparation resolves against the running executable, inspects the ca
 The worker reports activation before the server commits the candidate manifest and native launch configuration.
 Plain restarts and crash replacement reuse that accepted environment without another resolution.
 Explicit Python selections do not enable preparation.
-Automatic import resolution and R requirements are unavailable in sans-R sessions.
+Managed sans-R Python also resolves a reached missing import through the existing finder; R requirements remain unavailable.
 The default sans-R managed Python declaration includes NumPy, pandas, and DuckDB.
 `get` reports the accepted declaration, `reset` restores these startup defaults, and `set` retains exactly the requested declaration, including an empty set.
 DuckDB is resolved with the rest of the Python manifest through the hidden host resolve process before the environment is accepted; the worker never installs it through Console preparation.
@@ -168,7 +168,7 @@ Changing these constraints with a live worker requires restart.
 `set` clears omitted constraints; `reset` restores startup constraints (currently none).
 Captured resolver settings such as `UV_*` remain startup configuration and are not rewritten by these session operations.
 Sans-R managed sessions support these actions for Python and DuckDB extensions.
-Idle additive changes can commit live when they add only new Python distributions or only new DuckDB extensions.
+Idle additive changes can commit live when they add new Python distributions, DuckDB extensions, or both.
 Changing a declared distribution and changed declaration replacements require restart.
 User-selected Python, bare runtimes, Docker, and Docker Sandbox support inspection without enabling preparation.
 
@@ -286,9 +286,11 @@ These cases report an actionable import error instead of installing an ambiguous
 A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
 Both forms report the full missing-submodule name.
 
-When inference succeeds, the Python finder calls a private R closure supplied by the reticulate bridge.
-That closure snapshots reticulate's current requirement state, adds the inferred distribution through `reticulate::py_require(..., action = "add")`, and materializes the complete manifest through the existing managed-Python callback.
-The server returns a provisional environment in a `PythonResolved` reply to the existing `ResolvePython` request.
+When inference succeeds in an R-present session, the finder calls the reticulate bridge's private R closure.
+That closure adds the inferred distribution through `reticulate::py_require(..., action = "add")` and materializes the complete manifest through the existing managed-Python callback.
+In a managed sans-R session, the finder calls a native callback that forms the same additive request from the worker's accepted manifest.
+The server resolves the complete candidate through the captured host resolver and returns a provisional environment in the existing `PythonResolved` exchange.
+For sans-R Python, the reply also carries the inspected candidate configuration, constrained to the running interpreter.
 After Console activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
 The worker emits that report before the original Python import resumes.
 The server matches and commits the candidate when it processes the report; sideband order places it before any later evaluation outcome.
@@ -298,12 +300,12 @@ If the module is present, the original import continues in place.
 The cell is not replayed, and successful resolution emits no preparation marker.
 When the import and inferred distribution names differ, the server emits a bounded notice such as `[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']` after it commits the matching activation.
 Same-name inference and explicit preparation emit no resolution notice.
-The worker process, Python interpreter, Python objects, R globals, DuckDB catalog, stdin state, and PID remain in place.
+The worker process, Python interpreter, Python objects, DuckDB catalog, stdin state, and PID remain in place; an R-present session also retains its R globals.
 New subprocesses use the activated environment and can import its retained packages.
 
 A successfully activated environment remains committed if the inferred distribution does not provide the requested module or if later code in the cell fails.
 A later cell and a replacement after restart reuse it.
-An ordinary failure before activation restores the previous reticulate manifest, discards the provisional candidate, and leaves the worker usable.
+An ordinary failure before activation discards the provisional candidate and leaves the accepted environment usable; the R adapter restores its previous reticulate manifest.
 Resolver diagnostics name the import and inferred distribution and show the `requirements.python` recovery shape.
 
 Resolution occurs only when execution reaches a missing import.
@@ -312,12 +314,12 @@ An automatic request belongs to the active Python evaluation, so `timeout_ms` ca
 An empty `send` polls that evaluation, and interrupt targets its active host resolver.
 Restart, shutdown, and generation checks cancel or discard unactivated candidates from an old worker; an earlier `PythonActivated` commit remains retained.
 
-The finder prevents a second automatic resolution while its R callback is active.
+The finder prevents a second automatic resolution while its callback is active.
 A recursive missing import follows ordinary import failure rather than starting another resolver.
 The callback is also limited to the main worker process and the Python thread that configured the runtime.
-A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts and does not call R, reticulate, the sideband, or `uv`.
+A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts and does not call the resolver sideband or `uv`.
 
-A nonempty user-selected `RETICULATE_PYTHON` disables this path as well as explicit `requirements.python` additions.
+A user-selected Python environment disables this path and explicit `requirements.python` additions.
 The finder still reports a specific missing-import diagnostic, directing the user to install the distribution into that selected environment or restart MCP Console with managed Python enabled.
 
 Use explicit `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or marker is needed, the namespace is ambiguous, an error asks for an exact requirement, or the package should be prepared before the cell starts.
@@ -390,13 +392,13 @@ The R adapter still translates a retained exception through reticulate's conditi
 Only after activation and process setup succeed does the adapter record pending activation.
 Reticulate then accepts the returned configuration and writes the requirement binding that publishes `PythonActivated`.
 
-The server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
+In R-present sessions, the server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
 A runtime import reports that activation before the original import continues.
 A successful activation commits independently of later steps in the same mixed request.
 If Python succeeds and a following live R update fails, the Python addition remains retained and is available after restart.
 The same rule retains an automatically inferred distribution when the requested module or later cell code still fails.
 
-In a local managed sans-R session, an idle `action="add"` request can add a new named Python distribution before a Python or SQL cell or as a standalone request.
+In a local managed sans-R session, an idle `action="add"` request can add new named Python distributions and DuckDB extensions before a Python or SQL cell or as a standalone request.
 An exact retained requirement is a no-op.
 A different requirement for an already-declared distribution needs `control="restart"` and `action="set"`; the distribution name comes from the same PEP 508 parser used for request validation.
 This add-only rule does not promise that arbitrary package upgrades can be switched in a running interpreter.
@@ -404,10 +406,11 @@ It compares requirement declarations, not installed versions: resolving a new di
 Live preparation neither locks those versions nor unloads already-imported modules.
 Use explicit restart for upgrades or dependency changes that need fresh imports.
 The host resolves the complete candidate through the hidden resolver using the running environment's executable, then inspects the candidate and compares its `libpython` with the worker's active configuration.
-If DuckDB extensions are retained, the host prepares them against the candidate before activation.
+The host prepares the complete retained DuckDB extension set, including additions from the same request, against the candidate before activation.
 No candidate declaration appears in `action="get"` while this work is pending.
 The worker receives only this approved candidate and uses the shared native activation operation without loading R or installing packages inside the worker.
-Its `PythonActivated` report commits the manifest and native launch configuration together before a same-call cell begins.
+For an automatic import, the importing cell stays suspended while the server prepares that candidate through the same host path; the worker activates it and retries the import through the existing finder.
+Its `PythonActivated` report commits the manifest, native launch configuration, and any new extension declaration together before a same-call cell begins.
 Python objects, the managed DuckDB catalog, and the selected SQL connection remain in the worker; a later cell error does not discard an accepted activation.
 Validation, resolution, inspection, and compatibility failures leave the current worker and accepted environment intact.
 An activation exception retains its Python traceback and withholds same-call code and input; further requirement changes require restart because activation-script side effects cannot be rolled back.
@@ -438,7 +441,7 @@ Its spill and stored-secret paths remain in private worker storage, which retire
 Preparation never loads extensions, executes submitted code, opens a worker database, or changes a selected DB-API connection.
 The worker's interpreter, Python objects, managed DuckDB catalog, and selected SQL connection survive a successful live addition.
 Changed live `set` and `reset` declarations, interpreter constraints, `exclude_newer`, and changes to a declared Python distribution require explicit restart; an effective no-op remains a no-op even when those fields are present.
-An unsupported mixed request is rejected before any part is prepared or committed.
+Combined Python and extension additions prepare all retained extensions against the Python candidate before activation.
 Host installation failure or cancellation leaves the worker and committed requirements unchanged, and same-call code and input do not reach the worker.
 The shared extension cache may retain downloads made before failure.
 While preparation is pending, `requirements.action="get"` reports the committed declaration.

@@ -19,9 +19,10 @@ Managed targets use the same preparation ordering below; bare targets expose onl
 
 Local sans-R sessions managed through uv expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
 They support standalone preparation and preparation with a Python or SQL cell before first worker startup, and explicit restart preparation with or without a cell.
-An idle running worker also accepts effective new Python-distribution or DuckDB-extension additions with `action: "add"`; already-retained declarations remain no-ops.
+An idle running worker also accepts effective new Python-distribution and DuckDB-extension additions with `action: "add"`, including both in one call; already-retained declarations remain no-ops.
+Automatic missing-import resolution starts only when a managed Python cell reaches that import and uses the running evaluation's resolver exchange.
 Changes to a declared distribution, interpreter constraints, publication cutoffs, and changed `set` or `reset` declarations require explicit restart.
-Simultaneous effective package and extension additions are rejected before preparing or committing either part.
+The server prepares the complete Python candidate and retained extensions before one live activation when both change.
 Live validation, host preparation, and compatibility failures or cancellation leave the worker and committed declaration unchanged; same-call code and input are not sent.
 An activation failure withholds the cell and requires restart before further requirement changes.
 Restart resolves the cumulative candidate and inspects its embedding configuration before retirement.

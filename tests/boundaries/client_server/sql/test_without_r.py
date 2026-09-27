@@ -497,7 +497,14 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
                 python="identity = None",
             )
             assert live.get("isError"), live
-            assert "control: restart" in last_result_text(client)
+            assert "absent-fixture-distribution" in last_result_text(client)
+            live["content"][0]["text"], paths = re.subn(
+                r'"python": "[^"]+/home/\.cache/uv/archive-v0/[^"]+/bin/python"',
+                '"python": "<selected Python>"',
+                last_result_text(client),
+                count=1,
+            )
+            assert paths == 1
             for requirements in (
                 {"duckdb": ["json"], "python_version": [">=3.11"]},
                 {"duckdb": ["json"], "exclude_newer": "2026-01-01"},

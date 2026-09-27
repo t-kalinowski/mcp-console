@@ -208,6 +208,7 @@ impl Client {
         generation: &WorkerGeneration,
         environment: &Environment,
         requirements: crate::worker_protocol::PythonRequirementManifest,
+        extensions: &std::collections::BTreeSet<String>,
     ) -> Result<
         (crate::resolver::ManagedPython, crate::python::NativePython),
         EnvironmentResolutionFailure,
@@ -244,16 +245,12 @@ impl Client {
         )
         .map_err(|error| EnvironmentResolutionFailure::Host(error.to_string()))?;
 
-        if !environment.duckdb_extensions.is_empty() {
+        if !extensions.is_empty() {
             self.resolve_python_duckdb_extensions(
                 generation,
                 &candidate,
                 resolver,
-                &environment
-                    .duckdb_extensions
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>(),
+                &extensions.iter().cloned().collect::<Vec<_>>(),
                 environment.local_runtime.as_ref(),
             )?;
         }

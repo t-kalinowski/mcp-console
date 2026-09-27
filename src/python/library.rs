@@ -358,6 +358,22 @@ pub(super) fn configure_import_resolution(
     })
 }
 
+pub(super) fn configure_native_import_resolution() -> Result<(), String> {
+    let callback = api()?.with_gil(|api| unsafe {
+        std::ptr::NonNull::new(api.function(c"_mcp_console_services", c"resolve_import")?)
+            .ok_or_else(|| "native Python import callback is unavailable".to_string())
+    })?;
+    if configure_import_resolution(super::ImportResolution {
+        callback: Some(callback),
+        disabled_reason: None,
+    })? {
+        Ok(())
+    } else {
+        display_setup_exception()?;
+        Err("native Python import resolution setup failed".into())
+    }
+}
+
 pub(super) fn runtime_configured() -> Result<bool, String> {
     let slot = PYTHON_LIBRARY
         .lock()

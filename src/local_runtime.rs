@@ -115,6 +115,7 @@ impl Selection {
             }
             Self::Python {
                 explicit,
+                managed,
                 duckdb_extension_directory,
                 ..
             } => {
@@ -139,7 +140,9 @@ impl Selection {
                 } else {
                     command.env_remove(DUCKDB_EXTENSION_DIRECTORY);
                 }
-                command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+                if !*managed {
+                    command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+                }
             }
         }
         Ok(())

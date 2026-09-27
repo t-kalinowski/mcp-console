@@ -22,6 +22,7 @@ pub(crate) enum ActivationFailure {
         candidate_libpython: String,
         running_libpython: String,
     },
+    BeforeMutation(String),
     Infrastructure(String),
     /// The original exception and traceback remain in CPython's setup-error
     /// slot. The caller chooses how to report them through its own boundary.
@@ -38,7 +39,9 @@ impl fmt::Display for ActivationFailure {
                 formatter,
                 "New environment does not use the same Python binary\nnew libpython: {candidate_libpython}\nold libpython: {running_libpython}"
             ),
-            Self::Infrastructure(message) => formatter.write_str(message),
+            Self::BeforeMutation(message) | Self::Infrastructure(message) => {
+                formatter.write_str(message)
+            }
             Self::PythonException => formatter.write_str("Python activation raised an exception"),
         }
     }
@@ -58,13 +61,13 @@ pub(crate) fn activate_managed_environment(
     let script = Path::new(input.candidate_python)
         .parent()
         .ok_or_else(|| {
-            ActivationFailure::Infrastructure(
+            ActivationFailure::BeforeMutation(
                 "selected Python executable has no parent directory".into(),
             )
         })?
         .join("activate_this.py");
     let script = script.to_str().ok_or_else(|| {
-        ActivationFailure::Infrastructure("Python activation script path is not UTF-8".into())
+        ActivationFailure::BeforeMutation("Python activation script path is not UTF-8".into())
     })?;
     match super::super::library::activate_environment(script, input.candidate_executable) {
         Ok(true) => Ok(()),

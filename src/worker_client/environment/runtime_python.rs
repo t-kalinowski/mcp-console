@@ -2,7 +2,9 @@ use super::super::Client;
 use super::super::lifecycle::{
     OldGenerationCommitDisposition, RequirementChangeState, WorkerGeneration,
 };
-use super::requirements::{select_python_activation, validate_python_import_resolution};
+use super::requirements::{
+    RequirementDelta, Requirements, select_python_activation, validate_python_import_resolution,
+};
 use super::state::Environment;
 
 impl Client {
@@ -10,7 +12,13 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
-    ) -> Result<crate::resolver::ManagedPython, String> {
+    ) -> Result<
+        (
+            crate::resolver::ManagedPython,
+            Option<crate::python::NativePython>,
+        ),
+        String,
+    > {
         self.ensure_generation(&generation)?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
@@ -52,9 +60,48 @@ impl Client {
         if let Some(resolution) = import_resolution.as_ref() {
             validate_python_import_resolution(resolution, &retained_requirements)?;
         }
+        if environment
+            .local_runtime
+            .as_ref()
+            .is_some_and(crate::local_runtime::Selection::python_only)
+        {
+            let resolution = import_resolution
+                .as_ref()
+                .ok_or_else(|| "native Python resolution requires a reached import".to_string())?;
+            let delta = RequirementDelta::calculate(
+                &environment,
+                Requirements {
+                    python: vec![resolution.distribution.clone()],
+                    ..Default::default()
+                },
+            )?;
+            delta.validate_live_python_additions(&environment)?;
+            let expected = delta.python_candidate.ok_or_else(|| {
+                "automatic Python import did not add a new distribution".to_string()
+            })?;
+            if expected != requirements || expected != retained_requirements {
+                return Err(
+                    "automatic Python import does not match the retained declaration".into(),
+                );
+            }
+            if self.requirement_change_state(&generation)?
+                == RequirementChangeState::RestartRequired
+            {
+                return Err("requirement changes are unavailable until session restart".into());
+            }
+            let (candidate, inspected) = self
+                .resolve_live_native_python(
+                    &generation,
+                    &environment,
+                    expected,
+                    &environment.duckdb_extensions,
+                )
+                .map_err(|failure| failure.into_message())?;
+            return Ok((candidate, Some(inspected)));
+        }
         if current.requirements() == &retained_requirements {
             self.ensure_generation(&generation)?;
-            return Ok(current);
+            return Ok((current, None));
         }
         match self.requirement_change_state(&generation)? {
             RequirementChangeState::Available => {}
@@ -78,7 +125,10 @@ impl Client {
         };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
-        Ok(managed.with_retained_requirements(retained_requirements))
+        Ok((
+            managed.with_retained_requirements(retained_requirements),
+            None,
+        ))
     }
 
     pub(in crate::worker_client) fn resolve_runtime_python_version(
@@ -118,6 +168,7 @@ impl Client {
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidate: Option<crate::resolver::ManagedPython>,
         configuration: Option<crate::python::NativePython>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
@@ -137,7 +188,13 @@ impl Client {
             .managed_parts()?
             .0;
         let managed = select_python_activation(Some(current), requirements, candidate)?;
-        self.commit_locked_runtime_python(&generation, &mut environment, managed, configuration)
+        self.commit_locked_runtime_python(
+            &generation,
+            &mut environment,
+            managed,
+            configuration,
+            duckdb_extensions,
+        )
     }
 
     pub(super) fn commit_runtime_python(
@@ -153,7 +210,7 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.commit_locked_runtime_python(&generation, &mut environment, managed, None)
+        self.commit_locked_runtime_python(&generation, &mut environment, managed, None, None)
     }
 
     fn commit_locked_runtime_python(
@@ -162,6 +219,7 @@ impl Client {
         environment: &mut Environment,
         managed: crate::resolver::ManagedPython,
         configuration: Option<crate::python::NativePython>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         if let Some(configuration) = configuration.as_ref()
             && (!matches!(
@@ -194,6 +252,9 @@ impl Client {
                     };
                     **selected = configuration;
                     self.record_accepted_python(environment);
+                }
+                if let Some(duckdb_extensions) = duckdb_extensions {
+                    environment.duckdb_extensions = duckdb_extensions;
                 }
                 self.publish_requirements(environment);
                 Ok(disposition)

@@ -30,16 +30,17 @@ result:
         console_sql_connection(connection) selects a user-owned DB-API
         connection and console_sql_connection(None) restores managed DuckDB.
         Register Python data frames explicitly with
-        sql_connection().register(name, frame). R cells and automatic package
-        installation are unavailable. Idle Python package or DuckDB extension
-        additions preserve the worker and selected SQL connection. Console
-        manages Python through uv. Explicit requirements.python and
-        requirements.duckdb prepare packages and extensions before the first
-        worker starts or with control: restart. An idle worker can add new
-        Python distributions or DuckDB extensions without replacement. Changes
-        to an already-declared distribution, constraints, and declaration
-        replacements require restart; retained requirements are a no-op. Restart
-        resets objects and retains the accepted environment.
+        sql_connection().register(name, frame). R cells are unavailable. Idle
+        Python package and DuckDB extension additions and reached missing Python
+        imports preserve the worker and selected SQL connection. Console manages
+        Python through uv. Explicit requirements.python and requirements.duckdb
+        prepare packages and extensions before the first worker starts or with
+        control: restart. An idle worker can add new Python distributions and
+        DuckDB extensions without replacement, including in one request. A
+        missing Python import reached during a cell can prepare its inferred
+        distribution. Changes to an already-declared distribution, constraints,
+        and declaration replacements require restart; retained requirements are
+        a no-op. Restart resets objects and retains the accepted environment.
 
 
         Send one complete `python` or `sql` cell per call. Code-bearing calls
@@ -80,11 +81,12 @@ result:
               displays automatically. Use input() for managed stdin; Matplotlib plots
               return as PNG images when installed. sql_connection() returns the active
               SQL connection. An idle worker can add new requirements.python
-              distributions or requirements.duckdb extensions before this cell without
-              replacement. Changes to declared distributions, constraints, and
-              declaration replacements require control: restart. Automatic
-              installation and R integration are unavailable. Use timeout_ms: 0 then
-              poll for background execution.
+              distributions and requirements.duckdb extensions before this cell
+              without replacement. A reached missing import can prepare its inferred
+              distribution during the cell. Changes to declared distributions,
+              constraints, and declaration replacements require control: restart. R
+              integration is unavailable. Use timeout_ms: 0 then poll for background
+              execution.
             type:
               - string
               - "null"
@@ -133,19 +135,18 @@ result:
               or restore defaults with action=reset. Applies to a Console-managed uv
               environment. Supported before the first worker starts, alone or with a
               Python or SQL cell, and with control: restart, with or without code. An
-              idle worker accepts new Python distributions or DuckDB extensions
-              without replacement. Already-retained declarations are no-ops, including
-              extension names accompanying a Python addition. Additions accumulate
-              from the initial NumPy, pandas, and DuckDB declaration with no
-              extensions. Changes to an already-declared distribution, interpreter
-              constraints, exclusion dates, and set/reset declarations require
-              restart. Simultaneous effective package and extension additions are
-              unavailable live. A live Python candidate is resolved against the
-              running interpreter, inspected, and prepared with retained extensions
-              before activation. Validation or host preparation failure preserves the
-              worker and committed declaration; an activation failure can require
-              restart. Automatic installation is unavailable. Standalone preparation
-              cannot queue stdin.
+              idle worker accepts new Python distributions and DuckDB extensions
+              together without replacement. Already-retained declarations are no-ops.
+              Additions accumulate from the initial NumPy, pandas, and DuckDB
+              declaration with no extensions. Changes to an already-declared
+              distribution, interpreter constraints, exclusion dates, and set/reset
+              declarations require restart. A live Python candidate is resolved
+              against the running interpreter, inspected, and prepared with all
+              retained extensions before activation. Validation or host preparation
+              failure preserves the worker and committed declaration; an activation
+              failure can require restart. Reached missing Python imports can infer
+              and prepare a distribution during a cell. Standalone preparation cannot
+              queue stdin.
             type:
               - object
               - "null"
@@ -200,9 +201,10 @@ result:
                   values. Preparation runs outside the worker sandbox with full host
                   permissions and may execute installation or build code. Use trusted
                   dependencies and resolver configuration. An idle managed worker accepts
-                  new distributions without restart; changing a declared distribution
-                  requires restart. Automatic missing-import installation remains
-                  disabled.
+                  new distributions without restart, together with DuckDB extensions;
+                  changing a declared distribution requires restart. A reached missing
+                  Python import can add its inferred distribution during a managed Python
+                  cell.
                 type: array
                 items:
                   type: string

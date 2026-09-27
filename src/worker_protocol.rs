@@ -50,6 +50,8 @@ pub(crate) enum ServerMessage {
     },
     PythonResolved {
         python: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolutionFailed {
         message: String,
@@ -195,9 +197,15 @@ pub(crate) enum WorkerMessage {
     PythonActivated {
         requirements: PythonRequirementManifest,
     },
+    PythonActivationFailed {
+        requirements: PythonRequirementManifest,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     PythonPrepared,
     PythonPreparationFailed {
+        message: String,
+    },
+    PythonPreparationRejected {
         message: String,
     },
     #[serde(deserialize_with = "deserialize_payload_free")]
