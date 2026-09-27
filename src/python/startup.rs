@@ -192,7 +192,7 @@ impl Runtime {
             }
             Err(super::ActivationFailure::PythonException) => {
                 // The native setup slot retains the original Python traceback.
-                super::library::display_setup_exception()?;
+                super::library::display_activation_exception()?;
                 Ok(PreparationOutcome::Failed {
                     message: "Python activation failed; restart required".into(),
                 })

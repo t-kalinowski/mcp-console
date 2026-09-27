@@ -744,6 +744,18 @@ def _mcp_console_display_setup_exception(
 _mcp_console.display_setup_exception = _mcp_console_display_setup_exception
 
 
+def _mcp_console_display_activation_exception(
+    _display=_mcp_console_display_setup_exception,
+    _stderr=_sys.stderr,
+) -> None:
+    # After Ready, diagnostics must precede the preparation result on the
+    # sideband. Capture the installed console stream, independent of fd 2.
+    _display(_stderr=_stderr)
+
+
+_mcp_console.display_activation_exception = _mcp_console_display_activation_exception
+
+
 def _mcp_console_configure_native_child_environment(
     configuration: str,
     _json=_json,

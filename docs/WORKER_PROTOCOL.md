@@ -362,6 +362,7 @@ Successful native preparation without an activation receipt, or a duplicate or m
 Plain restart and crash replacement use the committed configuration; a later cell failure does not undo activation.
 
 An activation exception retains its original Python diagnostics and produces `python_preparation_failed`; the server requires restart before further requirement changes and withholds same-call input and code.
+Those diagnostics use the console sideband before the failure result, independently of raw stderr delivery.
 Activation-script side effects are not rolled back.
 Native activation does not replace Python objects, the loaded DuckDB runtime, its catalog, or the selected SQL connection.
 

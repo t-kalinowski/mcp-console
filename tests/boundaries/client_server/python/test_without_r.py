@@ -914,7 +914,20 @@ def test_live_python_activation_failure_requires_restart(
             installed_binary(binary, root), execution.serve(), env
         ) as client:
             client.initialize_and_list_tools()
-            client.send(python="identity = object()")
+            # Separate fd 2 from the sideband deterministically. Activation
+            # diagnostics must arrive before their preparation result even
+            # when the relay cannot observe the raw stderr stream.
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, tempfile
+
+                    identity = object()
+                    original_stderr = os.dup(2)
+                    raw_stderr = tempfile.TemporaryFile()
+                    _ = os.dup2(raw_stderr.fileno(), 2)
+                    """)
+            )
             initial = client.send(requirements={"action": "get"})["structuredContent"][
                 "requirements"
             ]
@@ -929,6 +942,17 @@ def test_live_python_activation_failure_requires_restart(
             ), diagnostic
             assert "activation failure ran code" not in diagnostic
             assert "restart required" in diagnostic
+            client.send(
+                # fmt: python
+                python=code("""
+                    os.dup2(original_stderr, 2)
+                    os.close(original_stderr)
+                    raw_stderr.seek(0)
+                    assert raw_stderr.read() == b""
+                    raw_stderr.close()
+                    """)
+            )
+            assert last_result_text(client) == "[done]"
             assert (
                 client.send(requirements={"action": "get"})["structuredContent"][
                     "requirements"

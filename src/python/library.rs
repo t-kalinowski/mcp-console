@@ -436,6 +436,10 @@ pub(super) fn display_setup_exception() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console", c"display_setup_exception"))
 }
 
+pub(super) fn display_activation_exception() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console", c"display_activation_exception"))
+}
+
 pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
     api()?.with_gil(|api| unsafe {
         let function = api.function(c"_mcp_console", c"activate_environment")?;
