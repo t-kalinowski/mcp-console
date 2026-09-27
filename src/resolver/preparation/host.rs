@@ -1,11 +1,11 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
-use super::{Discovery, Input, Mode, Operation, Output, Selections};
+use super::{Discovery, Input, Mode, NativeDiscovery, Operation, Output, Selections};
 use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 use crate::target_launch::transfer::{Io, duplicate};
 
@@ -23,9 +23,21 @@ impl Context {
     fn discover(
         mode: Mode,
         local: bool,
+        configured_native: Option<String>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let configured_python = std::env::var_os("RETICULATE_PYTHON");
+        let mode = if matches!(mode, Mode::Auto) {
+            if crate::local_runtime::Selection::r_is_present() {
+                Mode::R
+            } else {
+                Mode::PythonOnly
+            }
+        } else {
+            mode
+        };
+        let configured_python = configured_native
+            .map(OsString::from)
+            .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
         let managed_python = !configured_python
             .as_deref()
             .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
@@ -34,6 +46,19 @@ impl Context {
             let python =
                 resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
             let has_uv = python.has_uv();
+            let native = if !local && matches!(mode, Mode::PythonOnly) {
+                let (selection, managed) = crate::local_runtime::Selection::python_on_host(
+                    configured_python.clone().map(OsString::from),
+                    &python,
+                    on_started,
+                )?;
+                Some(NativeDiscovery {
+                    selection,
+                    python: managed,
+                })
+            } else {
+                None
+            };
             return Ok((
                 Self {
                     local,
@@ -49,9 +74,11 @@ impl Context {
                     selections: Selections {
                         r_home: None,
                         python: configured_python,
+                        native_python: None,
                     },
                     local_r_home_bytes: None,
                     local_has_uv: local.then_some(has_uv),
+                    native,
                 },
             ));
         }
@@ -66,12 +93,14 @@ impl Context {
             selections: Selections {
                 r_home: Some(home.to_string_lossy().into_owned()),
                 python: configured_python,
+                native_python: None,
             },
             local_r_home_bytes: local.then(|| {
                 use std::os::unix::ffi::OsStrExt;
                 home.as_os_str().as_bytes().to_vec()
             }),
             local_has_uv: local.then(|| python.has_uv()),
+            native: None,
         };
         Ok((
             Self {
@@ -141,23 +170,23 @@ impl Context {
                 serde_json::to_value(python).map_err(|error| error.to_string())
             }
             Operation::PythonVersion { constraints, r } => {
-                let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
-                self.prepare_uv(Some(&r), on_started)?;
-                resolver::resolve_python_version_for_remote(
-                    constraints,
-                    &self.python,
-                    &r,
-                    on_started,
-                )
-                .map(serde_json::Value::String)
-            }
-            Operation::LocalPythonVersion { constraints, r } => {
                 let r =
                     r.map(|r| r.on_host(self.rscript.as_ref().expect("managed R has an Rscript")));
                 self.prepare_uv(r.as_ref(), on_started)?;
-                let version =
-                    resolver::resolve_python_version(constraints, &self.python, on_started)?;
+                let version = match r.as_ref() {
+                    Some(r) if !self.local => resolver::resolve_python_version_for_remote(
+                        constraints,
+                        &self.python,
+                        r,
+                        on_started,
+                    )?,
+                    _ => resolver::resolve_python_version(constraints, &self.python, on_started)?,
+                };
                 Ok(serde_json::Value::String(version))
+            }
+            Operation::InspectPython { executable } => {
+                serde_json::to_value(crate::python::inspect_native(&executable, on_started)?)
+                    .map_err(|error| error.to_string())
             }
             Operation::Uv { r } => {
                 let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
@@ -179,10 +208,8 @@ impl Context {
                 extensions,
                 extension_directory,
             } => {
-                if !self.local || !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
-                    return Err(
-                        "Python-backed DuckDB preparation requires local managed Python".into(),
-                    );
+                if !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
+                    return Err("Python-backed DuckDB preparation requires managed Python".into());
                 }
                 resolver::resolve_python_duckdb_extensions(
                     &python,
@@ -204,7 +231,7 @@ impl Context {
             return Err("managed Python requirements are disabled because the session uses a user-selected Python environment".into());
         }
         if !self.python.has_uv() {
-            let r = r.ok_or("remote Python bootstrap requires managed R")?;
+            let r = r.ok_or("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment")?;
             let configuration = self
                 .r
                 .as_ref()
@@ -272,7 +299,7 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         version,
         build,
         workspace,
-        selections,
+        mut selections,
         mode,
     } = first
     else {
@@ -282,15 +309,24 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         return Err("incompatible SSH preparation protocol or Console build".into());
     }
     if !local {
-        if !matches!(mode, Mode::R) {
-            return Err("SSH preparation requires R discovery".into());
+        if !matches!(mode, Mode::Auto | Mode::R) {
+            return Err("SSH preparation requires runtime discovery".into());
         }
         crate::target_launch::enter_workspace(&workspace)?;
+        if let Some(configured) = selections.native_python.as_deref() {
+            let selection = std::path::absolute(configured)
+                .map_err(|error| format!("cannot locate remote Python selection: {error}"))?
+                .to_str()
+                .ok_or("remote Python selection is not UTF-8")?
+                .to_string();
+            selections.native_python = Some(selection.clone());
+            selections.python = Some(selection);
+        }
         // Only these runtime selections cross the workload boundary. This is the
         // single-threaded entry point; later worker environment changes cannot reach it.
         for (name, value) in [
-            ("R_HOME", selections.r_home),
-            ("RETICULATE_PYTHON", selections.python),
+            ("R_HOME", selections.r_home.clone()),
+            ("RETICULATE_PYTHON", selections.python.clone()),
         ] {
             if let Some(value) = value {
                 if value.contains('\0') {
@@ -349,7 +385,7 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         let mut context = perform(
             0,
             &job_events,
-            |started| Context::discover(mode, local, started),
+            |started| Context::discover(mode, local, selections.native_python, started),
             |(_, discovery)| serde_json::to_value(discovery).expect("discovery serializes"),
         )?
         .0;

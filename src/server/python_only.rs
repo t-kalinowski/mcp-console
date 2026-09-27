@@ -7,6 +7,7 @@ pub(super) fn configure(
     properties: &mut Map<String, Value>,
     python_preparation: bool,
     sql: bool,
+    remote: bool,
 ) {
     let remaining = description
         .split_once("\n\nSend one complete")
@@ -25,6 +26,11 @@ pub(super) fn configure(
         "Persistent local Python workbench. State persists across calls. Idle Python package additions and reached missing imports preserve the worker. R and SQL cells are unavailable."
     } else {
         "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session."
+    };
+    let introduction = if remote {
+        introduction.replace("Persistent local", "Persistent remote")
+    } else {
+        introduction.to_string()
     };
     *description = format!("{introduction} {environment}\n\nSend one complete{remaining}");
     *description = description.replace(

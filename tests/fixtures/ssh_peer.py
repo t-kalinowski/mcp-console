@@ -26,7 +26,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 3, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 4, "build": bootstrap["Open"]["build"]}})
     preparation_frame(
         {
             "Completed": {
@@ -56,7 +56,7 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(1, {"version": 999 if mode == "incompatible" else 3, "build": bootstrap["build"]})
+frame(1, {"version": 999 if mode == "incompatible" else 4, "build": bootstrap["build"]})
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})

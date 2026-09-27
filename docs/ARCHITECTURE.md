@@ -278,13 +278,14 @@ The Rust Python facade loads and retains that file-backed `libpython`, initializ
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
-Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
-When R is absent, the local resolver command prepares the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
+Runtime availability is captured on the execution host at session startup and passed through internal launch configuration to each worker.
+Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.
+When R is absent, the preparation owner resolves the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
 When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
 Without an absolute `HOME`, managed Python still starts; an explicit extension request fails before worker retirement.
 The Python DB-API adapter uses that directory when captured and otherwise leaves DuckDB's default, while keeping spill and stored secrets in the worker's private temporary directory.
 Without either selection or uv, startup reports an error rather than searching PATH for Python.
-The server inspects the selected executable before MCP readiness.
+The execution-host preparation owner inspects the selected executable before MCP readiness and each candidate before retirement or live activation.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
 The same coordinator constructs an absent R integration, native Python runtime, and SQL router without an R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
@@ -424,18 +425,18 @@ The server waits, polls, or completes the MCP response without moving response o
 
 When a code-bearing `send` declares requirements, the server treats them as preconditions of that evaluation.
 One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
-Local sans-R managed Python uses the same trusted `resolve` subprocess as other local preparation.
+Sans-R managed Python uses the existing trusted preparation owner on its execution host: `resolve` locally or the SSH preparation process remotely.
 It runs with full host permissions, independently of worker policy; it does not isolate worker-writable resolver inputs.
 The [requirements trust boundary](REQUIREMENTS.md#host-resolution-and-trust) documents the resulting escape paths.
 The mutable session environment owns the accepted manifest, executable, and embedding configuration together.
 Candidate inspection completes before worker retirement; failure or cancellation preserves the old selection and worker.
-In local sans-R startup and restart transitions, the inspected Python candidate's DuckDB installation API prepares all retained extension names that need preparation.
+In sans-R startup and restart transitions, the inspected Python candidate's DuckDB installation API prepares all retained extension names that need preparation.
 A changed Python candidate requires this step even when the extension names are unchanged.
 An idle live extension-only addition uses the accepted managed Python and captured extension cache through that same resolver operation, then commits the extension declaration only if its generation remains current.
 It sends no worker activation or SQL command, preserving Python objects, the managed catalog, and the selected connection.
 An idle live Python addition, optionally with DuckDB extensions, resolves against the accepted executable, inspects the candidate, checks library compatibility, and prepares the complete retained extension set before worker activation.
 The existing preparation receipt carries the approved native configuration to the worker; `PythonActivated` commits the candidate manifest and launch configuration in the current generation before a same-call cell can run.
-The hidden local resolver owns the Python helper's process group, cancellation, output, and cleanup; R-backed and SSH extension operations keep their existing path.
+The execution-host preparation owner owns the Python helper's process group, cancellation, output, and cleanup.
 Resolver and inspection results use bounded reads from the original open descriptors.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.

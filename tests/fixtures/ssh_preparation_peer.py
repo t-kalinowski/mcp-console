@@ -37,10 +37,12 @@ def complete(id, value, confirmed=True):
 
 
 opened = read()["Open"]
+assert opened["version"] == 4
+assert opened["mode"] == "Auto"
 write(
     {
         "Hello": {
-            "version": 2 if mode == "incompatible" else 3,
+            "version": 3 if mode == "incompatible" else 4,
             "build": opened["build"],
         }
     }

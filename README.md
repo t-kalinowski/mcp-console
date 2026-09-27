@@ -19,9 +19,10 @@ This is a **development preview** with changing interfaces.
 MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
-Local sessions can run Python and SQL without R.
+Local and SSH sessions can run Python and SQL without R on the execution host.
 When R is absent, Console uses `uv` from `PATH` to resolve its default environment.
-To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; that mode never invokes uv and disables package preparation.
+To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; for SSH, that path is relative to `target.workspace` on the remote host.
+This mode never invokes uv and disables package preparation.
 These sessions support Python, SQL, input, plots, interrupts, restart, and recording.
 SQL uses a lazy in-memory DuckDB connection or a selected Python DB-API connection.
 When Console manages Python through uv, `requirements.python` and `requirements.duckdb` prepare packages and extensions before first use or with an explicit restart.

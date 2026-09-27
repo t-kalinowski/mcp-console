@@ -47,6 +47,13 @@ To use an already provisioned target instead, set `MCP_CONSOLE_TEST_SSH_EXTERNAL
 That target must provide a compatible build, R, and an existing workspace with `results`, `cli`, and `denied` subdirectories.
 Run `scripts/test client_server/server/test_ssh_policy::external_execution_host_policy`.
 
+Sans-R cross-host acceptance uses `MCP_CONSOLE_TEST_SSH_NO_R_EXTERNAL`, with `target` and an absolute controller `ssh_config` path in the same JSON shape.
+Provide a compatible installed build, an existing writable `target.workspace`, remote uv, an absolute startup `HOME`, and an SSH host with no R installation.
+A container with its own OpenSSH server is suitable; native-sandbox coverage also needs the documented Linux capabilities.
+Run `scripts/test client_server/python/test_ssh_without_r::external_r_free_execution_host`.
+The case runs direct and native-sandbox sessions, uses remote interpreter paths unavailable on the controller, poisons controller interpreter and resolver commands, and checks retained packages, offline extension loading, replacement, explicit relative Python selection, recordings, and private-storage retirement.
+The ordinary localhost SSH cases additionally cover failed and interrupted resolution and inspection with deterministic checkpoints.
+
 A boundary suite is a Python file under one of four directories whose relative path has no component beginning with `_`:
 
 - `client_server` records the public MCP JSON-RPC boundary.

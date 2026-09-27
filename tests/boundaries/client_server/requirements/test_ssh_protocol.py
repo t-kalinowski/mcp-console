@@ -16,6 +16,8 @@ from support.suites import run_this_suite
 
 @requires(SSH)
 def test_python_preparation_preserves_v3_peer_compatibility(binary):
+    # Retain the R-present v3 payload shape; the peer negotiates v4 below.
+    # The incompatible-peer case rejects v3 before MCP readiness.
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         record = root / "requests"

@@ -56,9 +56,10 @@ Omitted target and explicit local host selection share the existing local launch
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
 SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
 Its default command uses remote PATH `mcp-console`, falling back to `uvx mcp-console` only when absent; configured argv prefixes run without executable preflight validation.
-The SSH preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
+The SSH preparation owner captures trusted resolver settings and runtime capabilities once; the local server owns requirements, candidates, and activation decisions.
 Local host preparation uses the hidden `resolve` subcommand over JSON lines; it captures resolver choices once, runs R, Python, and DuckDB resolvers, and confirms child cleanup before the server commits results.
-Only explicit remote R_HOME and RETICULATE_PYTHON workload selections also inform preparation.
+Only explicit remote R_HOME and RETICULATE_PYTHON workload selections, plus the top-level `python` selection, inform preparation.
+Remote sans-R sessions use remote uv by default or an explicitly selected remote interpreter; interpreter inspection stays inside the execution-host preparation boundary.
 Never discover controller interpreters, invoke controller resolvers, or validate remote paths on the controller.
 Require explicit result and resolver cleanup confirmation before committing an environment; uncertain preparation retirement blocks further preparation and replacement.
 Docker resolves its image once before workload startup and uses that immutable ID for every probe and generation.
@@ -184,7 +185,7 @@ Keep these invariants intact:
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
-  Local sans-R Python and DuckDB extension preparation use the trusted `resolve` subcommand with full host permissions, without a resolver sandbox or worker-policy/storage checks.
+  Sans-R Python and DuckDB extension preparation use the trusted execution-host preparation owner with full host permissions, without a resolver sandbox or worker-policy/storage checks.
   Resolver isolation is outside this feature's scope; document client-controlled executable and local-source escape paths in `docs/REQUIREMENTS.md`.
   Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   Accepted installation or build code may execute with server permissions.
@@ -249,7 +250,7 @@ Keep these invariants intact:
 ### Resolvers and sandbox
 
 - `src/resolver.rs`, `src/resolver/python_configuration.rs`, `src/resolver/` — host resolver entry point, retained environments, captured local `uv` selection, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
-- `src/resolver/programs/` — compile-time R programs for R-backed DuckDB extension preparation, R-library resolution, and `uv` discovery, plus the isolated Python DuckDB helper for local sans-R preparation.
+- `src/resolver/programs/` — compile-time R programs for R-backed DuckDB extension preparation, R-library resolution, and `uv` discovery, plus the Python DuckDB helper for sans-R preparation on the execution host.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — immutable runner launch configuration, macOS policy additions, and ordinary child inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 

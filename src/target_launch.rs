@@ -17,6 +17,7 @@ pub(crate) mod runtime;
 pub(crate) mod transfer;
 
 pub(crate) const VERSION: u32 = 3;
+pub(crate) const SSH_VERSION: u32 = 4;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;
@@ -257,10 +258,19 @@ impl<R: Read> Read for Output<R> {
 }
 
 impl Protocol {
+    pub fn version(&self) -> u32 {
+        if self.0 == "SSH" {
+            SSH_VERSION
+        } else {
+            VERSION
+        }
+    }
+
     pub fn compatible(&self, version: u32, build: &str) -> Result<(), String> {
-        if version != VERSION || build != env!("CARGO_PKG_VERSION") {
+        let expected = self.version();
+        if version != expected || build != env!("CARGO_PKG_VERSION") {
             return Err(format!(
-                "incompatible {} bootstrap: expected protocol {VERSION}, Console {}; received protocol {version}, Console {build}",
+                "incompatible {} bootstrap: expected protocol {expected}, Console {}; received protocol {version}, Console {build}",
                 self.0,
                 env!("CARGO_PKG_VERSION")
             ));

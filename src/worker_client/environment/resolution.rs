@@ -183,7 +183,7 @@ impl Client {
             {
                 // Inspect the resolved candidate before retirement. Both launch
                 // configuration and manifest stay provisional in this clone.
-                **inspected = self.inspect_managed_python(generation, &selected)?;
+                **inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
             }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
@@ -238,7 +238,7 @@ impl Client {
             None,
             Some(current.python()),
         )?;
-        let inspected = self.inspect_managed_python(generation, &candidate)?;
+        let inspected = self.inspect_managed_python(generation, &candidate, resolver)?;
         crate::python::ensure_libpython_compatible(
             &inspected.embedding.libpython,
             &running.embedding.libpython,
@@ -261,14 +261,16 @@ impl Client {
         &self,
         generation: &WorkerGeneration,
         candidate: &crate::resolver::ManagedPython,
+        resolver: &crate::resolver::execution::PythonConfiguration,
     ) -> Result<crate::python::NativePython, EnvironmentResolutionFailure> {
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;
-        let result = crate::python::inspect_native(candidate.python(), |handle| {
-            stop_handle = Some(handle.clone());
-            self.register_resolver_stop_handle(generation, handle)
-        });
+        let result =
+            crate::resolver::execution::inspect_native(resolver, candidate.python(), |handle| {
+                stop_handle = Some(handle.clone());
+                self.register_resolver_stop_handle(generation, handle)
+            });
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         self.ensure_startup(generation)

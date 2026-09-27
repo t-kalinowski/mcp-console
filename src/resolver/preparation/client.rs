@@ -144,7 +144,7 @@ impl Preparation {
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: session.target.workspace.clone(),
             selections,
-            mode: Mode::R,
+            mode: Mode::Auto,
         };
         Self::open_with(command, session.blocked.clone(), open, false, on_started)
     }

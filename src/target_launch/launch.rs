@@ -64,6 +64,12 @@ fn launch(
         )?;
     }
     let native = bootstrap.provider.needs_native_runner(bootstrap.no_sandbox);
+    let direct_native_python = !native
+        && bootstrap
+            .environment
+            .as_ref()
+            .and_then(|environment| environment.native.as_ref())
+            .is_some_and(crate::local_runtime::Selection::python_only);
     super::enter_workspace(&bootstrap.workspace)?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut policy = if !native {
@@ -122,7 +128,7 @@ fn launch(
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
         sandbox: None,
-        version: super::VERSION,
+        version: protocol.version(),
         build: env!("CARGO_PKG_VERSION").into(),
     })
     .map_err(|error| error.to_string())?;
@@ -135,11 +141,31 @@ fn launch(
         command.arg("image-runtime-probe");
         return supervise(command, false, native, Some(deadline), confirmed, protocol);
     }
+    let mut temporary = if direct_native_python {
+        Some(crate::local_runtime::TemporaryDirectory::create()?)
+    } else {
+        None
+    };
+    if let Some(temporary) = &temporary {
+        command.env("TMPDIR", temporary.path());
+    }
     if native {
         command.arg(&executable);
     }
     command.arg("worker-relay").arg(&executable).arg("worker");
-    supervise(command, true, native, None, confirmed, protocol)
+    let result = supervise(command, true, native, None, confirmed, protocol);
+    let cleanup = temporary
+        .as_mut()
+        .map_or(Ok(()), |temporary| temporary.retire());
+    if cleanup.is_err() {
+        *confirmed = false;
+    }
+    match (result, cleanup) {
+        (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+        (Err(error), _) => Err(error),
+        (_, Err(cleanup)) => Err(cleanup),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 struct Owner {

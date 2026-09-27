@@ -163,8 +163,14 @@ fn run_server(
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
     }
-    if python.is_some() && (target.is_some() || worker.is_some() || relay.is_some()) {
-        return Err("python selection requires a local built-in session".into());
+    if python.is_some()
+        && (target
+            .as_ref()
+            .is_some_and(|target| !matches!(target.compute, settings::Compute::Host {}))
+            || worker.is_some()
+            || relay.is_some())
+    {
+        return Err("python selection requires a local or SSH built-in session".into());
     }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {

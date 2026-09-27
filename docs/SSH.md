@@ -67,7 +67,9 @@ Native modes, proxy fields, omitted values, and explicit nulls retain the [sandb
 
 The worker inherits the remote environment, then applies `sandbox.environment` and `sandbox.inherit_environment`.
 These settings configure the workload, not SSH, `uvx`, or trusted preparation.
-Two runtime selections also inform preparation: an explicit `sandbox.environment.R_HOME` selects the remote R installation, and `sandbox.environment.RETICULATE_PYTHON` selects the remote Python mode.
+Two runtime selections also inform preparation: an explicit `sandbox.environment.R_HOME` selects the remote R installation, and `sandbox.environment.RETICULATE_PYTHON` remains an explicit Python selection for compatibility.
+The top-level `python` setting selects an existing remote interpreter and takes precedence over that compatibility setting.
+Relative `python` paths resolve against `target.workspace` on the execution host; the controller does not inspect or resolve them.
 The controller extracts only string selections; malformed environment fields remain in the captured policy for validation on the execution host.
 No other workload environment settings are applied to the preparation owner.
 The controller does not send its ambient R/Python paths, `HOME`, `TMPDIR`, or loader variables.
@@ -84,48 +86,61 @@ sandbox:
     RETICULATE_PYTHON: /srv/venvs/analysis/bin/python
 ```
 
-The remote R installation must include its shared `libR` library and be discoverable through remote `R_HOME` or `PATH`.
-Managed mode prepares the same [defaults and additions](REQUIREMENTS.md) as local execution, including reticulate and SQL adapters.
+The preparation owner discovers R from remote `R_HOME` or `PATH`.
+An invalid explicit R selection or broken discovered installation reports an R error.
+With R present, managed preparation retains the existing reticulate and SQL adapters and their [defaults and additions](REQUIREMENTS.md).
 An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available.
-Omitting that selection, using an empty value, or selecting `managed` retains managed Python when a bootstrap is available.
-The selected interpreter must already exist remotely and contain the Python packages needed by the analysis.
 
-The trusted preparation owner captures the execution host's environment once, including the R installation, `ir`/`uv` selection, Python preference, package-source settings, inherited R library paths, and cache locations.
+When R is absent, Console starts the native Python and SQL runtime.
+With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB before the first worker starts; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
+The native worker uses its Python and DB-API adapters without starting R, reticulate, or R DBI.
+An explicit `python` path bypasses uv and uses packages, DuckDB, and custom DB-API connections already available in that environment.
+R cells and R requirements are unavailable.
+
+The trusted preparation owner captures the execution host's environment once, including the applicable `ir` or `uv` selection, Python preference, package-source settings, and cache locations.
 Later worker mutations cannot change these choices.
-The worker receives the discovered R home, resolved managed R libraries, Python selection, and capability flags with precedence over conflicting workload overrides, including with `inherit_environment: false`.
+The worker receives the discovered R home or inspected native Python selection, resolved managed environments, extension-cache path, and capability flags with precedence over conflicting workload overrides, including with `inherit_environment: false`.
 R libraries and Python executables are validated on the remote host; their paths are only metadata on the controller.
 Other workload settings retain their existing meaning.
 In particular, configuring a workload cache does not relocate trusted preparation caches.
 
-When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
+When R is present but discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
-Bare and user-selected Python modes disable reticulate's implicit managed-venv installation.
+Bare and user-selected Python modes disable reticulate's implicit managed-venv installation when R is present.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
+For native Python, the accepted manifest, managed environment, and inspected launch configuration commit together after preparation and activation.
+Plain restart and crash replacement use that accepted selection.
 
 ## Trusted preparation
 
 A separate authenticated SSH connection runs a private preparation owner outside the worker sandbox.
 It remains available without a relay or worker, including for discovery and standalone `send(requirements=...)`.
-Its operations are limited to bootstrap preparation, R libraries, Python manifests and version selection, and DuckDB extensions.
+Its operations are limited to runtime discovery, bootstrap preparation, R libraries, Python manifests and version selection, selected-interpreter inspection, and DuckDB extensions.
 They call the same embedded resolver implementation used locally.
-The private requests carry no shell programs, source code, executable choices, or arbitrary environment overrides.
+The private requests carry no submitted cells, shell programs, or arbitrary environment overrides.
+They carry the configured interpreter selection, and live native preparation carries the running interpreter path as a constraint.
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 3 is unchanged.
+SSH launch and preparation protocol version 4 carry the optional native selection and inspection operations.
+R-present payloads omit native fields when unused.
+Docker and Docker Sandbox retain their existing launch version.
 Both require a matching Console package version.
-The optional `selected_python` field is used only by local live Python preparation; absent values default to no executable constraint and are omitted from SSH requests, preserving the existing v3 frame.
-Older preinstalled-only peers fail compatibility checks before MCP readiness.
+The optional `selected_python` field constrains live managed Python preparation to the running executable, locally or over SSH.
+Older peers fail compatibility checks before MCP readiness or worker startup.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
-Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.
+Python resolution retains the existing treatment of `UV_OFFLINE` and `UV_NO_CACHE`.
+Sans-R preparation selects remote uv from startup `PATH` and ignores `RETICULATE_UV`; R-present selection retains its existing behavior.
 
 The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations.
 The preparation owner retains trusted resolver configuration, not session manifests or activation decisions.
 Each operation runs its own resolver process groups and reports an explicit result and cleanup status before the server can commit a candidate.
 An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver.
-An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation.
+An ordinary installation or inspection failure with confirmed cleanup preserves the current worker, Python objects, SQL catalog, and committed declaration before retirement.
 Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session.
 Preparation is never automatically replayed after uncertain completion.
+An accepted live activation remains committed after a later cell or import error.
+Activation failures retain their diagnostics and can require restart; Console does not replay the cell or replace the worker to recover from preparation.
 
 Accepted requirements retain the [existing trust boundary](REQUIREMENTS.md#host-resolution-and-trust): installation and build code may execute with the remote account's trusted setup permissions.
 Preparation has the remote account's network access, independently of workload restrictions.
@@ -150,6 +165,10 @@ Closing MCP input cancels discovery before readiness and active preparation duri
 The remote preparation owner observes input closure independently of blocked protocol output and cancels and reaps its resolver groups.
 
 Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.
+Direct sans-R launches use a remote private temporary directory retained until the relay retires.
+Native sandbox launches use runner-owned private storage.
+Neither retirement path removes accepted Python environments or shared uv and DuckDB extension caches.
+Python-backed DuckDB extension preparation uses the extension-cache path captured from an absolute remote startup `HOME`; later worker changes to `HOME` or workload cache settings do not redirect preparation or loading.
 The remote helper observes connection closure independently of output backpressure and requests ordinary runner retirement, including before worker readiness.
 Local shutdown retains the existing staged bound of approximately 10 seconds, including forced local SSH termination if needed.
 The [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) records the separately owned setup and retirement allowances.
@@ -166,7 +185,8 @@ Direct execution retains its lack of runner-owned descendant cleanup.
 
 Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/` when `.agents/console` already exists there, or in the controller's `~/.agents/console/sessions/` otherwise.
 The controller's `MCP_CONSOLE_HOME` can replace the fallback directory without changing the remote account's home or configuration.
-Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.
+Session metadata records the SSH destination and initial remote execution directory separately from the controller's recording workspace.
+Paths returned by remote Python and SQL cells name execution-host files; recordings and image artifacts remain on the controller.
 Arbitrary files created by cells remain remote.
 The source-only Quarto projection includes remote target context and omits the controller `root.dir`.
 Rendering executes the captured cells, so prepare an appropriate environment and files first; local rendering does not reproduce the remote filesystem.

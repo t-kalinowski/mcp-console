@@ -1,4 +1,4 @@
-//! Captured local runtime selection, retained for every worker generation.
+//! Captured runtime selection, retained for every worker generation.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -42,6 +42,67 @@ impl Selection {
         resolver: &crate::resolver::execution::PythonConfiguration,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Option<ManagedPython>), String> {
+        Self::python_with(
+            configured,
+            resolver.has_uv(),
+            |started| {
+                crate::resolver::execution::resolve_python_manifest(
+                    crate::worker_protocol::default_native_python_requirement_manifest(),
+                    resolver,
+                    None,
+                    None,
+                    started,
+                )
+            },
+            |executable, started| {
+                crate::resolver::execution::inspect_native(resolver, executable, started)
+            },
+            on_started,
+        )
+    }
+
+    pub(crate) fn python_on_host(
+        configured: Option<OsString>,
+        resolver: &crate::resolver::ManagedPythonResolverConfiguration,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, Option<ManagedPython>), String> {
+        let (mut selection, managed) = Self::python_with(
+            configured,
+            resolver.has_uv(),
+            |started| {
+                crate::resolver::resolve_python_manifest_for_remote(
+                    crate::worker_protocol::default_native_python_requirement_manifest(),
+                    resolver,
+                    None,
+                    None,
+                    started,
+                )
+            },
+            |executable, started| crate::python::inspect_native(executable, started),
+            on_started,
+        )?;
+        if let Self::Python {
+            selected, explicit, ..
+        } = &mut selection
+            && explicit.is_some()
+        {
+            *explicit = Some(OsString::from(&selected.embedding.python));
+        }
+        Ok((selection, managed))
+    }
+
+    fn python_with(
+        configured: Option<OsString>,
+        has_uv: bool,
+        resolve: impl FnOnce(
+            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        ) -> Result<ManagedPython, String>,
+        inspect: impl FnOnce(
+            &Path,
+            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        ) -> Result<crate::python::NativePython, String>,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, Option<ManagedPython>), String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
         let (executable, managed) = if let Some(explicit) = &explicit {
             let executable = PathBuf::from(explicit);
@@ -57,23 +118,17 @@ impl Selection {
             };
             (executable, None)
         } else {
-            if !resolver.has_uv() {
+            if !has_uv {
                 return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
             }
-            let managed = crate::resolver::execution::resolve_python_manifest(
-                crate::worker_protocol::default_native_python_requirement_manifest(),
-                resolver,
-                None,
-                None,
-                on_started,
-            )?;
+            let managed = resolve(on_started)?;
             (managed.python().to_path_buf(), Some(managed))
         };
         // Preserve virtualenv symlinks: canonicalizing here would lose the
         // environment even though its base executable has the same identity.
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
-        let selected = crate::python::inspect_native(&executable, on_started)?;
+        let selected = inspect(&executable, on_started)?;
         // Ordinary managed Python sessions also work without HOME. A shared
         // extension cache is required only when extensions are requested.
         let duckdb_extension_directory = managed.as_ref().and_then(|_| {
