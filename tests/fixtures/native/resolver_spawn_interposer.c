@@ -11,7 +11,9 @@ static atomic_uint fork_count = 0;
 
 static int is_resolver(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
-    return server != NULL && strtol(server, NULL, 10) == getppid();
+    const char *child = getenv("MCP_CONSOLE_TEST_SPAWN_CHILD");
+    return server != NULL && strtol(server, NULL, 10) ==
+        (child != NULL ? getppid() : getpid());
 }
 
 __attribute__((constructor)) static void prevent_child_injection(void) {

@@ -37,6 +37,7 @@ def before_resolver_spawn(
         import sys
 
         os.environ["MCP_CONSOLE_TEST_SPAWN_SERVER"] = str(os.getpid())
+        os.environ["MCP_CONSOLE_TEST_SPAWN_CHILD"] = "1"
         os.environ["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = (
             os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
         )
