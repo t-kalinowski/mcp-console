@@ -511,6 +511,16 @@ fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
         if resolver_has_exited(pid)? {
             return Ok(ResolverInterrupt::AlreadyExited);
         }
+        // A dying macOS child can disappear from process-group lookup before
+        // waitid(WNOHANG) reports its exit. The unreaped direct child still owns
+        // this PID; wait for its exit event instead of rejecting the interrupt.
+        if unsafe { libc::getpgid(pid as libc::pid_t) } == -1
+            && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            crate::process_exit::wait_for_direct_child_exit(pid as libc::pid_t)
+                .map_err(io::Error::other)?;
+            return Ok(ResolverInterrupt::AlreadyExited);
+        }
     }
     Err(error)
 }
