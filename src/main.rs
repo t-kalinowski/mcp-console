@@ -43,6 +43,7 @@ mod sql;
 mod ssh;
 mod target_launch;
 mod target_session;
+mod text_preview;
 mod transcript;
 mod worker;
 mod worker_client;

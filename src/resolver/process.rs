@@ -110,7 +110,7 @@ impl ResolverProcess {
             child.stdout.take().expect("resolver stdout"),
             stdout_exit,
         ));
-        let stderr = read_bounded_output(crate::process_output::RelayOutput::new(
+        let stderr = read_diagnostics(crate::process_output::RelayOutput::new(
             child.stderr.take().expect("resolver stderr"),
             stderr_exit,
         ));
@@ -278,6 +278,17 @@ fn read_bounded_output(
             }
             Ok(bytes)
         })();
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+fn read_diagnostics(output: impl io::Read + Send + 'static) -> Receiver<io::Result<Vec<u8>>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        // Diagnostics are not protocol data. Retain both ends and exact UTF-8
+        // omission accounting while leaving room for the operation's context.
+        let result = crate::text_preview::TextPreview::read(output, 4096).map(String::into_bytes);
         let _ = sender.send(result);
     });
     receiver
