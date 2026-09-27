@@ -60,11 +60,12 @@ def _preinstalled_remote_runtime(
                 #!/bin/sh
                 [ "$1" = VALUE ] || exit 23
                 shift
-                exec /usr/bin/env -i PATH=/usr/bin:/bin R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
+                exec /usr/bin/env -i PATH=/usr/bin:/bin XDG_CACHE_HOME=CACHE_ROOT R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
                 """)
             .replace("VALUE", shlex.quote(argument))
             .replace("EXECUTABLE", shlex.quote(str(binary)))
             .replace("RHOME", shlex.quote(remote_environment["R_HOME"]))
+            .replace("CACHE_ROOT", shlex.quote(str(root / "remote-cache")))
         )
         prefix.chmod(0o755)
         config = configure(

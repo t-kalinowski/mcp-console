@@ -59,11 +59,10 @@ result:
 
         Evaluated code uses the native ":workspace" profile: it can edit files
         beneath the fixed launch workspace, write in the worker's private
-        temporary directory and to explicitly allowed paths, and can access the
-        network subject to the launcher's proxy settings. The workspace's .git,
-        .agents, .codex, and .claude paths are readable and protected from
-        writes by default. Explicit native rules can override these defaults or
-        restrict reads. Dependency preparation, when available, runs in a
+        temporary directory, and can access the network subject to the
+        launcher's proxy settings. The workspace's .git, .agents, .codex, and
+        .claude paths, resolver storage, and Console's installation are
+        protected from writes. Dependency preparation, when available, runs in a
         separate native resolver sandbox. Package code can write only to
         Console-owned resolver storage. Package downloads use a managed proxy
         restricted to trusted destinations; installer coordination permits

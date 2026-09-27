@@ -275,10 +275,7 @@ def _initializes_and_lists_tools(
 
 @requires(SANDBOX)
 def test_describes_project_network_access(binary: Path) -> Transcript:
-    restricted_filesystem = "can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
-    external_filesystem = (
-        "filesystem access governed by the launcher's sandbox settings"
-    )
+    restricted_filesystem = "can write only in the worker's private temporary directory"
     cases = (
         (
             "restricted",
@@ -325,13 +322,6 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
             restricted_filesystem,
         ),
         (
-            "external enforcement",
-            "sandbox: {filesystem: {kind: external-sandbox}}",
-            False,
-            "network access governed by the launcher's sandbox settings",
-            external_filesystem,
-        ),
-        (
             "no sandbox",
             "sandbox: {network: restricted}",
             True,
@@ -342,26 +332,23 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
     cases = (
         tuple(
             (
-                f"{kind} {network} ({'mapping' if mapping else 'string'})",
+                f"{profile} {network} ({'mapping' if mapping else 'string'})",
                 json.dumps(
                     {
+                        "extends": profile,
                         "sandbox": {
-                            "filesystem": {"kind": {kind: None} if mapping else kind},
                             "network": {network: None} if mapping else network,
-                        }
+                        },
                     }
                 ),
                 False,
-                "network access governed by the launcher's sandbox settings"
-                if kind == "external-sandbox"
-                else ("can" if network == "enabled" else "cannot")
+                ("can" if network == "enabled" else "cannot")
                 + " directly access the network",
                 filesystem_access,
             )
-            for kind, filesystem_access in (
-                ("unrestricted", "has unrestricted filesystem access"),
-                ("restricted", restricted_filesystem),
-                ("external-sandbox", external_filesystem),
+            for profile, filesystem_access in (
+                (":workspace", 'uses the native ":workspace" profile'),
+                (":read-only", restricted_filesystem),
             )
             for network in ("restricted", "enabled")
             for mapping in (False, True)
@@ -387,7 +374,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                     assert (restricted_filesystem in description) == (
                         filesystem_access == restricted_filesystem
                     ), (name, description)
-                    assert "runs outside the sandbox" in description
+                    assert "separate native resolver sandbox" in description
                 config.write_text("invalid: [", encoding="utf-8")
                 listed = client.request("tools/list")
                 assert listed["result"]["tools"][0]["description"] == description
