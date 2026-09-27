@@ -339,9 +339,15 @@ impl Launch {
             "/etc/nsswitch.conf",
             "/etc/hosts",
             "/etc/localtime",
+            // Linux's native runner creates its minimal device tree. Read-only
+            // file binds use nodev and would mask those working device nodes.
+            #[cfg(target_os = "macos")]
             "/dev/null",
+            #[cfg(target_os = "macos")]
             "/dev/zero",
+            #[cfg(target_os = "macos")]
             "/dev/random",
+            #[cfg(target_os = "macos")]
             "/dev/urandom",
         ];
         for path in self
