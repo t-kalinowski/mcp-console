@@ -3,12 +3,14 @@
 ---
 send:
   python: |
+    import errno
     from pathlib import Path
     for path in ['<fixture>/cache/mcp-console/resolver/payload/retained-payload', '<fixture>/cache/mcp-console/resolver/control/metadata.json', '<console-executable>']:
         try:
             with Path(path).open("r+b"):
                 pass
-        except PermissionError:
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS), error
             print("write denied")
         else:
             raise AssertionError("protected file was writable")

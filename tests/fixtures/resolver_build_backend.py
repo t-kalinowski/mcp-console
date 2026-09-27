@@ -1,6 +1,7 @@
 """A source-build hook used through real uv and the public send tool."""
 
 from pathlib import Path
+import errno
 import urllib.request
 import zipfile
 
@@ -16,13 +17,21 @@ def build_wheel(
     for name, path in [("outside", OUTSIDE), ("host_cache", HOST_CACHE)]:
         try:
             Path(path).write_text("build hook escaped")
-        except PermissionError:
+        except OSError as error:
+            # Linux may omit a denied directory from the mount namespace.
+            assert error.errno in (
+                errno.EPERM,
+                errno.EACCES,
+                errno.EROFS,
+                errno.ENOENT,
+            ), error
             evidence[name] = "denied"
         else:
             evidence[name] = "written"
     try:
         Path(SECRET).read_text()
-    except PermissionError:
+    except OSError as error:
+        assert error.errno in (errno.EPERM, errno.EACCES, errno.ENOENT), error
         evidence["secret"] = "denied"
     else:
         evidence["secret"] = "read"

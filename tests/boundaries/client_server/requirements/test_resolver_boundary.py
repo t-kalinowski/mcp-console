@@ -93,12 +93,13 @@ def test_selected_python_startup_hook_is_confined(binary: Path) -> Transcript:
         hook = (
             # fmt: python
             code("""
+                import errno
                 from pathlib import Path
 
                 try:
                     Path(MARKER).write_text("startup hook escaped")
-                except PermissionError:
-                    pass
+                except OSError as error:
+                    assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS), error
                 """)
         ).replace("MARKER", repr(str(marker)))
         (site / "sitecustomize.py").write_text(hook)
@@ -781,12 +782,14 @@ def test_weekly_cleanup_waits_for_idle_sessions_and_restart(binary: Path) -> Tra
                 # broker metadata, or the executable used for the next broker.
                 # fmt: python
                 program = code("""
+                    import errno
                     from pathlib import Path
                     for path in PROTECTED:
                         try:
                             with Path(path).open("r+b"):
                                 pass
-                        except PermissionError:
+                        except OSError as error:
+                            assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS), error
                             print("write denied")
                         else:
                             raise AssertionError("protected file was writable")
