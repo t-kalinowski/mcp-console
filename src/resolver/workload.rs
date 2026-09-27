@@ -221,8 +221,8 @@ impl Context {
                 serde_json::to_value(python).map_err(|error| error.to_string())
             }
             Operation::PythonVersion { constraints, r } => {
-                let r = r.on_host(&self.rscript);
-                self.prepare_uv(Some(&r), on_started)?;
+                let r = r.map(|r| r.on_host(&self.rscript));
+                self.prepare_uv(r.as_ref(), on_started)?;
                 resolver::resolve_python_version(constraints, &self.python, on_started)
                     .map(serde_json::Value::String)
             }

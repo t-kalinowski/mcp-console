@@ -1422,6 +1422,13 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "report raw R library bytes":
+            libraries = os.environb.get(b"R_LIBS", b"").split(os.pathsep.encode())
+            preserved = any(path.endswith(b"/ambient-\xff") for path in libraries)
+            send_output(writer, f"zod raw R library: preserved={str(preserved).lower()}\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "fail next r preparation":
             fail_next_r_preparation = True
             send(writer, {"kind": "completed"})

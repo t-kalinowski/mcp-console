@@ -3,7 +3,7 @@
 Dependency preparation and runtime inspection use a separate process tree:
 
 ```text
-server → hidden mcp-console resolver broker
+server → hidden mcp-console resolve broker
            → verified native sandbox runner
                → resolver-workload → uv / ir / R / Python / build subprocesses
 ```

@@ -14,7 +14,9 @@ from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.events import Events
 from support.normalization import code
+from support.processes import capture_process_identity, kill_processes
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, requires
@@ -253,6 +255,208 @@ def test_custom_worker_starts_without_home(
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
     return client.finish()
+
+
+def _write_selected_ir(path: Path) -> None:
+    path.write_text(
+        code(r"""
+            #!/bin/sh
+            if [ "$1" = --version ]; then
+              printf "ir 0.4.0\n"
+            elif [ -n "${MCP_CONSOLE_TEST_IR_FAIL_ONCE:-}" ] && [ ! -e "$MCP_CONSOLE_TEST_IR_FAIL_ONCE" ]; then
+              printf 1 > "$MCP_CONSOLE_TEST_IR_FAIL_ONCE"
+              printf "fixture rejection\n" >&2
+              exit 77
+            else
+              printf "%s" "$MCP_CONSOLE_TEST_IR_LIBRARY"
+            fi
+            """),
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+@executions(DIRECT)
+def test_custom_worker_preserves_non_utf8_r_libs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        _write_selected_ir(fake_bin / "ir")
+        library = root / "managed-library"
+        library.mkdir()
+        environment, _ = r_test_environment()
+        environment["PATH"] = os.pathsep.join((str(fake_bin), environment["PATH"]))
+        environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
+        ambient = os.fsdecode(os.fsencode(str(root)) + b"/ambient-\xff")
+        if sys.platform == "linux":
+            Path(ambient).mkdir()
+        environment["R_LIBS"] = ambient
+        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client.initialize_and_list_tools()
+        client.send(requirements={"r": ["praise"]})
+        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+        client.send(r="report raw R library bytes")
+        assert last_tool_text(client) == "zod raw R library: preserved=true\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_custom_worker_keeps_first_r_resolver_selection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with resolver_fixture_directory(binary, execution) as root:
+        first, second = root / "first", root / "second"
+        first.mkdir()
+        second.mkdir()
+        _write_selected_ir(second / "ir")
+        library = root / "managed-library"
+        library.mkdir()
+        environment, _ = r_test_environment()
+        environment["PATH"] = os.pathsep.join(
+            (str(first), str(second), environment["PATH"])
+        )
+        environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
+        unexpected = root / "unexpected-ir"
+        environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
+        client = McpClient(
+            binary,
+            execution.serve(
+                "--worker", str(zod), *resolver_fixture_arguments(environment)
+            ),
+            environment,
+        )
+        client.initialize_and_list_tools()
+        client.send(requirements={"r": ["praise"]})
+        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+
+        (first / "ir").write_text(
+            '#!/bin/sh\nprintf 1 > "$MCP_CONSOLE_TEST_UNEXPECTED_IR"\nexit 79\n',
+            encoding="utf-8",
+        )
+        (first / "ir").chmod(0o755)
+        client.send(requirements={"r": ["zeallot"]})
+        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+        assert not unexpected.exists(), "resolver selection changed within the session"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_custom_worker_keeps_selection_after_failed_first_manifest(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with resolver_fixture_directory(binary, execution) as root:
+        first, second = root / "first", root / "second"
+        first.mkdir()
+        second.mkdir()
+        _write_selected_ir(second / "ir")
+        library = root / "managed-library"
+        library.mkdir()
+        environment, _ = r_test_environment()
+        environment["PATH"] = os.pathsep.join(
+            (str(first), str(second), environment["PATH"])
+        )
+        environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
+        environment["MCP_CONSOLE_TEST_IR_FAIL_ONCE"] = str(root / "first-failed")
+        unexpected = root / "unexpected-ir"
+        environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
+        client = McpClient(
+            binary,
+            execution.serve(
+                "--worker", str(zod), *resolver_fixture_arguments(environment)
+            ),
+            environment,
+        )
+        client.initialize_and_list_tools()
+        failed = client.send(requirements={"r": ["praise"]})
+        assert failed["isError"] is True, failed
+        assert failed["content"][0]["text"] == (
+            "R package resolution failed with exit status: 77: fixture rejection"
+        ), failed
+
+        (first / "ir").write_text(
+            '#!/bin/sh\nprintf 1 > "$MCP_CONSOLE_TEST_UNEXPECTED_IR"\nexit 79\n',
+            encoding="utf-8",
+        )
+        (first / "ir").chmod(0o755)
+        client.send(requirements={"r": ["zeallot"]})
+        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+        assert not unexpected.exists(), "failed manifest lost the first selection"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_interrupt_after_local_resolver_exit_rejects_success(
+    binary: Path, execution: Execution
+) -> Transcript:
+    fixture = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "finished_ir_with_open_stdout"
+    )
+    zod = fixture.with_name("zod")
+    with tempfile.TemporaryDirectory() as temporary, Events() as exits:
+        root = Path(temporary)
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "ir").symlink_to(fixture)
+        library = root / "managed-library"
+        library.mkdir()
+        started = FifoCheckpoint.create(root / "ir-started")
+        ir_release = FifoCheckpoint.create(root / "ir-release")
+        holder_release = FifoCheckpoint.create(root / "holder-release")
+        environment, _ = r_test_environment()
+        environment["PATH"] = os.pathsep.join((str(fake_bin), environment["PATH"]))
+        environment.update(
+            {
+                "MCP_CONSOLE_TEST_IR_LIBRARY": str(library),
+                "MCP_CONSOLE_TEST_IR_PID": str(root / "ir-pid"),
+                "MCP_CONSOLE_TEST_IR_HOLDER_PID": str(root / "holder-pid"),
+                "MCP_CONSOLE_TEST_IR_STARTED": str(started.path),
+                "MCP_CONSOLE_TEST_IR_RELEASE": str(ir_release.path),
+                "MCP_CONSOLE_TEST_IR_HOLDER_RELEASE": str(holder_release.path),
+            }
+        )
+        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        holder_identity = None
+        try:
+            client.initialize_and_list_tools()
+            pending = client.start_send(requirements={"r": ["praise"]})
+            started.wait("resolver output retained after its child exits")
+            ir_pid = int((root / "ir-pid").read_text())
+            holder_identity = capture_process_identity(
+                int((root / "holder-pid").read_text())
+            )
+            exits.watch_process(ir_pid)
+            ir_release.release()
+            assert ir_pid in exits.wait(10), "resolver child did not exit"
+
+            client.send(control="interrupt", timeout_ms=0)
+            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            holder_release.release()
+            client.receive(pending)
+            assert pending["result"]["isError"] is True, pending
+            assert (
+                "local resolver interrupted" in pending["result"]["content"][0]["text"]
+            )
+            state = client.send(requirements={"action": "get"})["structuredContent"]
+            assert state["requirements"]["r"] == [], state
+            return client.finish()
+        finally:
+            ir_release.release()
+            holder_release.release()
+            stop_client(client)
+            if holder_identity is not None:
+                kill_processes((holder_identity,))
+            started.close()
+            ir_release.close()
+            holder_release.close()
 
 
 @executions(DIRECT, SANDBOXED)

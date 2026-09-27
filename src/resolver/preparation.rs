@@ -99,7 +99,7 @@ pub(crate) enum Operation {
     },
     PythonVersion {
         constraints: Vec<String>,
-        r: ManagedR,
+        r: Option<ManagedR>,
     },
     Duckdb {
         r: ManagedR,

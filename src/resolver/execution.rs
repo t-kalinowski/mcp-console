@@ -60,9 +60,7 @@ pub(crate) fn resolve_python_version(
     configuration.preparation.call(
         Operation::PythonVersion {
             constraints,
-            r: managed_r
-                .ok_or("Python version resolution requires managed R")?
-                .clone(),
+            r: managed_r.cloned(),
         },
         on_started,
     )

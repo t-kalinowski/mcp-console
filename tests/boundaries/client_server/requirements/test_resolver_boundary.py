@@ -357,7 +357,7 @@ def test_ssh_uses_execution_host_broker(binary: Path) -> Transcript:
                 assert "remote prepared\n" in last_result_text(client), (
                     client.transcript[-1]
                 )
-                assert not trap.exists(), "controller executed a resolver"
+                assert not trap.exists(), "controller executed a resolve"
                 transcript = client.finish()
         metadata = json.loads(
             (remote / "cache/mcp-console/resolver/control/metadata.json").read_text()

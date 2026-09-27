@@ -68,7 +68,7 @@ def worker_launcher_identities(
         command = subprocess.check_output(
             ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])], text=True
         ).strip()
-        if command == f"{binary} resolver":
+        if command == f"{binary} resolve":
             brokers.append(child)
     assert len(brokers) == 1, (children, brokers)
     return tuple(child for child in children if child != brokers[0])

@@ -1695,6 +1695,9 @@ impl Client {
     ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
+            if let Some(preparation) = &self.0.resolver {
+                preparation.check_ready()?;
+            }
             let _startup = self.reserve_worker_startup(&generation)?;
             let mut environment = match &self.0.environment {
                 Some(environment) => Some(

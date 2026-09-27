@@ -65,7 +65,7 @@ pub enum Command {
 
     /// Private resolver broker; requests and results use the preparation protocol
     #[command(hide = true)]
-    Resolver,
+    Resolve,
 
     /// Resolver workload, launched only after native enforcement
     #[command(hide = true)]

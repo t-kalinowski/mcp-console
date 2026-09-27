@@ -70,7 +70,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::Resolver => match resolver::broker::run() {
+        cli::Command::Resolve => match resolver::broker::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },

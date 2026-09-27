@@ -1254,7 +1254,7 @@ impl Client {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
                 (Err(error), Err(preparation_error)) => Err(format!(
-                    "{error}; additionally failed to retire SSH preparation: {preparation_error}"
+                    "{error}; additionally failed to retire preparation: {preparation_error}"
                 )),
             }
         })

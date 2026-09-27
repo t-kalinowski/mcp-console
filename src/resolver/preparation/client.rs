@@ -111,6 +111,13 @@ struct Pending {
 }
 
 impl Preparation {
+    pub(crate) fn check_ready(&self) -> Result<(), String> {
+        if let Some(error) = &*self.0.blocked.lock().map_err(|_| "resolver session lock")? {
+            return Err(error.clone());
+        }
+        Ok(())
+    }
+
     pub(crate) fn open(
         session: &crate::ssh::Session,
         selections: Selections,
@@ -137,7 +144,7 @@ impl Preparation {
     ) -> Result<(Self, Discovery), String> {
         let mut command =
             std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-        command.env_clear().current_dir("/").arg("resolver");
+        command.env_clear().current_dir("/").arg("resolve");
         let open = Input::Open {
             version: super::VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
@@ -270,9 +277,7 @@ impl Preparation {
         operation: Operation,
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<T, String> {
-        if let Some(error) = &*self.0.blocked.lock().map_err(|_| "resolver session lock")? {
-            return Err(error.clone());
-        }
+        self.check_ready()?;
         let id = self.0.sequence.fetch_add(1, Ordering::SeqCst);
         let request = Input::Run { id, operation };
         // Reject unsendable requests before registering a resolver or admitting
