@@ -270,6 +270,8 @@ exec "{shutil.which("uv")}" "$@"
             UV_HTTP_TIMEOUT="37",
             MCP_CONSOLE_TEST_CACHE=str(cache),
         )
+        # Exercise the file setting without an inherited environment override.
+        env.pop("UV_CACHE_DIR", None)
         # Project discovery must not override user configuration.
         (workspace / "uv.toml").write_text(
             'index-url = "https://invalid.example/project"\n'
@@ -289,7 +291,9 @@ exec "{shutil.which("uv")}" "$@"
                     print("user cache selected")
                     """)
             )
-            assert last_result_text(client) == "user cache selected\n"
+            assert last_result_text(client) == "user cache selected\n", (
+                client.transcript[-1]
+            )
             client.send(
                 control="restart",
                 requirements={"python": ["py-yaml12"]},
@@ -323,6 +327,8 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
             if cache_setting == "environment":
                 config.write_text('cache-dir = "unused-config-cache"\n')
                 env["UV_CACHE_DIR"] = "../shared-uv"
+            else:
+                env.pop("UV_CACHE_DIR", None)
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 client.send(
@@ -335,7 +341,9 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
                         print("relative startup paths retained")
                         """)
                 )
-                assert last_result_text(client) == "relative startup paths retained\n"
+                assert (
+                    last_result_text(client) == "relative startup paths retained\n"
+                ), client.transcript[-1]
                 records.extend(client.finish()[3:])
     return records
 
