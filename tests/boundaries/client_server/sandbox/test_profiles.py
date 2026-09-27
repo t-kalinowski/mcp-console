@@ -84,8 +84,21 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             "TEST_OUTSIDE": str(outside),
         }
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(binary, ("serve",), environment, host) as client:
+        with McpClient(
+            binary,
+            (
+                "serve",
+                "-c",
+                "resolver.environment=" + json.dumps({LOADER_VARIABLE: ""}),
+            ),
+            environment,
+            host,
+        ) as client:
             client.initialize_and_list_tools()
+            # The interposer observes worker policy only. Resolver helpers have
+            # their own empty launch environment and independent native policy.
+            preflights = capture.read_text().splitlines()
+            assert len(preflights) == 1, preflights
             description = client.transcript[-1]["result"]["tools"][0]["description"]
             for name in (
                 ":workspace",
@@ -93,7 +106,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
                 ".agents",
                 ".codex",
                 ".claude",
-                "default",
+                "resolver storage",
             ):
                 assert name in description, description
             # The trusted launch snapshot precedes even the first worker.
@@ -120,7 +133,8 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             assert last_tool_text(client) == "yaml12\n", last_tool_text(client)
             transcript = client.finish()
         launches = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(launches) == 5, launches
+        assert len(launches) == 4 + len(preflights), launches
+        launches = launches[len(preflights) :]
         assert all(policy == launches[0] for policy in launches), launches
         policy = launches[0]
         assert policy["extends"] == ":workspace"
@@ -139,7 +153,27 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
                         "value": {"kind": "project_roots", "subpath": ".claude"},
                     },
                     "access": "read",
-                }
+                },
+                {
+                    "path": {"type": "path", "path": str(binary.resolve().parents[1])},
+                    "access": "read",
+                },
+                {
+                    "path": {
+                        "type": "path",
+                        "path": str(
+                            (
+                                Path(
+                                    environment.get(
+                                        "XDG_CACHE_HOME", Path.home() / ".cache"
+                                    )
+                                )
+                                / "mcp-console/resolver"
+                            ).resolve()
+                        ),
+                    },
+                    "access": "read",
+                },
             ],
         }, policy
         return TranscriptWithCompanions(
