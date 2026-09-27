@@ -1821,9 +1821,20 @@ impl WorkerCallbacks {
     fn resolve_python(
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
-    ) -> Result<crate::resolver::ManagedPython, String> {
+    ) -> Result<
+        (
+            crate::resolver::ManagedPython,
+            Option<crate::python::NativePython>,
+        ),
+        String,
+    > {
         self.client
             .resolve_runtime_python(self.generation.clone(), request)
+    }
+
+    fn fail_python_activation(&self) -> Result<OldGenerationCommitDisposition, String> {
+        self.client
+            .require_restart_for_requirement_changes(&self.generation)
     }
 
     fn resolve_python_version(
@@ -1839,12 +1850,14 @@ impl WorkerCallbacks {
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidate: Option<crate::resolver::ManagedPython>,
         configuration: Option<crate::python::NativePython>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         self.client.activate_runtime_python(
             self.generation.clone(),
             requirements,
             candidate,
             configuration,
+            duckdb_extensions,
         )
     }
 }

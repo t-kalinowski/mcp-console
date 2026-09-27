@@ -162,11 +162,44 @@ pub(crate) fn publish_plot(image: Result<String, String>) {
 pub(crate) fn resolve_python(
     request: crate::worker_protocol::PythonResolveRequest,
 ) -> Result<String, String> {
+    let (python, native) = resolve_python_candidate(request)?;
+    if native.is_some() {
+        return Err(infrastructure_failure(
+            "R received a native Python resolver candidate".to_string(),
+        ));
+    }
+    Ok(python)
+}
+
+pub(crate) fn resolve_native_python(
+    request: crate::worker_protocol::PythonResolveRequest,
+) -> Result<crate::worker_protocol::NativePythonActivation, String> {
+    let (python, native) = resolve_python_candidate(request)?;
+    let native = native.ok_or_else(|| {
+        infrastructure_failure("native Python resolver omitted the candidate configuration".into())
+    })?;
+    if native.selected.embedding.python != python {
+        return Err(infrastructure_failure(
+            "native Python resolver returned mismatched executables".into(),
+        ));
+    }
+    Ok(*native)
+}
+
+fn resolve_python_candidate(
+    request: crate::worker_protocol::PythonResolveRequest,
+) -> Result<
+    (
+        String,
+        Option<Box<crate::worker_protocol::NativePythonActivation>>,
+    ),
+    String,
+> {
     send_worker_message(&WorkerMessage::ResolvePython { request })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
-        ServerMessage::PythonResolved { python } => {
+        ServerMessage::PythonResolved { python, native } => {
             crate::python::link_matplotlib_caches();
-            Ok(python)
+            Ok((python, native))
         }
         ServerMessage::PythonResolutionFailed { message } => Err(message),
         ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
@@ -198,6 +231,12 @@ pub(crate) fn publish_python_activation(
     requirements: crate::worker_protocol::PythonRequirementManifest,
 ) -> Result<(), String> {
     send_worker_message(&WorkerMessage::PythonActivated { requirements })
+}
+
+pub(crate) fn publish_python_activation_failure(
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+) -> Result<(), String> {
+    send_worker_message(&WorkerMessage::PythonActivationFailed { requirements })
 }
 
 pub(crate) fn resolve_r(

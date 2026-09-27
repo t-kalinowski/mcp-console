@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import json
 import os
 import signal
 import sys
@@ -47,6 +48,12 @@ def _console_input(prompt: object = "") -> str:
     if not _managed():
         return _input(prompt)
     return readline(str(prompt))
+
+
+def resolve_import(module: str, distribution: str) -> str:
+    return resolve_import_request(
+        json.dumps({"module": module, "distribution": distribution})
+    )
 
 
 def install_interrupt() -> None:

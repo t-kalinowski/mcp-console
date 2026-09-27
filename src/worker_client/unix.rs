@@ -752,10 +752,14 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         continue_environment_preparation: bool,
-        native: Option<(crate::resolver::ManagedPython, crate::python::NativePython)>,
+        native: Option<(
+            crate::resolver::ManagedPython,
+            crate::python::NativePython,
+            Option<std::collections::BTreeSet<String>>,
+        )>,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let activation = native.as_ref().map(|(managed, selected)| {
+        let activation = native.as_ref().map(|(managed, selected, _)| {
             Box::new(crate::worker_protocol::NativePythonActivation {
                 selected: selected.clone(),
                 requirements: managed.requirements().clone(),

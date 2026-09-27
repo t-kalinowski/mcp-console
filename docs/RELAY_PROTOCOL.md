@@ -152,6 +152,7 @@ The server can send these flat frames:
 - `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live reticulate preparation.
   The optional `native` object selects native activation in a managed session without R; that form requires `packages: []` and carries `selected` (the inspected native configuration) and `requirements` (the complete retained manifest).
 - `{"kind":"python_resolved","python":"..."}` returns one host Python-resolution result.
+  The optional `native` object carries the inspected candidate for a reached missing import in a managed sans-R session.
 - `{"kind":"python_resolution_failed","message":"..."}` returns one host Python-resolution failure.
 - `{"kind":"python_version_resolved","version":"3.12.11"}` returns one host Python-version result.
 - `{"kind":"python_version_resolution_failed","message":"..."}` returns one host Python-version failure.
@@ -199,8 +200,10 @@ The relay can emit these flat frames:
   For an inferred mapping, `request` may additionally contain `"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}`.
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
+- `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching native candidate whose activation failed after mutation may have begun.
 - `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
 - `{"kind":"python_preparation_failed","message":"..."}` completes live Python preparation with an ordinary failure.
+- `{"kind":"python_preparation_rejected","message":"..."}` rejects an explicit native candidate before mutation.
 - `{"kind":"completed"}` completes an evaluation.
 - `{"kind":"stdout","data":"hello\n"}` carries one raw fd-1 chunk that is entirely valid UTF-8.
 - `{"kind":"stderr","data":"..."}` carries one raw fd-2 chunk that is entirely valid UTF-8.

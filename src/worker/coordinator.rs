@@ -142,7 +142,7 @@ impl Coordinator {
                         )
                         .into());
                     }
-                    self.python.activate_native(&candidate.selected)
+                    self.python.activate_native(candidate)
                 } else {
                     self.r.prepare_python(|| self.python.prepare(packages))
                 };
@@ -162,6 +162,10 @@ impl Coordinator {
                     Ok(crate::python::PreparationOutcome::Failed { message }) => {
                         self.writer
                             .send(&WorkerMessage::PythonPreparationFailed { message })?;
+                    }
+                    Ok(crate::python::PreparationOutcome::Rejected { message }) => {
+                        self.writer
+                            .send(&WorkerMessage::PythonPreparationRejected { message })?;
                     }
                     Err(message) => return Err(io::Error::other(message).into()),
                 }

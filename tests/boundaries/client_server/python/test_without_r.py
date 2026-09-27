@@ -9,6 +9,7 @@ import subprocess
 import shutil
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -57,6 +58,29 @@ def installed_binary(binary: Path, root: Path) -> Path:
     for relative in ("libexec", "share/licenses/mcp-console"):
         shutil.copytree(source_prefix / relative, prefix / relative)
     return installed
+
+
+def write_test_wheel(root: Path, name: str, module_source: str | None) -> Path:
+    wheels = root / "wheels"
+    wheels.mkdir(exist_ok=True)
+    wheel = wheels / f"{name}-1.0.0-py3-none-any.whl"
+    dist_info = f"{name}-1.0.0.dist-info"
+    entries = {
+        f"{dist_info}/METADATA": (
+            f"Metadata-Version: 2.3\nName: {name.replace('_', '-')}\nVersion: 1.0.0\n"
+        ),
+        f"{dist_info}/WHEEL": (
+            "Wheel-Version: 1.0\nGenerator: mcp-console test\n"
+            "Root-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+    }
+    if module_source is not None:
+        entries[f"{name}/__init__.py"] = module_source
+    entries[f"{dist_info}/RECORD"] = "\n".join(f"{entry},," for entry in entries) + "\n"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for path, content in entries.items():
+            archive.writestr(path, content)
+    return wheels
 
 
 def preparation_environment(root: Path) -> dict[str, str]:
@@ -700,6 +724,439 @@ def test_adds_python_packages_to_idle_managed_worker(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_resolves_reached_import_in_managed_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            environment(root),
+            current_directory=root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python=code("""
+                    import os, sqlite3
+
+                    worker_pid = os.getpid()
+                    identity = object()
+                    identity_id = id(identity)
+                    managed = sql_connection()
+                    managed.execute("create table retained as select 42 as value")
+                    selected = sqlite3.connect(":memory:")
+                    selected.execute("create table chosen as select 7 as value")
+                    console_sql_connection(selected)
+                    steps = []
+                    print("state created")
+                    """)
+            )
+            assert last_result_text(client) == "state created\n"
+            client.send(
+                python=code("""
+                    steps.append("before import")
+                    def load_package():
+                        import yaml12
+                        return yaml12
+                    loaded = load_package()
+                    assert os.getpid() == worker_pid
+                    assert id(identity) == identity_id
+                    assert sql_connection() is selected
+                    assert managed.execute("select value from retained").fetchone() == (42,)
+                    assert steps == ["before import"]
+                    print("reached import activated")
+                    """)
+            )
+            assert "reached import activated\n" in last_result_text(client), (
+                client.transcript[-1]
+            )
+            assert (
+                "resolved PyPI distribution 'py-yaml12' for Python import 'yaml12'"
+                in last_result_text(client)
+            )
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]["requirements"]
+            assert "py-yaml12" in declaration["python"]
+            client.send(sql="select value from chosen")
+            assert "7" in last_result_text(client), client.transcript[-1]
+            client.send(
+                python=code("""
+                    steps.append("before second import")
+                    import pydash
+                    assert steps == ["before import", "before second import"]
+                    raise ValueError("later statement failed")
+                    """)
+            )
+            assert "ValueError: later statement failed" in last_result_text(client)
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]["requirements"]
+            assert {"py-yaml12", "pydash"}.issubset(declaration["python"])
+            (root / "uv").unlink()
+            client.send(requirements={"python": ["py-yaml12", "pydash"]})
+            assert last_result_text(client) == "[prepared]"
+            client.send(
+                python=code("""
+                    import subprocess, sys
+
+                    assert os.getpid() == worker_pid and id(identity) == identity_id
+                    assert sql_connection() is selected
+                    assert managed.execute("select value from retained").fetchone() == (42,)
+                    assert subprocess.check_output(
+                        [sys.executable, "-c", "import yaml12, pydash; print('child ready')"],
+                        text=True,
+                    ).strip() == "child ready"
+                    print("automatic additions survived later failure")
+                    """)
+            )
+            assert (
+                last_result_text(client)
+                == "automatic additions survived later failure\n"
+            )
+            client.send(control="restart")
+            client.send(
+                python="import yaml12, pydash; assert 'steps' not in globals(); print('restart retained imports')"
+            )
+            assert last_result_text(client) == "restart retained imports\n"
+            client.send(python="import os; os._exit(47)")
+            assert "status 47" in last_result_text(client)
+            client.send(
+                python="import yaml12, pydash; print('replacement retained imports')"
+            )
+            assert last_result_text(client) == "replacement retained imports\n"
+            records = client.finish()[3:]
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        assert any(
+            event["event"] == "python_environment_accepted"
+            and {"py-yaml12", "pydash"}.issubset(event["packages"])
+            for event in events
+        )
+        quarto = (session / "transcript.qmd").read_text()
+        assert "    - py-yaml12\n" in quarto and "    - pydash\n" in quarto
+        return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_combines_live_python_and_duckdb_additions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), environment(root)
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python=code("""
+                    import os, sqlite3
+
+                    worker_pid = os.getpid()
+                    identity = object()
+                    identity_id = id(identity)
+                    managed = sql_connection()
+                    managed.execute("create table retained as select 42 as value")
+                    selected = sqlite3.connect(":memory:")
+                    selected.execute("create table chosen as select 7 as value")
+                    console_sql_connection(selected)
+                    print("state created")
+                    """)
+            )
+            assert last_result_text(client) == "state created\n"
+            client.send(
+                requirements={"python": ["py-yaml12"], "duckdb": ["json"]},
+                sql="select value from chosen",
+            )
+            assert "7" in last_result_text(client), client.transcript[-1]
+            client.send(
+                python=code("""
+                    import os, subprocess, sys, yaml12
+
+                    assert os.getpid() == worker_pid
+                    assert id(identity) == identity_id
+                    assert sql_connection() is selected
+                    assert managed.execute("select value from retained").fetchone() == (42,)
+                    assert subprocess.check_output(
+                        [sys.executable, "-c", "import yaml12; print('child ready')"],
+                        text=True,
+                    ).strip() == "child ready"
+                    print("combined additions retained state")
+                    """)
+            )
+            assert last_result_text(client) == "combined additions retained state\n"
+            client.send(python="console_sql_connection(None)")
+            client.send(sql="select value from retained")
+            assert "42" in last_result_text(client), client.transcript[-1]
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]["requirements"]
+            assert "py-yaml12" in declaration["python"]
+            assert declaration["duckdb"] == ["json"]
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retains_automatic_additions_after_import_errors(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        wheels = write_test_wheel(root, "mcp_console_test_empty_pkg", None)
+        write_test_wheel(
+            root,
+            "mcp_console_test_raises_pkg",
+            'raise RuntimeError("synthetic module initialization failure")\n',
+        )
+        env = dict(environment(root), UV_FIND_LINKS=str(wheels))
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
+            )
+            client.send(
+                python="steps.append('empty'); import mcp_console_test_empty_pkg"
+            )
+            output = last_result_text(client)
+            assert "did not provide the import" in output, output
+            client.send(
+                python="steps.append('raises'); import mcp_console_test_raises_pkg"
+            )
+            output = last_result_text(client)
+            assert "RuntimeError: synthetic module initialization failure" in output, (
+                output
+            )
+            normalized, count = re.subn(
+                r'File "[^"\n]*/archive-v0/[^/]+/lib/python\d+\.\d+/site-packages/(mcp_console_test_raises_pkg/__init__\.py)"',
+                r'File "<managed Python>/\1"',
+                output,
+            )
+            assert count == 1, output
+            client.transcript[-1]["result"]["content"][0]["text"] = normalized
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]["requirements"]
+            assert {
+                "mcp_console_test_empty_pkg",
+                "mcp_console_test_raises_pkg",
+            }.issubset(declaration["python"])
+            client.send(
+                python="assert steps == ['empty', 'raises']; assert os.getpid() == worker_pid; print('failed imports did not replay cells')"
+            )
+            assert last_result_text(client) == "failed imports did not replay cells\n"
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_automatic_resolution_failure_and_cancel_keep_accepted_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        started = FifoCheckpoint.create(root / "started")
+        os.mkfifo(root / "alive")
+        alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            with McpClient(
+                installed_binary(binary, root), execution.serve(), env
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
+                )
+                initial = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]
+                (root / "mode").write_text("failure")
+                client.send(python="steps.append('failure'); import yaml12")
+                assert "fixture Python resolution failed" in last_result_text(client)
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"][
+                        "requirements"
+                    ]
+                    == initial
+                )
+                (root / "mode").write_text("interrupt")
+                pending = client.start_send(
+                    python="steps.append('cancel'); import yaml12"
+                )
+                started.wait("automatic Python resolver entered")
+                assert os.read(alive, 1) == b"1"
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"][
+                        "requirements"
+                    ]
+                    == initial
+                )
+                interrupt = client.start_send(control="interrupt")
+                client.receive_many([pending, interrupt])
+                assert os.read(alive, 1) == b""
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"][
+                        "requirements"
+                    ]
+                    == initial
+                )
+                client.send(
+                    python="assert steps == ['failure', 'cancel']; assert os.getpid() == worker_pid; print('accepted state retained')"
+                )
+                assert last_result_text(client) == "accepted state retained\n"
+                (root / "mode").write_text("success")
+                client.send(python="import yaml12; print('retry resolved import')")
+                assert "retry resolved import\n" in last_result_text(client)
+                return preparation_records(client.finish(), root)
+        finally:
+            started.close()
+            os.close(alive)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_automatic_activation_failure_requires_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        (root / "mode").write_text("activation-failure")
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(python="identity = object(); steps = []")
+            initial = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            client.send(python="steps.append('before'); import yaml12")
+            output = last_result_text(client)
+            assert output.count("RuntimeError: synthetic activation failure") == 1, (
+                output
+            )
+            assert "restart required" in output, output
+            assert (
+                client.send(requirements={"action": "get"})["structuredContent"][
+                    "requirements"
+                ]
+                == initial
+            )
+            client.send(requirements={"python": ["six"]})
+            assert last_result_text(client) == "[restart required]"
+            client.send(
+                python="assert steps == ['before']; print('worker still running')"
+            )
+            assert last_result_text(client) == "worker still running\n"
+            client.send(control="restart")
+            client.send(
+                python="assert 'identity' not in globals(); print('restart retained accepted environment')"
+            )
+            assert last_result_text(client) == "restart retained accepted environment\n"
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_automatic_imports_stay_on_main_worker_thread_and_process(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        (root / "mode").write_text("success")
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(python="import os; worker_pid = os.getpid()")
+            before = (root / "resolutions.log").read_text()
+            client.send(
+                python=code("""
+                    import threading
+
+                    thread_result = []
+                    def import_from_thread():
+                        try:
+                            import mcp_console_thread_missing
+                        except ModuleNotFoundError as error:
+                            thread_result.append((error.name, str(error)))
+                    thread = threading.Thread(target=import_from_thread)
+                    thread.start()
+                    thread.join()
+                    assert thread_result[0][0] == "mcp_console_thread_missing"
+                    assert "configuring thread" in thread_result[0][1]
+                    print("background import rejected")
+                    """)
+            )
+            assert last_result_text(client) == "background import rejected\n"
+            client.send(
+                python=code("""
+                    import select, signal, warnings
+
+                    read_descriptor, write_descriptor = os.pipe()
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", DeprecationWarning)
+                        child = os.fork()
+                    if child == 0:
+                        os.close(read_descriptor)
+                        try:
+                            import mcp_console_child_missing
+                        except ModuleNotFoundError as error:
+                            payload = f"{error.name}: {error}"
+                        else:
+                            payload = "missing import unexpectedly succeeded"
+                        os.write(write_descriptor, payload.encode())
+                        os._exit(0)
+                    os.close(write_descriptor)
+                    readable, _, _ = select.select([read_descriptor], [], [], 10)
+                    if not readable:
+                        os.kill(child, signal.SIGKILL)
+                        os.waitpid(child, 0)
+                        raise AssertionError("fork child did not finish its import")
+                    payload = os.read(read_descriptor, 65536).decode()
+                    os.close(read_descriptor)
+                    _, status = os.waitpid(child, 0)
+                    assert os.waitstatus_to_exitcode(status) == 0
+                    assert "mcp_console_child_missing" in payload
+                    assert "main worker process" in payload
+                    assert os.getpid() == worker_pid
+                    print("child import rejected")
+                    """)
+            )
+            assert last_result_text(client) == "child import rejected\n"
+            client.send(
+                python=code("""
+                    import sqlite3
+
+                    sql_missing = []
+                    def missing_from_sql():
+                        try:
+                            import mcp_console_sql_missing
+                        except ModuleNotFoundError as error:
+                            sql_missing.append(str(error))
+                            return 42
+                    selected = sqlite3.connect(":memory:")
+                    selected.create_function("missing_from_sql", 0, missing_from_sql)
+                    console_sql_connection(selected)
+                    """)
+            )
+            client.send(sql="select missing_from_sql() as value")
+            assert "42" in last_result_text(client), client.transcript[-1]
+            client.send(
+                python="assert sql_missing == [\"No module named 'mcp_console_sql_missing'\"]; print('SQL did not resolve imports')"
+            )
+            assert last_result_text(client) == "SQL did not resolve imports\n"
+            assert (root / "resolutions.log").read_text() == before
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
 def test_limits_live_python_additions_to_new_idle_distributions(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -737,7 +1194,6 @@ def test_limits_live_python_additions_to_new_idle_distributions(
                 {"python_version": ["<3"]},
                 {"exclude_newer": "2026-01-01"},
                 {"action": "set", "python": ["six"]},
-                {"python": ["py-yaml12"], "duckdb": ["json"]},
             ):
                 rejected = client.send(requirements=requirements)
                 assert rejected["isError"], rejected
@@ -759,7 +1215,7 @@ def test_limits_live_python_additions_to_new_idle_distributions(
             assert "42" in last_result_text(client), client.transcript[-1]
             before = (root / "resolutions.log").read_text()
             rejected = client.send(
-                requirements={"python": ["more-itertools"], "duckdb": ["fts"]}
+                requirements={"python": ["NumPy==0"], "duckdb": ["fts"]}
             )
             assert rejected["isError"], rejected
             assert (root / "resolutions.log").read_text() == before
@@ -771,7 +1227,7 @@ def test_limits_live_python_additions_to_new_idle_distributions(
                 "structuredContent"
             ]["requirements"]
             assert declaration["duckdb"] == ["json"]
-            assert "more-itertools" not in declaration["python"]
+            assert "NumPy==0" not in declaration["python"]
             return preparation_records(client.finish(), root)
 
 
@@ -1059,7 +1515,7 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                     {
                         "requirements": {
                             "duckdb": ["json"],
-                            "python": ["py-yaml12"],
+                            "python": ["numpy==0.1"],
                         }
                     },
                 ):
@@ -1365,17 +1821,15 @@ def test_resolves_default_python_without_r(
                 {"r": "1"},
                 {"requirements": {"action": "set", "python": ["six"]}},
                 {"requirements": {"r": ["cli"]}},
-                {"requirements": {"duckdb": ["json"], "python": ["six"]}},
+                {"requirements": {"duckdb": ["json"], "python": ["numpy==0.1"]}},
             ):
                 result = client.send(**request)
                 assert result.get("isError", True), result
                 client.send(python="assert id(identity) == identity_id; retained + 2")
                 assert last_result_text(client) == "43\n"
-            client.send(python="import mcp_console_package_that_does_not_exist")
+            client.send(python="import os.mcp_console_missing")
             assert 'File "<string>"' not in last_result_text(client)
-            assert "automatic package installation is unavailable" in last_result_text(
-                client
-            )
+            assert "os.mcp_console_missing" in last_result_text(client)
             assert "user-selected" not in last_result_text(client)
             client.send(python="assert id(identity) == identity_id; retained + 2")
             assert last_result_text(client) == "43\n"

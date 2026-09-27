@@ -193,22 +193,31 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
-            if self.python_only() && delta.is_live_python_only() {
+            if self.python_only() && delta.has_live_python_additions() {
                 let requirements = delta
                     .python_candidate
+                    .clone()
                     .expect("live Python delta includes a candidate");
-                let (candidate, inspected) =
-                    match self.resolve_live_native_python(generation, &environment, requirements) {
-                        Ok(candidate) => candidate,
-                        Err(failure) => {
-                            return self.finish_environment_resolution_failure(
-                                generation, intent, failure,
-                            );
-                        }
-                    };
+                let (candidate, inspected) = match self.resolve_live_native_python(
+                    generation,
+                    &environment,
+                    requirements,
+                    &delta.duckdb_extensions,
+                ) {
+                    Ok(candidate) => candidate,
+                    Err(failure) => {
+                        return self
+                            .finish_environment_resolution_failure(generation, intent, failure);
+                    }
+                };
                 drop(environment);
-                return self
-                    .prepare_running_native_python(generation, worker, candidate, inspected);
+                return self.prepare_running_native_python(
+                    generation,
+                    worker,
+                    candidate,
+                    inspected,
+                    delta.duckdb_changed.then_some(delta.duckdb_extensions),
+                );
             }
             let RequirementDelta {
                 duckdb_extensions,
@@ -321,10 +330,7 @@ impl Client {
         environment: &Environment,
         delta: &RequirementDelta,
     ) -> Result<(), String> {
-        if delta.python_candidate.is_some() && delta.duckdb_changed {
-            return Err("simultaneous live Python package and DuckDB extension additions require control: restart".into());
-        }
-        if delta.is_live_python_only() {
+        if delta.has_live_python_additions() {
             delta.validate_live_python_additions(environment)?;
         } else if !delta.is_live_duckdb_only() {
             return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
@@ -511,6 +517,7 @@ impl Client {
         mut worker: std::sync::MutexGuard<'_, WorkerState>,
         candidate: crate::resolver::ManagedPython,
         inspected: crate::python::NativePython,
+        duckdb_extensions: Option<BTreeSet<String>>,
     ) -> Result<PrepareResult, String> {
         self.ensure_generation(generation)?;
         let WorkerState::Running(running) = &mut *worker else {
@@ -542,7 +549,12 @@ impl Client {
                 }
             })
         });
-        match running.prepare_python(Vec::new(), false, Some((candidate, inspected)), commit) {
+        match running.prepare_python(
+            Vec::new(),
+            false,
+            Some((candidate, inspected, duckdb_extensions)),
+            commit,
+        ) {
             Ok(PreparationOutcome::Completed(Ok(()))) => Ok(PrepareResult::Prepared),
             Ok(PreparationOutcome::Completed(Err(error))) => {
                 self.fail_running_preparation(&mut worker, generation, false, error, false)
@@ -662,7 +674,7 @@ impl Client {
         }
     }
 
-    pub(super) fn require_restart_for_requirement_changes(
+    pub(in crate::worker_client) fn require_restart_for_requirement_changes(
         &self,
         generation: &WorkerGeneration,
     ) -> Result<OldGenerationCommitDisposition, String> {

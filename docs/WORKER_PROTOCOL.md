@@ -229,8 +229,8 @@ Only `python_version` may differ, allowing physical resolution against an exact 
 The server validates both manifests and their requirement syntax before starting a resolver.
 
 An automatic import may also include `import_resolution` with `module` and `distribution` strings.
-The module must be a top-level ASCII Python identifier, the distribution must be a different bare package name present in both manifests, and this metadata is valid only during an evaluation.
-The server associates valid metadata with the provisional environment and emits a bounded notice only if the matching `python_activated` event commits it for the current generation.
+The module must be a top-level ASCII Python identifier, and the distribution must be a bare package name present in both manifests; this metadata is valid only during an evaluation.
+The server associates valid metadata with the provisional environment and emits a bounded notice for differently named modules and distributions only if the matching `python_activated` event commits it for the current generation.
 
 `resolve_python_version.request.constraints` is a required array of version constraints.
 A successful version reply creates no environment candidate and requires no `python_activated` receipt.
@@ -353,8 +353,8 @@ worker -> server  {"kind":"python_prepared"}
 Before Python initialization it may report successful manifest materialization without a live `python_activated` event.
 After initialization, any new resolved environment that the worker activates must be reported with `python_activated` before `python_prepared`.
 
-The native form is used for idle local managed sessions without R.
-Before sending it, the server validates an effective add-only declaration, resolves the complete candidate against the running executable, inspects it, checks libpython compatibility, and prepares its retained DuckDB extensions.
+The native form is used for idle explicit preparation in local managed sessions without R.
+Before sending it, the server validates an effective add-only declaration, resolves the complete candidate against the running executable, inspects it, checks libpython compatibility, and prepares the complete retained DuckDB extension set, including same-call additions.
 The worker activates only the supplied candidate through the shared native activation operation; this form makes no nested resolver requests.
 On success, it updates its active native configuration and sends `python_activated` with the supplied retained manifest before `python_prepared`.
 The server matches that receipt to the candidate owned by the active preparation operation and commits the manifest, managed environment, and native launch configuration for the current generation.
@@ -362,6 +362,7 @@ Successful native preparation without an activation receipt, or a duplicate or m
 Plain restart and crash replacement use the committed configuration; a later cell failure does not undo activation.
 
 An activation exception retains its original Python diagnostics and produces `python_preparation_failed`; the server requires restart before further requirement changes and withholds same-call input and code.
+Compatibility or other pre-mutation rejection produces `python_preparation_rejected` and leaves the accepted environment usable.
 Those diagnostics use the console sideband before the failure result, independently of raw stderr delivery.
 Activation-script side effects are not rolled back.
 Native activation does not replace Python objects, the loaded DuckDB runtime, its catalog, or the selected SQL connection.
@@ -376,7 +377,9 @@ Every successful `python_resolved` reply is provisional.
 When the live runtime accepts that environment, the worker sends `python_activated` with the complete normalized logical manifest.
 The manifest must match a resolved candidate or the unchanged current managed environment.
 Activation is reported before the enclosing operation result.
-For automatic import resolution, `python_activated` is sent before the original import resumes.
+For automatic import resolution, `python_resolved` may carry the optional inspected `native` candidate in a managed sans-R session, using the same shape as `prepare_python`.
+The worker activates that candidate through the native operation and sends `python_activated` before the original import resumes.
+A post-mutation activation failure sends `python_activation_failed` for the matching candidate and requires restart before further requirement changes.
 A later missing-module or language error does not undo that accepted environment.
 
 An explicit pre-initialization preparation may instead materialize the last resolved candidate and finish with `python_prepared` without activation.

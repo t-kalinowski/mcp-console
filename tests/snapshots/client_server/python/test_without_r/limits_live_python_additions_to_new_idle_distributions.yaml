@@ -138,20 +138,6 @@ result:
 send:
   requirements:
     python:
-      - py-yaml12
-    duckdb:
-      - json
-result:
-  content:
-    - type: text
-      text: >-
-        simultaneous live Python package and DuckDB extension additions require
-        control: restart
-  isError: true
----
-send:
-  requirements:
-    python:
       - six
 result:
   content:
@@ -216,15 +202,16 @@ result:
 send:
   requirements:
     python:
-      - more-itertools
+      - NumPy==0
     duckdb:
       - fts
 result:
   content:
     - type: text
       text: >-
-        simultaneous live Python package and DuckDB extension additions require
-        control: restart
+        live Python requirements can only add new distributions; `NumPy==0`
+        changes already-declared `numpy`; use control: restart with
+        requirements.action: set
   isError: true
 ---
 send:

@@ -433,7 +433,7 @@ In local sans-R startup and restart transitions, the inspected Python candidate'
 A changed Python candidate requires this step even when the extension names are unchanged.
 An idle live extension-only addition uses the accepted managed Python and captured extension cache through that same resolver operation, then commits the extension declaration only if its generation remains current.
 It sends no worker activation or SQL command, preserving Python objects, the managed catalog, and the selected connection.
-An idle live Python-only addition resolves against the accepted executable, inspects the candidate, checks library compatibility, and prepares retained DuckDB extensions before worker activation.
+An idle live Python addition, optionally with DuckDB extensions, resolves against the accepted executable, inspects the candidate, checks library compatibility, and prepares the complete retained extension set before worker activation.
 The existing preparation receipt carries the approved native configuration to the worker; `PythonActivated` commits the candidate manifest and launch configuration in the current generation before a same-call cell can run.
 The hidden local resolver owns the Python helper's process group, cancellation, output, and cleanup; R-backed and SSH extension operations keep their existing path.
 Resolver and inspection results use bounded reads from the original open descriptors.
@@ -483,25 +483,26 @@ The private finder runs only after Python's existing import finders have failed,
 It also yields without a callback for optional-dependency misses reached while the default NumPy or pandas package is initializing, so importing those available defaults does not change the managed environment.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
 
-The Python finder calls a process-lifetime R closure through reticulate.
+In an R-present session, the Python finder calls a process-lifetime R closure through reticulate.
 That closure adds the distribution to reticulate's additive manifest and materializes it through the same helper used by explicit live Python preparation.
-The worker then uses the existing synchronous `ResolvePython` request; the relay only forwards that message and its reply.
+In a managed sans-R session, the finder calls a native callback that forms the additive request from the worker's accepted manifest.
+Both use the existing synchronous `ResolvePython` exchange; the relay only forwards that message and its reply.
 
 The server resolves a complete managed-Python candidate on the host and returns it provisionally.
-Reticulate checks compatibility with the live interpreter and activates the environment without replacing Python or the worker.
-Its active manifest binding submits the requirement write to Console's native owner, which matches and commits the pending activation before reporting `PythonActivated`.
+The R path checks compatibility through reticulate and reports activation through its active manifest binding.
+The sans-R path receives the approved native candidate, activates it through the same native operation used by explicit preparation, and reports `PythonActivated` before the finder retries the import.
 The server commits only a matching candidate owned by the current generation.
 The worker emits that report before it invalidates import caches and resumes the original import through Python's current meta-path finders.
 An automatic request records a differently named import and distribution on its provisional candidate, and the server renders that mapping as a bounded bracketed notice only when it commits the matching activation.
 The cell is not replayed.
 
 A successful activation remains retained if the inferred distribution does not contain the requested module or later cell code fails.
-An ordinary pre-activation failure restores the earlier reticulate manifest and leaves the worker usable.
+An ordinary pre-activation failure leaves the worker and accepted environment usable; the R adapter restores its earlier reticulate manifest.
 Restart, shutdown, and generation checks discard unactivated candidates owned by an old worker.
 
-The finder uses a reentrancy guard while the R callback runs.
+The finder uses a reentrancy guard while its callback runs.
 It also records the worker PID and configuring Python thread; a missing import reached from a fork child or another thread fails without calling R, reticulate, the sideband, or a host resolver.
-These checks keep R callbacks on the embedded-R thread and prevent nested resolver waits.
+These checks keep R callbacks on the embedded-R thread and prevent nested resolver waits in both runtimes.
 
 ### Interruption
 
@@ -590,7 +591,7 @@ It is a chronological call ledger: a timed-out cell, later polls, and eventual r
 The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
-Python-only managed sessions declare NumPy, pandas, and DuckDB plus packages from `python_environment_accepted` events emitted at the prestart/restart environment commit.
+Python-only managed sessions declare NumPy, pandas, and DuckDB plus packages from committed `python_environment_accepted` events, including live additions.
 They omit R defaults and rejected or discarded candidate requirements; accepted manifests remain recorded even if later worker replacement fails.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.

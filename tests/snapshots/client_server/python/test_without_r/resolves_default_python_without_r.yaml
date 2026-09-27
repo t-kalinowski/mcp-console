@@ -117,13 +117,14 @@ send:
     duckdb:
       - json
     python:
-      - six
+      - numpy==0.1
 result:
   content:
     - type: text
       text: >-
-        simultaneous live Python package and DuckDB extension additions require
-        control: restart
+        live Python requirements can only add new distributions; `numpy==0.1`
+        changes already-declared `numpy`; use control: restart with
+        requirements.action: set
   isError: true
 ---
 send:
@@ -136,16 +137,14 @@ result:
   isError: false
 ---
 send:
-  python: import mcp_console_package_that_does_not_exist
+  python: import os.mcp_console_missing
 result:
   content:
     - type: text
       text: |
         Traceback (most recent call last):
           File "<mcp-console:python:e7>", line 1, in <module>
-        ModuleNotFoundError: No module named 'mcp_console_package_that_does_not_exist'.
-
-        automatic package installation is unavailable in Python sessions without R; add a new distribution with requirements.python in an idle session, or use control: restart to replace a declaration
+        ModuleNotFoundError: No module named 'os.mcp_console_missing'; 'os' is not a package
   isError: false
 ---
 send:

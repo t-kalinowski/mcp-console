@@ -87,6 +87,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             method(c"diagnostic", diagnostic, 8),
             method(c"readline", readline, 8),
             method(c"publish_plot", publish_plot, 8),
+            method(c"resolve_import_request", resolve_import_request, 8),
             method(c"interrupt", interrupt, 1), // METH_VARARGS: signal number and frame
             Method {
                 name: std::ptr::null(),
@@ -206,6 +207,24 @@ unsafe extern "C" fn publish_plot(_: *mut PyObject, image: *mut PyObject) -> *mu
         let image = services.text(image)?;
         services.without_gil(|| worker::publish_plot(Ok(image)));
         Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn resolve_import_request(
+    _: *mut PyObject,
+    request: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        let request = services.text(request)?;
+        let resolution = serde_json::from_str(&request)
+            .map_err(|error| format!("invalid Python import request: {error}"))?;
+        let response = services.without_gil(|| crate::python::resolve_native_import(resolution))?;
+        Ok(unsafe {
+            (services.api.unicode_from_string_and_size)(
+                response.as_ptr().cast(),
+                response.len() as isize,
+            )
+        })
     })
 }
 

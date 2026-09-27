@@ -130,13 +130,14 @@ fn spawn_probe(
     crate::sideband::Reader,
     crate::sideband::Writer,
 ) {
-    spawn_probe_with_configuration(scenario, None, None)
+    spawn_probe_with_configuration(scenario, None, None, None)
 }
 
 fn spawn_probe_with_configuration(
     scenario: &str,
     configuration: Option<&str>,
     storage: Option<&Path>,
+    manifest: Option<&crate::worker_protocol::PythonRequirementManifest>,
 ) -> (
     std::process::Child,
     crate::sideband::Reader,
@@ -160,6 +161,12 @@ fn spawn_probe_with_configuration(
     if let Some(storage) = storage {
         command.env("TMPDIR", storage);
     }
+    if let Some(manifest) = manifest {
+        command.env(
+            "MCP_CONSOLE_MANAGED_PYTHON",
+            serde_json::to_string(manifest).expect("serialize managed Python declaration"),
+        );
+    }
     endpoints.configure_process(&mut command);
     let child = command.spawn().expect("start native worker probe");
     (child, reader, writer)
@@ -174,7 +181,7 @@ fn native_python_setup_runs_cells_without_r() {
     assert!(selected.status.success());
     let selected = String::from_utf8(selected.stdout).expect("selected executable");
     let (mut child, mut reader, _writer) =
-        spawn_probe_with_configuration("python_setup", Some(selected.trim()), None);
+        spawn_probe_with_configuration("python_setup", Some(selected.trim()), None, None);
     assert!(matches!(
         receive_python_probe(&mut reader, &mut child),
         WorkerMessage::Ready
@@ -263,8 +270,12 @@ fn native_python_activation_preserves_runtime_without_r() {
             Some("ValueError: native activation hook failed"),
         ),
     ] {
-        let (mut child, mut reader, _writer) =
-            spawn_probe_with_configuration(scenario, Some(&configuration), Some(&storage.0));
+        let (mut child, mut reader, _writer) = spawn_probe_with_configuration(
+            scenario,
+            Some(&configuration),
+            Some(&storage.0),
+            Some(initial.requirements()),
+        );
         assert!(matches!(
             receive_python_probe(&mut reader, &mut child),
             WorkerMessage::Ready

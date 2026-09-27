@@ -71,10 +71,16 @@ enum OperationKind {
     PreparePython {
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
-        native: Option<Box<(crate::resolver::ManagedPython, crate::python::NativePython)>>,
+        native: Option<Box<NativePreparationCandidate>>,
         activated: bool,
     },
 }
+
+type NativePreparationCandidate = (
+    crate::resolver::ManagedPython,
+    crate::python::NativePython,
+    Option<std::collections::BTreeSet<String>>,
+);
 
 enum Route {
     Cell(Arc<Evaluation>),
@@ -84,6 +90,7 @@ enum Route {
 
 struct PendingPythonCandidate {
     managed: crate::resolver::ManagedPython,
+    configuration: Option<crate::python::NativePython>,
     import_resolution: Option<crate::worker_protocol::PythonImportResolution>,
 }
 
@@ -195,7 +202,7 @@ impl WorkerOperationState {
         &self,
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
-        native: Option<Box<(crate::resolver::ManagedPython, crate::python::NativePython)>>,
+        native: Option<Box<NativePreparationCandidate>>,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython {
             commit,
@@ -208,7 +215,7 @@ impl WorkerOperationState {
     fn native_python_activation(
         &self,
         requirements: &crate::worker_protocol::PythonRequirementManifest,
-    ) -> Result<Option<(crate::resolver::ManagedPython, crate::python::NativePython)>, String> {
+    ) -> Result<Option<NativePreparationCandidate>, String> {
         let mut state = self.lock()?;
         match state
             .operation
@@ -220,12 +227,16 @@ impl WorkerOperationState {
                 activated,
                 ..
             }) => {
-                let (managed, selected) = candidate.as_ref();
+                let (managed, selected, duckdb_extensions) = candidate.as_ref();
                 if *activated || managed.requirements() != requirements {
                     return Err("worker activated an unexpected native Python candidate".into());
                 }
                 *activated = true;
-                Ok(Some((managed.clone(), selected.clone())))
+                Ok(Some((
+                    managed.clone(),
+                    selected.clone(),
+                    duckdb_extensions.clone(),
+                )))
             }
             _ => Ok(None),
         }
@@ -552,6 +563,18 @@ impl WorkerOperationState {
                 python_candidates.clear();
                 commit(Err(message)).map(OperationResult::PythonPrepared)
             }
+            (
+                OperationKind::PreparePython {
+                    native: Some(_), ..
+                },
+                RelayEvent::PythonPreparationRejected { message },
+            ) => {
+                r_candidates.clear();
+                python_candidates.clear();
+                Ok(OperationResult::PythonPrepared(
+                    super::PreparationOutcome::Completed(Err(message)),
+                ))
+            }
             (OperationKind::Cell(_), _) => {
                 Err("worker sent an unexpected evaluation result".to_string())
             }
@@ -619,7 +642,9 @@ impl OperationKind {
             | (Self::PrepareR { .. }, RelayEvent::RPreparationFailed { .. })
             | (
                 Self::PreparePython { .. },
-                RelayEvent::PythonPrepared | RelayEvent::PythonPreparationFailed { .. },
+                RelayEvent::PythonPrepared
+                | RelayEvent::PythonPreparationFailed { .. }
+                | RelayEvent::PythonPreparationRejected { .. },
             ) => true,
             (
                 Self::PrepareR {
@@ -948,6 +973,7 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
             | RelayEvent::ResolvePython { .. }
             | RelayEvent::ResolvePythonVersion { .. }
             | RelayEvent::PythonActivated { .. }
+            | RelayEvent::PythonActivationFailed { .. }
     )
 }
 
@@ -1100,13 +1126,20 @@ fn handle_semantic_event(
             }
             let import_resolution = request.import_resolution.clone();
             let response = match callbacks.resolve_python(request) {
-                Ok(managed) => {
+                Ok((managed, configuration)) => {
                     let python = managed.python().to_string_lossy().into_owned();
+                    let native = configuration.as_ref().map(|selected| {
+                        Box::new(crate::worker_protocol::NativePythonActivation {
+                            selected: selected.clone(),
+                            requirements: managed.requirements().clone(),
+                        })
+                    });
                     candidates.python.push(PendingPythonCandidate {
                         managed,
+                        configuration,
                         import_resolution,
                     });
-                    RelayCommand::PythonResolved { python }
+                    RelayCommand::PythonResolved { python, native }
                 }
                 Err(message) => RelayCommand::PythonResolutionFailed { message },
             };
@@ -1122,8 +1155,10 @@ fn handle_semantic_event(
         RelayEvent::PythonActivated { requirements } => {
             let activated = requirements.clone().normalized();
             let native = operation.native_python_activation(&activated)?;
-            let (managed, configuration, resolution) = match native {
-                Some((managed, configuration)) => (Some(managed), Some(configuration), None),
+            let (managed, configuration, duckdb_extensions, resolution) = match native {
+                Some((managed, configuration, duckdb_extensions)) => {
+                    (Some(managed), Some(configuration), duckdb_extensions, None)
+                }
                 None => {
                     let candidate = candidates
                         .python
@@ -1131,17 +1166,26 @@ fn handle_semantic_event(
                         .rposition(|candidate| candidate.managed.requirements() == &activated)
                         .map(|index| candidates.python.remove(index));
                     match candidate {
-                        Some(candidate) => {
-                            (Some(candidate.managed), None, candidate.import_resolution)
-                        }
-                        None => (None, None, None),
+                        Some(candidate) => (
+                            Some(candidate.managed),
+                            candidate.configuration,
+                            None,
+                            candidate.import_resolution,
+                        ),
+                        None => (None, None, None, None),
                     }
                 }
             };
             candidates.python.clear();
-            let disposition = callbacks.activate_python(requirements, managed, configuration)?;
+            let disposition = callbacks.activate_python(
+                requirements,
+                managed,
+                configuration,
+                duckdb_extensions,
+            )?;
             if disposition == OldGenerationCommitDisposition::Commit
                 && let Some(resolution) = resolution
+                && resolution.module != resolution.distribution
             {
                 operation.with_route(|route| match route {
                     Route::Cell(evaluation) => evaluation.bounded_notice(format!(
@@ -1156,11 +1200,29 @@ fn handle_semantic_event(
             }
             Ok(())
         }
+        RelayEvent::PythonActivationFailed { requirements } => {
+            operation.with_route(|route| match route {
+                Route::Cell(_) => Ok(()),
+                Route::Preparation | Route::Idle => {
+                    Err("worker reported native Python activation failure outside a cell".into())
+                }
+            })?;
+            let expected = requirements.normalized();
+            if !candidates.python.iter().any(|candidate| {
+                candidate.configuration.is_some() && candidate.managed.requirements() == &expected
+            }) {
+                return Err("worker failed an unexpected native Python candidate".into());
+            }
+            candidates.python.clear();
+            callbacks.fail_python_activation()?;
+            Ok(())
+        }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }
         | RelayEvent::PythonPrepared
-        | RelayEvent::PythonPreparationFailed { .. }) => {
+        | RelayEvent::PythonPreparationFailed { .. }
+        | RelayEvent::PythonPreparationRejected { .. }) => {
             operation.complete(event, &mut candidates.r, &mut candidates.python)
         }
         RelayEvent::Ready

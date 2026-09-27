@@ -81,12 +81,12 @@ See the [concrete escape scenario and trust boundary](REQUIREMENTS.md#host-resol
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
 In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the first worker starts, alone or with a Python or SQL cell.
-Once a worker is running, idle `action: "add"` calls can prepare new Python distributions or DuckDB extensions without replacement, with or without accompanying Python or SQL code.
+Once a worker is running, idle `action: "add"` calls can prepare new Python distributions and DuckDB extensions without replacement, with or without accompanying Python or SQL code.
 Already-retained declarations remain no-ops.
 Changing a requirement for a declared distribution, interpreter constraints, publication cutoffs, or a `set` or `reset` declaration still requires `control: "restart"`.
 Requirements already retained are a no-op, including on a running worker.
 Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
-Simultaneous effective Python-package and DuckDB-extension additions are rejected before either part is prepared.
+Python and DuckDB additions in one call prepare the complete candidate before native activation.
 
 Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with no default extensions.
 `python_version` and `exclude_newer` use the ordinary requirements contract.
@@ -98,6 +98,8 @@ Same-call code and input are sent only after successful replacement.
 For an idle live extension addition, the resolver uses the accepted managed Python and captured shared cache without changing packages or the interpreter.
 It installs extension files outside the worker; a later user `LOAD` uses the existing managed connection and catalog.
 For an idle live Python addition, the resolver prepares the complete candidate against the running executable, inspects it, checks the native library identity, and prepares retained DuckDB extensions with the candidate before worker activation.
+The same path handles a missing import reached during a managed Python cell: the existing finder infers a distribution, suspends the cell for host preparation, activates the candidate, then retries the import.
+It does not scan or replay the cell; earlier side effects remain, and SQL cells do not resolve missing imports automatically.
 The native activation keeps the interpreter, Python objects, managed DuckDB catalog, and selected SQL connection in place.
 Once the worker confirms activation, the server retains the new manifest, executable, and embedding configuration together; plain restart and crash replacement use that selection.
 An exception during activation may leave script side effects, so further requirement changes require restart.
@@ -122,7 +124,7 @@ Interrupts received while the worker is idle do not interrupt the next Python ce
 When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, DuckDB, and accepted package additions without R defaults or rejected requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
 Explicitly selected environments remain non-managed; prepare their packages before starting Console.
-Live environment updates, automatic missing-import installation, R requirements, and R cells are unavailable.
+R requirements and R cells are unavailable.
 An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
@@ -395,30 +397,32 @@ Resolution starts only when execution reaches the missing import.
 Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
-The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host `uv` resolver for a compatible environment.
+In R-present sessions, the finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest.
+In local managed sans-R sessions, it calls a native callback using the worker's accepted manifest.
+Both send the request through the existing host resolver exchange; the sans-R server inspects the candidate and prepares retained DuckDB extensions before activation.
 After Console activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.
-The automatic resolver request carries a differently named import and distribution together, and the server adds the bounded notice when it commits the matching activation.
+The automatic resolver request carries the import and inferred distribution together, and the server adds the bounded notice for differently named values when it commits the matching activation.
 
 This transition does not restart the worker or Python interpreter.
-Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
+Python objects, the DuckDB catalog, worker PID, and stdin state remain available; R-present sessions also retain R globals.
 New subprocesses use the activated environment and can import its retained packages.
 In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
 On Linux, the PID namespace limits native process enumeration to the sandbox.
 With `serve --no-sandbox`, psutil retains native process enumeration in the selected host or container namespace.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
-An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
+An ordinary resolution failure before activation leaves the accepted environment and worker usable; the R adapter restores its earlier reticulate manifest.
 Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
 
 Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
 Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
 
-Automatic resolution can call R and reticulate only from the main worker process and the Python thread that configured the runtime.
+Automatic resolution runs only from the main worker process and the Python thread that configured the runtime; R-present sessions call R and reticulate there.
 A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
 Imports already handled by ordinary Python finders remain available in those contexts.
 
-A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed resolution and `requirements.python`.
+A user-selected Python environment disables both automatic managed resolution and `requirements.python`.
 Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
 
 A bare runtime also disables the import resolver and `requirements.python`.

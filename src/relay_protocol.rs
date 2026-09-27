@@ -37,6 +37,8 @@ pub(crate) enum RelayCommand {
     },
     PythonResolved {
         python: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolutionFailed {
         message: String,
@@ -105,9 +107,15 @@ pub(crate) enum RelayEvent {
     PythonActivated {
         requirements: PythonRequirementManifest,
     },
+    PythonActivationFailed {
+        requirements: PythonRequirementManifest,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     PythonPrepared,
     PythonPreparationFailed {
+        message: String,
+    },
+    PythonPreparationRejected {
         message: String,
     },
     #[serde(deserialize_with = "deserialize_payload_free")]
@@ -172,9 +180,15 @@ impl From<WorkerMessage> for RelayEvent {
             WorkerMessage::PythonActivated { requirements } => {
                 Self::PythonActivated { requirements }
             }
+            WorkerMessage::PythonActivationFailed { requirements } => {
+                Self::PythonActivationFailed { requirements }
+            }
             WorkerMessage::PythonPrepared => Self::PythonPrepared,
             WorkerMessage::PythonPreparationFailed { message } => {
                 Self::PythonPreparationFailed { message }
+            }
+            WorkerMessage::PythonPreparationRejected { message } => {
+                Self::PythonPreparationRejected { message }
             }
             WorkerMessage::Completed => Self::Completed,
         }

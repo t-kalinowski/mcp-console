@@ -208,9 +208,21 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        simultaneous live Python package and DuckDB extension additions require
-        control: restart
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "<selected Python>",
+          "packages": [
+            "absent-fixture-distribution",
+            "duckdb==1.5.5"
+          ]
+        }
+        uv output:
+        × No solution found when resolving tool dependencies:
+          ╰─▶ Because absent-fixture-distribution was not found in the package
+              registry and you require absent-fixture-distribution, we can conclude
+              that your requirements are unsatisfiable.
   isError: true
 ---
 send:

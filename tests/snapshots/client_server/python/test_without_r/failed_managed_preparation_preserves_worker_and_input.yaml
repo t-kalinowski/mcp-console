@@ -229,13 +229,14 @@ send:
     duckdb:
       - json
     python:
-      - py-yaml12
+      - numpy==0.1
 result:
   content:
     - type: text
       text: >-
-        simultaneous live Python package and DuckDB extension additions require
-        control: restart
+        live Python requirements can only add new distributions; `numpy==0.1`
+        changes already-declared `numpy`; use control: restart with
+        requirements.action: set
   isError: true
 ---
 send:

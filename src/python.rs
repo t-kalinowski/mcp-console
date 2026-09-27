@@ -1,4 +1,5 @@
 mod inspection;
+mod native;
 mod requirements;
 mod reticulate;
 mod startup;
@@ -27,6 +28,9 @@ pub(crate) enum PreparationOutcome {
     #[serde(deserialize_with = "crate::worker_protocol::deserialize_payload_free")]
     Prepared,
     Failed {
+        message: String,
+    },
+    Rejected {
         message: String,
     },
 }
@@ -85,10 +89,22 @@ impl Runtime {
 
     pub(crate) fn activate_native(
         &mut self,
-        candidate: &NativePython,
+        candidate: &crate::worker_protocol::NativePythonActivation,
     ) -> Result<PreparationOutcome, String> {
-        self.startup.activate_native(candidate)
+        Ok(match native::activate(candidate)? {
+            native::ActivationOutcome::Prepared => PreparationOutcome::Prepared,
+            native::ActivationOutcome::Rejected(message) => {
+                PreparationOutcome::Rejected { message }
+            }
+            native::ActivationOutcome::Failed(message) => PreparationOutcome::Failed { message },
+        })
     }
+}
+
+pub(crate) fn resolve_native_import(
+    resolution: crate::worker_protocol::PythonImportResolution,
+) -> Result<String, String> {
+    native::resolve_import(resolution)
 }
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
