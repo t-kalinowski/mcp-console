@@ -299,6 +299,9 @@ class ReleaseScriptTests(unittest.TestCase):
                 }
                 if os.environ.get("FAKE_MCP_STARTUP_HANG"):
                     signal.pause()
+                if os.environ.get("FAKE_MCP_STARTUP_DIAGNOSTICS"):
+                    sys.stderr.write("installer progress\\n" * 65536)
+                    sys.stderr.flush()
                 print(
                     json.dumps(
                         {
@@ -629,6 +632,30 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 1 seconds", result.stderr)
+
+    def test_smoke_wheel_drains_startup_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_STARTUP_DIAGNOSTICS"] = "1"
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                "aarch64-apple-darwin",
+                "--startup-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "MCP server wrote to stderr: installer progress", result.stderr
+            )
+            self.assertNotIn("timed out", result.stderr)
 
     def test_smoke_linux_wheel_requires_sandbox_and_bundled_helper(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

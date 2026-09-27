@@ -13,7 +13,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 STABLE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
 PACKAGE_VERSION = re.compile(r'^version\s*=\s*"([^"]+)"\s*$')
@@ -74,12 +74,12 @@ def package_version() -> str:
     raise ReleaseError("Cargo.toml package version is missing")
 
 
-def terminate(process: subprocess.Popen[bytes]) -> str:
+def terminate(process: subprocess.Popen[bytes], diagnostics: BinaryIO) -> str:
     if process.poll() is None:
         process.kill()
     process.wait(timeout=5)
-    assert process.stderr is not None
-    return process.stderr.read().decode(errors="replace").strip()
+    diagnostics.seek(0)
+    return diagnostics.read().decode(errors="replace").strip()
 
 
 def receive(
@@ -115,108 +115,113 @@ def smoke_mcp(
     startup_timeout: float,
     response_timeout: float,
 ) -> None:
-    process = subprocess.Popen(
-        [str(executable), "serve"],
-        env=env,
-        cwd=workspace,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    assert process.stdin is not None
-    buffer = bytearray()
-
-    def send(message: dict[str, Any]) -> None:
+    # A pipe left unread during startup can block the resolver before its reply.
+    with tempfile.TemporaryFile() as diagnostics:
+        process = subprocess.Popen(
+            [str(executable), "serve"],
+            env=env,
+            cwd=workspace,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=diagnostics,
+        )
         assert process.stdin is not None
-        process.stdin.write((json.dumps(message) + "\n").encode())
-        process.stdin.flush()
+        buffer = bytearray()
 
-    try:
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-11-25",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "wheel-smoke-test",
-                        "version": "1.0.0",
+        def send(message: dict[str, Any]) -> None:
+            assert process.stdin is not None
+            process.stdin.write((json.dumps(message) + "\n").encode())
+            process.stdin.flush()
+
+        try:
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "wheel-smoke-test",
+                            "version": "1.0.0",
+                        },
                     },
+                }
+            )
+            initialization = receive(process, buffer, startup_timeout)
+            require(initialization.get("id") == 1, "unexpected initialize response ID")
+            require(
+                initialization.get("result", {}).get("serverInfo")
+                == {"name": "mcp-console", "version": version},
+                "unexpected initialize serverInfo",
+            )
+
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            # Runtime preparation is lazy; start the worker under the startup deadline.
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {"name": "send", "arguments": {"control": "restart"}},
+                }
+            )
+            startup = receive(process, buffer, startup_timeout)
+            require(startup.get("id") == 2, "unexpected startup response ID")
+            require(
+                startup.get("result")
+                == {
+                    "content": [
+                        {"type": "text", "text": "[starting new worker]\n[idle]"}
+                    ],
+                    "isError": False,
                 },
-            }
-        )
-        initialization = receive(process, buffer, startup_timeout)
-        require(initialization.get("id") == 1, "unexpected initialize response ID")
-        require(
-            initialization.get("result", {}).get("serverInfo")
-            == {"name": "mcp-console", "version": version},
-            "unexpected initialize serverInfo",
-        )
+                f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
+            )
 
-        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        # Runtime preparation is lazy; start the worker under the startup deadline.
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {"name": "send", "arguments": {"control": "restart"}},
-            }
-        )
-        startup = receive(process, buffer, startup_timeout)
-        require(startup.get("id") == 2, "unexpected startup response ID")
-        require(
-            startup.get("result")
-            == {
-                "content": [{"type": "text", "text": "[starting new worker]\n[idle]"}],
-                "isError": False,
-            },
-            f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
-        )
-
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "send",
-                    "arguments": {"r": "6 * 7"},
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {"r": "6 * 7"},
+                    },
+                }
+            )
+            evaluation = receive(process, buffer, response_timeout)
+            require(evaluation.get("id") == 3, "unexpected evaluation response ID")
+            require(
+                evaluation.get("result")
+                == {
+                    "content": [{"type": "text", "text": "[1] 42\n"}],
+                    "isError": False,
                 },
-            }
-        )
-        evaluation = receive(process, buffer, response_timeout)
-        require(evaluation.get("id") == 3, "unexpected evaluation response ID")
+                f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
+            )
+        except Exception as error:
+            standard_error = terminate(process, diagnostics)
+            if standard_error:
+                raise ReleaseError(f"{error}: {standard_error}") from error
+            raise
+
+        process.stdin.close()
+        try:
+            returncode = process.wait(timeout=response_timeout)
+        except subprocess.TimeoutExpired as error:
+            standard_error = terminate(process, diagnostics)
+            detail = f": {standard_error}" if standard_error else ""
+            raise ReleaseError(f"MCP server did not shut down{detail}") from error
+
+        diagnostics.seek(0)
+        standard_error = diagnostics.read().decode(errors="replace").strip()
         require(
-            evaluation.get("result")
-            == {
-                "content": [{"type": "text", "text": "[1] 42\n"}],
-                "isError": False,
-            },
-            f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
+            returncode == 0,
+            f"MCP server exited with status {returncode}: {standard_error}",
         )
-    except Exception as error:
-        standard_error = terminate(process)
-        if standard_error:
-            raise ReleaseError(f"{error}: {standard_error}") from error
-        raise
-
-    process.stdin.close()
-    try:
-        returncode = process.wait(timeout=response_timeout)
-    except subprocess.TimeoutExpired as error:
-        standard_error = terminate(process)
-        detail = f": {standard_error}" if standard_error else ""
-        raise ReleaseError(f"MCP server did not shut down{detail}") from error
-
-    assert process.stderr is not None
-    standard_error = process.stderr.read().decode(errors="replace").strip()
-    require(
-        returncode == 0, f"MCP server exited with status {returncode}: {standard_error}"
-    )
-    require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
+        require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
 def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
