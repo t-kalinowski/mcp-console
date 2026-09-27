@@ -870,6 +870,10 @@ def test_resolves_default_python_without_r(
             schema = client.transcript[-1]["result"]["tools"][0]
             assert "r" not in schema["inputSchema"]["properties"]
             assert "sql" in schema["inputSchema"]["properties"]
+            assert (
+                "duckdb"
+                in schema["inputSchema"]["properties"]["requirements"]["properties"]
+            )
             assert "without R" in schema["description"]
             client.send(
                 # fmt: python

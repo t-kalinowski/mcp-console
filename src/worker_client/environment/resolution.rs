@@ -61,6 +61,11 @@ impl Client {
             r_changed,
         } = delta;
         let mut environment = environment.clone();
+        let python_only = environment
+            .local_runtime
+            .as_ref()
+            .is_some_and(crate::local_runtime::Selection::python_only);
+        let python_changed = python_candidate.is_some();
         let early_resolver = match &environment.r_resolver {
             RResolver::Pending(setup) => Some(&setup.python_resolver),
             _ => match environment.python.as_ref() {
@@ -105,7 +110,7 @@ impl Client {
                 r_requirements,
             )?);
         }
-        if !duckdb_extensions.is_empty() && (duckdb_changed || r_changed) {
+        if !python_only && !duckdb_extensions.is_empty() && (duckdb_changed || r_changed) {
             let target = environment.r.as_ref().ok_or_else(|| {
                 EnvironmentResolutionFailure::Operation(
                     "DuckDB extension preparation requires a managed R environment".to_string(),
@@ -174,6 +179,34 @@ impl Client {
                 **inspected = self.inspect_managed_python(generation, &selected)?;
             }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
+        }
+        if python_only && !duckdb_extensions.is_empty() && (duckdb_changed || python_changed) {
+            let (selected, resolver) = environment
+                .python
+                .as_ref()
+                .ok_or_else(|| {
+                    EnvironmentResolutionFailure::Operation(
+                        "managed Python environment is unavailable".to_string(),
+                    )
+                })?
+                .managed_parts()
+                .map_err(EnvironmentResolutionFailure::Operation)?;
+            let directory = environment
+                .local_runtime
+                .as_ref()
+                .and_then(crate::local_runtime::Selection::duckdb_extension_directory)
+                .ok_or_else(|| {
+                    EnvironmentResolutionFailure::Operation(
+                        "managed DuckDB extension cache is unavailable".to_string(),
+                    )
+                })?;
+            self.resolve_python_duckdb_extensions(
+                generation,
+                selected,
+                resolver,
+                &duckdb_extensions.iter().cloned().collect::<Vec<_>>(),
+                directory,
+            )?;
         }
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
@@ -344,5 +377,33 @@ impl Client {
             classify_resolver_result(result, stop_handle.as_ref())?;
         }
         Ok(())
+    }
+
+    fn resolve_python_duckdb_extensions(
+        &self,
+        generation: &WorkerGeneration,
+        selected: &crate::resolver::ManagedPython,
+        resolver: &crate::resolver::execution::PythonConfiguration,
+        extensions: &[String],
+        extension_directory: &std::path::Path,
+    ) -> Result<(), EnvironmentResolutionFailure> {
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        let mut stop_handle = None;
+        let result = crate::resolver::execution::resolve_python_duckdb_extensions(
+            resolver,
+            selected,
+            extensions,
+            extension_directory,
+            |handle| {
+                stop_handle = Some(handle.clone());
+                self.register_resolver_stop_handle(generation, handle)
+            },
+        );
+        self.clear_resolver_stop_handle(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        self.ensure_startup(generation)
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        classify_resolver_result(result, stop_handle.as_ref())
     }
 }

@@ -7,8 +7,9 @@ use std::process::Command;
 use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
+pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
-pub(crate) const LIVE_PREPARATION_DISABLED: &str = "live Python requirements are unavailable without R; use requirements.python with control: restart to prepare a new environment";
+pub(crate) const LIVE_PREPARATION_DISABLED: &str = "live requirements are unavailable without R; use requirements.python or requirements.duckdb with control: restart to prepare a new environment";
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
 pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart";
 
@@ -23,6 +24,9 @@ pub(crate) enum Selection {
         explicit: Option<OsString>,
         // Capability only. The session environment owns the retained manifest.
         managed: bool,
+        // DuckDB's host cache is shared across worker generations. Its path
+        // must not follow the runner's disposable TMPDIR or mutable worker HOME.
+        duckdb_extension_directory: Option<PathBuf>,
     },
 }
 
@@ -69,16 +73,40 @@ impl Selection {
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
         let selected = crate::python::inspect_native(&executable, on_started)?;
+        let duckdb_extension_directory = managed
+            .as_ref()
+            .map(|_| {
+                let home = std::env::var_os("HOME")
+                    .filter(|home| !home.is_empty())
+                    .map(PathBuf::from)
+                    .ok_or("HOME is required for managed DuckDB extension preparation")?;
+                if !home.is_absolute() {
+                    return Err("HOME must be absolute for managed DuckDB extension preparation");
+                }
+                Ok(home.join(".duckdb/extensions"))
+            })
+            .transpose()?;
         let selection = Self::Python {
             selected: Box::new(selected),
             explicit,
             managed: managed.is_some(),
+            duckdb_extension_directory,
         };
         Ok((selection, managed))
     }
 
     pub(crate) fn python_only(&self) -> bool {
         matches!(self, Self::Python { .. })
+    }
+
+    pub(crate) fn duckdb_extension_directory(&self) -> Option<&Path> {
+        match self {
+            Self::Python {
+                duckdb_extension_directory,
+                ..
+            } => duckdb_extension_directory.as_deref(),
+            Self::R { .. } => None,
+        }
     }
 
     pub(crate) fn configure(&self, command: &mut Command) -> Result<(), String> {
@@ -89,7 +117,11 @@ impl Selection {
                 command.env_remove(ENVIRONMENT);
                 command.env("R_HOME", home);
             }
-            Self::Python { explicit, .. } => {
+            Self::Python {
+                explicit,
+                duckdb_extension_directory,
+                ..
+            } => {
                 command.env(
                     ENVIRONMENT,
                     serde_json::to_string(self).map_err(|error| {
@@ -105,6 +137,11 @@ impl Selection {
                     command.env("RETICULATE_PYTHON", python);
                 } else {
                     command.env_remove("RETICULATE_PYTHON");
+                }
+                if let Some(directory) = duckdb_extension_directory {
+                    command.env(DUCKDB_EXTENSION_DIRECTORY, directory);
+                } else {
+                    command.env_remove(DUCKDB_EXTENSION_DIRECTORY);
                 }
                 command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
             }

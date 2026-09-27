@@ -11,6 +11,7 @@ use crate::target_launch::transfer::{Io, duplicate};
 
 struct Context {
     local: bool,
+    mode: Mode,
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
@@ -36,6 +37,7 @@ impl Context {
             return Ok((
                 Self {
                     local,
+                    mode,
                     bootstrap: None,
                     r: None,
                     python,
@@ -74,6 +76,7 @@ impl Context {
         Ok((
             Self {
                 local,
+                mode,
                 bootstrap,
                 r: None,
                 python,
@@ -164,6 +167,24 @@ impl Context {
             Operation::Duckdb { r, extensions } => {
                 let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
                 resolver::resolve_duckdb_extensions(&r, &extensions, on_started)?;
+                Ok(serde_json::Value::Null)
+            }
+            Operation::DuckdbPython {
+                python,
+                extensions,
+                extension_directory,
+            } => {
+                if !self.local || !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
+                    return Err(
+                        "Python-backed DuckDB preparation requires local managed Python".into(),
+                    );
+                }
+                resolver::resolve_python_duckdb_extensions(
+                    &python,
+                    &extensions,
+                    &extension_directory,
+                    on_started,
+                )?;
                 Ok(serde_json::Value::Null)
             }
         }

@@ -14,6 +14,8 @@ pub(crate) fn run() -> Result<(), String> {
 #[cfg(unix)]
 mod managed_duckdb;
 #[cfg(unix)]
+mod managed_duckdb_python;
+#[cfg(unix)]
 mod managed_python;
 #[cfg(unix)]
 mod managed_r;
@@ -45,6 +47,8 @@ pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 
 #[cfg(unix)]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
+#[cfg(unix)]
+pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
 #[cfg(all(test, unix))]
 use managed_python::resolve_python_manifest;
 #[cfg(unix)]

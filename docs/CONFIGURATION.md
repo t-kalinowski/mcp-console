@@ -33,7 +33,7 @@ The equivalent CLI override is `mcp-console serve -c python=.venv/bin/python`.
 This setting takes precedence over inherited `RETICULATE_PYTHON` and is retained across worker restarts.
 It is unavailable with custom workers and execution targets.
 
-In a [session without R](BUILTIN_RUNTIME.md#python-sessions-without-r), omitting both selections uses Python resolved through uv and enables explicit startup/restart package preparation.
+In a [session without R](BUILTIN_RUNTIME.md#python-sessions-without-r), omitting both selections uses Python resolved through uv and enables explicit startup/restart Python package and DuckDB extension preparation.
 An explicit Python selection bypasses uv entirely and disables package preparation.
 Configure the existing environment's packages before starting Console.
 

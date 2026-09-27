@@ -181,3 +181,23 @@ pub(crate) fn resolve_duckdb_extensions(
         on_started,
     )
 }
+
+pub(crate) fn resolve_python_duckdb_extensions(
+    configuration: &PythonConfiguration,
+    python: &ManagedPython,
+    extensions: &[String],
+    extension_directory: &std::path::Path,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<(), String> {
+    let PythonConfiguration::Local { preparation, .. } = configuration else {
+        return Err("Python-backed DuckDB preparation requires a local resolver".into());
+    };
+    preparation.call(
+        Operation::DuckdbPython {
+            python: python.clone(),
+            extensions: extensions.to_vec(),
+            extension_directory: extension_directory.to_path_buf(),
+        },
+        on_started,
+    )
+}

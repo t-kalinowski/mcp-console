@@ -280,6 +280,8 @@ Native startup installs Console's stream, input, interrupt, and plot services af
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
 Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
 When R is absent, the local resolver command prepares the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
+The managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
+The Python DB-API adapter opens managed DuckDB with that directory while keeping spill and stored secrets in the worker's private temporary directory.
 Without either selection or uv, startup reports an error rather than searching PATH for Python.
 The server inspects the selected executable before MCP readiness.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
@@ -426,6 +428,9 @@ It runs with full host permissions, independently of worker policy; it does not 
 The [requirements trust boundary](REQUIREMENTS.md#host-resolution-and-trust) documents the resulting escape paths.
 The mutable session environment owns the accepted manifest, executable, and embedding configuration together.
 Candidate inspection completes before worker retirement; failure or cancellation preserves the old selection and worker.
+In local sans-R sessions, the same transition then runs the inspected Python candidate's DuckDB installation API for all retained extension names that need preparation.
+A changed Python candidate requires this step even when the extension names are unchanged.
+The hidden local resolver owns the Python helper's process group, cancellation, output, and cleanup; R-backed and SSH extension operations keep their existing path.
 Resolver and inspection results use bounded reads from the original open descriptors.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.

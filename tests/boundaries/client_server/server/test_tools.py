@@ -228,7 +228,7 @@ def _initializes_and_lists_tools(
             if python_managed:
                 assert set(
                     send["inputSchema"]["properties"]["requirements"]["properties"]
-                ) == {"python", "action", "python_version", "exclude_newer"}
+                ) == {"python", "duckdb", "action", "python_version", "exclude_newer"}
                 return client.finish()
             if bare or python_only:
                 assert send["inputSchema"]["properties"]["requirements"]["properties"][

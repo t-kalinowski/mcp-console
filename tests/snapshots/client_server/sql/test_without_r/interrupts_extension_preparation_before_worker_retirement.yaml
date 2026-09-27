@@ -1,0 +1,105 @@
+---
+send:
+  sql: CREATE TABLE retained AS SELECT 42 AS value
+result:
+  content:
+    - type: text
+      text: |
+        Count
+        -----
+        1
+  isError: false
+---
+send:
+  python: >-
+    import sysconfig; site = sysconfig.get_paths()['purelib']; identity =
+    object(); identity_id = id(identity); print(site)
+result:
+  content:
+    - type: text
+      text: |
+        <managed Python>/lib/python3.12/site-packages
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    duckdb:
+      - fts
+  sql: DROP TABLE retained
+result:
+  content:
+    - type: text
+      text: "[DuckDB extension resolution failed with exit status: 130: ]"
+  isError: true
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  sql: SELECT value FROM retained
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        42
+  isError: false
+---
+send:
+  python: assert id(identity) == identity_id; print('still live')
+result:
+  content:
+    - type: text
+      text: |
+        still live
+  isError: false

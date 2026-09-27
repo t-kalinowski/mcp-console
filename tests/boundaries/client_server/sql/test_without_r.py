@@ -1,6 +1,7 @@
 """Public MCP SQL coverage with no R executable visible to the local server."""
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,7 +14,7 @@ from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, requires
@@ -41,6 +42,413 @@ def installed_binary(binary: Path, root: Path) -> Path:
     for relative in ("libexec", "share/licenses/mcp-console"):
         shutil.copytree(source_prefix / relative, prefix / relative)
     return installed
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_prepares_extension_before_first_worker_and_loads_from_cache(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        cache = home / ".duckdb/extensions"
+        assert not cache.exists()
+        shadow = root / "duckdb.py"
+        shadow.write_text(
+            "raise RuntimeError('workspace DuckDB shadow was imported')\n"
+        )
+        env = dict(environment(root), HOME=str(home), PYTHONPATH=str(root))
+        if execution == DIRECT:
+            env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
+            env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(requirements={"duckdb": ["fts"]})
+            assert not result.get("isError"), result
+            (extension,) = cache.glob("v*/**/fts.duckdb_extension")
+            shadow.unlink()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import errno
+                    import socket
+
+                    with socket.socket() as probe:
+                        probe.settimeout(1)
+                        try:
+                            probe.connect(("203.0.113.1", 443))
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM), error
+                        else:
+                            raise AssertionError("worker network connection succeeded")
+                    print("worker network denied")
+                    """)
+            )
+            assert last_tool_text(client) == "worker network denied\n"
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client)
+            client.send(
+                sql="SELECT installed, loaded FROM duckdb_extensions() WHERE extension_name = 'fts'"
+            )
+            assert "true" in last_tool_text(client).lower()
+            client.send(python="import os; print(os.environ['TMPDIR'])")
+            first_temporary = Path(last_tool_text(client).strip())
+            (root / "uv").unlink()
+            client.send(
+                control="restart",
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            assert "Error:" not in last_tool_text(client)
+            assert not first_temporary.exists()
+            assert extension.is_file(), "restart removed the shared extension cache"
+            client.send(python="import os; print(os.environ['TMPDIR'])")
+            second_temporary = Path(last_tool_text(client).strip())
+            client.send(python="import os; os._exit(47)")
+            assert "status 47" in last_result_text(client)
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client)
+            assert not second_temporary.exists()
+            assert extension.is_file(), (
+                "crash replacement removed the shared extension cache"
+            )
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["fts"]
+            return _replace_paths(
+                client.finish()[3:], [first_temporary, second_temporary]
+            )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_combines_python_and_extension_candidates_across_duckdb_versions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        cache = home / ".duckdb/extensions"
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            dict(environment(root), HOME=str(home)),
+        ) as client:
+            client.initialize_and_list_tools()
+            first = client.send(
+                requirements={
+                    "action": "set",
+                    "python": ["duckdb==1.4.4", "six"],
+                    "duckdb": ["fts"],
+                },
+                python="import duckdb, six; assert duckdb.__version__ == '1.4.4'; print('first candidate')",
+            )
+            assert not first.get("isError"), first
+            assert last_tool_text(client) == "first candidate\n"
+            assert len(list(cache.glob("v1.4.4/**/fts.duckdb_extension"))) == 1
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"] == {
+                "r": [],
+                "python": ["duckdb==1.4.4", "six"],
+                "duckdb": ["fts"],
+                "python_version": [],
+                "exclude_newer": None,
+            }
+            second = client.send(
+                control="restart",
+                requirements={
+                    "action": "set",
+                    "python": ["duckdb==1.5.5", "six"],
+                    "duckdb": ["fts"],
+                },
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            assert not second.get("isError"), second
+            assert "Error:" not in last_tool_text(client)
+            assert len(list(cache.glob("v1.5.5/**/fts.duckdb_extension"))) == 1
+            client.send(python="import duckdb, six; print(duckdb.__version__)")
+            assert last_tool_text(client) == "1.5.5\n"
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["fts"]
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_combined_preparation_precedes_first_sql_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            dict(environment(root), HOME=str(home)),
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(
+                requirements={"python": ["six"], "duckdb": ["fts"]},
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            assert not result.get("isError"), result
+            assert "Error:" not in last_tool_text(client)
+            client.send(python="import six; print('combined SQL preparation')")
+            assert last_tool_text(client) == "combined SQL preparation\n"
+            assert (
+                len(
+                    list(
+                        (home / ".duckdb/extensions").glob("v*/**/fts.duckdb_extension")
+                    )
+                )
+                == 1
+            )
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_extension_actions_replace_and_reset_declarations(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        cache = home / ".duckdb/extensions"
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            dict(environment(root), HOME=str(home)),
+        ) as client:
+            client.initialize_and_list_tools()
+
+            def declaration():
+                inspected = client.send(requirements={"action": "get"})
+                assert not inspected.get("isError"), inspected
+                return inspected["structuredContent"]["requirements"]
+
+            assert declaration()["duckdb"] == []
+            client.send(requirements={"duckdb": ["fts"]})
+            assert declaration()["duckdb"] == ["fts"]
+            client.send(requirements={"duckdb": ["json"]})
+            assert declaration()["duckdb"] == ["fts", "json"]
+            client.send(
+                requirements={
+                    "action": "set",
+                    "python": ["duckdb"],
+                    "duckdb": ["fts"],
+                }
+            )
+            assert declaration()["python"] == ["duckdb"]
+            assert declaration()["duckdb"] == ["fts"]
+            (extension,) = cache.glob("v*/**/fts.duckdb_extension")
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client)
+            client.send(
+                control="restart", requirements={"action": "set", "python": ["duckdb"]}
+            )
+            assert declaration()["duckdb"] == []
+            assert extension.is_file(), (
+                "removing a declaration uninstalled the extension"
+            )
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client)
+            client.send(control="restart", requirements={"action": "reset"})
+            assert declaration()["python"] == ["numpy", "pandas", "duckdb"]
+            assert declaration()["duckdb"] == []
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_failed_and_live_extension_changes_preserve_worker_and_selected_connection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            dict(environment(root), HOME=str(home)),
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                requirements={
+                    "action": "set",
+                    "python": ["duckdb==1.5.5"],
+                    "duckdb": ["fts"],
+                }
+            )
+            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
+            client.send(
+                # fmt: python
+                python=code("""
+                    import sqlite3
+
+                    identity = object()
+                    identity_id = id(identity)
+                    selected = sqlite3.connect(":memory:")
+                    selected.execute("CREATE TABLE chosen(value INTEGER)")
+                    selected.execute("INSERT INTO chosen VALUES (17)")
+                    console_sql_connection(selected)
+                    print("selected SQLite")
+                    """)
+            )
+            assert last_tool_text(client) == "selected SQLite\n"
+            client.send(requirements={"duckdb": ["fts"]})
+            client.send(sql="SELECT value FROM chosen")
+            assert "17" in last_tool_text(client)
+            failed = client.send(
+                control="restart",
+                requirements={"duckdb": ["not_a_real_duckdb_extension"]},
+                stdin="retained input\n",
+                sql="DROP TABLE retained",
+            )
+            assert failed.get("isError"), failed
+            failure = last_result_text(client)
+            assert "not_a_real_duckdb_extension" in failure
+            failure = re.sub(
+                r"https://duckdb\.org/docs/stable/extensions/troubleshooting\?\S+",
+                "<DuckDB extension troubleshooting URL>",
+                failure,
+            )
+            failed["content"][0]["text"] = re.sub(
+                r'https?://[^"\s]+', "<DuckDB extension URL>", failure
+            )
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["fts"]
+            client.send(sql="SELECT value FROM chosen")
+            assert "17" in last_tool_text(client)
+            client.send(python="assert id(identity) == identity_id; print(input())")
+            assert "retained input" not in last_tool_text(client)
+            assert "[waiting for stdin]" in last_tool_text(client)
+            client.send(stdin="fresh input\n")
+            assert "fresh input" in last_tool_text(client)
+            client.send(python="console_sql_connection(None)")
+            client.send(sql="SELECT value FROM retained")
+            assert "42" in last_tool_text(client)
+            missing = client.send(
+                control="restart",
+                requirements={
+                    "action": "set",
+                    "python": ["six"],
+                    "duckdb": ["fts"],
+                },
+                python="identity = None",
+            )
+            assert missing.get("isError"), missing
+            assert "include duckdb in requirements.python" in last_result_text(client)
+            client.send(
+                python="assert id(identity) == identity_id; print('old worker intact')"
+            )
+            assert last_tool_text(client) == "old worker intact\n"
+            live = client.send(
+                requirements={"duckdb": ["json"]},
+                python="identity = None",
+            )
+            assert live.get("isError"), live
+            assert "control: restart" in last_result_text(client)
+            client.send(
+                python="assert id(identity) == identity_id; print('still intact')"
+            )
+            assert last_tool_text(client) == "still intact\n"
+            client.send(
+                requirements={"duckdb": ["fts"]},
+                python="assert id(identity) == identity_id; print('no-op')",
+            )
+            assert last_tool_text(client) == "no-op\n"
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_extension_preparation_before_worker_retirement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        started = FifoCheckpoint.create(root / "started")
+        release = FifoCheckpoint.create(root / "release")
+        env = dict(
+            environment(root),
+            HOME=str(home),
+            UV_CACHE_DIR=str(root / "uv-cache"),
+            MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(root),
+        )
+        try:
+            with McpClient(
+                installed_binary(binary, root), execution.serve(), env
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
+                client.send(
+                    python="import sysconfig; site = sysconfig.get_paths()['purelib']; identity = object(); identity_id = id(identity); print(site)"
+                )
+                site = Path(last_tool_text(client).strip())
+                hook = site / "sitecustomize.py"
+                hook.write_text(
+                    code("""
+                        import os
+                        import signal
+                        import sys
+                        from pathlib import Path
+
+                        if sys.flags.isolated:
+                            signal.signal(signal.SIGINT, lambda *_: os._exit(130))
+                            root = Path(os.environ["MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT"])
+                            with (root / "started").open("wb", buffering=0) as marker:
+                                marker.write(b"1")
+                            with (root / "release").open("rb", buffering=0) as gate:
+                                gate.read(1)
+                        """)
+                )
+                try:
+                    pending = client.start_send(
+                        control="restart",
+                        requirements={"duckdb": ["fts"]},
+                        sql="DROP TABLE retained",
+                    )
+                    started.wait("Python DuckDB resolver entered")
+                    interrupt = client.start_send(control="interrupt")
+                    client.receive_many([pending, interrupt])
+                    assert pending["result"].get("isError"), pending
+                    assert "exit status: 130" in str(pending["result"]), pending
+                    assert not interrupt["result"].get("isError"), interrupt
+                finally:
+                    release.release()
+                    hook.unlink()
+                inspected = client.send(requirements={"action": "get"})
+                assert inspected["structuredContent"]["requirements"]["duckdb"] == []
+                client.send(sql="SELECT value FROM retained")
+                assert "42" in last_tool_text(client)
+                client.send(
+                    python="assert id(identity) == identity_id; print('still live')"
+                )
+                assert last_tool_text(client) == "still live\n"
+                records = client.finish()[3:]
+                for record in records:
+                    for content in record.get("result", {}).get("content", []):
+                        if content.get("type") == "text":
+                            text = content["text"].replace(str(root), "<fixture>")
+                            content["text"] = re.sub(
+                                r"<fixture>/uv-cache/archive-v0/[^/]+",
+                                "<managed Python>",
+                                text,
+                            )
+                return records
+        finally:
+            started.close()
+            release.close()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -361,6 +769,19 @@ def test_selected_environment_uses_preinstalled_duckdb(
             check=True,
             capture_output=True,
         )
+        home = root / "home"
+        home.mkdir()
+        subprocess.run(
+            [
+                python,
+                "-I",
+                "-c",
+                "import duckdb; connection = duckdb.connect(':memory:'); connection.install_extension('fts')",
+            ],
+            check=True,
+            capture_output=True,
+            env=dict(os.environ, HOME=str(home)),
+        )
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         config.write_text("python: .venv/bin/python\n")
@@ -372,7 +793,7 @@ def test_selected_environment_uses_preinstalled_duckdb(
         with McpClient(
             installed_binary(binary, root),
             execution.serve(),
-            environment(bin_dir),
+            dict(environment(bin_dir), HOME=str(home)),
             workspace,
         ) as client:
             client.initialize_and_list_tools()
@@ -380,12 +801,17 @@ def test_selected_environment_uses_preinstalled_duckdb(
             assert "Error:" not in last_tool_text(client)
             client.send(sql="SELECT value FROM selected_state")
             assert "42" in last_tool_text(client)
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client)
             client.send(
                 python="sql_connection().execute('SELECT value FROM selected_state').fetchone()"
             )
             assert last_tool_text(client) == "(42,)\n"
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["python"] == []
+            refused = client.send(requirements={"duckdb": ["fts"]})
+            assert refused.get("isError"), refused
+            assert "user-selected Python environment" in last_result_text(client)
             return client.finish()[3:]
 
 

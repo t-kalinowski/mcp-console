@@ -175,8 +175,8 @@ result:
   content:
     - type: text
       text: >-
-        live Python requirements are unavailable without R; use
-        requirements.python with control: restart to prepare a new environment
+        live requirements are unavailable without R; use requirements.python or
+        requirements.duckdb with control: restart to prepare a new environment
   isError: true
 ---
 send:
@@ -191,8 +191,8 @@ result:
   content:
     - type: text
       text: >-
-        live Python requirements are unavailable without R; use
-        requirements.python with control: restart to prepare a new environment
+        live requirements are unavailable without R; use requirements.python or
+        requirements.duckdb with control: restart to prepare a new environment
   isError: true
 ---
 send:
@@ -217,8 +217,7 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        R and DuckDB requirements are unavailable in Python sessions without R
+      text: R requirements are unavailable in Python sessions without R
   isError: true
 ---
 send:
@@ -229,7 +228,8 @@ result:
   content:
     - type: text
       text: >-
-        R and DuckDB requirements are unavailable in Python sessions without R
+        live requirements are unavailable without R; use requirements.python or
+        requirements.duckdb with control: restart to prepare a new environment
   isError: true
 ---
 send:

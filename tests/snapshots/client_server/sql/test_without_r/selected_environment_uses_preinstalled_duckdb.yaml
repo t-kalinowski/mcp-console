@@ -22,6 +22,17 @@ result:
   isError: false
 ---
 send:
+  sql: SET autoinstall_known_extensions = false; LOAD fts
+result:
+  content:
+    - type: text
+      text: |
+        Success
+        -------
+        [0 rows]
+  isError: false
+---
+send:
   python: >-
     sql_connection().execute('SELECT value FROM selected_state').fetchone()
 result:
@@ -64,3 +75,15 @@ result:
       r: []
       python: []
   isError: false
+---
+send:
+  requirements:
+    duckdb:
+      - fts
+result:
+  content:
+    - type: text
+      text: >-
+        DuckDB extension preparation is unavailable with a user-selected Python
+        environment; install extensions before starting the session
+  isError: true
