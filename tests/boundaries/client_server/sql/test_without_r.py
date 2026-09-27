@@ -45,6 +45,40 @@ def installed_binary(binary: Path, root: Path) -> Path:
 
 
 @executions(DIRECT, SANDBOXED)
+def test_managed_python_starts_without_home_until_extension_requested(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        env = dict(environment(root), UV_CACHE_DIR=str(root / "uv-cache"))
+        env.pop("HOME", None)
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            env,
+            record_in_project=False,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="identity = object(); original = id(identity); print('ready')"
+            )
+            assert last_tool_text(client) == "ready\n"
+            denied = client.send(
+                control="restart",
+                requirements={"duckdb": ["fts"]},
+                python="identity = None",
+            )
+            assert denied.get("isError"), denied
+            assert "HOME" in last_result_text(client)
+            client.send(python="assert id(identity) == original; print('retained')")
+            assert last_tool_text(client) == "retained\n"
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == []
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_prepares_extension_before_first_worker_and_loads_from_cache(
     binary: Path, execution: Execution

@@ -73,19 +73,14 @@ impl Selection {
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
         let selected = crate::python::inspect_native(&executable, on_started)?;
-        let duckdb_extension_directory = managed
-            .as_ref()
-            .map(|_| {
-                let home = std::env::var_os("HOME")
-                    .filter(|home| !home.is_empty())
-                    .map(PathBuf::from)
-                    .ok_or("HOME is required for managed DuckDB extension preparation")?;
-                if !home.is_absolute() {
-                    return Err("HOME must be absolute for managed DuckDB extension preparation");
-                }
-                Ok(home.join(".duckdb/extensions"))
-            })
-            .transpose()?;
+        // Ordinary managed Python sessions also work without HOME. A shared
+        // extension cache is required only when extensions are requested.
+        let duckdb_extension_directory = managed.as_ref().and_then(|_| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .map(|home| home.join(".duckdb/extensions"))
+        });
         let selection = Self::Python {
             selected: Box::new(selected),
             explicit,

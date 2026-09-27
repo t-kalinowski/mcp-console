@@ -101,7 +101,8 @@ The selected environment takes precedence over inherited or sandbox-configured `
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
 The executable directory is not added to the import path.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
-The managed DuckDB connection reads the shared version-and-platform extension cache captured at server startup; it keeps spill and stored-secret files in private worker storage.
+With an absolute `HOME` at server startup, the managed DuckDB connection reads the captured shared version-and-platform extension cache; it keeps spill and stored-secret files in private worker storage.
+Without an absolute `HOME`, managed Python still starts, but explicit extension preparation reports that a shared cache root is required.
 If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
 Retirement does not delete resolver caches or the retained environment.
 

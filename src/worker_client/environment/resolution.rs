@@ -197,7 +197,8 @@ impl Client {
                 .and_then(crate::local_runtime::Selection::duckdb_extension_directory)
                 .ok_or_else(|| {
                     EnvironmentResolutionFailure::Operation(
-                        "managed DuckDB extension cache is unavailable".to_string(),
+                        "DuckDB extension preparation requires an absolute HOME at server startup"
+                            .to_string(),
                     )
                 })?;
             self.resolve_python_duckdb_extensions(

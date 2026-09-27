@@ -398,7 +398,8 @@ In local managed sans-R sessions, `requirements.duckdb` is available before firs
 The resolver runs the accepted or candidate environment's Python in isolated mode and imports its DuckDB package; `PYTHONPATH` and workspace modules do not redirect this helper.
 It calls DuckDB's extension installation API with names as data, without R or a separate DuckDB executable.
 On a Python environment change, the server inspects the candidate first and prepares the complete retained extension set against its DuckDB version, even if the extension names did not change.
-The managed worker reads the same `HOME/.duckdb/extensions` version-and-platform cache captured at server startup.
+With an absolute `HOME` at server startup, the managed worker reads the same `HOME/.duckdb/extensions` version-and-platform cache captured for the resolver.
+Without an absolute `HOME`, ordinary managed Python sessions still start, but explicit extension preparation fails before worker retirement.
 Its spill and stored-secret paths remain in private worker storage, which retirement removes without deleting shared extensions.
 Preparation never loads extensions, executes submitted code, or changes a selected DB-API connection.
 Changed declarations in a running sans-R session require restart; retained requests are a no-op.

@@ -280,8 +280,9 @@ Native startup installs Console's stream, input, interrupt, and plot services af
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
 Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
 When R is absent, the local resolver command prepares the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
-The managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
-The Python DB-API adapter opens managed DuckDB with that directory while keeping spill and stored secrets in the worker's private temporary directory.
+When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
+Without an absolute `HOME`, managed Python still starts; an explicit extension request fails before worker retirement.
+The Python DB-API adapter uses that directory when captured and otherwise leaves DuckDB's default, while keeping spill and stored secrets in the worker's private temporary directory.
 Without either selection or uv, startup reports an error rather than searching PATH for Python.
 The server inspects the selected executable before MCP readiness.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
