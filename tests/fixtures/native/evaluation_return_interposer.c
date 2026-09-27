@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #ifdef __linux__
@@ -14,17 +15,15 @@
 #include <linux/futex.h>
 #include <stdarg.h>
 #include <sys/syscall.h>
-static pid_t (*native_fork)(void);
+static ssize_t (*native_write)(int, const void *, size_t);
 static long (*native_syscall)(long, ...);
 #endif
 
 static pid_t server_pid;
-static atomic_bool first_fork = false;
 static atomic_uintptr_t waiting_mutex = 0;
 static atomic_uintptr_t contended_mutex = 0;
 static atomic_bool cancelling = false;
 static atomic_bool paused = false;
-static _Thread_local bool initial_evaluator = false;
 static _Thread_local bool released = false;
 
 __attribute__((constructor)) static void initialize(void) {
@@ -32,9 +31,9 @@ __attribute__((constructor)) static void initialize(void) {
     unsetenv("DYLD_INSERT_LIBRARIES");
     unsetenv("LD_PRELOAD");
 #ifdef __linux__
-    native_fork = dlsym(RTLD_NEXT, "fork");
+    native_write = dlsym(RTLD_NEXT, "write");
     native_syscall = dlsym(RTLD_NEXT, "syscall");
-    if (native_fork == NULL || native_syscall == NULL) _exit(120);
+    if (native_write == NULL || native_syscall == NULL) _exit(120);
 #endif
 }
 
@@ -42,17 +41,6 @@ static void notify(const char *name) {
     int descriptor = open(getenv(name), O_WRONLY | O_NONBLOCK);
     if (descriptor < 0 || write(descriptor, "1", 1) != 1) _exit(121);
     close(descriptor);
-}
-
-static pid_t observe_fork(void) {
-    if (getpid() == server_pid && !atomic_exchange(&first_fork, true)) {
-        initial_evaluator = true;
-    }
-#ifdef __APPLE__
-    return fork();
-#else
-    return native_fork();
-#endif
 }
 
 static void select_worker_mutex(uintptr_t mutex) {
@@ -63,7 +51,7 @@ static void select_worker_mutex(uintptr_t mutex) {
 }
 
 static void observe_contention(uintptr_t mutex) {
-    if (getpid() != server_pid || initial_evaluator ||
+    if (getpid() != server_pid ||
         access(getenv("MCP_CONSOLE_TEST_COMPLETION_ARMED"), F_OK) != 0) return;
     // Discard completed waits: restart can briefly contend on lifecycle
     // admission before sending cancellation and waiting for the worker.
@@ -88,21 +76,26 @@ static void await_release(const char *name) {
     close(descriptor);
 }
 
-static int observe_killpg(pid_t group, int number) {
-    if (getpid() == server_pid && initial_evaluator && number == SIGKILL &&
+static ssize_t observe_write(int descriptor, const void *bytes, size_t count) {
+    if (getpid() == server_pid && count >= 11 &&
+        memcmp(bytes, "{\"Control\":", 11) == 0 &&
+        memmem(bytes, count, "\"Cancelled\"", 11) != NULL &&
         access(getenv("MCP_CONSOLE_TEST_COMPLETION_ARMED"), F_OK) == 0 &&
         !atomic_exchange(&cancelling, true)) {
-        // Cancellation has left lifecycle admission. Keep the evaluator in
-        // resolver cleanup until restart contends on the worker mutex. This
-        // also guarantees a Linux futex wake at the eventual worker unlock.
+        // Cancellation has left lifecycle admission. Withhold its broker frame
+        // until restart contends on the old evaluator's worker mutex.
         select_worker_mutex(atomic_load(&waiting_mutex));
         await_release("MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE");
     }
-    return kill(-group, number);
+#ifdef __APPLE__
+    return write(descriptor, bytes, count);
+#else
+    return native_write(descriptor, bytes, count);
+#endif
 }
 
 static void after_unlock(uintptr_t mutex) {
-    if (getpid() != server_pid || !initial_evaluator ||
+    if (getpid() != server_pid ||
         mutex != atomic_load(&contended_mutex) || atomic_exchange(&paused, true)) return;
     notify("MCP_CONSOLE_TEST_COMPLETION_UNLOCKED");
     await_release("MCP_CONSOLE_TEST_COMPLETION_RELEASE");
@@ -149,14 +142,14 @@ static int observe_cond_timedwait_relative(pthread_cond_t *condition, pthread_mu
         (const void *)(uintptr_t)&replacee,                                    \
     };
 
-DYLD_INTERPOSE(observe_fork, fork)
-DYLD_INTERPOSE(observe_killpg, killpg)
+DYLD_INTERPOSE(observe_write, write)
 DYLD_INTERPOSE(observe_mutex_lock, pthread_mutex_lock)
 DYLD_INTERPOSE(observe_mutex_unlock, pthread_mutex_unlock)
 DYLD_INTERPOSE(observe_cond_timedwait_relative, pthread_cond_timedwait_relative_np)
 #else
-pid_t fork(void) { return observe_fork(); }
-int killpg(pid_t group, int number) { return observe_killpg(group, number); }
+ssize_t write(int descriptor, const void *bytes, size_t count) {
+    return observe_write(descriptor, bytes, count);
+}
 
 long syscall(long number, ...) {
     // Forward libc's six argument slots, as in the relay queue checkpoint.

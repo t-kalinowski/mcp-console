@@ -2,7 +2,6 @@
 
 import select
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -24,6 +23,7 @@ from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
+from support.resolvers import resolver_fixture_directory
 from support.suites import run_this_suite
 
 
@@ -93,8 +93,7 @@ def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "restart-stdin-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -120,8 +119,7 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "restart-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -278,8 +276,7 @@ def test_controlled_restart_requirement_failure_preserves_old_worker(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "unused-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])

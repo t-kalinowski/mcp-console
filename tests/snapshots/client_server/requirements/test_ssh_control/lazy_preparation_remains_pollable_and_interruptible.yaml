@@ -29,8 +29,7 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [failed to check R package resolver version with exit status: 130: ]
+      text: "[dependency resolution interrupted]"
   isError: true
 ---
 send:

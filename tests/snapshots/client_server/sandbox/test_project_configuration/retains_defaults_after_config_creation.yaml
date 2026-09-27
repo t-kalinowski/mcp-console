@@ -16,8 +16,11 @@ send:
     assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
     assert (os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") == "1") == configured
     _ = (Path(os.environ["TMPDIR"]) / "private").write_text("private storage")
-    _ = (host / "CLI cache" / "persistent").write_text("CLI grant")
-    for name, allowed in (("output café 雪", configured), ("neighbor", False)):
+    for name, allowed in (
+        ("output café 雪", configured),
+        ("cache", configured),
+        ("../neighbor", False),
+    ):
         try:
             _ = (host / name / "created").write_text("project grant")
         except OSError as error:
@@ -37,7 +40,7 @@ send:
         pass
     else:
         raise AssertionError("direct network unexpectedly allowed")
-    os.chdir(host / "CLI cache")
+    os.chdir(host / "cache")
     print("captured grants, proxy selection, and restricted network verified")
 result:
   content:
@@ -72,8 +75,11 @@ send:
     assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
     assert (os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") == "1") == configured
     _ = (Path(os.environ["TMPDIR"]) / "private").write_text("private storage")
-    _ = (host / "CLI cache" / "persistent").write_text("CLI grant")
-    for name, allowed in (("output café 雪", configured), ("neighbor", False)):
+    for name, allowed in (
+        ("output café 雪", configured),
+        ("cache", configured),
+        ("../neighbor", False),
+    ):
         try:
             _ = (host / name / "created").write_text("project grant")
         except OSError as error:
@@ -93,7 +99,7 @@ send:
         pass
     else:
         raise AssertionError("direct network unexpectedly allowed")
-    os.chdir(host / "CLI cache")
+    os.chdir(host / "cache")
     print("captured grants, proxy selection, and restricted network verified")
 result:
   content:
@@ -130,8 +136,11 @@ send:
     assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
     assert (os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") == "1") == configured
     _ = (Path(os.environ["TMPDIR"]) / "private").write_text("private storage")
-    _ = (host / "CLI cache" / "persistent").write_text("CLI grant")
-    for name, allowed in (("output café 雪", configured), ("neighbor", False)):
+    for name, allowed in (
+        ("output café 雪", configured),
+        ("cache", configured),
+        ("../neighbor", False),
+    ):
         try:
             _ = (host / name / "created").write_text("project grant")
         except OSError as error:
@@ -151,7 +160,7 @@ send:
         pass
     else:
         raise AssertionError("direct network unexpectedly allowed")
-    os.chdir(host / "CLI cache")
+    os.chdir(host / "cache")
     print("captured grants, proxy selection, and restricted network verified")
 result:
   content:
@@ -189,8 +198,11 @@ send:
     assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
     assert (os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") == "1") == configured
     _ = (Path(os.environ["TMPDIR"]) / "private").write_text("private storage")
-    _ = (host / "CLI cache" / "persistent").write_text("CLI grant")
-    for name, allowed in (("output café 雪", configured), ("neighbor", False)):
+    for name, allowed in (
+        ("output café 雪", configured),
+        ("cache", configured),
+        ("../neighbor", False),
+    ):
         try:
             _ = (host / name / "created").write_text("project grant")
         except OSError as error:
@@ -210,7 +222,7 @@ send:
         pass
     else:
         raise AssertionError("direct network unexpectedly allowed")
-    os.chdir(host / "CLI cache")
+    os.chdir(host / "cache")
     print("captured grants, proxy selection, and restricted network verified")
 result:
   content:

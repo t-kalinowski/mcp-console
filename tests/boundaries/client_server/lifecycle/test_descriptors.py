@@ -92,10 +92,11 @@ def descriptor_entry(
                     "isError": False,
                 }, result
                 launchers = child_process_identities(server)
-                assert len(launchers) == 1, launchers
-                assert descriptor not in process_file_descriptors(launchers[0]), (
-                    "unlisted server descriptor remained open in the relay launcher"
-                )
+                assert len(launchers) == 2, launchers
+                for launcher in launchers:
+                    assert descriptor not in process_file_descriptors(launcher), (
+                        "unlisted server descriptor remained open in a worker launcher or resolver broker"
+                    )
                 transcript = client.finish()
                 passed = True
             finally:

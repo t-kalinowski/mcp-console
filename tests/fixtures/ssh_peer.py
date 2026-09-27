@@ -26,7 +26,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 3, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 4, "build": bootstrap["Open"]["build"]}})
     preparation_frame(
         {
             "Completed": {
@@ -34,7 +34,12 @@ if "Open" in bootstrap:
                 "result": {
                     "Ok": {
                         "managed": False,
+                        "direct_uv": False,
                         "selections": {"r_home": None, "python": None},
+                        "runtime": None,
+                        "python": None,
+                        "protected": [],
+                        "extension_directory": None,
                     }
                 },
                 "control": None,
@@ -43,7 +48,7 @@ if "Open" in bootstrap:
         }
     )
     length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
-    assert json.loads(sys.stdin.buffer.read(length)) == "Close"
+    assert "Close" in json.loads(sys.stdin.buffer.read(length))
     preparation_frame("Closed")
     sys.exit(0)
 with log.open("a") as output:

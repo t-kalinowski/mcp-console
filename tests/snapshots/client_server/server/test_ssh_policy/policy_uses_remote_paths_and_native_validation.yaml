@@ -13,15 +13,15 @@ send:
     suppressWarnings(stopifnot(
       writable("results/value"),
       writable("cli/value"),
-      !writable("denied/value"),
-      !writable("workspace-value")
+      writable("workspace-value"),
+      !writable("../outside-workspace")
     ))
-    cat("remote relative and CLI grants verified\n")
+    cat("remote workspace grant verified\n")
 result:
   content:
     - type: text
       text: |
-        remote relative and CLI grants verified
+        remote workspace grant verified
   isError: false
 ---
 send:

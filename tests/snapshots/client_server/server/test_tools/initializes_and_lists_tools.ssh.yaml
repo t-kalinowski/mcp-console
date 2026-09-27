@@ -59,25 +59,27 @@ result:
 
         Evaluated code uses the native ":workspace" profile: it can edit files
         beneath the fixed launch workspace, write in the worker's private
-        temporary directory and to explicitly allowed paths, and cannot directly
-        access the network. The workspace's .git, .agents, .codex, and .claude
-        paths are readable and protected from writes by default. Explicit native
-        rules can override these defaults or restrict reads. Dependency
-        resolution, when available, runs outside the sandbox and may execute
-        installation or build code; use only trusted dependencies.
+        temporary directory, and cannot directly access the network. The
+        workspace's .git, .agents, .codex, and .claude paths, resolver storage,
+        and Console's installation are protected from writes. Dependency
+        preparation, when available, runs in a separate native resolver sandbox.
+        Package code can write only to Console-owned resolver storage. Package
+        downloads use a managed proxy restricted to trusted destinations;
+        installer coordination permits loopback sockets (including host loopback
+        services and DNS on macOS). Prepared artifacts remain untrusted and are
+        read-only to the worker.
 
 
         Execution target:
         {"transport":{"kind":"ssh","host":"console-test"},"workspace":"<ssh-test>/remote
         workspace","provider":"native","inner_native_runner":true}. Dependency
         capability is discovered there. When available, managed defaults and
-        requested R, Python, and DuckDB dependencies are prepared outside the
-        worker sandbox with the remote account's trusted setup permissions; bare
-        runtimes require preinstalled packages. Records and returned images are
-        saved on the controller beneath its existing project .agents/console
-        directory or its Console home directory. Files created by code remain
-        remote. The source-only Quarto export does not reproduce the remote
-        filesystem.
+        requested R, Python, and DuckDB dependencies are prepared through the
+        execution host's resolver broker; bare runtimes require preinstalled
+        packages. Records and returned images are saved on the controller
+        beneath its existing project .agents/console directory or its Console
+        home directory. Files created by code remain remote. The source-only
+        Quarto export does not reproduce the remote filesystem.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -157,7 +159,7 @@ result:
           control:
             description: |-
               Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-              SIGINT from the active host resolver or live worker and preserves in-memory state. After
+              interruption of active preparation or SIGINT from the live worker and preserves in-memory state. After
               successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
               earlier evaluation or attempting an optional following cell; the cell is not run if the
               interrupted evaluation remains active. When `requirements` is available, restart resolves

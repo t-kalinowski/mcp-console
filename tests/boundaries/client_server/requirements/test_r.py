@@ -24,6 +24,8 @@ from support.resolvers import (
     ir_requirements,
     ir_run_records,
     recording_ir_environment,
+    resolver_fixture_directory,
+    resolver_fixture_arguments,
 )
 from support.suites import run_this_suite
 
@@ -42,8 +44,7 @@ def test_rejects_unsupported_ir_version(
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
 
-    with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary).resolve()
+    with resolver_fixture_directory(binary, execution) as workspace:
         fake_bin = workspace / "bin"
         fake_bin.mkdir()
         fake_ir = fake_bin / "ir"
@@ -56,7 +57,7 @@ def test_rejects_unsupported_ir_version(
                   printf 'ir 0.3.0\n'
                   exit 0
                 fi
-                printf 'started\n' > "$MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"
+                printf 'started\n' > "$MCP_CONSOLE_TEST_UNSUPPORTED_IR_RUN_MARKER"
                 exit 97
                 """),
             encoding="utf-8",
@@ -66,14 +67,15 @@ def test_rejects_unsupported_ir_version(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         run_marker = workspace / "unsupported-ir-ran"
-        environment["MCP_CONSOLE_UNSUPPORTED_IR_RUN_MARKER"] = str(run_marker)
+        environment["MCP_CONSOLE_TEST_UNSUPPORTED_IR_RUN_MARKER"] = str(run_marker)
         zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                "--worker", str(zod), *resolver_fixture_arguments(environment)
+            ),
             environment,
-            current_directory=workspace,
         )
         client.initialize_and_list_tools()
         client.send(
@@ -94,8 +96,8 @@ def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Tra
     environment["RETICULATE_PYTHON"] = ""
     environment.pop("IR_NO_LOCAL_SOURCES", None)
 
-    with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary).resolve()
+    with resolver_fixture_directory(binary, execution) as workspace:
+        workspace = workspace.resolve()
         fixture = Path(__file__).resolve().parents[3] / "fixtures" / "r_install_escape"
         package = workspace / "package"
         shutil.copytree(fixture, package)
@@ -103,13 +105,12 @@ def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Tra
         (package / "inst" / "nonce").write_text(str(workspace), encoding="utf-8")
 
         install_marker = workspace / "package-configure-ran"
-        environment["MCP_CONSOLE_R_INSTALL_MARKER"] = str(install_marker)
+        environment["MCP_CONSOLE_TEST_R_INSTALL_MARKER"] = str(install_marker)
 
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
-            current_directory=workspace,
         )
         client.initialize_and_list_tools()
         reference = f"local::{package}?reinstall&nocache"
@@ -189,7 +190,7 @@ def test_prepares_with_empty_stdin_then_restarts(
     with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["praise"]})
-        assert last_result_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         client.send(stdin="", requirements={"r": ["praise"]})
         assert last_result_text(client) == "[prepared]"
         client.send(control="restart", requirements={"r": ["praise"]})
@@ -363,8 +364,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
     execution: Execution,
 ) -> Transcript:
     requirement = "mcpconsolepreparationfixture"
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "py-yaml12"
         )
@@ -387,7 +387,11 @@ def test_failed_mixed_preparation_retains_live_python_activation(
         environment["MCP_CONSOLE_TEST_IR_REQUIREMENT"] = requirement
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(candidate)
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -499,9 +503,12 @@ def test_failed_late_mixed_preparation_preserves_worker(
 def test_evaluates_with_default_managed_r(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         workspace = Path(temporary)
-        environment, record = recording_ir_environment(workspace)
+        environment, record = recording_ir_environment(fixtures)
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = os.pathsep.join(
@@ -510,7 +517,7 @@ def test_evaluates_with_default_managed_r(
 
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
             current_directory=workspace,
         )
@@ -567,10 +574,16 @@ def test_evaluates_with_default_managed_r(
 def test_prepares_initial_r_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
     initial_r = "praise"
     candidate_r = "zeallot"
-    with tempfile.TemporaryDirectory() as temporary:
+    invalid_r = "not a valid requirement !!!"
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
+        # Keep the failed-candidate checkpoint independent of pak's optional
+        # packages in the host installation. Successful resolutions use real ir.
+        environment, _ = recording_ir_environment(fixtures, fail_requirement=invalid_r)
         workspace = Path(temporary)
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
@@ -581,7 +594,7 @@ def test_prepares_initial_r_requirements(
 
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
             current_directory=workspace,
         )
@@ -591,20 +604,16 @@ def test_prepares_initial_r_requirements(
         )
         assert last_result_text(client) == "[prepared]"
 
-        invalid_r = "not a valid requirement !!!"
         client.send(
             requirements={"r": [invalid_r]},
         )
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         error = result["content"][0]["text"]
-        assert error.startswith(
-            "R package resolution failed with exit status: 1: Error:"
+        assert error == (
+            "R package resolution failed with exit status: 1: "
+            f"synthetic `ir` failure for {invalid_r}"
         ), error
-        assert f"Cannot parse package: {invalid_r}." in error, error
-        assert error.endswith("Execution halted\nir: dependency resolution failed"), (
-            error
-        )
 
         invalid_python = "example @ https://example.invalid/example.whl"
         client.send(

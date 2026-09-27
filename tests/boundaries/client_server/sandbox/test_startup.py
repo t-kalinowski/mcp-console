@@ -21,6 +21,7 @@ from support.macos import (
     darwin_child_process_identities,
 )
 from support.records import Transcript
+from support.processes import worker_launcher_identities
 from support.requirements import (
     MACOS_SANDBOX,
     NATIVE_FIXTURES,
@@ -77,7 +78,7 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
                 ],
                 "isError": True,
             }, result
-            assert darwin_child_process_identities(server) == ()
+            assert worker_launcher_identities(server, binary) == ()
 
             temporary_parent.unlink()
             temporary_parent.mkdir()
@@ -127,8 +128,8 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             waiting = client.start_send(r="echo echo")
             manager_started.wait("manager startup")
 
-            (manager,) = darwin_child_process_identities(
-                capture_darwin_process_identity(client.process.pid)
+            (manager,) = worker_launcher_identities(
+                capture_darwin_process_identity(client.process.pid), binary
             )
             (root,) = darwin_child_process_identities(manager)
             manager_pid = manager[0]

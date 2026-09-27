@@ -30,7 +30,7 @@ from support.events import Events
 from support.execution import SANDBOXED, Execution
 from support.processes import (
     capture_process_identity,
-    child_process_identities,
+    worker_launcher_identities,
     host_process_id,
     process_group_exists,
     stop_process_group,
@@ -564,6 +564,7 @@ def wait_for_stopped_worker(
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
     execution: Execution,
+    binary: Path,
 ) -> tuple[Path, int, int]:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while True:
@@ -587,8 +588,8 @@ def wait_for_stopped_worker(
                     # The native stage now execs the relay as its group leader.
                     # The server's direct child is the runner outside that group.
                     assert parent_id == process_group
-                    (supervisor,) = child_process_identities(
-                        capture_process_identity(client.process.pid)
+                    (supervisor,) = worker_launcher_identities(
+                        capture_process_identity(client.process.pid), binary
                     )
                     expected_parent = supervisor[0]
                 else:

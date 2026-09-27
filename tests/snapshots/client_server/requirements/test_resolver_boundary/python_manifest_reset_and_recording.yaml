@@ -1,0 +1,160 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-managed.yaml
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - six
+  python: import six; retained = 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  stdin: |
+    preserved input
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - mcp-console-no-such-resolver-package==0
+  stdin: |
+    rejected input
+  python: raise AssertionError('failed candidate ran')
+result:
+  content:
+    - type: text
+      text: |-
+        [managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.14 (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "mcp-console-no-such-resolver-package==0",
+            "six"
+          ]
+        }
+        uv output:
+        × No solution found when resolving tool dependencies:
+          ╰─▶ Because mcp-console-no-such-resolver-package was
+              not found in the package registry and you require
+              mcp-console-no-such-resolver-package==0, we can conclude that your
+              requirements are unsatisfiable.]
+  isError: true
+---
+send:
+  python: >-
+    assert retained == 42; assert input() == 'preserved input';
+    print('preserved')
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: ""]
+        preserved
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: reset
+  python: assert 'retained' not in globals(); print('reset')
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        reset
+        [done]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false

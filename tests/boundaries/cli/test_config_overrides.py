@@ -75,15 +75,28 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         for command in ("serve", "sandbox"):
             arguments = [*overrides[:2], command, *overrides[2:]]
             if command == "serve":
-                with McpClient(
-                    binary,
-                    (*arguments, "--worker", "unused-worker"),
-                    current_directory=workspace,
-                    environment=environment,
-                ) as client:
-                    client.initialize_and_list_tools()
-                    _, stderr = client.finish_with_standard_error()
-                    assert stderr == "", stderr
+                process = subprocess.Popen(
+                    [binary, *arguments, "--worker", "unused-worker"],
+                    cwd=workspace,
+                    env=environment,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                try:
+                    assert process.wait(timeout=10) == 1
+                    stdout, stderr = process.communicate()
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.wait()
+                assert stdout == "", stdout
+                assert stderr == (
+                    "managed resolver storage requires the default, :workspace, "
+                    "or :read-only worker filesystem policy without custom "
+                    "filesystem rules or native extensions\n"
+                ), stderr
             else:
                 result = subprocess.run(
                     [binary, *arguments, "--", "/usr/bin/true"],
@@ -116,6 +129,7 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
             records.append(
                 {
                     "command": command,
+                    **({"error": stderr} if command == "serve" else {}),
                     "overrides": overrides,
                     "environment": payloads[-1]["environment"],
                     "workspace_options": payloads[-1]["workspace_options"],

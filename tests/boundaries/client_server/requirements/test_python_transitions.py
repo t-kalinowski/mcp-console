@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -12,6 +11,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.resolvers import recording_uv_environment, uv_tool_run_requirements
+from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
 from support.suites import run_this_suite
 
 
@@ -98,12 +98,15 @@ def test_owns_managed_python_transitions(
 def test_preserves_preparation_restoration_and_live_noops(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
         environment, record = recording_uv_environment(
-            directory, fail_requirement="py-yaml12"
+            resolver_fixtures, fail_requirement="py-yaml12"
         )
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        ) as client:
             client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""

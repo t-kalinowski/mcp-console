@@ -8,13 +8,18 @@
 #include <unistd.h>
 
 static atomic_uint fork_count = 0;
+static pid_t owner;
 
 static int is_server(void) {
-    const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
-    return server != NULL && strtol(server, NULL, 10) == getpid();
+    return owner == getpid();
 }
 
 __attribute__((constructor)) static void prevent_child_injection(void) {
+    const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
+    if ((server != NULL && strtol(server, NULL, 10) == getpid()) ||
+        getenv("MCP_CONSOLE_TEST_SPAWN_WORKLOAD") != NULL) {
+        owner = getpid();
+    }
     if (is_server()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
         unsetenv("LD_PRELOAD");
@@ -25,7 +30,8 @@ static pid_t checkpoint_fork(void) {
     const char *armed = getenv("MCP_CONSOLE_TEST_SPAWN_ARMED");
     const char *ordinal = getenv("MCP_CONSOLE_TEST_SPAWN_ORDINAL");
     if (is_server() && armed != NULL && access(armed, F_OK) == 0 &&
-        atomic_fetch_add(&fork_count, 1) + 1 == strtoul(ordinal, NULL, 10)) {
+        atomic_fetch_add(&fork_count, 1) + 1 == strtoul(ordinal, NULL, 10) &&
+        unlink(armed) == 0) {
         int started = open(getenv("MCP_CONSOLE_TEST_SPAWN_STARTED"), O_WRONLY);
         int release = open(getenv("MCP_CONSOLE_TEST_SPAWN_RELEASE"), O_RDONLY);
         if (started < 0 || release < 0 || write(started, "1", 1) != 1) {

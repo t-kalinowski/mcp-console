@@ -1,9 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
 import re
+import os
+import select
 import signal
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -12,12 +13,7 @@ from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.processes import (
-    capture_process_identity,
-    child_process_identities,
-    live_processes,
-)
-from support.normalization import code, normalize_python_resolution_error
+from support.normalization import code, normalize_python_traceback_paths
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import (
@@ -26,6 +22,7 @@ from support.resolvers import (
     recording_uv_environment,
     uv_tool_run_requirements,
 )
+from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
 from support.suites import run_this_suite
 
 
@@ -34,10 +31,13 @@ def test_rejects_automatic_resolution_from_background_thread(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
-        environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+        environment, record = recording_uv_environment(resolver_fixtures)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -85,10 +85,13 @@ def test_rejects_automatic_resolution_from_background_thread(
 def test_rejects_automatic_resolution_from_fork_child(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
-        environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+        environment, record = recording_uv_environment(resolver_fixtures)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -168,14 +171,17 @@ def test_times_out_and_polls_automatic_python_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
         environment, started, release = checkpoint_uv_environment(
-            directory,
+            resolver_fixtures,
             "py-yaml12",
         )
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         resolver_released = False
         finished = False
         try:
@@ -228,18 +234,25 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
     execution: Execution,
 ) -> Transcript:
     requirement = "mcp_console_blocked_automatic_import"
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
         environment, started, release = checkpoint_uv_environment(
-            directory,
+            resolver_fixtures,
             requirement,
         )
+        lifetime = resolver_fixtures / "uv-lifetime"
+        os.mkfifo(lifetime)
+        reader = os.open(lifetime, os.O_RDONLY | os.O_NONBLOCK)
+        environment["MCP_CONSOLE_TEST_UV_LIFETIME"] = str(lifetime)
         environment.pop("RETICULATE_PYTHON", None)
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(
+                binary,
+                execution.serve(*resolver_fixture_arguments(environment)),
+                environment,
+            )
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -248,8 +261,6 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             client.initialize_and_list_tools()
             client.send(python="None")
             assert last_result_text(client) == "[done]"
-            server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
             # fmt: python
             python = code(f"""
                 import importlib
@@ -263,29 +274,25 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             client.send(python=python, timeout_ms=0)
             assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic Python resolver")
-            resolver = [
-                child
-                for child in child_process_identities(server)
-                if child not in existing_children
-            ]
-            assert len(resolver) == 1, resolver
             interrupt = client.start_send(control="interrupt", timeout_ms=30_000)
             client.receive(interrupt)
             # Keep the FIFO blocked until interruption has reaped this resolver.
-            assert live_processes(resolver) == [], (
-                "interrupt did not reap the automatic Python resolver"
+            assert select.select([reader], [], [], 10)[0], (
+                "Python resolver did not retire"
+            )
+            assert os.read(reader, 1) == b"", (
+                "Python resolver retained its lifetime pipe"
             )
             error = entry_result_text(interrupt)
             for expected in (
                 "ModuleNotFoundError",
                 requirement,
-                "managed Python resolution",
-                "KeyboardInterrupt",
+                "dependency resolution interrupted",
                 "requirements.python",
             ):
                 assert expected in error, (expected, error)
             interrupt["result"]["content"][0]["text"] = (
-                normalize_python_resolution_error(error)
+                normalize_python_traceback_paths(error)
             )
 
             client.send(
@@ -300,6 +307,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             passed = True
             return transcript
         finally:
+            os.close(reader)
             release.release()
             started.close()
             release.close()
@@ -312,19 +320,21 @@ def test_restart_discards_unactivated_automatic_python_candidate(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
         replacement_requirement = "mcp-console-restart-fixture"
         environment, uv_started, uv_release = checkpoint_uv_environment(
-            directory,
+            resolver_fixtures,
             replacement_requirement,
             reuse_resolved_python_for=("py-yaml12", replacement_requirement),
             provide_python_module=("py-yaml12", "yaml12"),
         )
         environment.pop("RETICULATE_PYTHON", None)
-        environment["TMPDIR"] = temporary
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:

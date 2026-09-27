@@ -16,7 +16,11 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import PROCESS_EVENTS, requires
-from support.resolvers import record_resolved_r_library
+from support.resolvers import (
+    record_resolved_r_library,
+    resolver_fixture_arguments,
+    resolver_fixture_directory,
+)
 from support.suites import run_this_suite
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
@@ -322,14 +326,19 @@ def test_records_tool_calls_and_images(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         workspace = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment["RETICULATE_PYTHON"] = ""
-        record_resolved_r_library(environment, workspace)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
             current_directory=workspace,
             umask=0,

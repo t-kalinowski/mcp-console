@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -80,7 +79,7 @@ def test_incompatible_preparation_peer_fails_before_mcp_ready(binary):
                 assert client.process.wait(timeout=12) != 0
                 assert not client.stdout.read()
                 errors = client.stderr.read()
-                assert "incompatible SSH preparation" in errors, errors
+                assert "incompatible resolver preparation" in errors, errors
                 assert not trap.exists()
                 return [{"stderr": errors}]
 

@@ -1,5 +1,5 @@
 #!/bin/sh
 
 set -eu
-: "${MCP_CONSOLE_R_INSTALL_MARKER:?}"
-printf 'configured\n' > "$MCP_CONSOLE_R_INSTALL_MARKER"
+: "${MCP_CONSOLE_TEST_R_INSTALL_MARKER:?}"
+printf 'configured\n' > "$MCP_CONSOLE_TEST_R_INSTALL_MARKER"

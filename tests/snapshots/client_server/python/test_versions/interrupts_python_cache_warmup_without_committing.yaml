@@ -18,7 +18,7 @@ send:
 result:
   content:
     - type: text
-      text: managed Python cache warmup interrupted
+      text: dependency resolution interrupted
   isError: true
 ---
 send:
@@ -29,7 +29,7 @@ result:
     - type: text
       text: |-
 
-        [running; poll with an empty send]
+        [idle]
   isError: false
 ---
 send: {}

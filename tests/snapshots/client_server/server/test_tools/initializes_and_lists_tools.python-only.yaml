@@ -25,9 +25,10 @@ result:
     - name: send
       description: >-
         Persistent local Python workbench. State persists across calls. R and
-        SQL cells, requirement changes, and automatic package installation are
+        SQL cells, live package changes, and automatic installation are
         unavailable in this session. Python uses the environment selected at
         server startup; restart resets objects and retains that environment.
+        Requirement preparation is unavailable.
 
 
         Send one complete `python` cell per call. Code-bearing calls must be
@@ -54,10 +55,13 @@ result:
 
 
         Evaluated code can read host files, cannot directly access the network,
-        and can write in the worker's private temporary directory and to paths
-        explicitly allowed by the launcher. Dependency resolution, when
-        available, runs outside the sandbox and may execute installation or
-        build code; use only trusted dependencies.
+        and can write only in the worker's private temporary directory.
+        Dependency preparation, when available, runs in a separate native
+        resolver sandbox. Package code can write only to Console-owned resolver
+        storage. Package downloads use a managed proxy restricted to trusted
+        destinations; installer coordination permits loopback sockets (including
+        host loopback services and DNS on macOS). Prepared artifacts remain
+        untrusted and are read-only to the worker.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

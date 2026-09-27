@@ -15,8 +15,8 @@ result:
   content:
     - type: text
       text: >-
-        [SSH preparation retirement is unconfirmed: truncated SSH frame length:
-        failed to fill whole buffer]
+        [resolver preparation retirement is unconfirmed: truncated resolver
+        frame length: failed to fill whole buffer]
   isError: true
 ---
 send:
@@ -27,9 +27,9 @@ result:
     - type: text
       text: |-
         [starting new worker]
-        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame length: failed to fill whole buffer]
+        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated resolver frame length: failed to fill whole buffer]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  SSH preparation owner stopped
+  resolver preparation owner stopped

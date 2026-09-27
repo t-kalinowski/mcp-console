@@ -17,6 +17,7 @@ from support.processes import (
     child_process_identities,
     kill_processes,
     live_processes,
+    worker_launcher_identities,
 )
 from support.normalization import code
 from support.records import Transcript
@@ -26,7 +27,7 @@ from support.suites import run_this_suite
 
 def _direct_generation(client: McpClient, binary: Path) -> tuple[ProcessIdentity, ...]:
     server = capture_process_identity(client.process.pid)
-    children = child_process_identities(server)
+    children = worker_launcher_identities(server, binary)
     assert len(children) == 1, children
     relay = children[0]
     command = subprocess.run(

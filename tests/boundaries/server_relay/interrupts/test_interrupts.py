@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -30,6 +29,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
+from support.resolvers import resolver_fixture_directory
 from support.suites import run_this_suite
 
 
@@ -77,14 +77,14 @@ def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     return transcript
 
 
-@executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+# Direct mode exposes package SIGINT handlers. Native retirement acknowledgment
+# is covered by requirements/test_resolver_boundary with a stopped launcher.
+@executions(DIRECT)
 def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "unused-interrupted-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -147,7 +147,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
                 for content in result["content"]
                 if content["type"] == "text"
             )
-            assert "R package resolution failed with exit status: 130" in error, error
+            assert "dependency resolution interrupted" in error, error
             assert _tool_text(client.send()) == "\n[idle]"
 
             before_cleanup = client._read_open_capture(capture)
@@ -285,8 +285,7 @@ def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "interrupt-success-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -351,8 +350,7 @@ def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_ce
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "interrupt-failure-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -721,8 +719,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         library = root / "cancelled-interrupt-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])

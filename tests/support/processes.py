@@ -57,6 +57,23 @@ def stop_process(process: subprocess.Popen[str]) -> None:
 
 ProcessIdentity = tuple[int, int, int]
 
+
+def worker_launcher_identities(
+    server: ProcessIdentity, binary: Path
+) -> tuple[ProcessIdentity, ...]:
+    """Exclude the retained broker, while preserving exact worker-tree assertions."""
+    children = child_process_identities(server)
+    brokers = []
+    for child in children:
+        command = subprocess.check_output(
+            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])], text=True
+        ).strip()
+        if command == f"{binary} resolver":
+            brokers.append(child)
+    assert len(brokers) == 1, (children, brokers)
+    return tuple(child for child in children if child != brokers[0])
+
+
 if sys.platform == "darwin":
     from support.macos import (
         current_darwin_process_identity as current_process_identity,

@@ -89,8 +89,13 @@ def main() -> None:
 
     block = os.environ.get("MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT")
     if block is not None and block in arguments:
+        lifetime = os.environ.get("MCP_CONSOLE_TEST_IR_LIFETIME")
+        # The controller observes EOF only after this blocked process retires.
+        retained = open(lifetime, "wb", buffering=0) if lifetime else None
         notify(os.environ["MCP_CONSOLE_TEST_IR_STARTED"])
         wait(os.environ["MCP_CONSOLE_TEST_IR_RELEASE"])
+        if retained:
+            retained.close()
 
     if library := fixture_library(arguments):
         print(library, end="")

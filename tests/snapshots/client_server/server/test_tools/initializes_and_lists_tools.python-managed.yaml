@@ -1,0 +1,171 @@
+---
+input:
+  method: initialize
+  params:
+    protocolVersion: 2025-11-25
+    capabilities: {}
+    clientInfo:
+      name: acceptance-test
+      version: 1.0.0
+result:
+  protocolVersion: 2025-11-25
+  capabilities:
+    tools: {}
+  serverInfo:
+    name: mcp-console
+    version: 0.0.4
+---
+input:
+  method: notifications/initialized
+---
+input:
+  method: tools/list
+result:
+  tools:
+    - name: send
+      description: >-
+        Persistent local Python workbench. State persists across calls. R and
+        SQL cells, live package changes, and automatic installation are
+        unavailable in this session. Explicit Python requirements prepare
+        packages before first use or with control: restart. The complete
+        candidate is resolved and inspected before retiring the current worker.
+        Failed preparation preserves the accepted environment, objects and
+        queued input. Changed requirements on a live worker need restart;
+        retained requirements are a no-op.
+
+
+        Send one complete `python` cell per call. Code-bearing calls must be
+        sequential; a control-only interrupt may overlap a pending `send`.
+        Inspect intermediate results before submitting dependent cells. Cells
+        are not transactional; changes made before an error may remain.
+
+
+        Omit code to poll, supply stdin, control the session, or prepare
+        requirements when available. If a response ends in `[running; poll with
+        an empty send]`, call `send` again without code or stdin; do not
+        resubmit the cell. Send `stdin` alone to answer an active prompt or
+        debugger. Field descriptions specify preparation, control, and timeout
+        ordering.
+
+
+        Each result has at most 8 KiB of UTF-8 text, including notices;
+        oversized output keeps its beginning and latest tail. Images have
+        separate limits. Retained raw-log paths are relative to the server's
+        launch directory for project recordings and absolute for home recordings
+        (both on the controller for remote targets). Full retained text requires
+        filesystem access there through existing tools; Console provides no
+        read/search interface.
+
+
+        Evaluated code can read host files, cannot directly access the network,
+        and can write only in the worker's private temporary directory.
+        Dependency preparation, when available, runs in a separate native
+        resolver sandbox. Package code can write only to Console-owned resolver
+        storage. Package downloads use a managed proxy restricted to trusted
+        destinations; installer coordination permits loopback sockets (including
+        host loopback services and DNS on macOS). Prepared artifacts remain
+        untrusted and are read-only to the worker.
+      inputSchema:
+        $schema: https://json-schema.org/draft/2020-12/schema
+        additionalProperties: false
+        type: object
+        properties:
+          python:
+            description: >-
+              One complete Python cell in persistent state. requirements.python can
+              prepare packages before first use or with control: restart, before this
+              cell executes in the replacement. Changed live requirements require
+              restart. Automatic installation, R integration and SQL are unavailable.
+            type:
+              - string
+              - "null"
+          control:
+            description: >-
+              interrupt signals the live worker or retires active preparation.
+              Requirements cannot accompany interrupt. restart prepares and inspects
+              any candidate before retiring the worker; preparation failure preserves
+              objects, retained requirements and queued input. On success, same-call
+              stdin and code go only to the replacement.
+            type: string
+            enum:
+              - interrupt
+              - restart
+          requirements:
+            description: >-
+              Inspect, add, replace, or reset the server's retained Python
+              declaration. Preparation is supported before first use or with control:
+              restart. Changed live requirements require restart. This declaration is
+              not an installed-package inventory.
+            type:
+              - object
+              - "null"
+            properties:
+              action:
+                description: |-
+                  get inspects the committed declaration without starting a worker or consuming output.
+                  add (default) accumulates requirements. set replaces all lists and Python constraints;
+                  omitted fields are empty, including when only action is supplied. reset restores startup
+                  defaults. get and reset reject payload fields. Changed set/reset with a live worker require
+                  control="restart"; the complete candidate resolves before the old worker is retired.
+                  add accepts up to 64 entries per language per call; set accepts the complete accumulated manifest.
+                type: string
+                enum:
+                  - get
+                  - add
+                  - set
+                  - reset
+              python_version:
+                description: |-
+                  Python version constraints, preserved by get and replaced as a whole by set. Add appends
+                  constraints; changing constraints with a live worker requires control="restart".
+                type: array
+                items:
+                  type: string
+              exclude_newer:
+                description: |-
+                  Python package publication cutoff accepted by uv, for example "2026-01-01". set clears an
+                  omitted or null cutoff; add preserves an omitted cutoff and cannot replace an existing one.
+                type:
+                  - string
+                  - "null"
+              python:
+                description: >-
+                  Named PEP 508 registry requirements, such as polars>=1 or scikit-learn.
+                  Prepare before first use or with control: restart. Paths, file URLs,
+                  editable requirements, direct references, local archives and local
+                  projects are rejected. Automatic import installation and live additions
+                  are unavailable without R.
+                type: array
+                items:
+                  type: string
+                  minLength: 1
+            additionalProperties: false
+          stdin:
+            description: >-
+              Input for an active read, prompt, or debugger. When responding to active
+              input, omit code and send stdin on its own. Its UTF-8 encoding is queued
+              exactly; no newline is added. Line-oriented input normally needs a
+              trailing `\n`. After interrupt, nonempty stdin is queued before the
+              100-millisecond grace and may be consumed while the earlier operation
+              unwinds. After restart, same-call stdin goes only to the replacement.
+              When sent with a cell, nonempty text is queued before code runs. Empty
+              text queues nothing. If output ends in [waiting for stdin], send the
+              requested input here. Unread text can satisfy later reads and is
+              discarded by restart.
+            type:
+              - string
+              - "null"
+          timeout_ms:
+            description: >-
+              Omit for normal calls and polls. Defaults to 60,000 milliseconds. This
+              limits the wait after cell dispatch or attachment to an active
+              evaluation and includes one automatic worker replacement attempt.
+              Reaching the timeout does not cancel execution or startup. Inline
+              control, interrupt grace, and restart happen before dispatch and may
+              make the complete call take longer. Use 0 for background execution, then
+              poll with an empty send. If a response ends with [running; poll with an
+              empty send] or [worker starting], poll without resubmitting the cell.
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 60000

@@ -367,7 +367,7 @@ def test_cleans_temporary_storage_after_startup_failure(
             """)
         (site / "sitecustomize.py").write_text(hook)
         arguments = (
-            execution.serve("--writable-root", str(root))
+            execution.serve("-c", "extends=:workspace")
             if execution == SANDBOXED
             else execution.serve()
         )
@@ -382,7 +382,7 @@ def test_cleans_temporary_storage_after_startup_failure(
             temporary = Path((root / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "startup failure deleted the environment"
-            return client.finish()
+            return client.finish()[3:]
 
 
 @executions(DIRECT)
@@ -643,7 +643,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             """)
         (site / "sitecustomize.py").write_text(hook)
         arguments = (
-            execution.serve("--writable-root", str(workspace))
+            execution.serve("-c", "extends=:workspace")
             if execution == SANDBOXED
             else execution.serve()
         )
@@ -655,7 +655,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
                 python="raise AssertionError('failed startup ran cell')"
             )
             assert result["isError"], result
-            records = client.finish()
+            records = client.finish()[3:]
             temporary = Path((workspace / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "failed startup removed selected environment"
@@ -943,6 +943,21 @@ def test_excludes_executable_directory_from_imports(
             "raise RuntimeError('imported executable directory')\n"
         )
         (venv / "bin/selected_package.py").write_text("value = -1\n")
+        # A copied executable has no symlink to its base installation. Supply
+        # that trusted read root explicitly; pyvenv.cfg cannot grant host reads.
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "resolver": {
+                        "readable_roots": [
+                            str(Path(sys.executable).resolve().parent.parent)
+                        ]
+                    }
+                }
+            )
+        )
         env = environment(venv / "bin")
         env.pop("PYTHONPATH", None)
         with McpClient(binary, execution.serve(), env, workspace) as client:

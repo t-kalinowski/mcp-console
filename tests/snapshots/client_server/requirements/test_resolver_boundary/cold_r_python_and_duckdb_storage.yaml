@@ -1,0 +1,67 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    r:
+      - praise
+    python:
+      - six
+    duckdb:
+      - httpfs
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: cat(normalizePath(find.package('praise')))
+result:
+  content:
+    - type: text
+      text: <resolver-payload>/r-library/praise
+  isError: false
+---
+send:
+  python: import six; retained = object(); retained_id = id(retained)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: LOAD httpfs; SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    r:
+      - mcpconsolenosuchpackage
+  python: raise AssertionError('failed preparation ran code')
+  stdin: |
+    must not be queued
+result:
+  content:
+    - type: text
+      text: "[R package resolution failed with exit status: 1: ! Optional package `pillar` is not available for pak.\n  Use `pak::pak_install_extra()` to install optional packages.\n  Use `options(pak.no_extra_messages = TRUE)` to suppress this message.\n\nℹ Loading metadata database\n✔ Loading metadata database ... done\n\n\r⸨             ⸩ Found  12  deps for  0/12  pkgs [⠋] Resolving standard (CRAN/Bi…\n⸨             ⸩ Found  12  deps for  0/12  pkgs [⠙] Resolving standard (CRAN/Bi…\nError: \n! error in pak subprocess\nCaused by error: \n! Could not solve package dependencies:\n* DBI: dependency conflict\n* arrow: dependency conflict\n* duckdb: dependency conflict\n* jsonlite: dependency conflict\n* mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.\n* nanoarrow: dependency conflict\n* pillar: dependency conflict\n* praise: dependency conflict\n* reticulate: dependency conflict\n* tibble: dependency conflict\n* tidyverse: dependency conflict\n* utf8: dependency conflict\n---\nBacktrace:\n1. global ir_resolve_main()\n2. global ir_resolve_refs(refs_in)\n3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)\n4. pak:::remote(function(...) { …\n5. err$throw(res$error)\n---\nSubprocess backtrace:\n1. base::withCallingHandlers(cli_message = function(msg) { …\n2. get(\"pkg_deps_internal\", asNamespace(\"pak\"))(...)\n3. pak:::pkg_deps_internal2(pkg, upgrade, dependencies)\n4. deps$stop_for_solution_error()\n5. private$plan$stop_for_solve_error()\n6. pkgdepends:::pkgplan_stop_for_solve_error(self, private)\n7. base::throw(new_error(\"Could not solve package dependencies:\\n\", msg, …\n8. | base::signalCondition(cond)\n9. global (function (e) …\nExecution halted\nir: dependency resolution failed]"
+  isError: true
+---
+send:
+  python: assert id(retained) == retained_id; print('preserved')
+result:
+  content:
+    - type: text
+      text: |
+        preserved
+  isError: false

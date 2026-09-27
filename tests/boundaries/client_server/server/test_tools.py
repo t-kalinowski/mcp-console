@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -111,6 +112,9 @@ def test_initializes_and_lists_tools(
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
         ),
+        "python-managed.yaml": _initializes_and_lists_tools(
+            binary, execution, python_only=True, python_managed=True
+        ),
     }
     if execution == SANDBOXED:
         companions["proxy.yaml"] = _initializes_and_lists_tools(
@@ -118,6 +122,9 @@ def test_initializes_and_lists_tools(
         )
         companions["workspace.yaml"] = _initializes_and_lists_tools(
             binary, execution, workspace_profile=True
+        )
+        companions["python-workspace.yaml"] = _initializes_and_lists_tools(
+            binary, execution, python_only=True, workspace_profile=True
         )
     else:
         companions["r-sql.yaml"] = _initializes_and_lists_tools(
@@ -138,6 +145,7 @@ def _initializes_and_lists_tools(
     *,
     bare: bool = False,
     python_only: bool = False,
+    python_managed: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
     ssh: bool = False,
@@ -154,6 +162,10 @@ def _initializes_and_lists_tools(
             python_bin = Path(library) / "bin"
             python_bin.mkdir()
             (python_bin / "python3").symlink_to(sys.executable)
+            if python_managed:
+                uv = shutil.which("uv")
+                assert uv is not None
+                (python_bin / "uv").symlink_to(uv)
             environment["PATH"] = str(python_bin)
             for name in (
                 "R_HOME",
@@ -214,7 +226,7 @@ def _initializes_and_lists_tools(
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
                 assert {"r", "sql"}.isdisjoint(send["inputSchema"]["properties"])
-            if bare or python_only:
+            if bare or (python_only and not python_managed):
                 assert send["inputSchema"]["properties"]["requirements"]["properties"][
                     "action"
                 ]["enum"] == ["get"]
@@ -230,7 +242,7 @@ def _initializes_and_lists_tools(
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
             requirement_properties = send_requirements["properties"]
-            assert requirement_properties.keys() == {
+            expected_properties = {
                 "action",
                 "duckdb",
                 "r",
@@ -238,6 +250,9 @@ def _initializes_and_lists_tools(
                 "python_version",
                 "exclude_newer",
             }
+            if python_managed:
+                expected_properties -= {"r", "duckdb"}
+            assert requirement_properties.keys() == expected_properties
             assert requirement_properties["action"]["enum"] == [
                 "get",
                 "add",
@@ -245,13 +260,16 @@ def _initializes_and_lists_tools(
                 "reset",
             ]
             for name in ("duckdb", "r", "python"):
+                if name not in expected_properties:
+                    continue
                 requirement = requirement_properties[name]
                 assert requirement["type"] == "array", requirement
                 assert "default" not in requirement, requirement
                 assert "maxItems" not in requirement, requirement
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
-            assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
+            if not python_managed:
+                assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
             return client.finish()
 
 
@@ -554,10 +572,9 @@ def test_bounds_argument_decoding_errors(
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         started = workspace / "worker-started"
-        roots = ("--writable-root", str(workspace)) if execution == SANDBOXED else ()
         with McpClient(
             binary,
-            execution.serve("--worker", str(zod), *roots),
+            execution.serve("--worker", str(zod)),
             {**os.environ, "MCP_CONSOLE_TEST_ZOD_STARTED": str(started)},
             current_directory=workspace,
         ) as client:
