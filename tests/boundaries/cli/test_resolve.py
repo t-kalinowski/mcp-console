@@ -41,7 +41,7 @@ esac
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env={**os.environ, "RETICULATE_UV": str(uv)},
+            env={**os.environ, "PATH": str(uv.parent)},
         )
         assert process.stdin is not None
         assert process.stdout is not None
