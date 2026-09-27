@@ -71,6 +71,8 @@ pub(crate) enum Operation {
     Python {
         requirements: PythonRequirementManifest,
         r: Option<ManagedR>,
+        // Only local live additions supply this; retain the v3 SSH frame.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         selected_python: Option<std::path::PathBuf>,
     },
     PythonVersion {

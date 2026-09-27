@@ -114,6 +114,7 @@ Oversized preparation requests are rejected before remote admission and leave th
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
 Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 3 is unchanged.
 Both require a matching Console package version.
+The optional `selected_python` field is used only by local live Python preparation; absent values default to no executable constraint and are omitted from SSH requests, preserving the existing v3 frame.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
 Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.

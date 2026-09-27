@@ -400,6 +400,9 @@ In a local managed sans-R session, an idle `action="add"` request can add a new 
 An exact retained requirement is a no-op.
 A different requirement for an already-declared distribution needs `control="restart"` and `action="set"`; the distribution name comes from the same PEP 508 parser used for request validation.
 This add-only rule does not promise that arbitrary package upgrades can be switched in a running interpreter.
+It compares requirement declarations, not installed versions: resolving a new distribution can select different versions of existing or transitive dependencies.
+Live preparation neither locks those versions nor unloads already-imported modules.
+Use explicit restart for upgrades or dependency changes that need fresh imports.
 The host resolves the complete candidate through the hidden resolver using the running environment's executable, then inspects the candidate and compares its `libpython` with the worker's active configuration.
 If DuckDB extensions are retained, the host prepares them against the candidate before activation.
 No candidate declaration appears in `action="get"` while this work is pending.

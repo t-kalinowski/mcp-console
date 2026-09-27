@@ -256,6 +256,9 @@ impl RequirementDelta {
         &self,
         environment: &Environment,
     ) -> Result<(), String> {
+        // This is declaration compatibility, not a resolved-version lock.
+        // The complete candidate may resolve different dependency versions;
+        // live activation does not promise arbitrary package hot-swapping.
         let retained = environment.declaration().python_manifest();
         let mut names = BTreeMap::new();
         for requirement in &retained.packages {
