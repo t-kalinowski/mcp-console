@@ -194,7 +194,34 @@ impl Client {
             .collect();
         let result = match resolver {
             super::super::RResolver::Discover => {
-                crate::resolver::resolve_r(requirements, on_started)
+                let existing = self
+                    .0
+                    .local_preparation
+                    .lock()
+                    .expect("local preparation lock")
+                    .clone();
+                let preparation = if let Some(existing) = existing {
+                    existing
+                } else {
+                    let opened = crate::resolver::preparation::Preparation::open_local(
+                        crate::resolver::preparation::Mode::Custom,
+                        &|handle| self.register_resolver_stop_handle(generation, handle),
+                    );
+                    self.clear_resolver_stop_handle(generation)
+                        .map_err(EnvironmentResolutionFailure::Operation)?;
+                    let (preparation, _) =
+                        opened.map_err(EnvironmentResolutionFailure::Operation)?;
+                    *self
+                        .0
+                        .local_preparation
+                        .lock()
+                        .expect("local preparation lock") = Some(preparation.clone());
+                    preparation
+                };
+                preparation.call(
+                    crate::resolver::preparation::Operation::ResolveRStandalone { requirements },
+                    on_started,
+                )
             }
             super::super::RResolver::Configured(configuration) => {
                 configuration.resolve_r(requirements, on_started)
@@ -263,11 +290,20 @@ impl Client {
             self.ensure_startup(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             let mut stop_handle = None;
-            let result = crate::resolver::execution::resolve_duckdb_extensions(
+            let local = self
+                .0
+                .local_preparation
+                .lock()
+                .expect("local preparation lock")
+                .clone();
+            let preparation = local.as_ref().or_else(|| {
                 self.0
                     .target
                     .as_ref()
-                    .and_then(crate::target_session::Session::ssh_preparation),
+                    .and_then(crate::target_session::Session::ssh_preparation)
+            });
+            let result = crate::resolver::execution::resolve_duckdb_extensions(
+                preparation,
                 managed_r,
                 extensions,
                 |handle| {

@@ -49,7 +49,7 @@ impl PythonEnvironment {
         let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
         Ok(Self::Managed {
             selected,
-            resolver: crate::resolver::execution::PythonConfiguration::Local(resolver),
+            resolver: crate::resolver::execution::PythonConfiguration::Direct(resolver),
         })
     }
 

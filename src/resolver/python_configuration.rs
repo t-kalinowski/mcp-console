@@ -69,6 +69,10 @@ impl ManagedPythonResolverConfiguration {
         self.uv.is_some()
     }
 
+    pub(crate) fn selected_uv(&self) -> Option<OsString> {
+        self.uv.clone()
+    }
+
     pub(crate) fn set_resolved_uv(&mut self, uv: impl Into<OsString>) {
         let uv = uv.into();
         if self.uv.is_none() {

@@ -117,6 +117,7 @@ impl ManagedPython {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,

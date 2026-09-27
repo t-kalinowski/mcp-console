@@ -31,6 +31,7 @@ from support.requirements import PROCESS_EVENTS, command, requires
 from support.resolvers import (
     ir_requirements,
     ir_run_records,
+    local_resolver_owner,
     recording_ir_environment,
 )
 from support.suites import run_this_suite
@@ -1087,7 +1088,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
             server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
+            owner = local_resolver_owner(server, binary)
+            existing_children = child_process_identities(owner)
 
             # fmt: r
             r = code(r"""
@@ -1102,7 +1104,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             started.wait("automatic R resolver")
             resolver = [
                 child
-                for child in child_process_identities(server)
+                for child in child_process_identities(owner)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver

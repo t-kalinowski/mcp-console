@@ -52,12 +52,19 @@ impl Selections {
 pub(crate) struct Discovery {
     pub managed: bool,
     pub selections: Selections,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_r_home_bytes: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_has_uv: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Operation {
     Bootstrap,
+    ResolveRStandalone {
+        requirements: Vec<String>,
+    },
     R {
         requirements: Vec<String>,
     },
@@ -69,10 +76,31 @@ pub(crate) enum Operation {
         constraints: Vec<String>,
         r: ManagedR,
     },
+    LocalPythonVersion {
+        constraints: Vec<String>,
+        r: Option<ManagedR>,
+    },
+    Uv {
+        r: ManagedR,
+    },
     Duckdb {
         r: ManagedR,
         extensions: Vec<String>,
     },
+}
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+pub(crate) enum Mode {
+    #[default]
+    R,
+    PythonOnly,
+    Custom,
+}
+
+impl Mode {
+    fn is_r(&self) -> bool {
+        matches!(self, Self::R)
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -83,6 +111,8 @@ enum Input {
         build: String,
         workspace: String,
         selections: Selections,
+        #[serde(default, skip_serializing_if = "Mode::is_r")]
+        mode: Mode,
     },
     Run {
         id: u64,
@@ -120,7 +150,14 @@ enum Output {
 }
 
 impl Output {
-    fn write(&self, writer: &mut impl Write) -> Result<(), String> {
+    fn write(&self, writer: &mut impl Write, local: bool) -> Result<(), String> {
+        let write_message = |writer: &mut _, message: &Self| {
+            if local {
+                write_jsonl(writer, message)
+            } else {
+                write(writer, message)
+            }
+        };
         let Self::Completed {
             id,
             result: Some(result),
@@ -128,18 +165,18 @@ impl Output {
             confirmed,
         } = self
         else {
-            return write(writer, self);
+            return write_message(writer, self);
         };
         let result = serde_json::to_string(result).map_err(|error| error.to_string())?;
         if result.len() <= LIMIT / 8 {
-            return write(writer, self);
+            return write_message(writer, self);
         }
         // JSON can expand each text byte to six bytes. Leave room for the
         // envelope; only the terminal receipt completes the assembled result.
         let mut tail = result.as_str();
         while !tail.is_empty() {
             let end = tail.floor_char_boundary((LIMIT / 8).min(tail.len()));
-            write(
+            write_message(
                 writer,
                 &Self::ResultChunk {
                     id: *id,
@@ -148,7 +185,7 @@ impl Output {
             )?;
             tail = &tail[end..];
         }
-        write(
+        write_message(
             writer,
             &Self::Completed {
                 id: *id,
@@ -178,17 +215,52 @@ fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String
 }
 
 fn read<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let bytes = crate::target_launch::read_payload(reader, LIMIT, super::PROTOCOL)
+    let bytes = crate::target_launch::read_payload(reader, LIMIT, crate::ssh::PROTOCOL)
         .map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid SSH preparation message: {error}"))
 }
 
+fn write_jsonl(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String> {
+    let bytes = encode(message)?;
+    writer
+        .write_all(&bytes)
+        .and_then(|()| writer.write_all(b"\n"))
+        .and_then(|()| writer.flush())
+        .map_err(|error| error.to_string())
+}
+
+fn read_jsonl<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0];
+        let count = reader.read(&mut byte).map_err(|error| error.to_string())?;
+        if count == 0 {
+            return Err("resolver input closed".into());
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+        bytes.push(byte[0]);
+        if bytes.len() > LIMIT {
+            return Err("resolver JSON line exceeds 1 MiB".into());
+        }
+    }
+    serde_json::from_slice(&bytes).map_err(|error| format!("invalid resolver JSON: {error}"))
+}
+
 pub(crate) fn run() -> Result<(), String> {
     #[cfg(unix)]
-    return host::run();
+    return host::run(false);
     #[cfg(not(unix))]
     Err("SSH preparation requires macOS or Linux".into())
+}
+
+pub(crate) fn run_local() -> Result<(), String> {
+    #[cfg(unix)]
+    return host::run(true);
+    #[cfg(not(unix))]
+    Err("host resolution requires macOS or Linux".into())
 }
 
 #[derive(Clone, Deserialize, Serialize)]

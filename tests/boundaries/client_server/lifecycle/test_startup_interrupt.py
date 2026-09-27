@@ -37,6 +37,7 @@ def before_resolver_spawn(
         import sys
 
         os.environ["MCP_CONSOLE_TEST_SPAWN_SERVER"] = str(os.getpid())
+        os.environ["MCP_CONSOLE_TEST_SPAWN_CHILD"] = "1"
         os.environ["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = (
             os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
         )
@@ -88,8 +89,9 @@ def before_resolver_spawn(
             (root / "armed").touch()
             yield client, started, release, root
         finally:
-            # Release the native server thread before transport teardown, even
-            # when an assertion fails while it is paused before child creation.
+            # Release the resolver fork before transport teardown, even when an
+            # assertion fails while it is paused before child creation.
+            (root / "armed").unlink(missing_ok=True)
             release.release()
 
 
@@ -110,6 +112,7 @@ def test_interrupts_first_cell_before_resolver_registration(
         assert not (root / "resolver.jsonl").exists()
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -143,6 +146,7 @@ def test_interrupts_first_cell_between_resolver_phases(
         assert invocations[0]["arguments"][:2] == ["python", "list"], invocations
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -172,6 +176,7 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         assert last_tool_text(client) == RUNNING
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
         client.receive(stdin)
