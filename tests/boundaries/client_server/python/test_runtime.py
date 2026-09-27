@@ -24,7 +24,6 @@ from support.r import r_test_environment, reference_plots
 from support.records import Transcript
 from support.resolvers import (
     matplotlib_test_environment,
-    send_and_collect_runtime_python_resolution,
 )
 from support.suites import run_this_suite
 
@@ -226,12 +225,14 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
             )
         )
         client.initialize_and_list_tools()
+        client.send(requirements={"python": ["matplotlib"]})
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         # fmt: r
         r = code(r"""
             reticulate::py_require("matplotlib")
             invisible(reticulate::py_config())
             """)
-        send_and_collect_runtime_python_resolution(client, r=r)
+        client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
         # fmt: python
         python = code("""
