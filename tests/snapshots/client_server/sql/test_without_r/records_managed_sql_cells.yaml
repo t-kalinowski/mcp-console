@@ -11,6 +11,16 @@ result:
   isError: false
 ---
 send:
+  requirements:
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
   python: sql_connection().execute("SELECT 1").fetchone()
 result:
   content:

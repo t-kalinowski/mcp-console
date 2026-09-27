@@ -19,10 +19,13 @@ Managed targets use the same preparation ordering below; bare targets expose onl
 
 Local sans-R sessions managed through uv expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
 They support standalone preparation and preparation with a Python or SQL cell before first worker startup, and explicit restart preparation with or without a cell.
-Changed requirements on a running worker are rejected before preparation or same-call code and input; exact retained requirements remain a no-op.
+An idle running worker also accepts effective DuckDB extension additions with `action: "add"`, including requests that repeat already-retained Python requirements.
+Python package or constraint changes and changed `set` or `reset` declarations require explicit restart; exact retained declarations remain a no-op.
+Unsupported mixed requests are rejected before preparing or committing any requirement.
+Live host installation failure or cancellation leaves the worker and committed declaration unchanged; same-call code and input are not sent.
 Restart resolves the cumulative candidate and inspects its embedding configuration before retirement.
 Failure before retirement preserves the current worker, retained requirements, and queued input; same-call code and input are sent only after successful replacement.
-Combining interrupt with Python requirements is rejected before signaling or queuing stdin, including retained requirements.
+Combining interrupt with requirements is rejected before signaling or queuing stdin, including retained requirements.
 The retirement/replacement failure semantics below still apply.
 
 Requirement-content errors normally also reject the call before those actions.

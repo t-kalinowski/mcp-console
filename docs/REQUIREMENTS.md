@@ -7,25 +7,29 @@ The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timin
 This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
-Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit startup and restart preparation when Console manages the environment through uv.
+Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) support explicit preparation when Console manages the environment through uv.
 The default uses uv from `PATH`; setting `python` in the Console config selects a non-managed environment without invoking uv.
 The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) uses the same trusted host resolver as mixed-language sessions.
 There is no automatic PATH-Python fallback.
 `requirements.python` and `requirements.duckdb` prepare additions before the first worker starts, alone or with a Python or SQL cell.
-After startup, changed requirements need `control: "restart"`, with or without code; already retained requirements are a no-op.
+After startup, an idle worker accepts `action: "add"` when only DuckDB extensions change; already retained Python requirements can accompany them.
+Python package or constraint changes and changed `set` or `reset` declarations still need `control: "restart"`.
+Unchanged declarations are a no-op.
 The existing prestart/restart transaction resolves the complete Python candidate and inspects its executable before preparing all retained extensions with that candidate's DuckDB.
 The hidden local `resolve` subprocess owns cancellation, output, and child cleanup for the Python-backed extension operation.
-Resolution, inspection, or extension preparation failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
+Before startup and during restart, resolution, inspection, or extension preparation failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
+Live extension installation uses the accepted managed Python environment and captured cache directory without resolving or inspecting another interpreter.
+It commits the complete extension declaration only after host preparation succeeds in the same worker generation.
 Plain restarts and crash replacement reuse that accepted environment without another resolution.
 Explicit Python selections do not enable preparation.
-Live requirement changes, automatic import resolution, and R requirements are unavailable in this mode.
+Live Python changes, automatic import resolution, and R requirements are unavailable in this mode.
 The default sans-R managed Python declaration includes NumPy, pandas, and DuckDB.
 `get` reports the accepted declaration, `reset` restores these startup defaults, and `set` retains exactly the requested declaration, including an empty set.
 DuckDB is resolved with the rest of the Python manifest through the hidden host resolve process before the environment is accepted; the worker never installs it through Console preparation.
 If it is absent after an explicit replacement, Python and a selected DB-API connection remain usable, while managed SQL reports how to obtain DuckDB.
 An extension requirement with no importable DuckDB package in the candidate fails and explains how to include `duckdb` in `requirements.python`.
 The managed sans-R declaration has no default extensions.
-R-backed live extension preparation below still applies only to sessions with R.
+The R-backed live preparation path below applies only to sessions with R.
 
 Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
 Its private JSON exchange carries requirement manifests, resolved environment data, controls, and cleanup receipts.
@@ -161,12 +165,15 @@ An unchanged replacement requires no preparation, but an explicitly requested re
 Changing these constraints with a live worker requires restart.
 `set` clears omitted constraints; `reset` restores startup constraints (currently none).
 Captured resolver settings such as `UV_*` remain startup configuration and are not rewritten by these session operations.
-Sans-R managed sessions support these actions for Python only, with restart required for all live changes.
+Sans-R managed sessions support these actions for Python and DuckDB extensions.
+Only idle additive extension changes can commit live; Python changes and changed declaration replacements require restart.
 User-selected Python, bare runtimes, Docker, and Docker Sandbox support inspection without enabling preparation.
 
 Committed replacements are recorded with their declaration and call ID in the event journal and Markdown transcript.
 Quarto records the environment boundaries, including Python constraints, and disables automatic execution after a replacement.
 Recreate those environments before enabling replay; one cumulative or final manifest may not satisfy historical cells.
+Successful additions update the committed `get` snapshot and appear as ordinary tool calls and results in the event journal and Markdown transcript.
+They do not create a Quarto replacement boundary.
 
 ## Requirements for a cell
 
@@ -191,8 +198,9 @@ No other operation can change the environment between successful preparation and
 Without inline control, the preparation behavior depends on worker state:
 
 - Before the worker starts, the server resolves all changed candidates, commits the complete retained environment only after they all succeed, starts the worker, and evaluates the cell.
-- With an idle running worker, the server applies the live R, Python, and DuckDB behavior described below, preserving supported live state, then immediately launches the cell in that worker generation.
+- With an idle running worker, the server applies the supported live R, Python, or DuckDB behavior described below, then immediately launches the cell in that worker generation.
 - With an eligible stopped worker, the server resolves and retains additions without live preparation, starts the normal replacement, and evaluates the cell there.
+- A stopped local sans-R worker still needs an explicit restart for changed requirements.
 - After a recoverable live R failure has made further environment changes require restart, new additions fail with `requirements require session restart; cell was not run`.
   The live worker is not destroyed automatically, so its state can be saved before an explicit restart.
 
@@ -332,11 +340,11 @@ The [standalone preparation row](SEND_OPERATIONS.md#operations) specifies its re
 Before a worker starts, the server resolves every changed candidate on the host, commits the retained configuration only after the complete request succeeds, and does not start the worker.
 Exact repeats return `[prepared]` without resolving them again.
 
-After a worker starts, requests that add to the retained environment are available only while it is idle:
+After a worker starts, changed additions to the retained environment are available only while it is idle:
 
 - R additions can update a worker that implements live R preparation.
 - Compatible Python additions can update an idle server-managed built-in worker.
-- DuckDB extensions are installed on the host without replacing the worker.
+- DuckDB extensions are installed on the host without replacing the worker, including in a local managed sans-R session.
 
 Live R and Python preparation is noninteractive.
 Use `send` to satisfy and collect any managed input requested by an idle R callback before preparing R or Python requirements.
@@ -394,15 +402,21 @@ DuckDB extension installation occurs entirely on the trusted host resolver.
 It uses DuckDB's default repository and signature checks, then leaves `LOAD` to the worker.
 The server accepts validated names, not repository, URL, path, or version selectors.
 
-In local managed sans-R sessions, `requirements.duckdb` is available before first worker startup and with explicit restart, including with a Python or SQL cell in the same call.
+In local managed sans-R sessions, `requirements.duckdb` is available before first worker startup, during explicit restart, and as an idle live addition, alone or with a Python or SQL cell.
 The resolver runs the accepted or candidate environment's Python in isolated mode and imports its DuckDB package; `PYTHONPATH` and workspace modules do not redirect this helper.
 It calls DuckDB's extension installation API with names as data, without R or a separate DuckDB executable.
 On a Python environment change, the server inspects the candidate first and prepares the complete retained extension set against its DuckDB version, even if the extension names did not change.
+For an idle live addition, it uses the accepted managed Python environment without resolving packages, reinspecting the interpreter, or requesting worker activation.
 With an absolute `HOME` at server startup, the managed worker reads the same `HOME/.duckdb/extensions` version-and-platform cache captured for the resolver.
 Without an absolute `HOME`, ordinary managed Python sessions still start, but explicit extension preparation fails before worker retirement.
 Its spill and stored-secret paths remain in private worker storage, which retirement removes without deleting shared extensions.
-Preparation never loads extensions, executes submitted code, or changes a selected DB-API connection.
-Changed declarations in a running sans-R session require restart; retained requests are a no-op.
+Preparation never loads extensions, executes submitted code, opens a worker database, or changes a selected DB-API connection.
+The worker's interpreter, Python objects, managed DuckDB catalog, and selected SQL connection survive a successful live addition.
+Changed live `set` and `reset` declarations, Python packages, interpreter constraints, and `exclude_newer` require explicit restart; an effective no-op remains a no-op even when those fields are present.
+An unsupported mixed request is rejected before any part is prepared or committed.
+Host installation failure or cancellation leaves the worker and committed requirements unchanged, and same-call code and input do not reach the worker.
+The shared extension cache may retain downloads made before failure.
+While preparation is pending, `requirements.action="get"` reports the committed declaration.
 Removing a declaration does not uninstall the cache entry or prohibit a later `LOAD`.
 
 In R-present sessions, there is no DuckDB-specific live-worker request or receipt.

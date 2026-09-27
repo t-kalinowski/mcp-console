@@ -429,8 +429,10 @@ It runs with full host permissions, independently of worker policy; it does not 
 The [requirements trust boundary](REQUIREMENTS.md#host-resolution-and-trust) documents the resulting escape paths.
 The mutable session environment owns the accepted manifest, executable, and embedding configuration together.
 Candidate inspection completes before worker retirement; failure or cancellation preserves the old selection and worker.
-In local sans-R sessions, the same transition then runs the inspected Python candidate's DuckDB installation API for all retained extension names that need preparation.
+In local sans-R startup and restart transitions, the inspected Python candidate's DuckDB installation API prepares all retained extension names that need preparation.
 A changed Python candidate requires this step even when the extension names are unchanged.
+An idle live extension-only addition uses the accepted managed Python and captured extension cache through that same resolver operation, then commits the extension declaration only if its generation remains current.
+It sends no worker activation or SQL command, preserving Python objects, the managed catalog, and the selected connection.
 The hidden local resolver owns the Python helper's process group, cancellation, output, and cleanup; R-backed and SSH extension operations keep their existing path.
 Resolver and inspection results use bounded reads from the original open descriptors.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
