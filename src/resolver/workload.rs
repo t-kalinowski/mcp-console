@@ -41,7 +41,9 @@ pub(crate) fn run() -> Result<(), String> {
     // coordinator alive to collect its result and prevent a later stage from
     // starting. resolver_command restores each child's default disposition.
     // Native mode retires the whole sandbox.
-    if unsafe { libc::signal(libc::SIGINT, interrupt as libc::sighandler_t) } == libc::SIG_ERR {
+    if unsafe { libc::signal(libc::SIGINT, interrupt as *const () as libc::sighandler_t) }
+        == libc::SIG_ERR
+    {
         return Err(std::io::Error::last_os_error().to_string());
     }
     use std::io::{Read, Write};

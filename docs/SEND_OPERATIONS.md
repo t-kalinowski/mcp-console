@@ -67,7 +67,8 @@ Preparation can import packages and load native libraries inside the resolver sa
 
 Preparation is not a general rollback boundary.
 Before the first worker starts and during restart preparation, the server commits changed retained candidates together after resolution and inspection through the [resolver broker](RESOLVER.md) succeeds.
-Host cache writes and installation or build side effects may survive a failed request.
+Resolver cache writes and installation or build side effects may survive a failed request.
+With `--no-sandbox`, those effects can reach the host outside resolver storage.
 Live preparation has separate activation points: a Python addition can remain retained if a following R update fails, and a failed R update can leave a changed library path that requires restart.
 The [live preparation rules](REQUIREMENTS.md#live-r-preparation) describe these outcomes and infrastructure failures that stop a worker.
 
