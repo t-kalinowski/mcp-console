@@ -1,10 +1,15 @@
 # SSH execution
 
-`mcp-console serve` can keep the MCP server and recordings local while running its relay and built-in worker on one existing SSH host. The host needs a compatible Console build, a supported native sandbox environment, and an existing workspace. The host needs a working R installation, `uv` (or another supported resolver bootstrap), and system libraries and build tools required by the requested packages. Console prepares its managed R, Python, and DuckDB environments there. It does not install R or synchronize files.
+`mcp-console serve` can keep the MCP server and recordings local while running its relay and built-in worker on one existing SSH host.
+The host needs a compatible Console build, a supported native sandbox environment, and an existing workspace.
+The host needs a working R installation, `uv` (or another supported resolver bootstrap), and system libraries and build tools required by the requested packages.
+Console prepares its managed R, Python, and DuckDB environments there.
+It does not install R or synchronize files.
 
 ## Configure a target
 
-For an existing `ssh analysis-host` configuration, first create or select the remote project yourself. Save this in the local project's `.agents/console/config.yaml`:
+For an existing `ssh analysis-host` configuration, first create or select the remote project yourself.
+Save this in the local project's `.agents/console/config.yaml`:
 
 ```yaml
 extends: :workspace
@@ -15,7 +20,12 @@ target:
   workspace: /srv/projects/analysis
 ```
 
-Then run `mcp-console serve` from the local project. Before advertising MCP tools, Console connects to `analysis-host`, checks protocol compatibility and the remote directory, and discovers that host's resolver capability. This does not install analysis packages or start a worker. The first operation that needs an environment prepares the managed defaults there; worker launch then validates the sandbox and starts the relay and worker in `/srv/projects/analysis`. `extends` is optional: omitting it preserves Console's restricted policy with host reads and private temporary writes. Selecting SSH alone grants no workspace writes.
+Then run `mcp-console serve` from the local project.
+Before advertising MCP tools, Console connects to `analysis-host`, checks protocol compatibility and the remote directory, and discovers that host's resolver capability.
+This does not install analysis packages or start a worker.
+The first operation that needs an environment prepares the managed defaults there; worker launch then validates the sandbox and starts the relay and worker in `/srv/projects/analysis`.
+`extends` is optional: omitting it preserves Console's restricted policy with host reads and private temporary writes.
+Selecting SSH alone grants no workspace writes.
 
 | Field                   | Default and meaning                                                                                                                                                                                                                                                   |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -27,17 +37,42 @@ Then run `mcp-console serve` from the local project. Before advertising MCP tool
 
 `target.compute` is optional for SSH and accepts `{kind: host}`; SSH plus Docker or Docker Sandbox is unsupported.
 
-For example, `target.command: [uvx, mcp-console==0.0.3]` selects a package version, and `target.command: [/opt/console/bin/mcp-console]` selects a preinstalled build. The selected package must implement this SSH protocol; a version pin is not a compatibility guarantee. Console does not preflight the selected executable or command prefix. Missing commands, installation failures, and command errors propagate through ordinary startup failure handling. An installed `mcp-console` that fails does not trigger the `uvx` fallback. The command is a trusted executable prefix, not a shell program or a `send` argument. It must leave stdout exclusively for Console's launch protocol; setup diagnostics belong on stderr. Unexpected stdout is an error.
+For example, `target.command: [uvx, mcp-console==0.0.3]` selects a package version, and `target.command: [/opt/console/bin/mcp-console]` selects a preinstalled build.
+The selected package must implement this SSH protocol; a version pin is not a compatibility guarantee.
+Console does not preflight the selected executable or command prefix.
+Missing commands, installation failures, and command errors propagate through ordinary startup failure handling.
+An installed `mcp-console` that fails does not trigger the `uvx` fallback.
+The command is a trusted executable prefix, not a shell program or a `send` argument.
+It must leave stdout exclusively for Console's launch protocol; setup diagnostics belong on stderr.
+Unexpected stdout is an error.
 
-`serve --no-sandbox` retains the configured SSH target and remote directory. It launches the remote relay directly, with the remote account's permissions and the existing direct-worker cleanup limitations. It still reads configuration to select the target, so malformed YAML is an error. Sandbox permission fields are not enforced in this mode; target environment controls still apply remotely. Custom development `--worker` and `--relay` replacements cannot be combined with SSH, Docker, or Docker Sandbox.
+`serve --no-sandbox` retains the configured SSH target and remote directory.
+It launches the remote relay directly, with the remote account's permissions and the existing direct-worker cleanup limitations.
+It still reads configuration to select the target, so malformed YAML is an error.
+Sandbox permission fields are not enforced in this mode; target environment controls still apply remotely.
+Custom development `--worker` and `--relay` replacements cannot be combined with SSH, Docker, or Docker Sandbox.
 
-Standalone `mcp-console sandbox -- COMMAND` remains local for supported native selections and rejects resolved compute enforcement. It uses the local cwd for built-ins, relative policy paths, and `--writable-root`, regardless of `target`.
+Standalone `mcp-console sandbox -- COMMAND` remains local for supported native selections and rejects resolved compute enforcement.
+It uses the local cwd for built-ins, relative policy paths, and `--writable-root`, regardless of `target`.
 
 ## Runtime selection and policy
 
-The local server captures the target, selected built-in, and native policy adjustments once. Every remote launch consumes that structured snapshot without reading remote YAML. Later local or remote configuration edits cannot change the session's target or selected policy. The helper applies Console's additions and native preflight on the execution host, including that host's platform defaults. The workspace profile resolves against the fixed remote workspace. Sandboxed managed sessions reject custom filesystem entries and CLI writable roots because they can override resolver artifact protections. Literal paths retain their existing semantics: no tilde or environment expansion and no symlink canonicalization by Console. Native modes, proxy fields, omitted values, and explicit nulls retain the [sandbox configuration](SANDBOX_CONFIGURATION.md) behavior and runner validation.
+The local server captures the target, selected built-in, and native policy adjustments once.
+Every remote launch consumes that structured snapshot without reading remote YAML.
+Later local or remote configuration edits cannot change the session's target or selected policy.
+The helper applies Console's additions and native preflight on the execution host, including that host's platform defaults.
+The workspace profile resolves against the fixed remote workspace.
+Sandboxed managed sessions reject custom filesystem entries and CLI writable roots because they can override resolver artifact protections.
+Literal paths retain their existing semantics: no tilde or environment expansion and no symlink canonicalization by Console.
+Native modes, proxy fields, omitted values, and explicit nulls retain the [sandbox configuration](SANDBOX_CONFIGURATION.md) behavior and runner validation.
 
-The worker inherits the remote environment, then applies `sandbox.environment` and `sandbox.inherit_environment`. These settings configure the workload, not SSH, `uvx`, or trusted preparation. Two runtime selections also inform preparation: an explicit `sandbox.environment.R_HOME` selects the remote R installation, and `sandbox.environment.RETICULATE_PYTHON` selects the remote Python mode. The controller extracts only string selections; malformed environment fields remain in the captured policy for validation on the execution host. No other workload environment settings are applied to the preparation owner. The controller does not send its ambient R/Python paths, `HOME`, `TMPDIR`, or loader variables. For an installation outside the remote SSH `PATH`, configure the execution-host paths explicitly:
+The worker inherits the remote environment, then applies `sandbox.environment` and `sandbox.inherit_environment`.
+These settings configure the workload, not SSH, `uvx`, or trusted preparation.
+Two runtime selections also inform preparation: an explicit `sandbox.environment.R_HOME` selects the remote R installation, and `sandbox.environment.RETICULATE_PYTHON` selects the remote Python mode.
+The controller extracts only string selections; malformed environment fields remain in the captured policy for validation on the execution host.
+No other workload environment settings are applied to the preparation owner.
+The controller does not send its ambient R/Python paths, `HOME`, `TMPDIR`, or loader variables.
+For an installation outside the remote SSH `PATH`, configure the execution-host paths explicitly:
 
 ```yaml
 target:
@@ -50,32 +85,97 @@ sandbox:
     RETICULATE_PYTHON: /srv/venvs/analysis/bin/python
 ```
 
-The remote R installation must include its shared `libR` library and be discoverable through remote `R_HOME` or `PATH`. Managed mode prepares the same [defaults and additions](REQUIREMENTS.md) as local execution, including reticulate and SQL adapters. An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available. Omitting that selection, using an empty value, or selecting `managed` retains managed Python when a bootstrap is available. The selected interpreter must already exist remotely and contain the Python packages needed by the analysis.
+The remote R installation must include its shared `libR` library and be discoverable through remote `R_HOME` or `PATH`.
+Managed mode prepares the same [defaults and additions](REQUIREMENTS.md) as local execution, including reticulate and SQL adapters.
+An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available.
+Omitting that selection, using an empty value, or selecting `managed` retains managed Python when a bootstrap is available.
+The selected interpreter must already exist remotely and contain the Python packages needed by the analysis.
 
-The trusted preparation owner captures the execution host's environment once, including the R installation, `ir`/`uv` selection, Python preference, package-source settings, inherited R library paths, and cache locations. Later worker mutations cannot change these choices. The worker receives the discovered R home, resolved managed R libraries, Python selection, and capability flags with precedence over conflicting workload overrides, including with `inherit_environment: false`. R libraries and Python executables are validated on the remote host; their paths are only metadata on the controller. Other workload settings retain their existing meaning. In particular, configuring a workload cache does not relocate trusted preparation caches.
+The trusted preparation owner captures the execution host's environment once, including the R installation, `ir`/`uv` selection, Python preference, package-source settings, inherited R library paths, and cache locations.
+Later worker mutations cannot change these choices.
+The worker receives the discovered R home, resolved managed R libraries, Python selection, and capability flags with precedence over conflicting workload overrides, including with `inherit_environment: false`.
+R libraries and Python executables are validated on the remote host; their paths are only metadata on the controller.
+Other workload settings retain their existing meaning.
+In particular, configuring a workload cache does not relocate trusted preparation caches.
 
-When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used. A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver. Bare and user-selected Python modes disable reticulate's implicit managed-venv installation. Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
+When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
+A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
+Bare and user-selected Python modes disable reticulate's implicit managed-venv installation.
+Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
 
 ## Trusted preparation
 
-A separate authenticated SSH connection runs a private preparation owner outside the worker sandbox. It remains available without a relay or worker, including for discovery and standalone `send(requirements=...)`. Its operations are limited to bootstrap preparation, R libraries, Python manifests and version selection, and DuckDB extensions. The transport starts the same safe-environment resolver broker used locally. Trusted launch settings are separate from operation requirements; requirements carry no shell programs, source code, executable choices, or environment overrides. Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames. Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests. Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification. Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 4 carries the broker launch context and complete inspected candidates. Both require a matching Console package version. Older preinstalled-only peers fail compatibility checks before MCP readiness. Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host. Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.
+A separate authenticated SSH connection runs a private preparation owner outside the worker sandbox.
+It remains available without a relay or worker, including for discovery and standalone `send(requirements=...)`.
+Its operations are limited to bootstrap preparation, R libraries, Python manifests and version selection, and DuckDB extensions.
+The transport starts the same safe-environment resolver broker used locally.
+Trusted launch settings are separate from operation requirements; requirements carry no shell programs, source code, executable choices, or environment overrides.
+Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
+Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
+Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
+Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 4 carries the broker launch context and complete inspected candidates.
+Both require a matching Console package version.
+Older preinstalled-only peers fail compatibility checks before MCP readiness.
+Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
+Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`, and `RETICULATE_UV`.
 
-The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations. The preparation owner retains trusted resolver configuration, not session manifests or activation decisions. Each operation runs inside the native resolver sandbox and reports its result only after trusted native cleanup, before the server can commit a candidate. An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver. An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation. Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session. Preparation is never automatically replayed after uncertain completion.
+The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations.
+The preparation owner retains trusted resolver configuration, not session manifests or activation decisions.
+Each operation runs inside the native resolver sandbox and reports its result only after trusted native cleanup, before the server can commit a candidate.
+An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver.
+An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation.
+Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session.
+Preparation is never automatically replayed after uncertain completion.
 
-Accepted requirements use the [resolver boundary](RESOLVER.md): installation, build, import, and inspection code run inside a separate native sandbox with isolated storage and a default-deny package-source proxy. Explicit `--no-sandbox` preparation uses the remote account permissions and ordinary host caches. Automatic R requests still accept only plain package names, explicit R references remain subject to `IR_NO_LOCAL_SOURCES`, and Python requirements, version constraints, and DuckDB extension names retain their validators.
+Accepted requirements use the [resolver boundary](RESOLVER.md): installation, build, import, and inspection code run inside a separate native sandbox with isolated storage and a default-deny package-source proxy.
+Explicit `--no-sandbox` preparation uses the remote account permissions and ordinary host caches.
+Automatic R requests still accept only plain package names, explicit R references remain subject to `IR_NO_LOCAL_SOURCES`, and Python requirements, version constraints, and DuckDB extension names retain their validators.
 
-A configured sandbox proxy runs on the remote host; its host-local addresses refer to that host. SSH transport and package bootstrap run outside the worker's network policy.
+A configured sandbox proxy runs on the remote host; its host-local addresses refer to that host.
+SSH transport and package bootstrap run outside the worker's network policy.
 
 ## Lifecycle and records
 
-The system OpenSSH client uses batch mode, no PTY, and no agent forwarding. Host-key verification remains under the user's OpenSSH configuration. Console can use an existing shared connection but never manages or terminates its master. Authentication, executable lookup, bootstrap, and native setup diagnostics remain visible on stderr. The connection timeout is 10 seconds. Preparation connection setup and each worker launch have a separate 30-second setup deadline. After the preparation handshake, runtime discovery and dependency installation have no fixed deadline. An ordinary cell may return running while defaults or automatic dependencies resolve; explicit preparation retains its ordering and wait semantics. `send.timeout_ms` never cancels a resolver. Interrupt and cancellation messages identify the preparation operation and reach its remote resolver process group, independently of the worker connection. Closing MCP input cancels discovery before readiness and active preparation during shutdown. The remote preparation owner observes input closure independently of blocked protocol output and cancels and reaps its resolver groups.
+The system OpenSSH client uses batch mode, no PTY, and no agent forwarding.
+Host-key verification remains under the user's OpenSSH configuration.
+Console can use an existing shared connection but never manages or terminates its master.
+Authentication, executable lookup, bootstrap, and native setup diagnostics remain visible on stderr.
+The connection timeout is 10 seconds.
+Preparation connection setup and each worker launch have a separate 30-second setup deadline.
+After the preparation handshake, runtime discovery and dependency installation have no fixed deadline.
+An ordinary cell may return running while defaults or automatic dependencies resolve; explicit preparation retains its ordering and wait semantics.
+`send.timeout_ms` never cancels a resolver.
+Interrupt and cancellation messages identify the preparation operation and reach its remote resolver process group, independently of the worker connection.
+Closing MCP input cancels discovery before readiness and active preparation during shutdown.
+The remote preparation owner observes input closure independently of blocked protocol output and cancels and reaps its resolver groups.
 
-Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules. The remote helper observes connection closure independently of output backpressure and requests ordinary runner retirement, including before worker readiness. Local shutdown retains the existing staged bound of approximately 10 seconds, including forced local SSH termination if needed. The [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) records the separately owned setup and retirement allowances. The local SSH process exiting is not proof that remote cleanup completed. On a healthy connection, the helper acknowledges retirement after the runner exits successfully and queued output is forwarded. Without that acknowledgment, Console reports unconfirmed retirement and prevents further replacement in the session. Cells are never replayed after transport failure.
+Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.
+The remote helper observes connection closure independently of output backpressure and requests ordinary runner retirement, including before worker readiness.
+Local shutdown retains the existing staged bound of approximately 10 seconds, including forced local SSH termination if needed.
+The [architecture timing reference](ARCHITECTURE.md#selected-target-sessions-and-timing) records the separately owned setup and retirement allowances.
+The local SSH process exiting is not proof that remote cleanup completed.
+On a healthy connection, the helper acknowledges retirement after the runner exits successfully and queued output is forwarded.
+Without that acknowledgment, Console reports unconfirmed retirement and prevents further replacement in the session.
+Cells are never replayed after transport failure.
 
-There is no reconnect, resume, heartbeat, or lease protocol. During an undetected network partition, remote cleanup may be delayed until SSH detects the connection loss. Client-side SSH keepalives do not establish bounded remote retirement. The runner retains its own limits, including no independent recovery after runner death. Direct execution retains its lack of runner-owned descendant cleanup.
+There is no reconnect, resume, heartbeat, or lease protocol.
+During an undetected network partition, remote cleanup may be delayed until SSH detects the connection loss.
+Client-side SSH keepalives do not establish bounded remote retirement.
+The runner retains its own limits, including no independent recovery after runner death.
+Direct execution retains its lack of runner-owned descendant cleanup.
 
-Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/` when `.agents/console` already exists there, or in the controller's `~/.agents/console/sessions/` otherwise. The controller's `MCP_CONSOLE_HOME` can replace the fallback directory without changing the remote account's home or configuration. Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace. Arbitrary files created by cells remain remote. The source-only Quarto projection includes remote target context and omits the controller `root.dir`. Rendering executes the captured cells, so prepare an appropriate environment and files first; local rendering does not reproduce the remote filesystem.
+Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/` when `.agents/console` already exists there, or in the controller's `~/.agents/console/sessions/` otherwise.
+The controller's `MCP_CONSOLE_HOME` can replace the fallback directory without changing the remote account's home or configuration.
+Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.
+Arbitrary files created by cells remain remote.
+The source-only Quarto projection includes remote target context and omits the controller `root.dir`.
+Rendering executes the captured cells, so prepare an appropriate environment and files first; local rendering does not reproduce the remote filesystem.
 
 ### Bounded output and retained text
 
-Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits. A retained-output path is relative to the controller's launch directory for project recordings and absolute for home recordings. Reading omitted text requires a filesystem tool with access to the selected controller directory; access only to the execution target or another client host is insufficient. Console does not transfer these files or expose a read/search tool. A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss. See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).
+Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits.
+A retained-output path is relative to the controller's launch directory for project recordings and absolute for home recordings.
+Reading omitted text requires a filesystem tool with access to the selected controller directory; access only to the execution target or another client host is insufficient.
+Console does not transfer these files or expose a read/search tool.
+A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss.
+See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).
