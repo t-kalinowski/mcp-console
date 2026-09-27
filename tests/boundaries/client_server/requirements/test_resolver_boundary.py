@@ -21,7 +21,13 @@ from support.client import McpClient
 from support.assertions import last_result_text
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import NATIVE_FIXTURES, SANDBOX, command, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    SANDBOX,
+    command,
+    requires,
+)
 from support.native import LOADER_VARIABLE, build_interposer
 from support.checkpoints import FifoCheckpoint
 from support.execution import SANDBOXED
@@ -177,6 +183,68 @@ def test_loader_environment_is_applied_only_after_enforcement(
             assert not client.transcript[-1]["result"].get("isError"), (
                 client.transcript[-1]
             )
+            return client.finish()
+
+
+@requires(MACOS_SANDBOX, command("xcode-select"))
+def test_resolver_uses_selected_developer_tools(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        developer = Path(
+            subprocess.check_output(["xcode-select", "-p"], text=True).strip()
+        )
+        venv = root / "python"
+        subprocess.run(
+            [str(Path(sys.executable).resolve()), "-m", "venv", "--without-pip", venv],
+            check=True,
+            capture_output=True,
+        )
+        site = next((venv / "lib").glob("python*/site-packages"))
+        (site / "sitecustomize.py").write_text(
+            # fmt: python
+            code("""
+                import json
+                import os
+                from pathlib import Path
+                import subprocess
+
+                if payload := os.environ.get("MCP_CONSOLE_RESOLVER_PAYLOAD"):
+                    make = subprocess.run(
+                        ["/usr/bin/make", "--version"], capture_output=True, text=True
+                    )
+                    (Path(payload) / "developer-tools.json").write_text(
+                        json.dumps(
+                            {
+                                "developer": os.environ.get("DEVELOPER_DIR"),
+                                "status": make.returncode,
+                                "stdout": make.stdout,
+                                "stderr": make.stderr,
+                            }
+                        )
+                    )
+                """)
+        )
+        path = root / "path"
+        path.mkdir()
+        environment = dict(
+            os.environ,
+            PATH=str(path),
+            RETICULATE_PYTHON=str(venv / "bin/python"),
+            DEVELOPER_DIR=str(developer),
+            XDG_CACHE_HOME=str(root / "cache"),
+        )
+        environment.pop("R_HOME", None)
+        with McpClient(binary, ("serve",), environment) as client:
+            client.initialize_and_list_tools()
+            result = json.loads(
+                (
+                    root / "cache/mcp-console/resolver/payload/developer-tools.json"
+                ).read_text()
+            )
+            assert result["developer"] == str(developer), result
+            assert result["status"] == 0, result
+            assert "GNU Make" in result["stdout"], result
+            client.send(python="print('selected developer tools are available')")
             return client.finish()
 
 

@@ -99,6 +99,8 @@ impl Launch {
                         | "CC"
                         | "CXX"
                         | "SDKROOT"
+                        | "DEVELOPER_DIR"
+                        | "TOOLCHAINS"
                 )
             {
                 environment.insert(name.into(), value.into());
@@ -117,6 +119,27 @@ impl Launch {
             .iter()
             .map(|path| workspace.join(path))
             .collect::<Vec<_>>();
+        #[cfg(target_os = "macos")]
+        {
+            // Apple's command shims use the selected developer directory, which
+            // need not be /Applications/Xcode.app. Capture the trusted selection
+            // as data; package processes must not discover a different toolchain.
+            let selection = Path::new("/var/db/xcode_select_link");
+            let developer = if let Some(path) = environment.get("DEVELOPER_DIR") {
+                Some(workspace.join(path))
+            } else if selection.is_symlink() {
+                Some(std::fs::read_link(selection).map_err(|e| e.to_string())?)
+            } else {
+                None
+            };
+            if let Some(developer) = developer {
+                environment.insert(
+                    "DEVELOPER_DIR".into(),
+                    developer.to_string_lossy().into_owned(),
+                );
+                readable.push(developer);
+            }
+        }
         for (program, variable) in [
             ("uv", "RETICULATE_UV"),
             ("R", "MCP_CONSOLE_RESOLVER_R"),
@@ -297,7 +320,6 @@ impl Launch {
             "/System",
             "/Library/Frameworks",
             "/Library/Developer/CommandLineTools",
-            "/Applications/Xcode.app",
             "/opt/homebrew/bin",
             "/opt/homebrew/opt",
             "/opt/homebrew/lib",
