@@ -1109,6 +1109,7 @@ def test_reports_direct_storage_retirement_failure(
                     client.stdin.close()
                     client.process.wait(timeout=15)
                     stderr = client.stderr.read()
+                    assert "truncated resolver frame" not in stderr, stderr
                     if stage == "startup failure":
                         # Startup already delivered its retirement error over MCP.
                         assert client.process.returncode == 0 and stderr == "", stderr

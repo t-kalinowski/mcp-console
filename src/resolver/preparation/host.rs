@@ -54,8 +54,9 @@ impl Context {
     fn quarantine(self) -> Result<(), String> {
         match self {
             Self::Local(context) => context.quarantine(),
-            // Dropping a connection sends an explicitly unconfirmed close.
-            Self::Remote { .. } => Ok(()),
+            Self::Remote { connection, .. } => {
+                connection.map_or(Ok(()), |broker| broker.quarantine())
+            }
         }
     }
 }

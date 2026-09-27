@@ -25,7 +25,10 @@ struct Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.events.send(Event::Close(None));
+        let _ = self.events.send(Event::Close {
+            reply: None,
+            release: false,
+        });
     }
 }
 
@@ -100,7 +103,10 @@ enum Event {
     Received(Result<Output, String>),
     WriteFailed(String),
     Exited,
-    Close(Option<mpsc::Sender<Result<(), String>>>),
+    Close {
+        reply: Option<mpsc::Sender<Result<(), String>>>,
+        release: bool,
+    },
 }
 
 struct Pending {
@@ -315,13 +321,24 @@ impl Preparation {
     }
 
     pub(crate) fn close(&self) -> Result<(), String> {
+        self.finish(true)
+    }
+
+    pub(crate) fn quarantine(&self) -> Result<(), String> {
+        self.finish(false)
+    }
+
+    fn finish(&self, release: bool) -> Result<(), String> {
         if self.0.closed.swap(true, Ordering::SeqCst) {
             return Ok(());
         }
         let (reply, response) = mpsc::channel();
         self.0
             .events
-            .send(Event::Close(Some(reply)))
+            .send(Event::Close {
+                reply: Some(reply),
+                release,
+            })
             .map_err(|_| "resolver preparation owner stopped")?;
         response
             .recv()
@@ -484,8 +501,7 @@ fn run(
                         deadline = None;
                     }
                 }
-                Event::Close(reply) => {
-                    let release = reply.is_some();
+                Event::Close { reply, release } => {
                     if let Some(reply) = reply {
                         closing.push(reply);
                     }

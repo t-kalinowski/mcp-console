@@ -33,4 +33,8 @@ impl Preparation {
     pub(crate) fn close(&self) -> Result<(), String> {
         Ok(())
     }
+
+    pub(crate) fn quarantine(&self) -> Result<(), String> {
+        Ok(())
+    }
 }

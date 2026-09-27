@@ -1237,16 +1237,18 @@ impl Client {
                 )),
             };
             let preparation = (|| {
-                if worker.is_ok()
-                    && let Some(resolver) = client.0.resolver.as_ref().or_else(|| {
-                        client
-                            .0
-                            .target
-                            .as_ref()
-                            .and_then(crate::target_session::Session::ssh_preparation)
-                    })
-                {
-                    resolver.close()?;
+                if let Some(resolver) = client.0.resolver.as_ref().or_else(|| {
+                    client
+                        .0
+                        .target
+                        .as_ref()
+                        .and_then(crate::target_session::Session::ssh_preparation)
+                }) {
+                    if worker.is_ok() {
+                        resolver.close()?;
+                    } else {
+                        resolver.quarantine()?;
+                    }
                 }
                 Ok(())
             })();
