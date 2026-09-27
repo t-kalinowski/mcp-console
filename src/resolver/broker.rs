@@ -107,7 +107,9 @@ impl Context {
         let resolver = if !self.launch.no_sandbox {
             let storage = self.storage.as_ref().ok_or("sandboxed dependency preparation requires XDG_CACHE_HOME or HOME for owned resolver storage")?;
             let (runner, version) = self.runner.as_ref().expect("native resolver runner");
-            let policy = self.launch.native(storage, &self.executable, *version)?;
+            let policy = self
+                .launch
+                .native(storage, &self.executable, runner, *version)?;
             command = Command::new(runner);
             command
                 .env_clear()

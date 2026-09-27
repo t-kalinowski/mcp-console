@@ -202,6 +202,7 @@ impl Launch {
         &self,
         storage: &super::storage::Storage,
         executable: &Path,
+        runner: &Path,
         version: u32,
     ) -> Result<Value, String> {
         let payload = &storage.payload;
@@ -326,6 +327,8 @@ impl Launch {
             .iter()
             .map(PathBuf::as_path)
             .chain(std::iter::once(executable))
+            // Linux re-execs the verified companion inside its mount namespace.
+            .chain(std::iter::once(runner))
             .chain(system.into_iter().map(Path::new).filter(|p| p.exists()))
         {
             entries.push(json!({"path":{"type":"path","path":path},"access":"read"}));
