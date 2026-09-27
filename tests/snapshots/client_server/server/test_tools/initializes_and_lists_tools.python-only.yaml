@@ -24,16 +24,22 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent local Python workbench. State persists across calls. R and
-        SQL cells, live requirements, and automatic package installation are
+        Persistent local Python and SQL workbench without R. State persists
+        across calls. Managed SQL uses a lazy in-memory DuckDB connection. In
+        Python, sql_connection() returns the active SQL connection;
+        console_sql_connection(connection) selects a user-owned DB-API
+        connection and console_sql_connection(None) restores managed DuckDB.
+        Register Python data frames explicitly with
+        sql_connection().register(name, frame). R cells, live requirements,
+        DuckDB extension preparation, and automatic package installation are
         unavailable in this session. Python uses the environment selected at
         server startup; restart resets objects and retains that environment.
 
 
-        Send one complete `python` cell per call. Code-bearing calls must be
-        sequential; a control-only interrupt may overlap a pending `send`.
-        Inspect intermediate results before submitting dependent cells. Cells
-        are not transactional; changes made before an error may remain.
+        Send one complete `python` or `sql` cell per call. Code-bearing calls
+        must be sequential; a control-only interrupt may overlap a pending
+        `send`. Inspect intermediate results before submitting dependent cells.
+        Cells are not transactional; changes made before an error may remain.
 
 
         Omit code to poll, supply stdin, control the session, or prepare
@@ -67,11 +73,31 @@ result:
             description: >-
               One complete Python cell in persistent state. The final expression
               displays automatically. Use input() for managed stdin; Matplotlib plots
-              return as PNG images when installed. Use only packages already in the
-              selected environment. R integration, SQL cells, live requirements, and
-              automatic package installation are unavailable. Use control: restart
-              with python to run in a fresh worker using the same environment, or
-              timeout_ms: 0 then poll for background execution.
+              return as PNG images when installed. Use packages already in the
+              selected environment. sql_connection() returns the active SQL
+              connection, and console_sql_connection(connection) selects a user-owned
+              DB-API connection. R integration, live requirements, and automatic
+              package installation are unavailable. Use control: restart with python
+              to run in a fresh worker using the same environment, or timeout_ms: 0
+              then poll for background execution.
+            type:
+              - string
+              - "null"
+          sql:
+            description: >-
+              One complete SQL cell through the active Python DB-API connection.
+              Managed DuckDB opens lazily on the first SQL cell or sql_connection()
+              call and retains an in-memory catalog until worker replacement. Python
+              data frames require explicit registration through
+              sql_connection().register(name, frame); automatic frame scanning is
+              disabled. console_sql_connection(connection) selects a user-owned DB-API
+              connection, and console_sql_connection(None) restores managed DuckDB
+              without discarding its catalog. A query with columns returns a bounded
+              preview. SQL errors leave the Python session usable. If DuckDB is
+              unavailable, select a custom connection or install DuckDB in the
+              selected environment; managed sessions can add it with
+              requirements.python and control: restart. R cells and DuckDB extension
+              preparation are unavailable.
             type:
               - string
               - "null"

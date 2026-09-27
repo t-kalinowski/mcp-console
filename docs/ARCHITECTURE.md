@@ -237,7 +237,7 @@ It reports readiness, accepts complete cells and supported preparation operation
 The built-in worker's `worker::core` owns shared sideband state, command readiness, deferred operation messages, active cell language, resolver exchanges, output publication, and shutdown and failure state.
 Its cell state also suppresses R resolution during SQL callbacks.
 The `worker::coordinator` owns one message loop, preparation and cell dispatch, and completion reporting.
-It retains a Python adapter and an optional SQL adapter alongside an optional `worker::r_integration` boundary for R event waiting, idle callbacks, graphics, and interrupt handling.
+It retains Python and SQL adapters alongside an optional `worker::r_integration` boundary for R event waiting, idle callbacks, graphics, and interrupt handling.
 The `worker::input` module owns interactive stdin buffering and preserves unfinished input across operations.
 The `worker::interrupt` service owns native signal distribution, input wakeup setup, blocking native command waiting, and Python interrupt acknowledgment through startup-supplied state callbacks that do not enter an interpreter.
 Its native interrupt state and wait can run without initializing R; the ordinary startup installs R's pending and suspended state instead.
@@ -264,7 +264,7 @@ On Linux, it re-executes before R initialization with the selected `R_HOME/lib` 
 This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
-The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains a user-selected DB-API connection without converting it or its result rows through reticulate.
+The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains user-selected DB-API connections and, without R, a lazy worker-owned DuckDB connection without converting objects or result rows through Rust or R.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The reticulate adapter retains discovery, selection precedence, and R-side hints.
 For each fresh selection, Console inspects that executable in an owned child and derives the embedding library and Python home from its runtime and `sysconfig`.
@@ -279,9 +279,11 @@ Reticulate then attaches its conversion and event runtime to the running interpr
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
 Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
-When R is absent, the local resolver command prepares the default Python manifest, or the server selects PATH Python when uv is absent, and the server inspects that executable before MCP readiness.
+When R is absent, the local resolver command prepares the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
+Without either selection or uv, startup reports an error rather than searching PATH for Python.
+The server inspects the selected executable before MCP readiness.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
-The same coordinator constructs an absent R integration, native Python runtime, and no R DBI backend.
+The same coordinator constructs an absent R integration, native Python runtime, and SQL router without an R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
 Startup failures retain Python tracebacks on the startup diagnostic stream, and every coordinator return restores the Python thread before extension-library exit destructors.
 The native runner owns sandbox temporary storage; direct relay lifetimes own a private directory and retire it after the worker, including failed startup.
@@ -578,7 +580,7 @@ It is a chronological call ledger: a timed-out cell, later polls, and eventual r
 The source-only Quarto document contains the source from calls with exactly one submitted R, Python, or SQL field in call order; it omits stdin, options, results, errors, polls, and artifacts.
 It includes qualifying source from rejected calls and failed evaluations.
 Its `ir` front matter declares the managed built-in R and Python requirements followed by cumulative explicit declarations from recorded calls.
-Python-only managed sessions declare NumPy and pandas plus packages from `python_environment_accepted` events emitted at the prestart/restart environment commit.
+Python-only managed sessions declare NumPy, pandas, and DuckDB plus packages from `python_environment_accepted` events emitted at the prestart/restart environment commit.
 They omit R defaults and rejected or discarded candidate requirements; accepted manifests remain recorded even if later worker replacement fails.
 Bare sessions omit both managed defaults and rejected requirement payloads.
 It does not declare a Python version, so `ir render transcript.qmd` uses reticulate's default managed Python selection.

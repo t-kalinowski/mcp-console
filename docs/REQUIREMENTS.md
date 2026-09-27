@@ -18,7 +18,11 @@ Resolution or inspection failure preserves the current worker and environment; s
 Plain restarts and crash replacement reuse that accepted environment without another resolution.
 Explicit Python selections do not enable preparation.
 Live requirement additions, automatic import resolution, R requirements, and DuckDB requirements are unavailable in this mode.
-The remaining preparation and SQL behavior in this document applies to sessions with R.
+The default sans-R managed Python declaration includes NumPy, pandas, and DuckDB.
+`get` reports the accepted declaration, `reset` restores these startup defaults, and `set` retains exactly the requested declaration, including an empty set.
+DuckDB is resolved with the rest of the Python manifest through the hidden host resolve process before the environment is accepted; the worker never installs it.
+If it is absent after an explicit replacement, Python and a selected DB-API connection remain usable, while managed SQL reports how to obtain DuckDB.
+The remaining R and DuckDB extension preparation behavior in this document applies to sessions with R.
 
 Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
 Its private JSON exchange carries requirement manifests, resolved environment data, controls, and cleanup receipts.
@@ -62,11 +66,11 @@ There are no named environments or persistence across server processes.
 
 The built-in server prepares these defaults when an operation first needs an environment:
 
-| Environment | Defaults                                                             |
-| ----------- | -------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` |
-| Python      | NumPy and pandas when Python is server-managed                       |
-| DuckDB      | ICU and JSON extensions                                              |
+| Environment | Defaults                                                                                  |
+| ----------- | ----------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow`                      |
+| Python      | NumPy and pandas when Python is server-managed; local sans-R sessions also include DuckDB |
+| DuckDB      | ICU and JSON extensions                                                                   |
 
 These defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
@@ -135,6 +139,7 @@ The managed mixed-language worker separately prepares its R infrastructure: `ret
 These packages support the implemented Python bridge and SQL adapters.
 They remain available when the optional declaration is empty.
 NumPy and pandas are optional Python conveniences; an empty managed Python declaration runs standard-library code without either distribution.
+In a sans-R session, an empty declaration also omits DuckDB; SQL can still use a user-selected DB-API connection.
 R/Python conversions that need NumPy still require it.
 Custom workers retain their existing `DBI`, `duckdb`, and `jsonlite` preparation infrastructure.
 Preinstalled and unmanaged targets have no Console-managed package infrastructure to report.

@@ -500,6 +500,10 @@ pub(super) fn use_r_sql() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
 }
 
+pub(super) fn configure_native_sql() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"enable_native"))
+}
+
 pub(super) fn take_sql_restore_request() -> Result<bool, String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(false);

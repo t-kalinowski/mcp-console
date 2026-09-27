@@ -7,24 +7,33 @@ mod r_dbi;
 /// in CPython. Rust chooses the active provider for each SQL cell without
 /// converting connection objects or result rows between the runtimes.
 pub(crate) struct Bridge {
-    r_dbi: r_dbi::Backend,
+    r_dbi: Option<r_dbi::Backend>,
 }
 
 impl Bridge {
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
-            r_dbi: r_dbi::Backend::initialize()?,
+            r_dbi: Some(r_dbi::Backend::initialize()?),
         })
+    }
+
+    pub(crate) fn native() -> Self {
+        Self { r_dbi: None }
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         match py_dbapi::dispatch(source)? {
             py_dbapi::Provider::Handled => Ok(()),
             py_dbapi::Provider::Managed => {
-                self.r_dbi.restore_managed()?;
-                self.r_dbi.evaluate(source)
+                let r_dbi = self.r_dbi.as_mut().ok_or("R SQL backend is unavailable")?;
+                r_dbi.restore_managed()?;
+                r_dbi.evaluate(source)
             }
-            py_dbapi::Provider::R => self.r_dbi.evaluate(source),
+            py_dbapi::Provider::R => self
+                .r_dbi
+                .as_mut()
+                .ok_or("R SQL backend is unavailable")?
+                .evaluate(source),
         }
     }
 }

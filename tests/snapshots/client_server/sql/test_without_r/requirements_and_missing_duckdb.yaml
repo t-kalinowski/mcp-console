@@ -41,15 +41,48 @@ result:
   isError: false
 ---
 send:
-  requirements:
-    action: set
-    python:
-      - six
+  sql: CREATE TABLE retained AS SELECT 42 AS value
 result:
   content:
     - type: text
-      text: "[prepared]"
+      text: |
+        Count
+        -----
+        1
   isError: false
+---
+send:
+  python: identity = object(); identity_id = id(identity)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  sql: DROP TABLE retained
+result:
+  content:
+    - type: text
+      text: |-
+        [managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.14 (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "duckdb",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        fixture Python resolution failed]
+  isError: true
 ---
 send:
   requirements:
@@ -62,7 +95,9 @@ result:
           "requirements": {
             "r": [],
             "python": [
-              "six"
+              "numpy",
+              "pandas",
+              "duckdb"
             ],
             "duckdb": [],
             "python_version": [],
@@ -78,7 +113,9 @@ result:
     requirements:
       r: []
       python:
-        - six
+        - numpy
+        - pandas
+        - duckdb
       duckdb: []
       python_version: []
       exclude_newer: ~
@@ -89,48 +126,130 @@ result:
   isError: false
 ---
 send:
-  python: import six; retained = 42; retained
+  sql: SELECT value FROM retained
 result:
   content:
     - type: text
       text: |
+        value
+        -----
         42
   isError: false
 ---
 send:
-  requirements:
-    action: reset
-result:
-  content:
-    - type: text
-      text: >-
-        changed requirements require an explicit restart; retry
-        send(control="restart", requirements={"action": "set", ...}) with the
-        complete declaration (or action="reset")
-  isError: true
----
-send:
-  python: retained
+  python: assert id(identity) == identity_id; print('retained')
 result:
   content:
     - type: text
       text: |
-        42
+        retained
   isError: false
 ---
 send:
   control: restart
   requirements:
     action: set
-  python: import importlib.util; importlib.util.find_spec('numpy') is None
 result:
   content:
     - type: text
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        True
-        [done]
+        [idle]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  sql: SELECT 1
+result:
+  content:
+    - type: text
+      text: >
+        Error: DuckDB is unavailable; add duckdb with requirements.python and
+        control: restart in a managed session, install it before starting a
+        selected Python environment, or select a DB-API connection with
+        console_sql_connection(connection)
+  isError: false
+---
+send:
+  python: |
+    import importlib.util
+    import sqlite3
+
+    assert importlib.util.find_spec("duckdb") is None
+    selected = sqlite3.connect(":memory:")
+    console_sql_connection(selected)
+    print("Python remains available")
+result:
+  content:
+    - type: text
+      text: |
+        Python remains available
+  isError: false
+---
+send:
+  sql: SELECT 7 AS custom_value
+result:
+  content:
+    - type: text
+      text: |
+        custom_value
+        ------------
+        7
+  isError: false
+---
+send:
+  python: console_sql_connection(None); selected.execute('SELECT 1').fetchone()
+result:
+  content:
+    - type: text
+      text: |
+        (1,)
+  isError: false
+---
+send:
+  sql: SELECT 1
+result:
+  content:
+    - type: text
+      text: >
+        Error: DuckDB is unavailable; add duckdb with requirements.python and
+        control: restart in a managed session, install it before starting a
+        selected Python environment, or select a DB-API connection with
+        console_sql_connection(connection)
   isError: false
 ---
 send:
@@ -222,10 +341,12 @@ result:
   isError: false
 ---
 send:
-  python: import numpy, pandas; 42
+  sql: SELECT 9 AS restored
 result:
   content:
     - type: text
       text: |
-        42
+        restored
+        --------
+        9
   isError: false

@@ -57,7 +57,7 @@ impl Selection {
                 return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
             }
             let managed = crate::resolver::execution::resolve_python_manifest(
-                crate::worker_protocol::default_python_requirement_manifest(),
+                crate::worker_protocol::default_native_python_requirement_manifest(),
                 resolver,
                 None,
                 on_started,

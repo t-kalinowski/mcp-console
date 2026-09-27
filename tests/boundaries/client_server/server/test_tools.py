@@ -223,7 +223,8 @@ def _initializes_and_lists_tools(
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
-                assert {"r", "sql"}.isdisjoint(send["inputSchema"]["properties"])
+                assert "r" not in send["inputSchema"]["properties"]
+                assert "sql" in send["inputSchema"]["properties"]
             if python_managed:
                 assert set(
                     send["inputSchema"]["properties"]["requirements"]["properties"]

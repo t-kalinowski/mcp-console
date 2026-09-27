@@ -58,24 +58,7 @@ send:
 result:
   content:
     - type: text
-      text: R and SQL cells are unavailable in Python sessions without R
-  isError: true
----
-send:
-  python: assert id(identity) == identity_id; retained + 2
-result:
-  content:
-    - type: text
-      text: |
-        43
-  isError: false
----
-send:
-  sql: SELECT 1
-result:
-  content:
-    - type: text
-      text: R and SQL cells are unavailable in Python sessions without R
+      text: R cells are unavailable in Python sessions without R
   isError: true
 ---
 send:
@@ -155,7 +138,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e8>", line 1, in <module>
+          File "<mcp-console:python:e7>", line 1, in <module>
         ModuleNotFoundError: No module named 'mcp_console_package_that_does_not_exist'.
 
         automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart

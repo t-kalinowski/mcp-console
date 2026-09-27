@@ -708,9 +708,9 @@ impl Client {
                 }
             }
             if let Some(cell) = &request.cell
-                && !matches!(cell.language, crate::cell::Language::Python)
+                && matches!(cell.language, crate::cell::Language::R)
             {
-                return Err("R and SQL cells are unavailable in Python sessions without R".into());
+                return Err("R cells are unavailable in Python sessions without R".into());
             }
         }
         if let Some(target) = &self.0.target

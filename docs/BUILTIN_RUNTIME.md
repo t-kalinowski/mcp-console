@@ -53,7 +53,7 @@ An invalid explicit `R_HOME` or a broken discovered R installation reports an R 
 
 There are two environment modes:
 
-- By default, Console selects `uv` on `PATH` and resolves its default Python manifest (`numpy` and `pandas`).
+- By default, Console selects `uv` on `PATH` and resolves its default Python manifest (`numpy`, `pandas`, and `duckdb`).
   It retains the environment for subsequent workers.
   Resolution failure is reported without trying another interpreter.
 - Set `python: .venv/bin/python` in `.agents/console/config.yaml`, or pass `-c python=.venv/bin/python`, to use an existing environment.
@@ -86,7 +86,7 @@ Requirements already retained are a no-op, including on a running worker.
 Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
 Live additions are rejected without changing the environment or silently restarting.
 
-Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration, and `reset` restores NumPy and pandas.
+Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB.
 `python_version` and `exclude_newer` use the ordinary requirements contract.
 Restart preparation resolves the complete candidate manifest and inspects the resulting executable before retiring the current worker.
 Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
@@ -105,13 +105,23 @@ Retirement does not delete resolver caches or the retained environment.
 
 Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
 Interrupts received while the worker is idle do not interrupt the next Python cell.
-When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, and accepted package additions without R defaults or rejected requirements.
+When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, DuckDB, and accepted package additions without R defaults or rejected requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
 Explicitly selected environments remain non-managed; prepare their packages before starting Console.
-Live environment updates, automatic missing-import installation, R and DuckDB requirements, R cells, and SQL cells are unavailable.
+Live environment updates, automatic missing-import installation, R and DuckDB extension requirements, and R cells are unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
 This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
+
+SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection that opens on the first SQL cell or `sql_connection()` call.
+Python-only cells do not open it.
+`sql_connection()` returns the connection currently selected for SQL cells, including a user-owned DB-API connection selected with `console_sql_connection(connection)`.
+`console_sql_connection(None)` restores the same managed DuckDB connection and catalog without closing the user-owned connection.
+Register a Python data frame explicitly with `sql_connection().register("name", frame)` before querying it; automatic frame scanning is disabled.
+The managed connection places spill files and persistent secrets beneath the worker's private temporary directory.
+Restart and crash replacement create a fresh catalog while retaining the accepted Python environment.
+Query errors and interrupts leave the session usable; transaction effects follow the selected driver.
+If DuckDB is absent from an explicit or replaced environment, SQL reports how to add it or select a DB-API connection, and Python remains usable.
 
 ## Cells and polling
 
@@ -417,7 +427,7 @@ Objects and proxies tied to a worker generation become invalid when that generat
 
 ## SQL and DuckDB
 
-The managed in-memory DuckDB connection is the default SQL backend and is created lazily.
+With R present, the managed in-memory DuckDB connection is the default SQL backend and is created lazily.
 Later managed SQL cells, DBI calls, and dplyr relations reuse its catalog.
 DuckDB CLI dot commands are not supported.
 
@@ -444,7 +454,8 @@ console_sql_connection(connection)
 The Python runtime retains the exact connection object.
 If it implements `execute()`, SQL cells execute directly on it so connection-local state is preserved; otherwise the adapter executes through `connection.cursor()`.
 The adapter reads result metadata and bounded rows through the returned cursor protocol, without converting the connection or its result rows through reticulate.
-`console_sql_connection(None)` restores managed DuckDB for the next SQL cell or R `sql_connection()` call, whichever comes first.
+With R present, `console_sql_connection(None)` restores managed DuckDB for the next SQL cell or R `sql_connection()` call, whichever comes first.
+Without R, Python `sql_connection()` returns the active Python connection, and `console_sql_connection(None)` restores the worker-owned DuckDB connection and its catalog.
 
 The R provider submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
 Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
@@ -453,10 +464,11 @@ Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands t
 The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
 DuckDB extension requirements and the managed conveniences below apply only to the managed R-backed DuckDB provider; prepare Python drivers and their dependencies through `requirements.python`.
 
-Environment scanning lets an unqualified relation name refer to an R data frame in global state.
+With R present, environment scanning lets an unqualified relation name refer to an R data frame in global state.
 A DuckDB table or view with the same name takes precedence.
 A view over an R data-frame name observes a later rebinding when queried.
-Managed DuckDB does not expose Python objects as relations and adds no separate registration API.
+The R-owned managed DuckDB connection does not expose Python objects as relations and adds no separate registration API.
+The sans-R managed connection supports explicit registration through DuckDB's Python connection API and does not scan Python frames.
 A selected Python driver can use only the relations and driver-specific registrations available on that connection.
 
 Query results are previews, not complete result materializations for display.

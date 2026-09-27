@@ -18,6 +18,7 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "duckdb",
             "py-yaml12"
           ]
         }

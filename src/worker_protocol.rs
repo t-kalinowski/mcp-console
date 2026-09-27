@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::cell::Language;
 
 pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
+pub(crate) const DEFAULT_NATIVE_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas", "duckdb"];
 
 pub(crate) fn deserialize_payload_free<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
@@ -93,6 +94,16 @@ impl PythonRequirementManifest {
 pub(crate) fn default_python_requirement_manifest() -> PythonRequirementManifest {
     PythonRequirementManifest {
         packages: DEFAULT_PYTHON_PACKAGES
+            .iter()
+            .map(|package| (*package).to_string())
+            .collect(),
+        ..Default::default()
+    }
+}
+
+pub(crate) fn default_native_python_requirement_manifest() -> PythonRequirementManifest {
+    PythonRequirementManifest {
+        packages: DEFAULT_NATIVE_PYTHON_PACKAGES
             .iter()
             .map(|package| (*package).to_string())
             .collect(),

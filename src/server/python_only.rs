@@ -6,6 +6,7 @@ pub(super) fn configure(
     description: &mut String,
     properties: &mut Map<String, Value>,
     python_preparation: bool,
+    sql: bool,
 ) {
     let remaining = description
         .split_once("\n\nSend one complete")
@@ -16,15 +17,27 @@ pub(super) fn configure(
     } else {
         "Python uses the environment selected at server startup; restart resets objects and retains that environment."
     };
-    *description = format!(
-        "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session. {environment}\n\nSend one complete{remaining}"
+    let introduction = if sql {
+        "Persistent local Python and SQL workbench without R. State persists across calls. Managed SQL uses a lazy in-memory DuckDB connection. In Python, sql_connection() returns the active SQL connection; console_sql_connection(connection) selects a user-owned DB-API connection and console_sql_connection(None) restores managed DuckDB. Register Python data frames explicitly with sql_connection().register(name, frame). R cells, live requirements, DuckDB extension preparation, and automatic package installation are unavailable in this session."
+    } else {
+        "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session."
+    };
+    *description = format!("{introduction} {environment}\n\nSend one complete{remaining}");
+    *description = description.replace(
+        "`r`, `python`, or `sql` cell",
+        if sql {
+            "`python` or `sql` cell"
+        } else {
+            "`python` cell"
+        },
     );
-    *description = description.replace("`r`, `python`, or `sql` cell", "`python` cell");
+    let python_description = if sql {
+        "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Use packages already in the selected environment. sql_connection() returns the active SQL connection, and console_sql_connection(connection) selects a user-owned DB-API connection. R integration, live requirements, and automatic package installation are unavailable. Use control: restart with python to run in a fresh worker using the same environment, or timeout_ms: 0 then poll for background execution."
+    } else {
+        "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Use packages already in the selected environment. R and SQL cells, live requirements, and automatic package installation are unavailable. Use control: restart with python to run in a fresh worker using the same environment, or timeout_ms: 0 then poll for background execution."
+    };
     for (field, description) in [
-        (
-            "python",
-            "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Use only packages already in the selected environment. R integration, SQL cells, live requirements, and automatic package installation are unavailable. Use control: restart with python to run in a fresh worker using the same environment, or timeout_ms: 0 then poll for background execution.",
-        ),
+        ("python", python_description),
         (
             "control",
             "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT from the live worker and preserves Python state. After successful delivery, stdin is queued and send waits 100 milliseconds before observing the earlier evaluation or attempting an optional following cell; that cell is not run if the interrupted evaluation remains active. restart discards Python objects, debugger state, and unread stdin, retains the selected environment, and sends same-call stdin and code only to the replacement worker.",
@@ -42,12 +55,17 @@ pub(super) fn configure(
             property["description"] = description.into();
         }
     }
+    if sql {
+        properties.get_mut("sql").expect("SQL property")["description"] = "One complete SQL cell through the active Python DB-API connection. Managed DuckDB opens lazily on the first SQL cell or sql_connection() call and retains an in-memory catalog until worker replacement. Python data frames require explicit registration through sql_connection().register(name, frame); automatic frame scanning is disabled. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores managed DuckDB without discarding its catalog. A query with columns returns a bounded preview. SQL errors leave the Python session usable. If DuckDB is unavailable, select a custom connection or install DuckDB in the selected environment; managed sessions can add it with requirements.python and control: restart. R cells and DuckDB extension preparation are unavailable.".into();
+    }
     if python_preparation {
+        let python_description = if sql {
+            "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. sql_connection() returns the active SQL connection. requirements.python prepares packages before first use, or with control: restart before the replacement runs this cell. Live package updates, automatic package installation, and R integration are unavailable. Use timeout_ms: 0 then poll for background execution."
+        } else {
+            "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. requirements.python prepares packages before first use, or with control: restart before the replacement runs this cell. Live package updates, automatic package installation, R cells, and SQL cells are unavailable. Use timeout_ms: 0 then poll for background execution."
+        };
         for (field, description) in [
-            (
-                "python",
-                "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. requirements.python prepares packages before first use, or with control: restart before the replacement runs this cell. Live package updates, automatic package installation, R integration, and SQL are unavailable. Use timeout_ms: 0 then poll for background execution.",
-            ),
+            ("python", python_description),
             (
                 "control",
                 "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT from the live worker and preserves Python state; during preparation it interrupts the host resolver. Same-call stdin is queued before the interrupt grace. Python requirements with interrupt are rejected before signaling or queuing input. restart discards objects and unread stdin, then sends same-call stdin and code only to the replacement. With requirements.python, the complete candidate environment is resolved and inspected before stopping the current worker. Preparation failure preserves the current worker, retained requirements, and queued input; same-call code and stdin are not sent. Retirement or replacement failure follows the ordinary restart contract. Plain restart reuses the accepted environment.",
@@ -60,7 +78,11 @@ pub(super) fn configure(
         let requirements = properties
             .get_mut("requirements")
             .expect("requirements schema");
-        requirements["description"] = "Inspect with action=get; add named Python packages with action=add (the default), replace the declaration with action=set, or restore defaults with action=reset. Applies to a Console-managed uv environment. Supported before the first worker starts, alone or with a Python cell, and with control: restart, with or without code. Additions accumulate in the retained declaration, initially NumPy and pandas. A changed live environment requires restart; retained requirements are a no-op. Resolution and native inspection finish before retirement. Automatic installation is unavailable. Standalone preparation cannot queue stdin.".into();
+        let cells = if sql { "Python or SQL" } else { "Python" };
+        requirements["description"] = format!(
+            "Inspect with action=get; add named Python packages with action=add (the default), replace the declaration with action=set, or restore defaults with action=reset. Applies to a Console-managed uv environment. Supported before the first worker starts, alone or with a {cells} cell, and with control: restart, with or without code. Additions accumulate in the retained declaration, initially NumPy, pandas, and DuckDB. An explicit set, including an empty set, remains exactly that declaration. A changed live environment requires restart; retained requirements are a no-op. Resolution and native inspection finish before retirement. Automatic installation is unavailable. Standalone preparation cannot queue stdin."
+        )
+        .into();
         let fields = requirements["properties"]
             .as_object_mut()
             .expect("requirement properties");
