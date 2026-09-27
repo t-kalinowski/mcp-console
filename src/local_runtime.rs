@@ -9,9 +9,9 @@ use crate::resolver::{ManagedPython, ResolverStopHandle};
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
-pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle DuckDB extension additions require control: restart in a Python session without R";
+pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
-pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart";
+pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; add a new distribution with requirements.python in an idle session, or use control: restart to replace a declaration";
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -63,6 +63,7 @@ impl Selection {
             let managed = crate::resolver::execution::resolve_python_manifest(
                 crate::worker_protocol::default_native_python_requirement_manifest(),
                 resolver,
+                None,
                 None,
                 on_started,
             )?;

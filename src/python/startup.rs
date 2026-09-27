@@ -73,6 +73,7 @@ pub(crate) fn finish_initialization() -> Result<(), String> {
 /// Native owner for both Python-first and R-first interpreter startup.
 pub(super) struct Runtime {
     adapter: Option<reticulate::Adapter>,
+    native: Option<super::NativePython>,
     completed: bool,
 }
 
@@ -80,6 +81,7 @@ impl Runtime {
     pub(super) fn initialize() -> Result<Self, String> {
         Ok(Self {
             adapter: Some(reticulate::Adapter::initialize()?),
+            native: None,
             completed: false,
         })
     }
@@ -123,6 +125,7 @@ impl Runtime {
         finished?;
         Ok(Self {
             adapter: None,
+            native: Some(configuration.clone()),
             completed: true,
         })
     }
@@ -162,5 +165,44 @@ impl Runtime {
             .as_ref()
             .expect("live preparation requires R")
             .prepare(packages)
+    }
+
+    pub(super) fn activate_native(
+        &mut self,
+        candidate: &super::NativePython,
+    ) -> Result<PreparationOutcome, String> {
+        let running = self.native.as_ref().expect("native Python is running");
+        let input = super::ActivationInput {
+            candidate_python: &candidate.embedding.python,
+            candidate_libpython: &candidate.embedding.libpython,
+            candidate_executable: &candidate.embedding.python,
+            running_libpython: &running.embedding.libpython,
+        };
+        let result = super::activate_managed_environment(input);
+        match result {
+            Ok(()) => match super::library::configure_native_child_environment(candidate) {
+                Ok(true) => {
+                    self.native = Some(candidate.clone());
+                    Ok(PreparationOutcome::Prepared)
+                }
+                Ok(false) => {
+                    super::library::display_setup_exception()?;
+                    Ok(PreparationOutcome::Failed {
+                        message: "Python activation failed; restart required".into(),
+                    })
+                }
+                Err(message) => Ok(PreparationOutcome::Failed { message }),
+            },
+            Err(super::ActivationFailure::PythonException) => {
+                // The native setup slot retains the original Python traceback.
+                super::library::display_setup_exception()?;
+                Ok(PreparationOutcome::Failed {
+                    message: "Python activation failed; restart required".into(),
+                })
+            }
+            Err(error) => Ok(PreparationOutcome::Failed {
+                message: error.to_string(),
+            }),
+        }
     }
 }

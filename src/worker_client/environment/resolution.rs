@@ -74,9 +74,15 @@ impl Client {
             },
         };
         let early_python = match (&python_candidate, early_resolver) {
-            (Some(candidate), Some(resolver)) if resolver.has_direct_local_uv() => Some(
-                self.resolve_managed_python_host(generation, candidate.clone(), resolver, None)?,
-            ),
+            (Some(candidate), Some(resolver)) if resolver.has_direct_local_uv() => {
+                Some(self.resolve_managed_python_host(
+                    generation,
+                    candidate.clone(),
+                    resolver,
+                    None,
+                    None,
+                )?)
+            }
             _ => None,
         };
         let pending_python = if let RResolver::Pending(setup) = &environment.r_resolver {
@@ -167,6 +173,7 @@ impl Client {
                     candidate,
                     &resolver,
                     environment.r.as_ref(),
+                    None,
                 )?
             };
             if let Some(crate::local_runtime::Selection::Python {
@@ -191,6 +198,76 @@ impl Client {
             .map_err(EnvironmentResolutionFailure::Operation)?;
         environment.duckdb_extensions = duckdb_extensions;
         Ok(environment)
+    }
+
+    /// Resolve and inspect the complete candidate while the accepted running
+    /// environment remains locked. The executable path is resolver input only;
+    /// it never becomes a user declaration.
+    pub(super) fn resolve_live_native_python(
+        &self,
+        generation: &WorkerGeneration,
+        environment: &Environment,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+    ) -> Result<
+        (crate::resolver::ManagedPython, crate::python::NativePython),
+        EnvironmentResolutionFailure,
+    > {
+        let (current, resolver) = environment
+            .python
+            .as_ref()
+            .ok_or_else(|| {
+                EnvironmentResolutionFailure::Operation(
+                    "managed Python environment is unavailable".into(),
+                )
+            })?
+            .managed_parts()
+            .map_err(EnvironmentResolutionFailure::Operation)?;
+        let running = match environment.local_runtime.as_ref() {
+            Some(crate::local_runtime::Selection::Python { selected, .. }) => selected,
+            _ => {
+                return Err(EnvironmentResolutionFailure::Operation(
+                    "native Python launch configuration is unavailable".into(),
+                ));
+            }
+        };
+        let candidate = self.resolve_managed_python_host(
+            generation,
+            requirements,
+            resolver,
+            None,
+            Some(current.python()),
+        )?;
+        let inspected = self.inspect_managed_python(generation, &candidate)?;
+        crate::python::ensure_libpython_compatible(
+            &inspected.embedding.libpython,
+            &running.embedding.libpython,
+        )
+        .map_err(|error| EnvironmentResolutionFailure::Host(error.to_string()))?;
+
+        if !environment.duckdb_extensions.is_empty() {
+            let mut provisional = environment.clone();
+            provisional
+                .python
+                .as_mut()
+                .expect("managed native Python exists")
+                .replace_managed(candidate.clone())
+                .map_err(EnvironmentResolutionFailure::Operation)?;
+            if let Some(crate::local_runtime::Selection::Python { selected, .. }) =
+                &mut provisional.local_runtime
+            {
+                **selected = inspected.clone();
+            }
+            self.resolve_python_duckdb_extensions_for_environment(
+                generation,
+                &provisional,
+                &environment
+                    .duckdb_extensions
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )?;
+        }
+        Ok((candidate, inspected))
     }
 
     fn inspect_managed_python(
@@ -295,6 +372,7 @@ impl Client {
         requirements: crate::worker_protocol::PythonRequirementManifest,
         resolver: &crate::resolver::execution::PythonConfiguration,
         managed_r: Option<&crate::resolver::ManagedR>,
+        selected_python: Option<&std::path::Path>,
     ) -> Result<crate::resolver::ManagedPython, EnvironmentResolutionFailure> {
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
@@ -303,6 +381,7 @@ impl Client {
             requirements,
             resolver,
             managed_r,
+            selected_python,
             |handle| {
                 stop_handle = Some(handle.clone());
                 self.register_resolver_stop_handle(generation, handle)

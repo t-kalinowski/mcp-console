@@ -402,6 +402,25 @@ pub(super) fn configure_native_environment(
     })
 }
 
+pub(super) fn configure_native_child_environment(
+    configuration: &super::NativePython,
+) -> Result<bool, String> {
+    let encoded = serde_json::to_string(configuration)
+        .map_err(|error| format!("cannot encode native Python environment: {error}"))?;
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_native_child_environment")?;
+        let argument =
+            (api.unicode_from_string_and_size)(encoded.as_ptr().cast(), encoded.len() as isize);
+        if argument.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        api.finish_setup(result)
+    })
+}
+
 pub(super) fn display_setup_exception() -> Result<(), String> {
     let api = {
         let slot = PYTHON_LIBRARY

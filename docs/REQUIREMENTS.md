@@ -12,17 +12,19 @@ The default uses uv from `PATH`; setting `python` in the Console config selects 
 The [sans-R runtime contract](BUILTIN_RUNTIME.md#python-sessions-without-r) uses the same trusted host resolver as mixed-language sessions.
 There is no automatic PATH-Python fallback.
 `requirements.python` and `requirements.duckdb` prepare additions before the first worker starts, alone or with a Python or SQL cell.
-After startup, an idle worker accepts `action: "add"` when only DuckDB extensions change; already retained Python requirements can accompany them.
-Python package or constraint changes and changed `set` or `reset` declarations still need `control: "restart"`.
+After startup, an idle worker accepts `action: "add"` for new Python distributions or DuckDB extensions; already retained declarations can accompany either as no-ops.
+Simultaneous effective additions to both fields, changes to a declared distribution or constraint, and changed `set` or `reset` declarations still need `control: "restart"`.
 Unchanged declarations are a no-op.
 The existing prestart/restart transaction resolves the complete Python candidate and inspects its executable before preparing all retained extensions with that candidate's DuckDB.
 The hidden local `resolve` subprocess owns cancellation, output, and child cleanup for the Python-backed extension operation.
 Before startup and during restart, resolution, inspection, or extension preparation failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
 Live extension installation uses the accepted managed Python environment and captured cache directory without resolving or inspecting another interpreter.
 It commits the complete extension declaration only after host preparation succeeds in the same worker generation.
+Live Python preparation resolves against the running executable, inspects the candidate, checks `libpython`, and prepares retained extensions before sending the candidate to the worker.
+The worker reports activation before the server commits the candidate manifest and native launch configuration.
 Plain restarts and crash replacement reuse that accepted environment without another resolution.
 Explicit Python selections do not enable preparation.
-Live Python changes, automatic import resolution, and R requirements are unavailable in this mode.
+Automatic import resolution and R requirements are unavailable in sans-R sessions.
 The default sans-R managed Python declaration includes NumPy, pandas, and DuckDB.
 `get` reports the accepted declaration, `reset` restores these startup defaults, and `set` retains exactly the requested declaration, including an empty set.
 DuckDB is resolved with the rest of the Python manifest through the hidden host resolve process before the environment is accepted; the worker never installs it through Console preparation.
@@ -166,7 +168,8 @@ Changing these constraints with a live worker requires restart.
 `set` clears omitted constraints; `reset` restores startup constraints (currently none).
 Captured resolver settings such as `UV_*` remain startup configuration and are not rewritten by these session operations.
 Sans-R managed sessions support these actions for Python and DuckDB extensions.
-Only idle additive extension changes can commit live; Python changes and changed declaration replacements require restart.
+Idle additive changes can commit live when they add only new Python distributions or only new DuckDB extensions.
+Changing a declared distribution and changed declaration replacements require restart.
 User-selected Python, bare runtimes, Docker, and Docker Sandbox support inspection without enabling preparation.
 
 Committed replacements are recorded with their declaration and call ID in the event journal and Markdown transcript.
@@ -393,6 +396,20 @@ A successful activation commits independently of later steps in the same mixed r
 If Python succeeds and a following live R update fails, the Python addition remains retained and is available after restart.
 The same rule retains an automatically inferred distribution when the requested module or later cell code still fails.
 
+In a local managed sans-R session, an idle `action="add"` request can add a new named Python distribution before a Python or SQL cell or as a standalone request.
+An exact retained requirement is a no-op.
+A different requirement for an already-declared distribution needs `control="restart"` and `action="set"`; the distribution name comes from the same PEP 508 parser used for request validation.
+This add-only rule does not promise that arbitrary package upgrades can be switched in a running interpreter.
+The host resolves the complete candidate through the hidden resolver using the running environment's executable, then inspects the candidate and compares its `libpython` with the worker's active configuration.
+If DuckDB extensions are retained, the host prepares them against the candidate before activation.
+No candidate declaration appears in `action="get"` while this work is pending.
+The worker receives only this approved candidate and uses the shared native activation operation without loading R or installing packages inside the worker.
+Its `PythonActivated` report commits the manifest and native launch configuration together before a same-call cell begins.
+Python objects, the managed DuckDB catalog, and the selected SQL connection remain in the worker; a later cell error does not discard an accepted activation.
+Validation, resolution, inspection, and compatibility failures leave the current worker and accepted environment intact.
+An activation exception retains its Python traceback and withholds same-call code and input; further requirement changes require restart because activation-script side effects cannot be rolled back.
+The worker is not restarted automatically.
+
 An ordinary Python preparation failure restores the prior reticulate manifest, discards unaccepted candidates, and leaves the worker usable.
 By itself, this failure does not make restart mandatory.
 A Python transport, protocol, or bridge-infrastructure failure stops the worker instead.
@@ -417,7 +434,7 @@ Without an absolute `HOME`, ordinary managed Python sessions still start, but ex
 Its spill and stored-secret paths remain in private worker storage, which retirement removes without deleting shared extensions.
 Preparation never loads extensions, executes submitted code, opens a worker database, or changes a selected DB-API connection.
 The worker's interpreter, Python objects, managed DuckDB catalog, and selected SQL connection survive a successful live addition.
-Changed live `set` and `reset` declarations, Python packages, interpreter constraints, and `exclude_newer` require explicit restart; an effective no-op remains a no-op even when those fields are present.
+Changed live `set` and `reset` declarations, interpreter constraints, `exclude_newer`, and changes to a declared Python distribution require explicit restart; an effective no-op remains a no-op even when those fields are present.
 An unsupported mixed request is rejected before any part is prepared or committed.
 Host installation failure or cancellation leaves the worker and committed requirements unchanged, and same-call code and input do not reach the worker.
 The shared extension cache may retain downloads made before failure.

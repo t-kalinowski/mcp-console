@@ -110,6 +110,7 @@ pub(crate) fn resolve_python_manifest(
     requirements: PythonRequirementManifest,
     configuration: &PythonConfiguration,
     managed_r: Option<&ManagedR>,
+    selected_python: Option<&std::path::Path>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     match configuration {
@@ -117,6 +118,7 @@ pub(crate) fn resolve_python_manifest(
             Operation::Python {
                 requirements,
                 r: managed_r.cloned(),
+                selected_python: selected_python.map(std::path::Path::to_path_buf),
             },
             on_started,
         ),
@@ -124,11 +126,17 @@ pub(crate) fn resolve_python_manifest(
             Operation::Python {
                 requirements,
                 r: managed_r.cloned(),
+                selected_python: selected_python.map(std::path::Path::to_path_buf),
             },
             on_started,
         ),
         #[cfg(not(unix))]
         PythonConfiguration::Direct(configuration) => {
+            if selected_python.is_some() {
+                return Err(
+                    "live managed Python preparation is unsupported on this platform".into(),
+                );
+            }
             super::resolve_python_manifest(requirements, configuration, on_started)
         }
     }

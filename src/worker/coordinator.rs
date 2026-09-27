@@ -134,8 +134,18 @@ impl Coordinator {
             }
             // Keep worker-owned preparation state transitions atomic. Any
             // nested host resolver registers its own interrupt target.
-            ServerMessage::PreparePython { packages } => {
-                let result = self.r.prepare_python(|| self.python.prepare(packages));
+            ServerMessage::PreparePython { packages, native } => {
+                let result = if let Some(candidate) = native.as_ref() {
+                    if !packages.is_empty() {
+                        return Err(io::Error::other(
+                            "native Python preparation cannot include R package declarations",
+                        )
+                        .into());
+                    }
+                    self.python.activate_native(&candidate.selected)
+                } else {
+                    self.r.prepare_python(|| self.python.prepare(packages))
+                };
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
@@ -144,6 +154,9 @@ impl Coordinator {
                 }
                 match result {
                     Ok(crate::python::PreparationOutcome::Prepared) => {
+                        if let Some(candidate) = native {
+                            core::publish_python_activation(candidate.requirements)?;
+                        }
                         self.writer.send(&WorkerMessage::PythonPrepared)?;
                     }
                     Ok(crate::python::PreparationOutcome::Failed { message }) => {

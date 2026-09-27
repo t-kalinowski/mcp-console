@@ -123,7 +123,11 @@ impl Context {
                 self.rscript = Some(r.rscript().to_path_buf());
                 serde_json::to_value(r).map_err(|error| error.to_string())
             }
-            Operation::Python { requirements, r } => {
+            Operation::Python {
+                requirements,
+                r,
+                selected_python,
+            } => {
                 let r =
                     r.map(|r| r.on_host(self.rscript.as_ref().expect("managed R has an Rscript")));
                 self.prepare_uv(r.as_ref(), on_started)?;
@@ -131,6 +135,7 @@ impl Context {
                     requirements,
                     &self.python,
                     if self.local { None } else { r.as_ref() },
+                    selected_python.as_deref(),
                     on_started,
                 )?;
                 serde_json::to_value(python).map_err(|error| error.to_string())

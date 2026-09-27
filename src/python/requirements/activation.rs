@@ -53,12 +53,7 @@ impl fmt::Display for ActivationFailure {
 pub(crate) fn activate_managed_environment(
     input: ActivationInput<'_>,
 ) -> Result<(), ActivationFailure> {
-    if input.candidate_libpython != input.running_libpython {
-        return Err(ActivationFailure::Incompatible {
-            candidate_libpython: input.candidate_libpython.to_owned(),
-            running_libpython: input.running_libpython.to_owned(),
-        });
-    }
+    ensure_libpython_compatible(input.candidate_libpython, input.running_libpython)?;
 
     let script = Path::new(input.candidate_python)
         .parent()
@@ -75,5 +70,19 @@ pub(crate) fn activate_managed_environment(
         Ok(true) => Ok(()),
         Ok(false) => Err(ActivationFailure::PythonException),
         Err(error) => Err(ActivationFailure::Infrastructure(error)),
+    }
+}
+
+pub(crate) fn ensure_libpython_compatible(
+    candidate_libpython: &str,
+    running_libpython: &str,
+) -> Result<(), ActivationFailure> {
+    if candidate_libpython == running_libpython {
+        Ok(())
+    } else {
+        Err(ActivationFailure::Incompatible {
+            candidate_libpython: candidate_libpython.to_owned(),
+            running_libpython: running_libpython.to_owned(),
+        })
     }
 }

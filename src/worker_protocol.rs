@@ -45,6 +45,8 @@ pub(crate) enum ServerMessage {
     },
     PreparePython {
         packages: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolved {
         python: String,
@@ -70,6 +72,13 @@ pub(crate) struct PythonRequirementManifest {
     pub(crate) python_version: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) exclude_newer: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativePythonActivation {
+    pub(crate) selected: crate::python::NativePython,
+    pub(crate) requirements: PythonRequirementManifest,
 }
 
 impl PythonRequirementManifest {

@@ -433,6 +433,8 @@ In local sans-R startup and restart transitions, the inspected Python candidate'
 A changed Python candidate requires this step even when the extension names are unchanged.
 An idle live extension-only addition uses the accepted managed Python and captured extension cache through that same resolver operation, then commits the extension declaration only if its generation remains current.
 It sends no worker activation or SQL command, preserving Python objects, the managed catalog, and the selected connection.
+An idle live Python-only addition resolves against the accepted executable, inspects the candidate, checks library compatibility, and prepares retained DuckDB extensions before worker activation.
+The existing preparation receipt carries the approved native configuration to the worker; `PythonActivated` commits the candidate manifest and launch configuration in the current generation before a same-call cell can run.
 The hidden local resolver owns the Python helper's process group, cancellation, output, and cleanup; R-backed and SSH extension operations keep their existing path.
 Resolver and inspection results use bounded reads from the original open descriptors.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.

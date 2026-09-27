@@ -71,6 +71,7 @@ pub(crate) enum Operation {
     Python {
         requirements: PythonRequirementManifest,
         r: Option<ManagedR>,
+        selected_python: Option<std::path::PathBuf>,
     },
     PythonVersion {
         constraints: Vec<String>,

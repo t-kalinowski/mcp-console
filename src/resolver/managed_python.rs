@@ -66,22 +66,30 @@ pub(crate) fn resolve_python_manifest(
     configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest_with_r(requirements, configuration, None, on_started)
+    resolve_python_manifest_with_r(requirements, configuration, None, None, on_started)
 }
 
 pub(crate) fn resolve_python_manifest_for_remote(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
     managed_r: Option<&super::ManagedR>,
+    selected_python: Option<&Path>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest_with_r(requirements, configuration, managed_r, on_started)
+    resolve_python_manifest_with_r(
+        requirements,
+        configuration,
+        managed_r,
+        selected_python,
+        on_started,
+    )
 }
 
 fn resolve_python_manifest_with_r(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
     managed_r: Option<&super::ManagedR>,
+    selected_python: Option<&Path>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     crate::python_requirement::validate_all(&requirements.packages)?;
@@ -89,11 +97,26 @@ fn resolve_python_manifest_with_r(
     let requirements = requirements.normalized();
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    let versions =
-        resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
-    let resolved_python = versions
-        .resolve(&requirements.python_version)
-        .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))?;
+    let resolved_python = if let Some(selected) = selected_python {
+        if !selected.is_absolute() || !selected.is_file() {
+            return Err(format!(
+                "running Python executable is unavailable: {}",
+                selected.display()
+            ));
+        }
+        selected
+            .to_str()
+            .ok_or("running Python executable is not UTF-8")?
+            .to_owned()
+    } else {
+        let versions =
+            resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
+        versions
+            .resolve(&requirements.python_version)
+            .map_err(|error| {
+                format!("managed Python version resolution failed: {}", error.trim())
+            })?
+    };
     let output_path = super::result_file::ResultFile::create(&std::env::temp_dir())?;
     let output = run_managed_python_resolver(
         &requirements,
@@ -106,7 +129,9 @@ fn resolve_python_manifest_with_r(
     )?;
     if !output.status.success() {
         let error = resolver_error(&output);
-        let python = if requirements.python_version.is_empty() {
+        let python = if selected_python.is_some() {
+            resolved_python.clone()
+        } else if requirements.python_version.is_empty() {
             format!("{resolved_python} (reticulate default)")
         } else {
             requirements.python_version.join(", ")

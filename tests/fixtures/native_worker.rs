@@ -228,12 +228,14 @@ fn native_python_activation_preserves_runtime_without_r() {
         manifest(vec!["duckdb".into()]),
         &resolver,
         None,
+        None,
         |_| Ok(()),
     )
     .expect("prepare initial managed Python environment");
     let candidate = crate::resolver::resolve_python_manifest_for_remote(
         manifest(vec!["duckdb".into(), "py-yaml12".into()]),
         &resolver,
+        None,
         None,
         |_| Ok(()),
     )
