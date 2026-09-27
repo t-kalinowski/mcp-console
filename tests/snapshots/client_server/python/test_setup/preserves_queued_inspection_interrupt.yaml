@@ -39,7 +39,9 @@ send:
 result:
   content:
     - type: text
-      text: "Error: Python inspection interrupted\n\n"
+      text: |+
+        Error: Python inspection interrupted
+
   isError: false
 ---
 send:
