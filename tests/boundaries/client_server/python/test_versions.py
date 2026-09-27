@@ -36,6 +36,7 @@ from support.resolvers import (
     write_uv_python_inventories,
 )
 from support.suites import run_this_suite
+from boundaries.client_server._harness import interrupt_paused_preparation
 
 
 @executions(DIRECT, SANDBOXED)
@@ -889,15 +890,14 @@ def test_interrupts_python_cache_warmup_without_committing(
         with client:
             preparation = client.start_send(requirements={"python": ["py-yaml12"]})
             warmup_started.wait("Python cache warmup started")
-            interrupt = client.start_send(control="interrupt", timeout_ms=30_000)
-            client.receive_many([preparation, interrupt])
+            interrupt_paused_preparation(client, warmup_release)
+            client.receive(preparation)
             assert preparation["result"] == {
                 "content": [
                     {"type": "text", "text": "dependency resolution interrupted"}
                 ],
                 "isError": True,
             }, preparation
-            assert not interrupt["result"].get("isError"), interrupt
             client.send()
             assert last_result_text(client) == "\n[idle]"
             client.send(requirements={"python": ["py-yaml12"]})
@@ -960,15 +960,14 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             block_tool_run.touch()
             preparation = client.start_send(requirements={"python": ["py-yaml12"]})
             tool_run_started.wait("Python resolver started")
-            interrupt = client.start_send(control="interrupt", timeout_ms=30_000)
-            client.receive_many([preparation, interrupt])
+            interrupt_paused_preparation(client, tool_run_release)
+            client.receive(preparation)
             assert preparation["result"] == {
                 "content": [
                     {"type": "text", "text": "dependency resolution interrupted"}
                 ],
                 "isError": True,
             }, preparation
-            assert not interrupt["result"].get("isError"), interrupt
             assert not unexpected_warmup.exists(), (
                 "cache warmup started after interruption"
             )
