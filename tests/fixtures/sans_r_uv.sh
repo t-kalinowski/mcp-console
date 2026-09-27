@@ -41,6 +41,12 @@ if $needs_preparation; then
             exit 0 ;;
         inspection|inspection-interrupt) printf '%s' "$root/invalid-python" > "$output"; exit 0 ;;
         interrupt) message="fixture Python resolution interrupted"; checkpoint ;;
+        activation-failure)
+            "$root/real-uv" "$@" || exit $?
+            for output do :; done
+            python=$(/bin/cat "$output")
+            printf 'raise RuntimeError("synthetic activation failure")\n' > "$(/usr/bin/dirname "$python")/activate_this.py"
+            exit 0 ;;
     esac
 fi
 exec "$root/real-uv" "$@"

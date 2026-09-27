@@ -71,6 +71,8 @@ enum OperationKind {
     PreparePython {
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
+        native: Option<Box<(crate::resolver::ManagedPython, crate::python::NativePython)>>,
+        activated: bool,
     },
 }
 
@@ -193,11 +195,40 @@ impl WorkerOperationState {
         &self,
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
+        native: Option<Box<(crate::resolver::ManagedPython, crate::python::NativePython)>>,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython {
             commit,
             continue_environment_preparation,
+            native,
+            activated: false,
         })
+    }
+
+    fn native_python_activation(
+        &self,
+        requirements: &crate::worker_protocol::PythonRequirementManifest,
+    ) -> Result<Option<(crate::resolver::ManagedPython, crate::python::NativePython)>, String> {
+        let mut state = self.lock()?;
+        match state
+            .operation
+            .as_mut()
+            .map(|operation| &mut operation.kind)
+        {
+            Some(OperationKind::PreparePython {
+                native: Some(candidate),
+                activated,
+                ..
+            }) => {
+                let (managed, selected) = candidate.as_ref();
+                if *activated || managed.requirements() != requirements {
+                    return Err("worker activated an unexpected native Python candidate".into());
+                }
+                *activated = true;
+                Ok(Some((managed.clone(), selected.clone())))
+            }
+            _ => Ok(None),
+        }
     }
 
     fn begin_preparation(
@@ -490,8 +521,25 @@ impl WorkerOperationState {
                 python_candidates.clear();
                 commit(Err(message)).map(OperationResult::RPrepared)
             }
-            (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
-                let candidate = python_candidates.pop().map(|candidate| candidate.managed);
+            (
+                OperationKind::PreparePython {
+                    commit,
+                    native,
+                    activated,
+                    ..
+                },
+                RelayEvent::PythonPrepared,
+            ) => {
+                if native.is_some() && !activated {
+                    return Err(
+                        "worker completed native Python preparation without activation".into(),
+                    );
+                }
+                let candidate = if native.is_some() {
+                    None
+                } else {
+                    python_candidates.pop().map(|candidate| candidate.managed)
+                };
                 r_candidates.clear();
                 python_candidates.clear();
                 commit(Ok(candidate)).map(OperationResult::PythonPrepared)
@@ -1073,17 +1121,25 @@ fn handle_semantic_event(
         }
         RelayEvent::PythonActivated { requirements } => {
             let activated = requirements.clone().normalized();
-            let candidate = candidates
-                .python
-                .iter()
-                .rposition(|candidate| candidate.managed.requirements() == &activated)
-                .map(|index| candidates.python.remove(index));
-            let (managed, resolution) = match candidate {
-                Some(candidate) => (Some(candidate.managed), candidate.import_resolution),
-                None => (None, None),
+            let native = operation.native_python_activation(&activated)?;
+            let (managed, configuration, resolution) = match native {
+                Some((managed, configuration)) => (Some(managed), Some(configuration), None),
+                None => {
+                    let candidate = candidates
+                        .python
+                        .iter()
+                        .rposition(|candidate| candidate.managed.requirements() == &activated)
+                        .map(|index| candidates.python.remove(index));
+                    match candidate {
+                        Some(candidate) => {
+                            (Some(candidate.managed), None, candidate.import_resolution)
+                        }
+                        None => (None, None, None),
+                    }
+                }
             };
             candidates.python.clear();
-            let disposition = callbacks.activate_python(requirements, managed)?;
+            let disposition = callbacks.activate_python(requirements, managed, configuration)?;
             if disposition == OldGenerationCommitDisposition::Commit
                 && let Some(resolution) = resolution
             {

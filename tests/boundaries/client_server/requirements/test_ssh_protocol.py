@@ -15,6 +15,39 @@ from support.suites import run_this_suite
 
 
 @requires(SSH)
+def test_python_preparation_preserves_v3_peer_compatibility(binary):
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        record = root / "requests"
+        peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
+        configure(root, root, [sys.executable, str(peer), "legacy-python", str(record)])
+        with localhost(root / "sshd") as environment:
+            trap = poison_controller(root / "sshd", environment)
+            with McpClient(
+                binary, ("serve", "--no-sandbox"), environment, root
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(requirements={"python": ["six"]})
+                requests = [
+                    json.loads(line) for line in record.read_text().splitlines()
+                ]
+                (python,) = [
+                    r["operation"]["Python"]
+                    for r in requests
+                    if "Python" in r["operation"]
+                ]
+                assert set(python) == {"requirements", "r"}, python
+                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+                declaration = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]
+                assert "six" in declaration["python"], declaration
+                records = client.finish()[3:]
+            assert not trap.exists()
+            return records
+
+
+@requires(SSH)
 def test_invalid_preparation_results_never_commit_or_launch(binary):
     transcript = []
     for mode in (

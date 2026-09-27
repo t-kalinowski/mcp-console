@@ -1,5 +1,5 @@
 use rmcp::schemars;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::state::{Environment, PythonEnvironment, ensure_managed_python_available};
 
@@ -243,6 +243,42 @@ impl RequirementDelta {
             && !self.restart_required
             && self.python_candidate.is_none()
             && !self.r_changed
+    }
+
+    pub(super) fn is_live_python_only(&self) -> bool {
+        self.python_candidate.is_some()
+            && !self.restart_required
+            && !self.duckdb_changed
+            && !self.r_changed
+    }
+
+    pub(super) fn validate_live_python_additions(
+        &self,
+        environment: &Environment,
+    ) -> Result<(), String> {
+        // This is declaration compatibility, not a resolved-version lock.
+        // The complete candidate may resolve different dependency versions;
+        // live activation does not promise arbitrary package hot-swapping.
+        let retained = environment.declaration().python_manifest();
+        let mut names = BTreeMap::new();
+        for requirement in &retained.packages {
+            names.insert(
+                crate::python_requirement::distribution_name(requirement)?,
+                requirement,
+            );
+        }
+        for requirement in &self.python_additions {
+            if retained.packages.contains(requirement) {
+                continue;
+            }
+            let name = crate::python_requirement::distribution_name(requirement)?;
+            if let Some(previous) = names.insert(name, requirement) {
+                return Err(format!(
+                    "live Python requirements can only add new distributions; `{requirement}` changes already-declared `{previous}`; use control: restart with requirements.action: set"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

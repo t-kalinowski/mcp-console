@@ -30,14 +30,14 @@ result:
         console_sql_connection(connection) selects a user-owned DB-API
         connection and console_sql_connection(None) restores managed DuckDB.
         Register Python data frames explicitly with
-        sql_connection().register(name, frame). R cells, live Python changes,
-        and automatic package installation are unavailable in this session. Idle
-        DuckDB extension additions preserve the worker and selected SQL
-        connection. Console manages Python through uv. Explicit
-        requirements.python and requirements.duckdb prepare packages and
-        extensions before the first worker starts or with control: restart. An
-        idle worker can add DuckDB extensions without replacement, using the
-        accepted Python and shared cache. Python changes and changed declaration
+        sql_connection().register(name, frame). R cells and automatic package
+        installation are unavailable. Idle Python package or DuckDB extension
+        additions preserve the worker and selected SQL connection. Console
+        manages Python through uv. Explicit requirements.python and
+        requirements.duckdb prepare packages and extensions before the first
+        worker starts or with control: restart. An idle worker can add new
+        Python distributions or DuckDB extensions without replacement. Changes
+        to an already-declared distribution, constraints, and declaration
         replacements require restart; retained requirements are a no-op. Restart
         resets objects and retains the accepted environment.
 
@@ -80,10 +80,10 @@ result:
               One complete Python cell in persistent state. The final expression
               displays automatically. Use input() for managed stdin; Matplotlib plots
               return as PNG images when installed. sql_connection() returns the active
-              SQL connection. requirements.duckdb can add extensions to an idle worker
-              before this cell without replacing it. Changed requirements.python and
-              declaration replacements require control: restart; both requirement
-              fields also work before first use or during restart. Automatic
+              SQL connection. An idle worker can add new requirements.python
+              distributions or requirements.duckdb extensions before this cell without
+              replacement. Changes to declared distributions, constraints, and
+              declaration replacements require control: restart. Automatic
               installation and R integration are unavailable. Use timeout_ms: 0 then
               poll for background execution.
             type:
@@ -99,12 +99,13 @@ result:
               disabled. console_sql_connection(connection) selects a user-owned DB-API
               connection, and console_sql_connection(None) restores managed DuckDB
               without discarding its catalog. A query with columns returns a bounded
-              preview. SQL errors leave the Python session usable. requirements.duckdb
-              prepares extensions before startup, during restart, or on an idle
-              running worker before this cell; LOAD runs later in the worker. SQL
-              never installs them automatically through Console. If DuckDB is
-              unavailable, add duckdb with requirements.python and control: restart or
-              select a custom connection. R cells are unavailable.
+              preview. SQL errors leave the Python session usable. Idle
+              requirements.python additions prepare new distributions before this
+              cell; requirements.duckdb prepares extensions before startup, during
+              restart, or on an idle worker. LOAD runs later in the worker. SQL never
+              installs extensions automatically through Console. If DuckDB is
+              unavailable, add duckdb with requirements.python or select a custom
+              connection. R cells are unavailable.
             type:
               - string
               - "null"
@@ -117,11 +118,11 @@ result:
               are rejected before signaling or queuing input. restart discards objects
               and unread stdin, then sends same-call stdin and code only to the
               replacement. The complete Python candidate is resolved and inspected
-              before its DuckDB extensions are prepared and before stopping the
-              current worker. Preparation failure preserves the current worker,
-              retained requirements, and queued input; same-call code and stdin are
-              not sent. Retirement or replacement failure follows the ordinary restart
-              contract. Plain restart reuses the accepted environment.
+              before its DuckDB extensions are prepared. Validation and host
+              preparation failures preserve the current worker and retained
+              requirements; same-call code and stdin are not sent. A live activation
+              failure may require restart. Plain restart reuses the accepted
+              environment.
             type: string
             enum:
               - interrupt
@@ -133,18 +134,19 @@ result:
               or restore defaults with action=reset. Applies to a Console-managed uv
               environment. Supported before the first worker starts, alone or with a
               Python or SQL cell, and with control: restart, with or without code. An
-              idle worker also accepts extension-only additions without replacement,
-              including requests that repeat retained Python requirements. Additions
-              accumulate in the retained declaration, initially NumPy, pandas, and
-              DuckDB but no extensions. Changed Python packages, interpreter
+              idle worker accepts new Python distributions or DuckDB extensions
+              without replacement. Already-retained declarations are no-ops, including
+              extension names accompanying a Python addition. Additions accumulate
+              from the initial NumPy, pandas, and DuckDB declaration with no
+              extensions. Changes to an already-declared distribution, interpreter
               constraints, exclusion dates, and set/reset declarations require
-              restart; unchanged declarations are a no-op. Unsupported mixed requests
-              fail before any part is prepared. Live extension preparation uses the
-              accepted Python and captured cache; it commits only after host
-              installation succeeds in the current generation. The Python candidate is
-              inspected for startup or restart preparation before its extensions are
-              prepared and before worker retirement. Automatic installation is
-              unavailable. Standalone preparation cannot queue stdin.
+              restart. Simultaneous effective package and extension additions are
+              unavailable live. A live Python candidate is resolved against the
+              running interpreter, inspected, and prepared with retained extensions
+              before activation. Validation or host preparation failure preserves the
+              worker and committed declaration; an activation failure can require
+              restart. Automatic installation is unavailable. Standalone preparation
+              cannot queue stdin.
             type:
               - object
               - "null"
@@ -198,8 +200,10 @@ result:
                   paths, URLs, editable requirements, and archives are rejected as request
                   values. Preparation runs outside the worker sandbox with full host
                   permissions and may execute installation or build code. Use trusted
-                  dependencies and resolver configuration. Live changes require control:
-                  restart.
+                  dependencies and resolver configuration. An idle managed worker accepts
+                  new distributions without restart; changing a declared distribution
+                  requires restart. Automatic missing-import installation remains
+                  disabled.
                 type: array
                 items:
                   type: string

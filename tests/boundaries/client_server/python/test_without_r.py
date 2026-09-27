@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import select
 import time
 import subprocess
@@ -47,6 +48,17 @@ def preparation_directory():
     return tempfile.TemporaryDirectory(prefix="console-preparation-test-")
 
 
+def installed_binary(binary: Path, root: Path) -> Path:
+    prefix = root / "installation"
+    (prefix / "bin").mkdir(parents=True)
+    installed = prefix / "bin/mcp-console"
+    shutil.copy2(binary, installed)
+    source_prefix = binary.parent.parent
+    for relative in ("libexec", "share/licenses/mcp-console"):
+        shutil.copytree(source_prefix / relative, prefix / relative)
+    return installed
+
+
 def preparation_environment(root: Path) -> dict[str, str]:
     fixture = Path(__file__).resolve().parents[3] / "fixtures/sans_r_uv.sh"
     for name in ("uv", "invalid-python"):
@@ -80,11 +92,29 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
                 .replace(str(root.resolve()), "<preparation>")
                 .replace(str(root), "<preparation>")
             )
-            if text.startswith(
-                (
-                    "managed Python resolution failed:",
-                    "[managed Python resolution failed:",
+            text = re.sub(
+                r'("python": ")<preparation>/[^"\n]+(")',
+                r"\1<running Python>\2",
+                text,
+            )
+            text = re.sub(
+                r"<preparation>/archive-v0/[^/\"\n]+/bin/activate_this.py",
+                "<preparation>/archive-v0/<environment>/bin/activate_this.py",
+                text,
+            )
+            text = re.sub(
+                r"(?m)^old libpython: .+$",
+                "old libpython: <running libpython>",
+                text,
+            )
+            if (
+                text.startswith(
+                    (
+                        "managed Python resolution failed:",
+                        "[managed Python resolution failed:",
+                    )
                 )
+                and '"python": "<running Python>"' not in text
             ):
                 text = normalize_python_resolution_error(text)
             content["text"] = text
@@ -532,6 +562,414 @@ def test_prepares_managed_python_at_startup_and_restart(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_adds_python_packages_to_idle_managed_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        preparation_directory() as directory,
+        tempfile.TemporaryDirectory() as workspace,
+    ):
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            environment(root),
+            Path(workspace),
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, sqlite3, sys
+
+                    identity = object()
+                    identity_id = id(identity)
+                    worker_pid = os.getpid()
+                    managed = sql_connection()
+                    managed_id = id(managed)
+                    managed.execute("create table retained as select 42 as value")
+                    selected = sqlite3.connect(":memory:")
+                    selected.execute("create table chosen (value integer)")
+                    console_sql_connection(selected)
+                    print("running state created")
+                    """)
+            )
+            assert last_result_text(client) == "running state created\n", (
+                client.transcript[-1]
+            )
+            client.send(requirements={"python": ["py-yaml12"]})
+            assert last_result_text(client) == "[prepared]", client.transcript[-1]
+            client.send(
+                requirements={"python": ["six"]},
+                stdin="live input\n",
+                # fmt: python
+                python=code("""
+                    import os, six, sys, yaml12
+                    import subprocess
+
+                    assert os.getpid() == worker_pid
+                    assert id(identity) == identity_id
+                    assert id(managed) == managed_id
+                    assert sql_connection() is selected
+                    assert managed.execute("select value from retained").fetchone() == (42,)
+                    assert (
+                        subprocess.check_output(
+                            [sys.executable, "-c", "import six, yaml12; print('child ready')"],
+                            text=True,
+                        ).strip()
+                        == "child ready"
+                    )
+                    assert input() == "live input"
+                    print("live packages and state retained")
+                    """),
+            )
+            assert last_result_text(client).endswith(
+                "live packages and state retained\n"
+            ), client.transcript[-1]
+            client.send(sql="select value from chosen")
+            assert "value" in last_result_text(client), client.transcript[-1]
+            client.send(python="console_sql_connection(None)")
+            client.send(sql="select value from retained")
+            assert "42" in last_result_text(client), client.transcript[-1]
+            client.send(
+                requirements={"python": ["more-itertools"]},
+                python="raise ValueError('later cell failed')",
+            )
+            assert "ValueError: later cell failed" in last_result_text(client), (
+                client.transcript[-1]
+            )
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]["requirements"]
+            assert {"py-yaml12", "six", "more-itertools"}.issubset(
+                declaration["python"]
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    import more_itertools
+
+                    assert id(identity) == identity_id
+                    print("accepted after cell failure")
+                    """)
+            )
+            assert last_result_text(client) == "accepted after cell failure\n"
+            client.send(control="restart")
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, subprocess, sys
+                    import more_itertools, six, yaml12
+
+                    assert "identity" not in globals()
+                    assert (
+                        subprocess.check_output(
+                            ["python", "-c", "import more_itertools, six, yaml12; print('child ready')"],
+                            text=True,
+                        ).strip()
+                        == "child ready"
+                    )
+                    print("plain restart retained additions")
+                    """)
+            )
+            assert last_result_text(client) == "plain restart retained additions\n"
+            client.send(python="import os; os._exit(47)")
+            assert "status 47" in last_result_text(client), client.transcript[-1]
+            client.send(
+                python="import more_itertools, six, yaml12; print('crash replacement retained additions')"
+            )
+            assert last_result_text(client) == "crash replacement retained additions\n"
+            records = client.finish()[3:]
+        (session,) = (Path(workspace) / ".agents/console/sessions").iterdir()
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        accepted = [
+            event["packages"]
+            for event in events
+            if event["event"] == "python_environment_accepted"
+        ]
+        assert len(accepted) >= 3, accepted
+        assert {"py-yaml12", "six", "more-itertools"}.issubset(accepted[-1])
+        quarto = (session / "transcript.qmd").read_text()
+        assert "execute:\n  eval: false" not in quarto
+        assert "    - more-itertools\n" in quarto
+        return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_limits_live_python_additions_to_new_idle_distributions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        (root / "mode").write_text("success")
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import os; worker_pid = os.getpid(); identity = object()"
+            )
+            assert last_result_text(client) == "[done]"
+            before = (root / "resolutions.log").read_text()
+            client.send(python="input('busy> ')")
+            assert "waiting for stdin" in last_result_text(client)
+            busy = client.send(requirements={"python": ["py-yaml12"]})
+            assert busy["isError"], busy
+            assert "already evaluating" in last_result_text(client), busy
+            client.send(requirements={"python": ["numpy"]})
+            assert last_result_text(client) == "[prepared]"
+            client.send(stdin="ready\n")
+            assert "ready" in last_result_text(client)
+            client.send(python="import pdb; pdb.set_trace(); print('debugger resumed')")
+            assert "(Pdb)" in last_result_text(client)
+            busy = client.send(requirements={"python": ["py-yaml12"]})
+            assert busy["isError"], busy
+            assert "already evaluating" in last_result_text(client), busy
+            client.send(stdin="continue\n")
+            assert "debugger resumed" in last_result_text(client)
+            for requirements in (
+                {"python": ["NumPy==0"]},
+                {"python_version": ["<3"]},
+                {"exclude_newer": "2026-01-01"},
+                {"action": "set", "python": ["six"]},
+                {"python": ["py-yaml12"], "duckdb": ["json"]},
+            ):
+                rejected = client.send(requirements=requirements)
+                assert rejected["isError"], rejected
+            assert (root / "resolutions.log").read_text() == before
+            client.send(requirements={"python": ["six"]})
+            assert last_result_text(client) == "[prepared]"
+            for requirements in (
+                {"action": "reset"},
+                {"action": "set", "python": ["six"]},
+            ):
+                rejected = client.send(requirements=requirements)
+                assert rejected["isError"], rejected
+            client.send(requirements={"python": ["six"], "duckdb": ["json"]})
+            assert last_result_text(client) == "[prepared]"
+            client.send(
+                requirements={"python": ["py-yaml12"], "duckdb": ["json"]},
+                sql="select 42 as value",
+            )
+            assert "42" in last_result_text(client), client.transcript[-1]
+            before = (root / "resolutions.log").read_text()
+            rejected = client.send(
+                requirements={"python": ["more-itertools"], "duckdb": ["fts"]}
+            )
+            assert rejected["isError"], rejected
+            assert (root / "resolutions.log").read_text() == before
+            client.send(
+                python="import os, six, yaml12; assert os.getpid() == worker_pid; print('state retained')"
+            )
+            assert last_result_text(client) == "state retained\n"
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]["requirements"]
+            assert declaration["duckdb"] == ["json"]
+            assert "more-itertools" not in declaration["python"]
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_live_python_failure_and_interrupt_preserve_accepted_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        started = FifoCheckpoint.create(root / "started")
+        os.mkfifo(root / "alive")
+        alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            with McpClient(
+                installed_binary(binary, root), execution.serve(), env
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    python="import os; worker_pid = os.getpid(); identity = object()"
+                )
+                initial = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]
+                (root / "mode").write_text("failure")
+                failed = client.send(
+                    requirements={"python": ["py-yaml12"]},
+                    python="raise AssertionError('failed preparation ran code')",
+                    stdin="must not be queued\n",
+                )
+                assert failed["isError"], failed
+                assert "fixture Python resolution failed" in last_result_text(client)
+                assert "failed preparation ran code" not in last_result_text(client)
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"][
+                        "requirements"
+                    ]
+                    == initial
+                )
+                (root / "mode").write_text("interrupt")
+                pending = client.start_send(
+                    requirements={"python": ["py-yaml12"]},
+                    python="raise AssertionError('cancelled preparation ran code')",
+                )
+                started.wait("live candidate resolver entered")
+                assert os.read(alive, 1) == b"1"
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"][
+                        "requirements"
+                    ]
+                    == initial
+                )
+                interrupt = client.start_send(control="interrupt")
+                client.receive_many([pending, interrupt])
+                assert pending["result"]["isError"], pending
+                assert os.read(alive, 1) == b""
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"][
+                        "requirements"
+                    ]
+                    == initial
+                )
+                client.send(
+                    python="import os; assert os.getpid() == worker_pid; print('still running')"
+                )
+                assert last_result_text(client) == "still running\n"
+                (root / "mode").write_text("success")
+                client.send(requirements={"python": ["py-yaml12"]})
+                assert last_result_text(client) == "[prepared]"
+                return preparation_records(client.finish(), root)
+        finally:
+            started.close()
+            os.close(alive)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_live_python_rejects_incompatible_library_before_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, sysconfig
+
+                    worker_pid = os.getpid()
+                    identity = object()
+                    identity_id = id(identity)
+                    print(
+                        os.path.join(
+                            sysconfig.get_config_var("LIBDIR"), sysconfig.get_config_var("LDLIBRARY")
+                        )
+                    )
+                    """)
+            )
+            library = Path(last_result_text(client).strip())
+            assert library.is_file(), library
+            alias = root / "alias-libpython"
+            alias.symlink_to(library)
+            description_file = root / "invalid-inspection.json"
+            description = json.loads(description_file.read_text())
+            description["libpython"] = str(alias)
+            description_file.write_text(json.dumps(description))
+            initial = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            (root / "mode").write_text("inspection")
+            rejected = client.send(requirements={"python": ["py-yaml12"]})
+            assert rejected["isError"], rejected
+            assert "does not use the same Python binary" in last_result_text(client)
+            assert (
+                client.send(requirements={"action": "get"})["structuredContent"][
+                    "requirements"
+                ]
+                == initial
+            )
+            client.send(
+                python="import os; assert os.getpid() == worker_pid and id(identity) == identity_id; print('compatible worker retained')"
+            )
+            assert last_result_text(client) == "compatible worker retained\n"
+            # The first cell exposes a host library path only to the test.
+            return preparation_records(client.finish(), root)[1:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_live_python_activation_failure_requires_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with preparation_directory() as directory:
+        root = Path(directory)
+        env = preparation_environment(root)
+        (root / "mode").write_text("activation-failure")
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            # Separate fd 2 from the sideband deterministically. Activation
+            # diagnostics must arrive before their preparation result even
+            # when the relay cannot observe the raw stderr stream.
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os, tempfile
+
+                    identity = object()
+                    original_stderr = os.dup(2)
+                    raw_stderr = tempfile.TemporaryFile()
+                    _ = os.dup2(raw_stderr.fileno(), 2)
+                    """)
+            )
+            initial = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            failed = client.send(
+                requirements={"python": ["py-yaml12"]},
+                python="raise AssertionError('activation failure ran code')",
+            )
+            assert failed["isError"], failed
+            diagnostic = last_result_text(client)
+            assert (
+                diagnostic.count("RuntimeError: synthetic activation failure") == 1
+            ), diagnostic
+            assert "activation failure ran code" not in diagnostic
+            assert "restart required" in diagnostic
+            client.send(
+                # fmt: python
+                python=code("""
+                    os.dup2(original_stderr, 2)
+                    os.close(original_stderr)
+                    raw_stderr.seek(0)
+                    assert raw_stderr.read() == b""
+                    raw_stderr.close()
+                    """)
+            )
+            assert last_result_text(client) == "[done]"
+            assert (
+                client.send(requirements={"action": "get"})["structuredContent"][
+                    "requirements"
+                ]
+                == initial
+            )
+            client.send(requirements={"python": ["six"]})
+            assert last_result_text(client) == "[restart required]"
+            client.send(control="restart")
+            client.send(
+                python="assert 'identity' not in globals(); print('accepted environment retained')"
+            )
+            assert last_result_text(client) == "accepted environment retained\n"
+            return preparation_records(client.finish(), root)
+
+
+@executions(DIRECT, SANDBOXED)
 def test_failed_managed_preparation_preserves_worker_and_input(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -603,9 +1041,9 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                     assert last_result_text(client) == "objects intact\n"
                 before = (root / "resolutions.log").read_text()
                 for request in (
-                    {"requirements": {"python": ["py-yaml12"]}},
+                    {"requirements": {"action": "set", "python": ["py-yaml12"]}},
                     {
-                        "requirements": {"python": ["py-yaml12"]},
+                        "requirements": {"action": "set", "python": ["py-yaml12"]},
                         # fmt: python
                         "python": code("""
                             identity = None
@@ -925,7 +1363,7 @@ def test_resolves_default_python_without_r(
             assert last_result_text(client) == "43\n", client.transcript[-1]
             for request in (
                 {"r": "1"},
-                {"requirements": {"python": ["six"]}},
+                {"requirements": {"action": "set", "python": ["six"]}},
                 {"requirements": {"r": ["cli"]}},
                 {"requirements": {"duckdb": ["json"], "python": ["six"]}},
             ):
@@ -1802,7 +2240,7 @@ def test_records_managed_python_defaults(
                     """)
             )
             assert last_result_text(client) == "42\n"
-            client.send(requirements={"python": ["six"]})
+            client.send(requirements={"action": "set", "python": ["six"]})
             assert client.transcript[-1]["result"]["isError"]
             client.send(python="retained")
             assert last_result_text(client) == "42\n"

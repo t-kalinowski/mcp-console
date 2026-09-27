@@ -743,6 +743,39 @@ def _mcp_console_display_setup_exception(
 
 _mcp_console.display_setup_exception = _mcp_console_display_setup_exception
 
+
+def _mcp_console_display_activation_exception(
+    _display=_mcp_console_display_setup_exception,
+    _stderr=_sys.stderr,
+) -> None:
+    # After Ready, diagnostics must precede the preparation result on the
+    # sideband. Capture the installed console stream, independent of fd 2.
+    _display(_stderr=_stderr)
+
+
+_mcp_console.display_activation_exception = _mcp_console_display_activation_exception
+
+
+def _mcp_console_configure_native_child_environment(
+    configuration: str,
+    _json=_json,
+    _os=_os,
+) -> None:
+    expected = _json.loads(configuration)
+    executable = expected["embedding"]["python"]
+    directory = _os.path.dirname(executable)
+    inherited = _os.environ.get("PATH", "")
+    _os.environ["PATH"] = directory + (_os.pathsep + inherited if inherited else "")
+    if expected["prefix"] != expected["base_prefix"]:
+        _os.environ["VIRTUAL_ENV"] = expected["prefix"]
+    else:
+        _os.environ.pop("VIRTUAL_ENV", None)
+
+
+_mcp_console.configure_native_child_environment = (
+    _mcp_console_configure_native_child_environment
+)
+
 # The runtime runs with __main__ globals and private locals. Remember its code
 # objects so cell tracebacks can omit our frames without hiding user exec() code.
 _mcp_console_codes_to_record = []

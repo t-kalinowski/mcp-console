@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::cell::Language;
 use crate::worker_protocol::{
-    PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest,
-    RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
+    NativePythonActivation, PythonRequirementManifest, PythonResolveRequest,
+    PythonVersionResolveRequest, RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
 };
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -32,6 +32,8 @@ pub(crate) enum RelayCommand {
     },
     PreparePython {
         packages: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolved {
         python: String,

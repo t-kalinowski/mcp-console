@@ -752,14 +752,24 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         continue_environment_preparation: bool,
+        native: Option<(crate::resolver::ManagedPython, crate::python::NativePython)>,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let result = self
-            .operation
-            .begin_python_preparation(commit, continue_environment_preparation)?;
-        self.relay
-            .commands
-            .send(RelayCommand::PreparePython { packages })?;
+        let activation = native.as_ref().map(|(managed, selected)| {
+            Box::new(crate::worker_protocol::NativePythonActivation {
+                selected: selected.clone(),
+                requirements: managed.requirements().clone(),
+            })
+        });
+        let result = self.operation.begin_python_preparation(
+            commit,
+            continue_environment_preparation,
+            native.map(Box::new),
+        )?;
+        self.relay.commands.send(RelayCommand::PreparePython {
+            packages,
+            native: activation,
+        })?;
         match receive_operation(result)? {
             OperationResult::PythonPrepared(result) => Ok(result),
             _ => Err("worker sent an unexpected Python preparation message".to_string()),

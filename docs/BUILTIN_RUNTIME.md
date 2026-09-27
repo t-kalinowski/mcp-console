@@ -81,12 +81,12 @@ See the [concrete escape scenario and trust boundary](REQUIREMENTS.md#host-resol
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
 In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the first worker starts, alone or with a Python or SQL cell.
-Once a worker is running, idle `action: "add"` calls can prepare DuckDB extensions without replacement, with or without accompanying Python or SQL code.
-Already-retained Python requirements may accompany them as no-ops.
-Python package or constraint changes and changed `set` or `reset` declarations still require `control: "restart"`.
+Once a worker is running, idle `action: "add"` calls can prepare new Python distributions or DuckDB extensions without replacement, with or without accompanying Python or SQL code.
+Already-retained declarations remain no-ops.
+Changing a requirement for a declared distribution, interpreter constraints, publication cutoffs, or a `set` or `reset` declaration still requires `control: "restart"`.
 Requirements already retained are a no-op, including on a running worker.
 Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
-Unsupported mixed live requests are rejected before any part is prepared.
+Simultaneous effective Python-package and DuckDB-extension additions are rejected before either part is prepared.
 
 Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with no default extensions.
 `python_version` and `exclude_newer` use the ordinary requirements contract.
@@ -97,6 +97,11 @@ Interrupting preparation stops its resolver operation and discards the candidate
 Same-call code and input are sent only after successful replacement.
 For an idle live extension addition, the resolver uses the accepted managed Python and captured shared cache without changing packages or the interpreter.
 It installs extension files outside the worker; a later user `LOAD` uses the existing managed connection and catalog.
+For an idle live Python addition, the resolver prepares the complete candidate against the running executable, inspects it, checks the native library identity, and prepares retained DuckDB extensions with the candidate before worker activation.
+The native activation keeps the interpreter, Python objects, managed DuckDB catalog, and selected SQL connection in place.
+Once the worker confirms activation, the server retains the new manifest, executable, and embedding configuration together; plain restart and crash replacement use that selection.
+An exception during activation may leave script side effects, so further requirement changes require restart.
+Same-call code and input are withheld.
 Host failure or cancellation leaves the worker, selected connection, and committed declaration unchanged; same-call code and input are not sent.
 Downloads already written to the cache may remain.
 After retirement begins, ordinary retirement and replacement failure semantics apply; the retired worker cannot be restored.

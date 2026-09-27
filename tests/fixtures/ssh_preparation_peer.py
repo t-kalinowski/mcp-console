@@ -1,4 +1,4 @@
-"""Deliberately invalid preparation peers, reached through real OpenSSH."""
+"""Preparation compatibility and failure peers, reached through real OpenSSH."""
 
 import json
 import struct
@@ -58,6 +58,30 @@ while (message := read()) is not None:
     with Path(record).open("a") as stream:
         stream.write(json.dumps(request) + "\n")
     id = request["id"]
+    if mode == "legacy-python":
+        operation = request["operation"]
+        if operation == "Bootstrap" or "Duckdb" in operation:
+            complete(id, None)
+        elif "R" in operation:
+            complete(
+                id,
+                {
+                    "library": "/remote-only/library",
+                    "r_libs": {"Unix": list(b"/remote-only/library")},
+                    "requirements": operation["R"]["requirements"],
+                },
+            )
+        else:
+            python = operation["Python"]
+            assert set(python) == {"requirements", "r"}, python
+            complete(
+                id,
+                {
+                    "python": "/remote-only/python",
+                    "requirements": python["requirements"],
+                },
+            )
+        continue
     if mode in ("truncated-result", "mismatched-chunk", "chunked-and-inline"):
         write(
             {

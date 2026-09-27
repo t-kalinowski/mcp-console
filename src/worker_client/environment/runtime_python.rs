@@ -67,6 +67,7 @@ impl Client {
             requirements,
             resolver,
             environment.r.as_ref(),
+            None,
             |handle| self.register_resolver_stop_handle(&generation, handle),
         ) {
             Ok(managed) => managed,
@@ -116,6 +117,7 @@ impl Client {
         generation: WorkerGeneration,
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidate: Option<crate::resolver::ManagedPython>,
+        configuration: Option<crate::python::NativePython>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
@@ -135,7 +137,7 @@ impl Client {
             .managed_parts()?
             .0;
         let managed = select_python_activation(Some(current), requirements, candidate)?;
-        self.commit_locked_runtime_python(&generation, &mut environment, managed)
+        self.commit_locked_runtime_python(&generation, &mut environment, managed, configuration)
     }
 
     pub(super) fn commit_runtime_python(
@@ -151,7 +153,7 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.commit_locked_runtime_python(&generation, &mut environment, managed)
+        self.commit_locked_runtime_python(&generation, &mut environment, managed, None)
     }
 
     fn commit_locked_runtime_python(
@@ -159,7 +161,18 @@ impl Client {
         generation: &WorkerGeneration,
         environment: &mut Environment,
         managed: crate::resolver::ManagedPython,
+        configuration: Option<crate::python::NativePython>,
     ) -> Result<OldGenerationCommitDisposition, String> {
+        if let Some(configuration) = configuration.as_ref()
+            && (!matches!(
+                &environment.local_runtime,
+                Some(crate::local_runtime::Selection::Python { managed: true, .. })
+            ) || std::path::Path::new(&configuration.embedding.python) != managed.python())
+        {
+            return Err(
+                "worker activation does not match the approved native Python candidate".into(),
+            );
+        }
         let lifecycle = self
             .0
             .lifecycle
@@ -173,6 +186,15 @@ impl Client {
                     .as_mut()
                     .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                     .replace_managed(managed)?;
+                if let Some(configuration) = configuration {
+                    let Some(crate::local_runtime::Selection::Python { selected, .. }) =
+                        &mut environment.local_runtime
+                    else {
+                        unreachable!("native candidate was checked before commit");
+                    };
+                    **selected = configuration;
+                    self.record_accepted_python(environment);
+                }
                 self.publish_requirements(environment);
                 Ok(disposition)
             }

@@ -16,14 +16,16 @@ result:
 ---
 send:
   requirements:
+    action: set
     python:
       - six
 result:
   content:
     - type: text
       text: >-
-        changed requirements other than idle DuckDB extension additions require
-        control: restart in a Python session without R
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
   isError: true
 ---
 send:

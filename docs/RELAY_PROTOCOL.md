@@ -150,6 +150,7 @@ The server can send these flat frames:
 - `{"kind":"r_resolved","library":"..."}` returns one provisional host R-resolution result.
 - `{"kind":"r_resolution_failed","failure":"host","message":"..."}` returns one host R-resolution failure; `failure` is `host`, `interrupted`, or `operation`.
 - `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live reticulate preparation.
+  The optional `native` object selects native activation in a managed session without R; that form requires `packages: []` and carries `selected` (the inspected native configuration) and `requirements` (the complete retained manifest).
 - `{"kind":"python_resolved","python":"..."}` returns one host Python-resolution result.
 - `{"kind":"python_resolution_failed","message":"..."}` returns one host Python-resolution failure.
 - `{"kind":"python_version_resolved","version":"3.12.11"}` returns one host Python-version result.
@@ -217,7 +218,10 @@ The relay can emit these flat frames:
 
 The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines runtime R resolution, failure classes, and activation ordering.
 Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
-The relay preserves the optional `import_resolution` object unchanged.
+It also defines every field of `prepare_python.native`; the relay forwards that object unchanged, as it does the optional `import_resolution` object.
+For native preparation, the server has already resolved, inspected, and approved the candidate before sending `prepare_python`.
+The worker reports a matching `python_activated` before `python_prepared`; the server commits the accepted environment and launch configuration on that activation receipt.
+The [live preparation contract](WORKER_PROTOCOL.md#live-python-preparation) defines correlation, failure handling, and restart behavior.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.
 It does not run host resolvers, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.

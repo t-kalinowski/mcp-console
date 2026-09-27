@@ -240,7 +240,9 @@ Keep these invariants intact:
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate selection and attachment adapter, Console embedding-configuration handoff, candidate lookup, declaration checks, and automatic-resolution forwarding.
   R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator.
   Sans-R defaults require uv on the startup PATH; top-level `python` selects an existing environment without invoking uv.
-  Managed environments support explicit prestart/restart Python preparation, with native inspection and launch configuration committed through the mutable session environment; live activation and automatic import installation remain disabled.
+  Managed environments support explicit prestart/restart Python preparation and idle additions of new distributions through native activation, with the accepted manifest and launch configuration committed together.
+  Declaration replacements, changed requirements for declared distributions, interpreter constraints, and publication cutoffs require explicit restart; simultaneous effective Python and DuckDB extension additions are unavailable live.
+  Automatic import installation remains disabled without R; explicitly selected Python environments remain non-managed.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.

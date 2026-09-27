@@ -4,7 +4,9 @@ mod reticulate;
 mod startup;
 
 pub(crate) use inspection::{NativePython, inspect_native, inspect_selected};
-pub(crate) use requirements::{ActivationFailure, ActivationInput, activate_managed_environment};
+pub(crate) use requirements::{
+    ActivationFailure, ActivationInput, activate_managed_environment, ensure_libpython_compatible,
+};
 pub(crate) use startup::{
     SelectedPython, finish_initialization, initialize_selected, setup_runtime,
 };
@@ -79,6 +81,13 @@ impl Runtime {
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
         self.startup.prepare(packages)
+    }
+
+    pub(crate) fn activate_native(
+        &mut self,
+        candidate: &NativePython,
+    ) -> Result<PreparationOutcome, String> {
+        self.startup.activate_native(candidate)
     }
 }
 

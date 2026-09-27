@@ -8,7 +8,9 @@
 mod activation;
 mod r;
 
-pub(crate) use activation::{ActivationFailure, ActivationInput, activate_managed_environment};
+pub(crate) use activation::{
+    ActivationFailure, ActivationInput, activate_managed_environment, ensure_libpython_compatible,
+};
 
 use r::{Adapter, Declaration, Record, Value};
 

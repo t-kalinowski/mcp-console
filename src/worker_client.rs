@@ -1838,8 +1838,13 @@ impl WorkerCallbacks {
         &self,
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidate: Option<crate::resolver::ManagedPython>,
+        configuration: Option<crate::python::NativePython>,
     ) -> Result<OldGenerationCommitDisposition, String> {
-        self.client
-            .activate_runtime_python(self.generation.clone(), requirements, candidate)
+        self.client.activate_runtime_python(
+            self.generation.clone(),
+            requirements,
+            candidate,
+            configuration,
+        )
     }
 }
