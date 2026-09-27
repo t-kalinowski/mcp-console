@@ -95,6 +95,41 @@ def test_owns_managed_python_transitions(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            python="import sys; identity = object(); identity_id = id(identity); initial_executable = sys.executable"
+        )
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        # fmt: r
+        r = code(r"""
+            before <- reticulate::py_config()
+            invisible(reticulate::py_require("py-yaml12"))
+            after <- reticulate::py_config()
+            stopifnot(
+              identical(after$libpython, before$libpython),
+              identical(
+                after$executable,
+                reticulate::py_eval("__import__('sys').executable")
+              ),
+              "py-yaml12" %in% reticulate::py_require()$packages
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        declared = client.send(requirements={"action": "get"})["structuredContent"]
+        assert "py-yaml12" in declared["requirements"]["python"]
+        client.send(
+            python="import yaml12; (id(identity) == identity_id, sys.executable != initial_executable, yaml12.__name__)"
+        )
+        assert last_tool_text(client) == "(True, True, 'yaml12')\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_preserves_preparation_restoration_and_live_noops(
     binary: Path, execution: Execution
 ) -> Transcript:
