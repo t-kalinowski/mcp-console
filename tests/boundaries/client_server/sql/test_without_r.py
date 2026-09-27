@@ -112,18 +112,21 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
                     import errno
                     import socket
 
-                    with socket.socket() as probe:
-                        probe.settimeout(1)
-                        try:
+                    try:
+                        # Linux may deny socket creation before connect is reached.
+                        with socket.socket() as probe:
+                            probe.settimeout(1)
                             probe.connect(("203.0.113.1", 443))
-                        except OSError as error:
-                            assert error.errno in (errno.EACCES, errno.EPERM), error
-                        else:
-                            raise AssertionError("worker network connection succeeded")
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM), error
+                    else:
+                        raise AssertionError("worker network connection succeeded")
                     print("worker network denied")
                     """)
             )
-            assert last_tool_text(client) == "worker network denied\n"
+            assert last_tool_text(client) == "worker network denied\n", last_tool_text(
+                client
+            )
             client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
             assert "Error:" not in last_tool_text(client)
             client.send(

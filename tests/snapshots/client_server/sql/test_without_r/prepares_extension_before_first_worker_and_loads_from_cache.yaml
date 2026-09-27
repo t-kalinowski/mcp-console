@@ -14,14 +14,15 @@ send:
     import errno
     import socket
 
-    with socket.socket() as probe:
-        probe.settimeout(1)
-        try:
+    try:
+        # Linux may deny socket creation before connect is reached.
+        with socket.socket() as probe:
+            probe.settimeout(1)
             probe.connect(("203.0.113.1", 443))
-        except OSError as error:
-            assert error.errno in (errno.EACCES, errno.EPERM), error
-        else:
-            raise AssertionError("worker network connection succeeded")
+    except OSError as error:
+        assert error.errno in (errno.EACCES, errno.EPERM), error
+    else:
+        raise AssertionError("worker network connection succeeded")
     print("worker network denied")
 result:
   content:
