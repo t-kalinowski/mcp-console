@@ -618,7 +618,12 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                         "stdin": "invalid input\n",
                     },
                     {"requirements": {"r": ["cli"]}},
-                    {"requirements": {"duckdb": ["json"]}},
+                    {
+                        "requirements": {
+                            "duckdb": ["json"],
+                            "python": ["py-yaml12"],
+                        }
+                    },
                 ):
                     response = client.send(**request)
                     assert response.get("isError", True), response
@@ -922,7 +927,7 @@ def test_resolves_default_python_without_r(
                 {"r": "1"},
                 {"requirements": {"python": ["six"]}},
                 {"requirements": {"r": ["cli"]}},
-                {"requirements": {"duckdb": ["json"]}},
+                {"requirements": {"duckdb": ["json"], "python": ["six"]}},
             ):
                 result = client.send(**request)
                 assert result.get("isError", True), result

@@ -22,8 +22,8 @@ result:
   content:
     - type: text
       text: >-
-        live Python requirements are unavailable without R; use
-        requirements.python with control: restart to prepare a new environment
+        changed requirements other than idle DuckDB extension additions require
+        control: restart in a Python session without R
   isError: true
 ---
 send:
