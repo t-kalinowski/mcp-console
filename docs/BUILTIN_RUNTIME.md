@@ -80,15 +80,16 @@ The resolver and its inputs are trusted: Console does not prevent worker-created
 See the [concrete escape scenario and trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
-In a Console-managed uv session, `requirements.python` can add packages before the first worker starts, alone or with a Python cell.
+In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the first worker starts, alone or with a Python or SQL cell.
 Once a worker is running, changed requirements require `control: "restart"`, with or without accompanying code.
 Requirements already retained are a no-op, including on a running worker.
 Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
 Live additions are rejected without changing the environment or silently restarting.
 
-Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB.
+Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with no default extensions.
 `python_version` and `exclude_newer` use the ordinary requirements contract.
-Restart preparation resolves the complete candidate manifest and inspects the resulting executable before retiring the current worker.
+Restart preparation resolves the complete Python candidate, inspects its executable, and installs retained extensions with that candidate's DuckDB before retiring the current worker.
+The same extension preparation occurs before first startup; if DuckDB is absent, include `duckdb` in `requirements.python`.
 Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
 Interrupting preparation stops its resolver operation and discards the candidate before any worker retirement.
 Same-call code and input are sent only after successful replacement.
@@ -100,6 +101,8 @@ The selected environment takes precedence over inherited or sandbox-configured `
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
 The executable directory is not added to the import path.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
+With an absolute `HOME` at server startup, the managed DuckDB connection reads the captured shared version-and-platform extension cache; it keeps spill and stored-secret files in private worker storage.
+Without an absolute `HOME`, managed Python still starts, but explicit extension preparation reports that a shared cache root is required.
 If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
 Retirement does not delete resolver caches or the retained environment.
 
@@ -108,7 +111,8 @@ Interrupts received while the worker is idle do not interrupt the next Python ce
 When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, DuckDB, and accepted package additions without R defaults or rejected requirements.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
 Explicitly selected environments remain non-managed; prepare their packages before starting Console.
-Live environment updates, automatic missing-import installation, R and DuckDB extension requirements, and R cells are unavailable.
+Live environment updates, automatic missing-import installation, R requirements, and R cells are unavailable.
+An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
 This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
@@ -118,7 +122,7 @@ Python-only cells do not open it.
 `sql_connection()` returns the connection currently selected for SQL cells, including a user-owned DB-API connection selected with `console_sql_connection(connection)`.
 `console_sql_connection(None)` restores the same managed DuckDB connection and catalog without closing the user-owned connection.
 Register a Python data frame explicitly with `sql_connection().register("name", frame)` before querying it; automatic frame scanning is disabled.
-The managed connection places spill files and persistent secrets beneath the worker's private temporary directory.
+The managed connection places spill files and persistent secrets beneath the worker's private temporary directory and loads prepared extensions from the retained shared cache.
 Restart and crash replacement create a fresh catalog while retaining the accepted Python environment.
 Query errors and interrupts leave the session usable; transaction effects follow the selected driver.
 If DuckDB is absent from an explicit or replaced environment, SQL reports how to add it or select a DB-API connection, and Python remains usable.
@@ -462,7 +466,9 @@ Results that report columns use the bounded preview path below, while results wi
 Each selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
 Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
 The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
-DuckDB extension requirements and the managed conveniences below apply only to the managed R-backed DuckDB provider; prepare Python drivers and their dependencies through `requirements.python`.
+DuckDB extension requirements prepare the managed R-backed provider or the local sans-R managed Python provider before worker startup or restart.
+They do not alter a selected DB-API connection; prepare Python drivers and their dependencies through `requirements.python`.
+The R-specific managed conveniences below apply only to the R-backed provider.
 
 With R present, environment scanning lets an unqualified relation name refer to an R data frame in global state.
 A DuckDB table or view with the same name takes precedence.

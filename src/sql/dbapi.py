@@ -272,13 +272,17 @@ import os as _os
 from pathlib import Path as _Path
 
 _native_storage = None
+_native_extension_directory = None
 _managed_connection = None
 
 
 def enable_native():
-    global _native_storage
+    global _native_storage, _native_extension_directory
 
     _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
+    _native_extension_directory = _os.environ.get(
+        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", ""
+    )
     _builtins.sql_connection = sql_connection
 
 
@@ -297,7 +301,7 @@ def _ensure_managed_connection():
         connection = duckdb.connect(
             ":memory:",
             config={
-                "extension_directory": "",
+                "extension_directory": _native_extension_directory,
                 "secret_directory": str(_native_storage / "stored-secrets"),
                 "temp_directory": str(_native_storage / "spill"),
                 "python_enable_replacements": "false",

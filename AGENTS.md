@@ -184,7 +184,7 @@ Keep these invariants intact:
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
-  Local sans-R preparation uses the trusted `resolve` subcommand with full host permissions, without a resolver sandbox or worker-policy/storage checks.
+  Local sans-R Python and DuckDB extension preparation use the trusted `resolve` subcommand with full host permissions, without a resolver sandbox or worker-policy/storage checks.
   Resolver isolation is outside this feature's scope; document client-controlled executable and local-source escape paths in `docs/REQUIREMENTS.md`.
   Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   Accepted installation or build code may execute with server permissions.
@@ -248,7 +248,7 @@ Keep these invariants intact:
 ### Resolvers and sandbox
 
 - `src/resolver.rs`, `src/resolver/python_configuration.rs`, `src/resolver/` — host resolver entry point, retained environments, captured local `uv` selection, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
-- `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
+- `src/resolver/programs/` — compile-time R programs for R-backed DuckDB extension preparation, R-library resolution, and `uv` discovery, plus the isolated Python DuckDB helper for local sans-R preparation.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — immutable runner launch configuration, macOS policy additions, and ordinary child inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 

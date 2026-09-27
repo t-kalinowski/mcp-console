@@ -698,12 +698,14 @@ impl Client {
         if self.python_only() {
             if let Some(requirements) = &request.requirements {
                 if !self.python_preparation() {
+                    if !requirements.duckdb.is_empty() {
+                        return Err("DuckDB extension preparation is unavailable with a user-selected Python environment; install extensions before starting the session".into());
+                    }
                     return Err(crate::local_runtime::PREPARATION_DISABLED.into());
                 }
-                if !requirements.r.is_empty() || !requirements.duckdb.is_empty() {
+                if !requirements.r.is_empty() {
                     return Err(
-                        "R and DuckDB requirements are unavailable in Python sessions without R"
-                            .into(),
+                        "R requirements are unavailable in Python sessions without R".into(),
                     );
                 }
             }

@@ -17,7 +17,7 @@ These checks reject incompatible `get` fields, payloads with `reset`, replacemen
 [SSH targets](SSH.md) discover capability on the execution host before advertising the schema.
 Managed targets use the same preparation ordering below; bare targets expose only `requirements.action="get"` and reject supplied preparation before control, stdin, or evaluation side effects.
 
-Local sans-R sessions managed through uv expose Python requirements and the ordinary action/version/cutoff fields; R and DuckDB requirements remain unavailable.
+Local sans-R sessions managed through uv expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
 They support standalone preparation and preparation with a Python or SQL cell before first worker startup, and explicit restart preparation with or without a cell.
 Changed requirements on a running worker are rejected before preparation or same-call code and input; exact retained requirements remain a no-op.
 Restart resolves the cumulative candidate and inspects its embedding configuration before retirement.

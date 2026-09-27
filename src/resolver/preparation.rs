@@ -87,6 +87,11 @@ pub(crate) enum Operation {
         r: ManagedR,
         extensions: Vec<String>,
     },
+    DuckdbPython {
+        python: ManagedPython,
+        extensions: Vec<String>,
+        extension_directory: std::path::PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]
