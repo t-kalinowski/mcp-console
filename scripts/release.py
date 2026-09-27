@@ -173,7 +173,7 @@ def smoke_mcp(
                 "content": [{"type": "text", "text": "[starting new worker]\n[idle]"}],
                 "isError": False,
             },
-            "unexpected runtime startup response",
+            f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
         )
 
         send(

@@ -308,10 +308,13 @@ class ReleaseScriptTests(unittest.TestCase):
                                 "content": [
                                     {
                                         "type": "text",
-                                        "text": "[starting new worker]\\n[idle]",
+                                        "text": os.environ.get(
+                                            "FAKE_MCP_STARTUP_ERROR",
+                                            "[starting new worker]\\n[idle]",
+                                        ),
                                     }
                                 ],
-                                "isError": False,
+                                "isError": bool(os.environ.get("FAKE_MCP_STARTUP_ERROR")),
                             },
                         }
                     ),
@@ -584,6 +587,25 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
+
+    def test_smoke_wheel_reports_runtime_startup_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_STARTUP_ERROR"] = "resolver fixture failed"
+
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                "aarch64-apple-darwin",
+                cwd=directory,
+                env=environment,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("resolver fixture failed", result.stderr)
 
     def test_smoke_wheel_bounds_runtime_startup_separately(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
