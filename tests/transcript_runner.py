@@ -359,6 +359,121 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
 
+    def test_cases_isolate_console_home_and_preserve_host_environment(self) -> None:
+        ambient_home = self.root / "ambient-home"
+        console_home = self.root / "ambient-console"
+        project_console = self.root / ".agents/console"
+        project_console.mkdir(parents=True)
+        (project_console / "config.yaml").write_text("invalid: [", encoding="utf-8")
+        config = console_home / "config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text("invalid: [", encoding="utf-8")
+        commands = self.root / "commands"
+        commands.mkdir()
+        environment = os.environ | {
+            "HOME": str(ambient_home),
+            "MCP_CONSOLE_HOME": str(console_home),
+            "R_HOME": str(self.root / "missing-R"),
+            "PATH": str(commands),
+        }
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import json
+                import os
+
+
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    root = binary.parents[2]
+                    expected = json.loads((root / "environment.json").read_text())
+                    actual = {name: os.environ.get(name) for name in expected}
+                    assert actual == expected, (actual, expected)
+                    console = Path(os.environ["MCP_CONSOLE_HOME"])
+                    assert console.is_absolute()
+                    assert console != root / "ambient-console"
+                    assert not (console / "config.yaml").exists()
+                    workspace = Path.cwd()
+                    assert workspace != root.resolve(), workspace
+                    assert not (workspace / ".agents").exists()
+                    (root / "workspace.txt").write_text(str(workspace))
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        names = (
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "R_LIBS_USER",
+            "R_USER_CACHE_DIR",
+            "R_USER_DATA_DIR",
+            "DOCKER_CONFIG",
+            "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+        )
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                for name in names:
+                    if explicit:
+                        environment[name] = str(self.root / name)
+                    else:
+                        environment.pop(name, None)
+                expected = {
+                    name: environment.get(name) for name in ("HOME", "R_HOME", *names)
+                }
+                (self.root / "environment.json").write_text(json.dumps(expected))
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        self.boundaries / "_run.py",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(
+                    Path((self.root / "workspace.txt").read_text()).exists()
+                )
+        self.assertEqual(config.read_text(), "invalid: [")
+
+    def test_focused_cases_do_not_probe_r(self) -> None:
+        environment = self.prepare_script()
+        r_home = self.root / "selected-R"
+        (r_home / "bin").mkdir(parents=True)
+        rscript = (
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                from pathlib import Path
+
+                Path(__file__).with_suffix(".probed").touch()
+                raise SystemExit(86)
+                """)
+        )
+        for executable in (r_home / "bin/Rscript", self.root / "commands/Rscript"):
+            executable.write_text(rscript, encoding="utf-8")
+            executable.chmod(0o755)
+        for selected_home in (str(r_home), None):
+            with self.subTest(selected_home=selected_home):
+                environment.pop("R_HOME", None)
+                if selected_home is not None:
+                    environment["R_HOME"] = selected_home
+                result = subprocess.run(
+                    ["scripts/test", "client_server/server/test_tools::selected"],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((r_home / "bin/Rscript.probed").exists())
+        self.assertFalse((self.root / "commands/Rscript.probed").exists())
+
     def test_script_creates_empty_timings_when_selected_case_is_skipped(self) -> None:
         environment = self.prepare_script()
         self.suite.write_text(

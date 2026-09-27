@@ -60,8 +60,17 @@ static int observe_waitid(idtype_t type, id_t id, siginfo_t *info, int options) 
 
 __attribute__((constructor))
 static void remove_interposer_from_child_environment(void) {
-    unsetenv("DYLD_INSERT_LIBRARIES");
-    unsetenv("LD_PRELOAD");
+    const char *server = getenv("MCP_CONSOLE_TEST_PERMISSION_SERVER");
+    if (server == NULL) {
+        char pid[32];
+        snprintf(pid, sizeof(pid), "%ld", (long)getpid());
+        setenv("MCP_CONSOLE_TEST_PERMISSION_SERVER", pid, 1);
+    } else {
+        // The server's direct children include the resolver owner. Their
+        // children, including ir and the worker, must not inherit the hook.
+        unsetenv("DYLD_INSERT_LIBRARIES");
+        unsetenv("LD_PRELOAD");
+    }
 }
 
 #ifdef __APPLE__

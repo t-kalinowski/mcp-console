@@ -3,9 +3,22 @@
 ---
 send:
   python: |
+    import ctypes
     import os
-    import time
+    import signal
     from pathlib import Path
+
+    checkpoint_library = ctypes.PyDLL(os.environ["MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"])
+    wait_for_interrupt = checkpoint_library.wait_for_probe_interrupt
+    wait_for_interrupt.argtypes = (
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    )
+    wait_for_interrupt.restype = ctypes.c_int
+    started_path = Path(os.environ["TMPDIR"], "sql-interrupt-started")
+    release_path = Path(os.environ["TMPDIR"], "sql-interrupt-release")
 
 
     class InterruptibleConnection:
@@ -18,12 +31,27 @@ send:
 
         def execute(self, source):
             if source == "WAIT":
-                Path(
-                    os.environ["TMPDIR"],
-                    "python-sql-interrupt-started",
-                ).touch()
-                while True:
-                    time.sleep(60)
+                wakeup_read, wakeup_write = os.pipe()
+                os.set_blocking(wakeup_write, False)
+                previous_wakeup = signal.set_wakeup_fd(wakeup_write)
+                try:
+                    with (
+                        started_path.open("wb", buffering=0) as started,
+                        release_path.open("rb", buffering=0) as release,
+                    ):
+                        assert (
+                            wait_for_interrupt(
+                                started.fileno(),
+                                release.fileno(),
+                                wakeup_read,
+                                ctypes.pythonapi.PyErr_CheckSignals,
+                            )
+                            == 0
+                        )
+                finally:
+                    signal.set_wakeup_fd(previous_wakeup)
+                    os.close(wakeup_read)
+                    os.close(wakeup_write)
             self.description = (("answer",),)
             self.rows = [(42,)]
             return self
@@ -33,10 +61,13 @@ send:
 
 
     console_sql_connection(InterruptibleConnection())
+    print(started_path, release_path, sep="\n")
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        <SQL interrupt started>
+        <SQL interrupt release>
   isError: false
 ---
 send:
@@ -52,14 +83,23 @@ result:
 ---
 send:
   control: interrupt
-  timeout_ms: 30000
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
 result:
   content:
     - type: text
       text: |
         Traceback (most recent call last):
           File "<string>", line 216, in _evaluate
-          File "<mcp-console:python:e1>", line 21, in execute
+          File "<mcp-console:python:e1>", line 38, in execute
         KeyboardInterrupt
   isError: false
 ---

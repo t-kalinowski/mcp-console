@@ -111,7 +111,9 @@ def _preinstalled_remote_runtime(
             with McpClient(binary, execution.serve(), environment, local) as client:
                 client.initialize_and_list_tools()
                 send = client.transcript[-1]["result"]["tools"][0]
-                assert "requirements" not in send["inputSchema"]["properties"], send
+                assert send["inputSchema"]["properties"]["requirements"]["properties"][
+                    "action"
+                ]["enum"] == ["get"], send
                 assert "console-test" in send["description"], send
                 client.send(
                     # fmt: r

@@ -63,6 +63,10 @@ pub enum Command {
     #[command(hide = true)]
     Worker,
 
+    /// Run the internal host resolver
+    #[command(hide = true)]
+    Resolve,
+
     #[command(hide = true)]
     DockerOwner,
     #[command(hide = true)]

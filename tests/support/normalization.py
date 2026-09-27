@@ -13,7 +13,7 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
     error = normalize_python_traceback_paths(error)
     error, python_patch = re.subn(
         r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\))?(",)$',
-        r"\1.x\2\3",
+        r"\1.XX\2\3",
         error,
         count=1,
     )
@@ -21,7 +21,7 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
     has_python_version = '\n  "python_version": [\n' in error
     error, python_version_patch = re.subn(
         r'(?m)^(  "python_version": \[\n    "\d+\.\d+)\.\d+("\n  \])$',
-        r"\1.x\2",
+        r"\1.XX\2",
         error,
         count=1,
     )

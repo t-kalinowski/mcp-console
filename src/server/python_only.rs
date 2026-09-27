@@ -20,14 +20,6 @@ pub(super) fn configure(
         "Persistent local Python workbench. State persists across calls. R and SQL cells, live requirements, and automatic package installation are unavailable in this session. {environment}\n\nSend one complete{remaining}"
     );
     *description = description.replace("`r`, `python`, or `sql` cell", "`python` cell");
-    if python_preparation {
-        description.truncate(
-            description
-                .find("Dependency resolution, when available,")
-                .expect("local dependency description"),
-        );
-        description.push_str("Python preparation uses a separate native sandbox with network access and the user's protected uv configuration and storage. Only wheels are supported. Protected startup uv configuration can explicitly opt in to local wheel sources; worker-writable sources are inaccessible. Use trusted dependencies.");
-    }
     for (field, description) in [
         (
             "python",
@@ -58,7 +50,7 @@ pub(super) fn configure(
             ),
             (
                 "control",
-                "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT from the live worker and preserves Python state; during preparation it retires the candidate sandbox. Same-call stdin is queued before the interrupt grace. Python requirements with interrupt are rejected before signaling or queuing input. restart discards objects and unread stdin, then sends same-call stdin and code only to the replacement. With requirements.python, the complete candidate environment is resolved and inspected before stopping the current worker. Preparation failure preserves the current worker, retained requirements, and queued input; same-call code and stdin are not sent. Retirement or replacement failure follows the ordinary restart contract. Plain restart reuses the accepted environment.",
+                "Applies lifecycle control alone or before compatible same-call fields. interrupt requests SIGINT from the live worker and preserves Python state; during preparation it interrupts the host resolver. Same-call stdin is queued before the interrupt grace. Python requirements with interrupt are rejected before signaling or queuing input. restart discards objects and unread stdin, then sends same-call stdin and code only to the replacement. With requirements.python, the complete candidate environment is resolved and inspected before stopping the current worker. Preparation failure preserves the current worker, retained requirements, and queued input; same-call code and stdin are not sent. Retirement or replacement failure follows the ordinary restart contract. Plain restart reuses the accepted environment.",
             ),
         ] {
             if let Some(property) = properties.get_mut(field) {
@@ -68,14 +60,12 @@ pub(super) fn configure(
         let requirements = properties
             .get_mut("requirements")
             .expect("requirements schema");
-        requirements["description"] = "Explicit Python package requirements for a Console-managed uv environment. Supported before the first worker starts, alone or with a Python cell, and with control: restart, with or without code. Additions are merged with defaults and retained requirements. A changed live environment requires restart; retained requirements are a no-op. Resolution and native inspection finish before retirement. Automatic installation is unavailable. Standalone preparation cannot queue stdin.".into();
+        requirements["description"] = "Inspect with action=get; add named Python packages with action=add (the default), replace the declaration with action=set, or restore defaults with action=reset. Applies to a Console-managed uv environment. Supported before the first worker starts, alone or with a Python cell, and with control: restart, with or without code. Additions accumulate in the retained declaration, initially NumPy and pandas. A changed live environment requires restart; retained requirements are a no-op. Resolution and native inspection finish before retirement. Automatic installation is unavailable. Standalone preparation cannot queue stdin.".into();
         let fields = requirements["properties"]
             .as_object_mut()
             .expect("requirement properties");
         fields.shift_remove("r");
         fields.shift_remove("duckdb");
-        fields.get_mut("python").expect("Python requirements")["description"] = "Named PEP 508 requirements added to the retained Python manifest. Local paths, URLs, editable requirements, and archives are rejected as request values. Preparation uses uv in a separate native sandbox with protected shared uv storage. Only compatible wheels are supported; source builds are unavailable. Live changes require control: restart.".into();
-    } else {
-        properties.shift_remove("requirements");
+        fields.get_mut("python").expect("Python requirements")["description"] = "Named PEP 508 requirements added to the retained Python manifest. Local paths, URLs, editable requirements, and archives are rejected as request values. Preparation runs outside the worker sandbox with full host permissions and may execute installation or build code. Use trusted dependencies and resolver configuration. Live changes require control: restart.".into();
     }
 }

@@ -20,7 +20,7 @@ MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 Local sessions can run Python without R.
-When R is absent, Console uses system-installed `uv` and uv-managed CPython to resolve its default environment.
+When R is absent, Console uses `uv` from `PATH` to resolve its default environment.
 To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; that mode never invokes uv and disables package preparation.
 These sessions support Python execution, input, plots, interrupts, restart, and recording; live requirements, automatic package installation, and SQL are unavailable.
 When Console manages Python through uv, `requirements.python` prepares packages before first use or with an explicit restart.
@@ -85,7 +85,9 @@ Follow up in the same conversation:
 > Using the model and data already in the console, where does the model make the most mistakes?
 > Show me a plot and the path to the recorded console session transcript.
 
-Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the server's working directory.
+If `.agents/console` exists in the server's working directory, records and plot artifacts are written under its `sessions/<run-id>/` directory.
+Otherwise, Console writes them under `~/.agents/console/sessions/<run-id>/` without creating a project `.agents` directory.
+Set [`MCP_CONSOLE_HOME`](docs/CONFIGURATION.md) to an absolute directory to relocate fallback configuration and recordings without changing `HOME`.
 Your client uses its configured model; the exact calls and responses can vary.
 
 ## Reproducible reports
@@ -105,7 +107,10 @@ The [process diagram and ownership guide](docs/ARCHITECTURE.md#process-layout) e
 - The **runtime worker** owns live R, Python, and SQL state and evaluates one cell at a time.
 - The **private sandbox runner** owns native enforcement, private temporary storage, and descendant supervision within its [documented limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
-Restart discards in-memory language and database state while retaining prepared requirements in the server.
+Restart discards in-memory language and database state while retaining selected requirements in the server.
+Use `send(requirements={"action": "get"})` to inspect them.
+Add is the default; `set` replaces the complete declaration, including with no optional packages, and `reset` restores startup defaults.
+Changed replacements of a live worker require `control="restart"`; see [requirements management](docs/REQUIREMENTS.md#inspecting-and-replacing-requirements).
 Recordings remain files; they are not session checkpoints.
 The architecture separates host setup and recording from evaluated code, while the shared worker enables interoperation and means a restart affects all three languages.
 
@@ -123,6 +128,7 @@ Linux requires mounted `/proc` and permission for the native sandbox's namespace
 Restricted containers or host security policy may prevent startup.
 
 Dependency preparation runs **outside the worker sandbox** and may execute trusted installation, build, or initialization code with host permissions.
+The trusted resolver subcommand has full host permissions; worker-writable resolver inputs can let crafted client code escape the worker sandbox.
 Use only trusted requirements and resolver configuration.
 See the [dependency trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust).
 

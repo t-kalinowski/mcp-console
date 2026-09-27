@@ -40,7 +40,7 @@ const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabl
 pub(in crate::worker_client) enum PythonEnvironment {
     Managed {
         selected: crate::resolver::ManagedPython,
-        resolver: Box<crate::resolver::execution::PythonConfiguration>,
+        resolver: crate::resolver::execution::PythonConfiguration,
     },
     UserSelected(OsString),
     Ambient,
@@ -67,9 +67,7 @@ impl PythonEnvironment {
         let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
         Ok(Self::Managed {
             selected,
-            resolver: Box::new(crate::resolver::execution::PythonConfiguration::Local(
-                resolver,
-            )),
+            resolver: crate::resolver::execution::PythonConfiguration::Direct(resolver),
         })
     }
 
@@ -139,13 +137,7 @@ impl PythonEnvironment {
     }
 }
 
-pub(super) fn ensure_python_additions_available(
-    environment: &Environment,
-    additions: &[String],
-) -> Result<(), String> {
-    if additions.is_empty() {
-        return Ok(());
-    }
+pub(super) fn ensure_managed_python_available(environment: &Environment) -> Result<(), String> {
     if environment.custom_worker {
         return Err("Python requirements are unavailable with a custom worker".to_string());
     }

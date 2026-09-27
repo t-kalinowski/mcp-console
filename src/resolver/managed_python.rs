@@ -4,7 +4,10 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
-use super::process::{ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write};
+use super::process::{
+    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
+    resolver_command,
+};
 
 const PYTHON_PATH_SOURCE: &str = r#"
 import sys
@@ -57,6 +60,7 @@ impl ManagedPython {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
@@ -83,14 +87,14 @@ fn resolve_python_manifest_with_r(
     crate::python_requirement::validate_all(&requirements.packages)?;
     crate::python_requirement::validate_version_constraints(&requirements.python_version)?;
     let requirements = requirements.normalized();
-    let resolver = ResolverProcess::for_preparation(configuration.preparation_directory())?;
+    let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     let versions =
         resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
     let resolved_python = versions
         .resolve(&requirements.python_version)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))?;
-    let output_path = super::result_file::ResultFile::create(&configuration.output_directory())?;
+    let output_path = super::result_file::ResultFile::create(&std::env::temp_dir())?;
     let output = run_managed_python_resolver(
         &requirements,
         &resolved_python,
@@ -129,8 +133,7 @@ uv output:
         ));
     }
     check_resolver_control(&resolver, "managed Python resolution")?;
-    let bytes = output_path.read(4096)?;
-    let output = String::from_utf8(bytes)
+    let output = String::from_utf8(output_path.read(4096)?)
         .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
     let python = PathBuf::from(output.trim());
     if !python.is_absolute() || !python.is_file() {
@@ -139,8 +142,7 @@ uv output:
             python.display()
         ));
     }
-    configuration.ensure_safe_python_path(&python)?;
-    warm_matplotlib(&python, configuration, &resolver, &mut on_started)?;
+    warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,
         requirements,
@@ -185,7 +187,7 @@ fn resolve_python_versions<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let resolver = ResolverProcess::for_preparation(configuration.preparation_directory())?;
+    let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)
 }
@@ -291,7 +293,7 @@ where
 {
     let uv = configuration.uv()?;
     let program = Path::new(uv);
-    let mut command = configuration.command(program, resolver)?;
+    let mut command = resolver_command(program);
     command
         .args([
             "python",
@@ -343,7 +345,7 @@ where
 {
     let uv = configuration.uv()?;
     let program = Path::new(uv);
-    let mut command = configuration.command(program, resolver)?;
+    let mut command = resolver_command(program);
     command
         .args(["tool", "run", "--isolated", "--python"])
         .arg(resolved_python);
@@ -353,12 +355,8 @@ where
     for package in &requirements.packages {
         command.arg("--with").arg(package);
     }
-    command.args(["--", "python"]);
-    if configuration.sans_r() {
-        command.arg("-I");
-    }
     command
-        .args(["-c", PYTHON_PATH_SOURCE])
+        .args(["--", "python", "-c", PYTHON_PATH_SOURCE])
         .arg(output_path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -373,14 +371,13 @@ where
 
 fn warm_matplotlib<F>(
     python: &Path,
-    configuration: &super::ManagedPythonResolverConfiguration,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
 ) -> Result<(), String>
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut command = configuration.command(python, resolver)?;
+    let mut command = resolver_command(python);
     command
         .args(["-I", "-c", "import matplotlib.font_manager"])
         .stdin(Stdio::null())
@@ -425,7 +422,7 @@ fn resolver_error(output: &ResolverOutput) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-pub(super) fn run_resolver_command<F>(
+fn run_resolver_command<F>(
     mut command: Command,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
@@ -435,12 +432,15 @@ pub(super) fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let (mut child, [stdout, stderr]) = resolver.spawn(&mut command).map_err(|error| {
+    let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()
         )
     })?;
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+    resolver.watch_exit(child.id());
     if let Some(on_started) = on_started.take()
         && let Err(error) = on_started(resolver.stop_handle())
     {

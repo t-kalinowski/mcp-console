@@ -11,7 +11,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import entry_result_text, last_result_text
+from support.assertions import (
+    entry_result_text,
+    last_result_text,
+    wait_for_evaluation_output,
+)
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -27,6 +31,7 @@ from support.requirements import PROCESS_EVENTS, command, requires
 from support.resolvers import (
     ir_requirements,
     ir_run_records,
+    local_resolver_owner,
     recording_ir_environment,
 )
 from support.suites import run_this_suite
@@ -1083,7 +1088,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
             server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
+            owner = local_resolver_owner(server, binary)
+            existing_children = child_process_identities(owner)
 
             # fmt: r
             r = code(r"""
@@ -1091,23 +1097,28 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                 do.call(base::loadNamespace, list(package = package))
                 resolver_interrupt_cell_ran <- TRUE
                 """)
-            evaluation = client.start_send(r=r)
+            # Release the cell's response claim before the interrupt becomes
+            # the sole reader of the resolver error and evaluation completion.
+            client.send(r=r, timeout_ms=0)
+            assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic R resolver")
             resolver = [
                 child
-                for child in child_process_identities(server)
+                for child in child_process_identities(owner)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver
-            interrupt = client.start_send(control="interrupt")
-            client.receive_many([evaluation, interrupt])
+            wait_for_evaluation_output(
+                client,
+                "Error: R package resolution interrupted\n",
+                "automatic R resolver interruption",
+                completion_timeout_seconds=client.response_timeout,
+                control="interrupt",
+            )
             # Keep the FIFO blocked until interruption has reaped this resolver.
             assert live_processes(resolver) == [], (
                 "interrupt did not reap the R resolver"
             )
-            assert entry_result_text(interrupt) == "\n[idle]"
-            error = entry_result_text(evaluation)
-            assert error == "Error: R package resolution interrupted\n", repr(error)
             assert len(ir_run_records(record)) == baseline + 1
 
             client.send(

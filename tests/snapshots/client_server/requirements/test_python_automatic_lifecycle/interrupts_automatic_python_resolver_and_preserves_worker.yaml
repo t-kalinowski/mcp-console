@@ -59,14 +59,14 @@ result:
         managed Python resolution failed:
         resolver input:
         {
-          "python": "3.12.x",
+          "python": "3.12.XX",
           "packages": [
             "numpy",
             "pandas",
             "mcp_console_blocked_automatic_import"
           ],
           "python_version": [
-            "3.12.x"
+            "3.12.XX"
           ]
         }
         uv output:

@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::resolver::{ManagedPython, ManagedPythonResolverConfiguration, ResolverStopHandle};
+use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
@@ -35,7 +35,7 @@ impl Selection {
 
     pub(crate) fn python(
         configured: Option<OsString>,
-        resolver: Option<&ManagedPythonResolverConfiguration>,
+        resolver: &crate::resolver::execution::PythonConfiguration,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Option<ManagedPython>), String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
@@ -53,9 +53,13 @@ impl Selection {
             };
             (executable, None)
         } else {
-            let managed = crate::resolver::resolve_python_manifest(
+            if !resolver.has_uv() {
+                return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
+            }
+            let managed = crate::resolver::execution::resolve_python_manifest(
                 crate::worker_protocol::default_python_requirement_manifest(),
-                resolver.expect("managed Python selection requires a resolver"),
+                resolver,
+                None,
                 on_started,
             )?;
             (managed.python().to_path_buf(), Some(managed))
@@ -64,7 +68,7 @@ impl Selection {
         // environment even though its base executable has the same identity.
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
-        let selected = crate::python::inspect_prepared(&executable, resolver, on_started)?;
+        let selected = crate::python::inspect_native(&executable, on_started)?;
         let selection = Self::Python {
             selected: Box::new(selected),
             explicit,
@@ -145,12 +149,8 @@ pub(crate) struct TemporaryDirectory(Option<PathBuf>);
 
 impl TemporaryDirectory {
     pub(crate) fn create() -> Result<Self, String> {
-        Self::create_in(&std::env::temp_dir())
-    }
-
-    pub(crate) fn create_in(directory: &Path) -> Result<Self, String> {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
-        let template = directory.join("mcp-console-worker-XXXXXX");
+        let template = std::env::temp_dir().join("mcp-console-worker-XXXXXX");
         let mut bytes = template.as_os_str().as_bytes().to_vec();
         bytes.push(0);
         // mkdtemp creates a private, unique directory with mode 0700.

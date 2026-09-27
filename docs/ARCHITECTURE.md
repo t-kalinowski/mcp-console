@@ -18,7 +18,8 @@ MCP client
 mcp-console server                         host
     ├── generation, relay lifetime, and operation owner
     ├── retained environments, output, and recording
-    ├──── host resolvers                    R, Python, and DuckDB setup
+    ├──── mcp-console resolve               host preparation owner
+    │       └── resolver process groups     R, Python, and DuckDB setup
     │
     │ ordinary child stdin/stdout; inherited stderr
     ▼
@@ -50,6 +51,12 @@ Local and SSH host execution use that account's permissions and temporary-direct
 Docker retains its outer container boundary and retirement.
 Docker Sandbox compute enforcement retains its outer microVM and provider policy, including with `--no-sandbox`; it does not use an inner native runner.
 Available R, Python, and DuckDB dependency resolution runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
+
+For local sessions, the server opens the hidden `mcp-console resolve` command before managed-runtime discovery and keeps that host process for the session.
+It exchanges JSON lines on the command's standard streams: the server sends complete requirement manifests and operation controls, and the command returns resolved environment data with a cleanup receipt.
+The server still owns the retained manifest, candidate commits, worker generations, and interrupt routing.
+The preparation owner captures host resolver choices once and retires each child process group before returning its result.
+Custom workers open the command when they first request host preparation.
 
 For a configured SSH target, the process chain is:
 
@@ -272,7 +279,7 @@ Reticulate then attaches its conversion and event runtime to the running interpr
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
 Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
-When R is absent, the server resolves the default Python manifest through the existing local host resolver, or selects PATH Python when uv is absent, and inspects that executable before MCP readiness.
+When R is absent, the local resolver command prepares the default Python manifest, or the server selects PATH Python when uv is absent, and the server inspects that executable before MCP readiness.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
 The same coordinator constructs an absent R integration, native Python runtime, and no R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
@@ -337,14 +344,19 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-For a local host target, the built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
+For a local host target, the built-in server opens the host resolver command, which captures a stable resolver configuration and detects its capability without installing an environment.
 The Python configuration captures an explicit `RETICULATE_UV` selection or `uv` on `PATH` independently of R discovery.
 R bootstrap prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
 It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
 An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
 With directly available `uv`, local Python preparation runs before R library preparation and does not require a managed R library; reticulate bootstrap remains the R-backed fallback when direct `uv` is unavailable.
 For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
-Explicit requirements remain preconditions of evaluation and combine their additions with the pending defaults.
+Explicit requirements remain preconditions of evaluation.
+Default-add requests combine additions with pending defaults; set/reset calculate a whole-declaration candidate using the same environment owner and resolver transaction.
+Retained R requirements describe the declaration separately from necessary R bridge and SQL infrastructure.
+Managed Python already carries its logical manifest, including an empty package list.
+A separate read-only projection is published at generation-checked environment commits.
+Inspection reads that short-lived snapshot lock without acquiring the environment lock held during resolution.
 If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
 The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
 An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
@@ -407,15 +419,12 @@ The server waits, polls, or completes the MCP response without moving response o
 
 When a code-bearing `send` declares requirements, the server treats them as preconditions of that evaluation.
 One exclusive environment transition covers requirement-delta calculation, host resolution, live preparation or a pre-start retained-environment commit, and reservation and launch of the evaluation in the same generation.
-For local sans-R managed Python, the launch boundary constructs a separate native preparation sandbox with read-only host access, denied worker locations, and writes to uv-selected storage and preparation temporary files.
-The native launcher starts with a cleared environment and supplies the captured user environment only after enforcement.
-uv interprets user/system configuration and reports its storage paths; Console retains them for the session.
-Explicit config and storage paths retain their launch-directory meaning before preparation switches to `/`.
-Protected startup configuration may opt in to local wheel sources, but the resolver cannot read worker-writable locations.
-Resolver, inspection, and status results are read with size limits from the original open descriptors.
-Version discovery, uv resolution, cache warming, and native inspection all use it; the server owns ordinary child lifetime and requires successful native retirement before accepting a candidate.
-Interrupt and cancellation retire the preparation sandbox without changing the current worker.
-The supported worker policies exclude custom filesystem and native extensions, so the resolver does not reconstruct effective worker write permissions.
+Local sans-R managed Python uses the same trusted `resolve` subprocess as other local preparation.
+It runs with full host permissions, independently of worker policy; it does not isolate worker-writable resolver inputs.
+The [requirements trust boundary](REQUIREMENTS.md#host-resolution-and-trust) documents the resulting escape paths.
+The mutable session environment owns the accepted manifest, executable, and embedding configuration together.
+Candidate inspection completes before worker retirement; failure or cancellation preserves the old selection and worker.
+Resolver and inspection results use bounded reads from the original open descriptors.
 No other send or environment-changing operation can enter that boundary, and a failed or superseded transition cannot dispatch the cell.
 The server releases the environment transition after launch; the active evaluation continues to own stdin, waiting, output cuts, response delivery, and restart handoff.
 
@@ -542,12 +551,15 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 ## Recording, cell output, and image artifacts
 
 Recording is a server responsibility and does not add messages to either private protocol.
-On the first `send` call, the server creates a private run directory under `.agents/console/sessions/` in its working directory.
+On the first `send` call, the server creates a private run directory under the launch working directory's `.agents/console/sessions/` if `.agents/console` already exists there.
+Otherwise it writes under `~/.agents/console/sessions/` without creating a project `.agents` directory.
+`MCP_CONSOLE_HOME` can replace the default `~/.agents/console` directory; project directory selection still takes precedence.
+Raw-log paths returned to clients are relative to the launch directory for project recordings and absolute for home recordings.
 It appends tool calls and assembled results to `internal/events.jsonl`.
 The initial `session_started` event records whether dynamic environment resolution is available.
 Sans-R uv-managed sessions separately record `python_preparation: true` while dynamic resolution remains disabled.
 The Quarto projection uses that capability and the captured Python-only managed selection separately to declare initial requirements.
-For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local `working_directory` that owns the recording.
+For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local launch `working_directory`.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
 Docker Sandbox metadata records its compute provider, template digest, CLI version, target workspace, and shares; generation events identify VM names and UUIDs separately from container IDs.
 Declared binds and shared paths can expose controller records to the workload.
@@ -578,7 +590,10 @@ SQL chunks require a DBI connection supplied by the document user.
 
 SSH, Docker, and Docker Sandbox projections identify the execution target and omit the local execution root.
 Rendering them executes the captured cells, so the user must prepare an appropriate environment and files first; the document does not reproduce remote files.
-Every generated QMD includes the `ir render transcript.qmd` command in a frontmatter comment.
+A committed set/reset records the normalized declaration, Python constraints, and originating call ID in a `requirements_selected` event.
+The Markdown projection displays it; Quarto inserts it before the accompanying cell, marks environment boundaries, and disables evaluation.
+One header manifest cannot replay cells with incompatible historical requirements.
+QMD without replacement boundaries includes the `ir render transcript.qmd` command in a frontmatter comment.
 
 For a local session, render the source projection from the recording directory with:
 

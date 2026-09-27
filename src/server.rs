@@ -162,14 +162,20 @@ struct SendArguments {
     /// same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
     /// and unread-stdin state and sends same-call stdin and code only to the replacement.
     control: Option<SendControl>,
-    /// Additive R packages, Python packages, or DuckDB extensions to retain for later calls.
+    /// Inspect or manage retained R packages, Python packages, and DuckDB extensions.
+    /// action=get returns a read-only snapshot, including Python constraints and separate runtime
+    /// infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
+    /// manifest is in structuredContent.requirements even when it exceeds the text preview limit.
+    /// action=add is the default; action=set replaces the whole declaration without injecting defaults;
+    /// action=reset restores startup defaults. Changed replacements require control="restart" with a
+    /// live worker. Empty set means no optional requirements; bare {} is invalid.
     /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
     /// that cell. With `control = "restart"`, they are part of the restart transaction, with or
-    /// without a cell. Requirements are not accepted with interrupt unless a cell follows.
+    /// without a cell. Only add can accompany interrupt, and only when a cell follows.
     /// Preparation does not import, attach, or load dependencies. On a code-bearing call without
     /// control, preparation completes before same-call nonempty stdin is queued. Standalone
     /// preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
-    /// unchanged and sends neither stdin nor code. With interrupt and a following cell, signal
+    /// unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
     /// delivery and stdin enqueue happen before requirements are validated or prepared and are not
     /// rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
     /// not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
@@ -220,26 +226,43 @@ enum SendControl {
 #[schemars(inline)]
 #[serde(deny_unknown_fields)]
 struct Requirements {
-    /// Additive DuckDB extension names for the managed DuckDB backend, for standalone preparation,
+    /// get inspects the committed declaration without starting a worker or consuming output.
+    /// add (default) accumulates requirements. set replaces all lists and Python constraints;
+    /// omitted fields are empty, including when only action is supplied. reset restores startup
+    /// defaults. get and reset reject payload fields. Changed set/reset with a live worker require
+    /// control="restart"; the complete candidate resolves before the old worker is retired.
+    /// add accepts up to 64 entries per language per call; set accepts the complete accumulated manifest.
+    #[serde(default)]
+    action: crate::worker_client::RequirementsAction,
+    /// Python version constraints, preserved by get and replaced as a whole by set. Add appends
+    /// constraints; changing constraints with a live worker requires control="restart".
+    #[serde(default, deserialize_with = "supplied_list")]
+    #[schemars(with = "Vec<String>")]
+    python_version: Option<Vec<String>>,
+    /// Python package publication cutoff accepted by uv, for example "2026-01-01". set clears an
+    /// omitted or null cutoff; add preserves an omitted cutoff and cannot replace an existing one.
+    #[serde(default, deserialize_with = "supplied_nullable")]
+    exclude_newer: Option<Option<String>>,
+    /// DuckDB extension names for the managed DuckDB backend, for standalone preparation,
     /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
     /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
     /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
     /// uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
     /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
     /// later inside the worker.
-    #[serde(default)]
-    #[schemars(length(max = 64), inner(length(min = 1, max = 64)))]
-    duckdb: Vec<String>,
-    /// Additive, single-line `ir` package references for standalone preparation, preparation before a
+    #[serde(default, deserialize_with = "supplied_list")]
+    #[schemars(with = "Vec<String>", inner(length(min = 1, max = 64)))]
+    duckdb: Option<Vec<String>>,
+    /// Single-line `ir` package references for standalone preparation, preparation before a
     /// cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
     /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
     /// Automatic R discovery accepts only plain package names. An idle worker that implements R
     /// preparation can add requirements without losing live state. Local package sources are
     /// rejected because resolution runs with server permissions.
-    #[serde(default)]
-    #[schemars(length(max = 64), inner(length(min = 1)))]
-    r: Vec<String>,
-    /// Additive, named PEP 508 registry requirements for standalone preparation, preparation before a
+    #[serde(default, deserialize_with = "supplied_list")]
+    #[schemars(with = "Vec<String>", inner(length(min = 1)))]
+    r: Option<Vec<String>>,
+    /// Named PEP 508 registry requirements for standalone preparation, preparation before a
     /// cell, or a restart transaction, for example `polars>=1`, `scikit-learn`, or
     /// `matplotlib; python_version >= '3.10'`. Use explicit requirements when automatic import
     /// inference needs a different distribution, a version, an extra, or an environment marker, or
@@ -249,9 +272,21 @@ struct Requirements {
     /// server-managed worker may activate compatible additions without losing state. A nonempty
     /// user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
     /// requirements.
-    #[serde(default)]
-    #[schemars(length(max = 64), inner(length(min = 1)))]
-    python: Vec<String>,
+    #[serde(default, deserialize_with = "supplied_list")]
+    #[schemars(with = "Vec<String>", inner(length(min = 1)))]
+    python: Option<Vec<String>>,
+}
+
+fn supplied_list<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error> {
+    Vec::<String>::deserialize(deserializer).map(Some)
+}
+
+fn supplied_nullable<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 fn default_timeout_ms() -> u64 {
@@ -360,6 +395,19 @@ impl ConsoleServer {
         {
             values.retain(|value| !value.is_null());
         }
+        // Omission carries meaning for get/reset. Do not advertise payload defaults.
+        for property in properties
+            .get_mut("requirements")
+            .and_then(|requirements| requirements.get_mut("properties"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("requirements schema properties")
+            .values_mut()
+        {
+            property
+                .as_object_mut()
+                .expect("requirement property schema")
+                .remove("default");
+        }
         // Keep the normal tool prose and nested requirements unchanged; evals
         // only need to project which direct code fields the client can call.
         for (field, enabled) in [
@@ -373,8 +421,18 @@ impl ConsoleServer {
         }
         if python_only {
             python_only::configure(description, properties, python_preparation);
-        } else if !dynamic_resolution {
-            properties.shift_remove("requirements");
+        }
+        if !dynamic_resolution && !python_preparation {
+            let requirements = properties
+                .get_mut("requirements")
+                .expect("requirements schema");
+            *requirements = serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Inspect the server's retained declaration with action=get. Preparation is unavailable for this target; the declaration is not an installed-package inventory.",
+                "properties": {"action": {"type": "string", "enum": ["get"]}},
+                "required": ["action"],
+                "additionalProperties": false,
+            });
         }
         router
     }
@@ -389,7 +447,7 @@ Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must
 
 Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering.
 
-Each result has at most 8 KiB of UTF-8 text, including notices; oversized output keeps its beginning and latest tail. Images have separate limits. Retained raw-log paths are relative to the Console server recording workspace (the controller for remote targets). Full retained text requires filesystem access there through existing tools; Console provides no read/search interface."#
+Each result has at most 8 KiB of UTF-8 text, including notices; oversized output keeps its beginning and latest tail. Images have separate limits. Retained raw-log paths are relative to the server's launch directory for project recordings and absolute for home recordings (both on the controller for remote targets). Full retained text requires filesystem access there through existing tools; Console provides no read/search interface."#
     )]
     async fn send(
         &self,
@@ -435,9 +493,60 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                 Languages::field(cell.language)
             ));
         }
-        let requirements = requirements.map(|Requirements { duckdb, r, python }| {
-            crate::worker_client::Requirements { duckdb, r, python }
-        });
+        if let Some(requirements) = &requirements {
+            use crate::worker_client::RequirementsAction::{Get, Reset};
+            if matches!(requirements.action, Get | Reset)
+                && (requirements.r.is_some()
+                    || requirements.python.is_some()
+                    || requirements.duckdb.is_some()
+                    || requirements.python_version.is_some()
+                    || requirements.exclude_newer.is_some())
+            {
+                return Err(
+                    "requirements.action=get/reset takes no package lists or constraint fields"
+                        .into(),
+                );
+            }
+            if requirements.action == Get {
+                if cell.is_some() || stdin.is_some() || control.is_some() {
+                    return Err(
+                        "requirements.action=get cannot be combined with code, stdin, or control"
+                            .into(),
+                    );
+                }
+                let snapshot = self.worker.inspect_requirements();
+                let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");
+                let text = if json.len() <= 8 * 1024 {
+                    json
+                } else {
+                    "The complete requirements declaration is in structuredContent.requirements; supply that object with action=\"set\". The manifest exceeds the text preview limit and is not reproduced here.".into()
+                };
+                let mut result =
+                    CallToolResult::success(vec![rmcp::model::ContentBlock::text(text)]);
+                result.structured_content = Some(snapshot);
+                return Ok(result);
+            }
+        }
+        let requirements = requirements.map(
+            |Requirements {
+                 action,
+                 duckdb,
+                 r,
+                 python,
+                 python_version,
+                 exclude_newer,
+             }| {
+                crate::worker_client::Requirements {
+                    action,
+                    call_id: call.id(),
+                    duckdb: duckdb.unwrap_or_default(),
+                    r: r.unwrap_or_default(),
+                    python: python.unwrap_or_default(),
+                    python_version: python_version.unwrap_or_default(),
+                    exclude_newer,
+                }
+            },
+        );
         let response = self
             .worker
             .send(crate::worker_client::SendRequest {

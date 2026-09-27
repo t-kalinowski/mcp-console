@@ -14,11 +14,13 @@ send:
     package <- "RcppRoll"
     do.call(base::loadNamespace, list(package = package))
     resolver_interrupt_cell_ran <- TRUE
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: |
-        Error: R package resolution interrupted
+      text: |-
+
+        [running; poll with an empty send]
   isError: false
 ---
 send:
@@ -26,9 +28,8 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [idle]
+      text: |
+        Error: R package resolution interrupted
   isError: false
 ---
 send:

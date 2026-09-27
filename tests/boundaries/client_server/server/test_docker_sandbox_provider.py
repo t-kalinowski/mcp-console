@@ -59,7 +59,9 @@ def test_compute_selection_skips_native_bundle_and_captures_configuration(
             with McpClient(relocated, ("serve", *flags), environment, root) as client:
                 client.initialize_and_list_tools()
                 tool = client.transcript[-1]["result"]["tools"][0]
-                assert "requirements" not in tool["inputSchema"]["properties"]
+                assert tool["inputSchema"]["properties"]["requirements"]["properties"][
+                    "action"
+                ]["enum"] == ["get"]
                 assert (
                     "microVM" in tool["description"]
                     and "without a sandbox" not in tool["description"]

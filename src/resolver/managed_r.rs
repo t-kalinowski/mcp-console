@@ -116,6 +116,7 @@ pub(crate) struct ManagedRResolverConfiguration {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ManagedR {
     library: PathBuf,
+    // Serde's Unix OsString representation preserves native path bytes in JSON.
     r_libs: OsString,
     // Executable selection never travels in a preparation request.
     #[serde(skip)]
@@ -175,6 +176,11 @@ impl ManagedR {
         Ok(())
     }
 
+    pub(crate) fn with_retained_requirements(mut self, requirements: Vec<String>) -> Self {
+        self.requirements = requirements;
+        self
+    }
+
     pub(crate) fn requirements(&self) -> &[String] {
         &self.requirements
     }
@@ -211,12 +217,15 @@ pub(crate) fn discover(
 pub(crate) fn resolve_r(
     requirements: Vec<String>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    on_configured: impl FnOnce(ManagedRResolverConfiguration),
 ) -> Result<ManagedR, String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     let mut python = super::ManagedPythonResolverConfiguration::capture();
     let configuration = discover_r_resolver_with(&resolver, &mut on_started, &mut python)?
         .ok_or_else(|| "dynamic environment resolution requires `ir` or `uv`".to_string())?;
+    // Retain the selected executables even when this first manifest fails.
+    on_configured(configuration.clone());
     resolve_r_with_process(&configuration, requirements, &resolver, &mut on_started)
 }
 

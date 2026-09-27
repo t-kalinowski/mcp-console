@@ -260,6 +260,10 @@ def test_first_cell_prepares_defaults_after_running_response(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "jsonlite",
+            "pillar",
+            "tibble",
+            "utf8",
         }, preparation
         client.send(timeout_ms=0)
         assert last_tool_text(client) == RUNNING
@@ -410,11 +414,19 @@ def test_restart_replaces_first_use_cell_and_stdin(
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
         contended = FifoCheckpoint.create(root / "contended")
+        completion_started = FifoCheckpoint.create(root / "completion-started")
         cancel_release = FifoCheckpoint.create(root / "cancel-release")
         unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
-        for checkpoint in (contended, cancel_release, unlocked, release, parked):
+        for checkpoint in (
+            contended,
+            completion_started,
+            cancel_release,
+            unlocked,
+            release,
+            parked,
+        ):
             resources.callback(checkpoint.close)
         armed = root / "armed"
         environment = {
@@ -422,6 +434,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
                 build_interposer(root, "evaluation_return_interposer")
             ),
             "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
+            "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(completion_started.path),
             "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
             "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
             "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
@@ -456,7 +469,11 @@ def test_restart_replaces_first_use_cell_and_stdin(
             stdin="replacement input",
             timeout_ms=600_000,
         )
+        completion_started.wait("resolver completion reached the server")
         contended.wait("restart waits for the cancelling evaluation's worker lock")
+        assert not select.select([client.stdout], [], [], 0)[0], (
+            "restart replied before the old evaluation released the worker lock"
+        )
         cancel_release.release()
         unlocked.wait("old evaluation released the worker lock")
         client.receive(replacement)

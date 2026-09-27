@@ -25,7 +25,6 @@ if [ "$(/usr/bin/basename "$0")" = invalid-python ]; then
     [ "$(/bin/cat "$root/mode")" != replace-inspection ] || replace_output "$4"
     exit 0
 fi
-if [ "$2" = dir ]; then exec "$root/real-uv" "$@"; fi
 printf '%s\n' "$@" >> "$root/resolutions.log"
 needs_preparation=false
 for output do
@@ -34,15 +33,13 @@ done
 if $needs_preparation; then
     case $(/bin/cat "$root/mode") in
         failure) echo "fixture Python resolution failed" >&2; exit 1 ;;
-        replace-output|replace-inspection|replace-status)
+        replace-output|replace-inspection)
             printf '%s' "$root/invalid-python" > "$output"
             case $(/bin/cat "$root/mode") in
                 replace-output) replace_output "$output" ;;
-                replace-status) replace_output "$MCP_CONSOLE_RESOLVER_STATUS" ;;
             esac
             exit 0 ;;
         inspection|inspection-interrupt) printf '%s' "$root/invalid-python" > "$output"; exit 0 ;;
-        unsafe-candidate) /bin/cat "$root/candidate" > "$output"; exit 0 ;;
         interrupt) message="fixture Python resolution interrupted"; checkpoint ;;
     esac
 fi

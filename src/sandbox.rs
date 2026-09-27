@@ -26,7 +26,7 @@ pub fn capture_settings(
     if provider == crate::settings::Provider::Compute {
         return Err("standalone sandbox is local and cannot use the resolved compute provider; use mcp-console serve for Docker Sandbox execution".into());
     }
-    capture_policy(source, settings, roots)
+    capture_policy(source.as_deref(), settings, roots)
 }
 
 pub fn capture_policy(
@@ -213,12 +213,4 @@ pub fn run(
         let _ = (exit_with_parent, config_env, settings_env, settings);
         unsupported::run(command)
     }
-}
-
-/// Capture the same verified companion used for worker launches.
-pub(crate) fn preparation_runner() -> Result<(PathBuf, u32), String> {
-    Ok((
-        installation::private_runner()?,
-        installation::PROTOCOL_VERSION,
-    ))
 }

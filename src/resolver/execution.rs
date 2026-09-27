@@ -1,25 +1,30 @@
 //! Select the execution host without moving session transactions into the resolver.
 
+use super::preparation::{Operation, Preparation};
 use super::{ManagedPython, ManagedR, ResolverStopHandle};
-use crate::ssh::preparation::{Operation, Preparation};
 use crate::worker_protocol::PythonRequirementManifest;
 
 #[derive(Clone)]
 pub(crate) enum Bootstrap {
-    Local(super::ManagedRBootstrap),
+    Local(Preparation),
     Ssh(Preparation),
 }
 
 #[derive(Clone)]
 pub(crate) enum RConfiguration {
-    Local(super::ManagedRResolverConfiguration),
+    Local(Preparation),
     Ssh(Preparation),
 }
 
 #[derive(Clone)]
 pub(crate) enum PythonConfiguration {
-    Local(super::ManagedPythonResolverConfiguration),
+    Local {
+        preparation: Preparation,
+        has_uv: bool,
+    },
     Ssh(Preparation),
+    #[cfg(not(unix))]
+    Direct(super::ManagedPythonResolverConfiguration),
 }
 
 impl Bootstrap {
@@ -29,9 +34,10 @@ impl Bootstrap {
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<RConfiguration, String> {
         match (self, python) {
-            (Self::Local(bootstrap), PythonConfiguration::Local(python)) => bootstrap
-                .prepare(python, on_started)
-                .map(RConfiguration::Local),
+            (Self::Local(preparation), PythonConfiguration::Local { .. }) => {
+                preparation.call::<()>(Operation::Bootstrap, on_started)?;
+                Ok(RConfiguration::Local(preparation.clone()))
+            }
             (Self::Ssh(remote), PythonConfiguration::Ssh(_)) => {
                 remote.call::<()>(Operation::Bootstrap, on_started)?;
                 Ok(RConfiguration::Ssh(remote.clone()))
@@ -44,20 +50,29 @@ impl Bootstrap {
 impl PythonConfiguration {
     pub(crate) fn has_uv(&self) -> bool {
         match self {
-            Self::Local(configuration) => configuration.has_uv(),
+            Self::Local { has_uv, .. } => *has_uv,
+            #[cfg(not(unix))]
+            Self::Direct(configuration) => configuration.has_uv(),
             // The trusted remote configuration resolves uv in the operation
             // that first needs it, using the selected managed R environment.
             Self::Ssh(_) => true,
         }
     }
     pub(crate) fn has_direct_local_uv(&self) -> bool {
-        matches!(self, Self::Local(configuration) if configuration.has_uv())
+        match self {
+            Self::Local { has_uv, .. } => *has_uv,
+            #[cfg(not(unix))]
+            Self::Direct(configuration) => configuration.has_uv(),
+            Self::Ssh(_) => false,
+        }
     }
-    pub(crate) fn set_resolved_uv(&mut self, uv: std::ffi::OsString) {
-        let Self::Local(configuration) = self else {
-            unreachable!("remote uv stays remote")
-        };
-        configuration.set_resolved_uv(uv);
+    pub(crate) fn set_resolved_uv(&mut self, _uv: std::ffi::OsString) {
+        match self {
+            Self::Local { has_uv, .. } => *has_uv = true,
+            #[cfg(not(unix))]
+            Self::Direct(configuration) => configuration.set_resolved_uv(_uv),
+            Self::Ssh(_) => unreachable!("remote uv stays remote"),
+        }
     }
 }
 
@@ -68,11 +83,15 @@ impl RConfiguration {
         python: &PythonConfiguration,
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<std::ffi::OsString, String> {
-        let (Self::Local(configuration), PythonConfiguration::Local(python)) = (self, python)
-        else {
+        let (Self::Local(preparation), PythonConfiguration::Local { .. }) = (self, python) else {
             unreachable!("remote uv stays remote")
         };
-        configuration.resolve_uv(managed_r, python, on_started)
+        preparation.call(
+            Operation::Uv {
+                r: managed_r.clone(),
+            },
+            on_started,
+        )
     }
 
     pub(crate) fn resolve_r(
@@ -81,9 +100,7 @@ impl RConfiguration {
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<ManagedR, String> {
         match self {
-            Self::Local(configuration) => {
-                super::resolve_r_with(configuration, requirements, on_started)
-            }
+            Self::Local(preparation) => preparation.call(Operation::R { requirements }, on_started),
             Self::Ssh(remote) => remote.call(Operation::R { requirements }, on_started),
         }
     }
@@ -96,9 +113,13 @@ pub(crate) fn resolve_python_manifest(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     match configuration {
-        PythonConfiguration::Local(configuration) => {
-            super::resolve_python_manifest(requirements, configuration, on_started)
-        }
+        PythonConfiguration::Local { preparation, .. } => preparation.call(
+            Operation::Python {
+                requirements,
+                r: managed_r.cloned(),
+            },
+            on_started,
+        ),
         PythonConfiguration::Ssh(remote) => remote.call(
             Operation::Python {
                 requirements,
@@ -106,6 +127,10 @@ pub(crate) fn resolve_python_manifest(
             },
             on_started,
         ),
+        #[cfg(not(unix))]
+        PythonConfiguration::Direct(configuration) => {
+            super::resolve_python_manifest(requirements, configuration, on_started)
+        }
     }
 }
 
@@ -116,9 +141,13 @@ pub(crate) fn resolve_python_version(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     match configuration {
-        PythonConfiguration::Local(configuration) => {
-            super::resolve_python_version(constraints, configuration, on_started)
-        }
+        PythonConfiguration::Local { preparation, .. } => preparation.call(
+            Operation::LocalPythonVersion {
+                constraints,
+                r: managed_r.cloned(),
+            },
+            on_started,
+        ),
         PythonConfiguration::Ssh(remote) => remote.call(
             Operation::PythonVersion {
                 constraints,
@@ -130,23 +159,25 @@ pub(crate) fn resolve_python_version(
             },
             on_started,
         ),
+        #[cfg(not(unix))]
+        PythonConfiguration::Direct(configuration) => {
+            super::resolve_python_version(constraints, configuration, on_started)
+        }
     }
 }
 
 pub(crate) fn resolve_duckdb_extensions(
-    remote: Option<&Preparation>,
+    preparation: Option<&Preparation>,
     managed_r: &ManagedR,
     extensions: &[String],
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(), String> {
-    match remote {
-        None => super::resolve_duckdb_extensions(managed_r, extensions, on_started),
-        Some(remote) => remote.call(
-            Operation::Duckdb {
-                r: managed_r.clone(),
-                extensions: extensions.to_vec(),
-            },
-            on_started,
-        ),
-    }
+    let preparation = preparation.ok_or("DuckDB resolver has no preparation owner")?;
+    preparation.call(
+        Operation::Duckdb {
+            r: managed_r.clone(),
+            extensions: extensions.to_vec(),
+        },
+        on_started,
+    )
 }

@@ -55,6 +55,7 @@ impl Client {
             duckdb_extensions,
             duckdb_changed,
             python_additions: _,
+            restart_required: _,
             python_candidate,
             r_requirements,
             r_changed,
@@ -63,7 +64,7 @@ impl Client {
         let early_resolver = match &environment.r_resolver {
             RResolver::Pending(setup) => Some(&setup.python_resolver),
             _ => match environment.python.as_ref() {
-                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver.as_ref()),
+                Some(PythonEnvironment::Managed { resolver, .. }) => Some(resolver),
                 _ => None,
             },
         };
@@ -170,12 +171,9 @@ impl Client {
             {
                 // Inspect the resolved candidate before retirement. Both launch
                 // configuration and manifest stay provisional in this clone.
-                **inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
+                **inspected = self.inspect_managed_python(generation, &selected)?;
             }
-            environment.python = Some(PythonEnvironment::Managed {
-                selected,
-                resolver: Box::new(resolver),
-            });
+            environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
@@ -187,19 +185,14 @@ impl Client {
         &self,
         generation: &WorkerGeneration,
         candidate: &crate::resolver::ManagedPython,
-        resolver: &crate::resolver::execution::PythonConfiguration,
     ) -> Result<crate::python::NativePython, EnvironmentResolutionFailure> {
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;
-        let crate::resolver::execution::PythonConfiguration::Local(configuration) = resolver else {
-            unreachable!("native inspection belongs to local Python sessions")
-        };
-        let result =
-            crate::python::inspect_prepared(candidate.python(), Some(configuration), |handle| {
-                stop_handle = Some(handle.clone());
-                self.register_resolver_stop_handle(generation, handle)
-            });
+        let result = crate::python::inspect_native(candidate.python(), |handle| {
+            stop_handle = Some(handle.clone());
+            self.register_resolver_stop_handle(generation, handle)
+        });
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         self.ensure_startup(generation)
@@ -220,9 +213,43 @@ impl Client {
             stop_handle = Some(handle.clone());
             self.register_resolver_stop_handle(generation, handle)
         };
+        let retained = requirements.clone();
+        let requirements = requirements
+            .into_iter()
+            .chain(self.0.runtime_r_requirements.iter().cloned())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         let result = match resolver {
             super::super::RResolver::Discover => {
-                crate::resolver::resolve_r(requirements, on_started)
+                let existing = self
+                    .0
+                    .local_preparation
+                    .lock()
+                    .expect("local preparation lock")
+                    .clone();
+                let preparation = if let Some(existing) = existing {
+                    existing
+                } else {
+                    let opened = crate::resolver::preparation::Preparation::open_local(
+                        crate::resolver::preparation::Mode::Custom,
+                        &|handle| self.register_resolver_stop_handle(generation, handle),
+                    );
+                    self.clear_resolver_stop_handle(generation)
+                        .map_err(EnvironmentResolutionFailure::Operation)?;
+                    let (preparation, _) =
+                        opened.map_err(EnvironmentResolutionFailure::Operation)?;
+                    *self
+                        .0
+                        .local_preparation
+                        .lock()
+                        .expect("local preparation lock") = Some(preparation.clone());
+                    preparation
+                };
+                preparation.call(
+                    crate::resolver::preparation::Operation::ResolveRStandalone { requirements },
+                    on_started,
+                )
             }
             super::super::RResolver::Configured(configuration) => {
                 configuration.resolve_r(requirements, on_started)
@@ -247,6 +274,7 @@ impl Client {
         self.clear_resolver_stop_handle(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         classify_resolver_result(result, stop_handle.as_ref())
+            .map(|managed| managed.with_retained_requirements(retained))
     }
 
     fn resolve_managed_python_host(
@@ -290,11 +318,20 @@ impl Client {
             self.ensure_startup(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             let mut stop_handle = None;
-            let result = crate::resolver::execution::resolve_duckdb_extensions(
+            let local = self
+                .0
+                .local_preparation
+                .lock()
+                .expect("local preparation lock")
+                .clone();
+            let preparation = local.as_ref().or_else(|| {
                 self.0
                     .target
                     .as_ref()
-                    .and_then(crate::target_session::Session::ssh_preparation),
+                    .and_then(crate::target_session::Session::ssh_preparation)
+            });
+            let result = crate::resolver::execution::resolve_duckdb_extensions(
+                preparation,
                 managed_r,
                 extensions,
                 |handle| {

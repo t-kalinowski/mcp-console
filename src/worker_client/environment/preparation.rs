@@ -55,6 +55,8 @@ impl Client {
         _preparation: &tokio::sync::RwLockWriteGuard<'_, ()>,
         intent: PreparationIntent,
     ) -> Result<PrepareResult, String> {
+        let action = requirements.action;
+        let call_id = requirements.call_id;
         let environment = self
             .0
             .environment
@@ -82,6 +84,7 @@ impl Client {
             if self.python_only() {
                 return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
             }
+            self.require_explicit_restart(&delta)?;
             if matches!(intent, PreparationIntent::Standalone)
                 && self.requirement_change_state(generation)?
                     == RequirementChangeState::RestartRequired
@@ -103,6 +106,7 @@ impl Client {
                 if delta.is_empty() {
                     return Ok(PrepareResult::Prepared);
                 }
+                self.require_explicit_restart(&delta)?;
                 Some((environment, delta))
             }
             Err(std::sync::TryLockError::WouldBlock) => None,
@@ -166,6 +170,7 @@ impl Client {
                 if delta.is_empty() {
                     return Ok(PrepareResult::Prepared);
                 }
+                self.require_explicit_restart(&delta)?;
                 (environment, delta)
             }
         };
@@ -183,10 +188,13 @@ impl Client {
                 );
             }
         };
-        if self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired {
+        if !delta.restart_required
+            && self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired
+        {
             return Ok(PrepareResult::RestartRequired);
         }
-        if matches!(*worker, WorkerState::Stopped)
+        if !delta.restart_required
+            && matches!(*worker, WorkerState::Stopped)
             && matches!(intent, PreparationIntent::Standalone)
         {
             return Ok(PrepareResult::RestartRequired);
@@ -197,6 +205,7 @@ impl Client {
                 duckdb_changed,
                 python_additions,
                 python_candidate,
+                restart_required: _,
                 r_requirements,
                 r_changed,
             } = delta;
@@ -269,6 +278,8 @@ impl Client {
                 lifecycle.processes.resolver = None;
                 *environment = resolved;
                 self.record_accepted_python(&environment);
+                self.publish_requirements(&environment);
+                self.record_requirements(action, call_id, &environment);
                 Ok(PrepareResult::Prepared)
             }
             LifecycleState::Ready => {
@@ -277,6 +288,13 @@ impl Client {
             LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
+    }
+
+    fn require_explicit_restart(&self, delta: &RequirementDelta) -> Result<(), String> {
+        if delta.restart_required && self.has_live_worker()? {
+            return Err("changed requirements require an explicit restart; retry send(control=\"restart\", requirements={\"action\": \"set\", ...}) with the complete declaration (or action=\"reset\")".into());
+        }
+        Ok(())
     }
 
     fn finish_environment_resolution_failure(
@@ -312,6 +330,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 environment.duckdb_extensions = duckdb_extensions;
+                self.publish_requirements(environment);
                 Ok(())
             }
             LifecycleState::Ready => {
@@ -531,6 +550,7 @@ impl Client {
                 if let Some(duckdb_extensions) = duckdb_extensions {
                     environment.duckdb_extensions = duckdb_extensions;
                 }
+                self.publish_requirements(&environment);
                 Ok(disposition)
             }
             OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),

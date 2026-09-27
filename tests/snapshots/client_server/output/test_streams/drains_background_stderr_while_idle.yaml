@@ -15,7 +15,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8079
+        text_bytes: 8101
         concat:
           - |
             zod background stderr
@@ -23,7 +23,7 @@ result:
             count: 3946
           - |
 
-            [output preview: omitted 4186390 rendered UTF-8 bytes; no retained cell log (4194326 raw bytes observed); omitted text is unavailable]
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; no retained cell log (<raw byte count> raw bytes observed); omitted text is unavailable]
           - repeat: y
             count: 3968
           - |-

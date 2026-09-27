@@ -24,18 +24,31 @@ from support.requirements import PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
 
 
-def _direct_generation(client: McpClient, binary: Path) -> tuple[ProcessIdentity, ...]:
+def _direct_generation(
+    client: McpClient, binary: Path, *, resolver: bool
+) -> tuple[ProcessIdentity, ...]:
     server = capture_process_identity(client.process.pid)
     children = child_process_identities(server)
-    assert len(children) == 1, children
-    relay = children[0]
-    command = subprocess.run(
-        ["/bin/ps", "-ww", "-o", "args=", "-p", str(relay[0])],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    assert command.startswith(f"{binary} worker-relay "), command
+    commands = {
+        child: subprocess.run(
+            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        for child in children
+    }
+    relays = [
+        child
+        for child, command in commands.items()
+        if command.startswith(f"{binary} worker-relay ")
+    ]
+    resolvers = [
+        child for child, command in commands.items() if command == f"{binary} resolve"
+    ]
+    assert len(relays) == 1 and len(resolvers) == int(resolver), commands
+    assert len(children) == 1 + int(resolver), commands
+    relay = relays[0]
     children = child_process_identities(relay)
     assert len(children) == 1, children
     worker = children[0]
@@ -73,14 +86,14 @@ def test_builtin_worker_runs_directly_with_host_access(binary: Path) -> Transcri
                     """)
             )
             assert (workspace / "host-output").read_text() == "host write succeeded"
-            identities.extend(_direct_generation(client, binary))
+            identities.extend(_direct_generation(client, binary, resolver=True))
             client.send(
                 control="restart",
                 python='print("output" in globals())',
             )
             assert "False\n" in last_tool_text(client), client.transcript[-1]
             assert live_processes(identities) == []
-            identities.extend(_direct_generation(client, binary))
+            identities.extend(_direct_generation(client, binary, resolver=True))
             client.finish()
             assert live_processes(identities) == []
             return client.transcript
@@ -122,11 +135,11 @@ def test_custom_worker_runs_directly_with_host_access(binary: Path) -> Transcrip
             client.initialize_and_list_tools()
             client.send(r="probe sandbox")
             assert output.read_text() == "escaped"
-            identities.extend(_direct_generation(client, binary))
+            identities.extend(_direct_generation(client, binary, resolver=False))
             client.send(control="restart", r="echo replacement ready")
             assert "zod: replacement ready\n" in last_tool_text(client)
             assert live_processes(identities) == []
-            identities.extend(_direct_generation(client, binary))
+            identities.extend(_direct_generation(client, binary, resolver=False))
             client.finish()
             assert live_processes(identities) == []
             return client.transcript

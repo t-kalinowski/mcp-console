@@ -29,7 +29,7 @@ result:
         [managed Python resolution failed:
         resolver input:
         {
-          "python": "3.12.x (reticulate default)",
+          "python": "3.12.XX (reticulate default)",
           "packages": [
             "numpy",
             "pandas",
@@ -91,7 +91,19 @@ send:
 result:
   content:
     - type: text
-      text: "[managed Python resolution interrupted]"
+      text: |-
+        [managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.XX (reticulate default)",
+          "packages": [
+            "numpy",
+            "pandas",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        fixture Python resolution interrupted]
   isError: true
 ---
 send:
@@ -127,7 +139,9 @@ send:
 result:
   content:
     - type: text
-      text: "[Python inspection resolution interrupted]"
+      text: |-
+        [selected Python inspection failed (exit status: 1): fixture Python inspection interrupted
+        ]
   isError: true
 ---
 send:

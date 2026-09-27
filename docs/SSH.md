@@ -97,7 +97,7 @@ R libraries and Python executables are validated on the remote host; their paths
 Other workload settings retain their existing meaning.
 In particular, configuring a workload cache does not relocate trusted preparation caches.
 
-When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema omits `requirements`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
+When discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
 Bare and user-selected Python modes disable reticulate's implicit managed-venv installation.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
@@ -163,7 +163,8 @@ Client-side SSH keepalives do not establish bounded remote retirement.
 The runner retains its own limits, including no independent recovery after runner death.
 Direct execution retains its lack of runner-owned descendant cleanup.
 
-Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/`.
+Journals, output spools, transcripts, and returned image bytes stay in the local project's `.agents/console/sessions/` when `.agents/console` already exists there, or in the controller's `~/.agents/console/sessions/` otherwise.
+The controller's `MCP_CONSOLE_HOME` can replace the fallback directory without changing the remote account's home or configuration.
 Session metadata records the SSH destination and initial remote execution directory separately from the local recording workspace.
 Arbitrary files created by cells remain remote.
 The source-only Quarto projection includes remote target context and omits the controller `root.dir`.
@@ -172,8 +173,8 @@ Rendering executes the captured cells, so prepare an appropriate environment and
 ### Bounded output and retained text
 
 Tool results return bounded text previews with the beginning and latest tail under an 8 KiB total UTF-8 budget; images have separate limits.
-A retained-output path is relative to the Console server's recording workspace on the controller.
-Reading omitted text requires a filesystem tool with access to that controller directory; access only to the execution target or another client host is insufficient.
+A retained-output path is relative to the controller's launch directory for project recordings and absolute for home recordings.
+Reading omitted text requires a filesystem tool with access to the selected controller directory; access only to the execution target or another client host is insufficient.
 Console does not transfer these files or expose a read/search tool.
 A log can contain only a retained prefix after the file limit or a write failure; the preview still observes the latest output and reports the loss.
 See [the built-in runtime guide](BUILTIN_RUNTIME.md#output-and-notices).

@@ -23,6 +23,7 @@ from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     initialize_python_and_record_baseline,
+    local_resolver_owner,
     recording_uv_environment,
     uv_tool_run_requirements,
 )
@@ -249,7 +250,8 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             client.send(python="None")
             assert last_result_text(client) == "[done]"
             server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
+            owner = local_resolver_owner(server, binary)
+            existing_children = child_process_identities(owner)
             # fmt: python
             python = code(f"""
                 import importlib
@@ -265,7 +267,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             started.wait("automatic Python resolver")
             resolver = [
                 child
-                for child in child_process_identities(server)
+                for child in child_process_identities(owner)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver

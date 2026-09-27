@@ -65,14 +65,18 @@ def normalize_pipe_counts(client: McpClient) -> None:
     normalize_preview_paths(client)
     for entry in client.transcript:
         for block in entry.get("result", {}).get("content", []):
-            if block["type"] == "text" and "zod expected " in block["text"]:
+            if block["type"] == "text":
                 text = block["text"]
                 text = re.sub(
                     r"(omitted )\d+( rendered UTF-8 bytes)",
                     r"\1<omitted byte count>\2",
                     text,
                 )
-                text = re.sub(r"\d+( raw bytes retained)", r"<raw byte count>\1", text)
+                text = re.sub(
+                    r"\d+( raw bytes (?:retained|observed))",
+                    r"<raw byte count>\1",
+                    text,
+                )
                 text = re.sub(
                     r"(zod expected [^\n]* tail: )\d+", r"\1<pipe tail bytes>", text
                 )

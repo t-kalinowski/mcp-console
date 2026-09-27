@@ -160,13 +160,6 @@ def _initializes_and_lists_tools(
             python_bin.mkdir()
             if python_managed:
                 (python_bin / "uv").symlink_to(shutil.which("uv"))
-                # Installation metadata from setup-uv is not resolver configuration.
-                environment["UV_VERSION"] = "0.0.0"
-                loader_path = Path(library).resolve() / "lib"
-                loader_path.mkdir()
-                environment["LD_LIBRARY_PATH"] = os.pathsep.join(
-                    [environment.get("LD_LIBRARY_PATH") or "/usr/lib", str(loader_path)]
-                )
             else:
                 (python_bin / "python3").symlink_to(sys.executable)
             environment["PATH"] = str(python_bin)
@@ -202,7 +195,13 @@ def _initializes_and_lists_tools(
                 ),
                 encoding="utf-8",
             )
-        with McpClient(binary, execution.serve(), environment, workspace) as client:
+        with McpClient(
+            binary,
+            execution.serve(),
+            environment,
+            workspace,
+            record_in_project=False,
+        ) as client:
             client.initialize_and_list_tools()
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
@@ -228,10 +227,12 @@ def _initializes_and_lists_tools(
             if python_managed:
                 assert set(
                     send["inputSchema"]["properties"]["requirements"]["properties"]
-                ) == {"python"}
+                ) == {"python", "action", "python_version", "exclude_newer"}
                 return client.finish()
             if bare or python_only:
-                assert "requirements" not in send["inputSchema"]["properties"]
+                assert send["inputSchema"]["properties"]["requirements"]["properties"][
+                    "action"
+                ]["enum"] == ["get"]
                 transcript = client.finish()
                 if ssh:
                     transcript = json.loads(
@@ -244,11 +245,25 @@ def _initializes_and_lists_tools(
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
             requirement_properties = send_requirements["properties"]
-            assert requirement_properties.keys() == {"duckdb", "r", "python"}
-            for requirement in requirement_properties.values():
+            assert requirement_properties.keys() == {
+                "action",
+                "duckdb",
+                "r",
+                "python",
+                "python_version",
+                "exclude_newer",
+            }
+            assert requirement_properties["action"]["enum"] == [
+                "get",
+                "add",
+                "set",
+                "reset",
+            ]
+            for name in ("duckdb", "r", "python"):
+                requirement = requirement_properties[name]
                 assert requirement["type"] == "array", requirement
-                assert requirement["maxItems"] == 64, requirement
-                assert requirement["default"] == [], requirement
+                assert "default" not in requirement, requirement
+                assert "maxItems" not in requirement, requirement
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64

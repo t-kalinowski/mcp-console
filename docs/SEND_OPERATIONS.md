@@ -6,17 +6,18 @@ The [runtime guide](BUILTIN_RUNTIME.md) describes language behavior and response
 A call accepts at most one complete `r`, `python`, or `sql` cell.
 Submit cells sequentially and collect an unfinished evaluation before submitting another cell.
 A control-only interrupt may overlap a pending call, including requirement preparation for restart.
+`requirements.action="get"` may also overlap active evaluation or resolution; it reads a committed server snapshot and consumes no output.
 An empty `stdin` string contributes no bytes; the table refers to nonempty input.
 
 ## Validation before actions
 
 Request decoding and structural checks precede interruption, preparation, stdin enqueue, and evaluation.
-These checks reject unknown fields, wrong field types, multiple code fields, disabled languages, unavailable requirements, standalone preparation with nonempty stdin, and interrupt plus requirements without a cell.
+These checks reject incompatible `get` fields, payloads with `reset`, replacement actions with interrupt, unknown fields, wrong field types, multiple code fields, disabled languages, unavailable requirements, standalone preparation with nonempty stdin, and interrupt plus requirements without a cell.
 
 [SSH targets](SSH.md) discover capability on the execution host before advertising the schema.
-Managed targets use the same preparation ordering below; bare targets omit `requirements` and reject supplied preparation before control, stdin, or evaluation side effects.
+Managed targets use the same preparation ordering below; bare targets expose only `requirements.action="get"` and reject supplied preparation before control, stdin, or evaluation side effects.
 
-Local sans-R sessions managed through uv expose only `requirements.python`.
+Local sans-R sessions managed through uv expose Python requirements and the ordinary action/version/cutoff fields; R and DuckDB requirements remain unavailable.
 They support standalone preparation and preparation with a Python cell before first worker startup, and explicit restart preparation with or without a cell.
 Changed requirements on a running worker are rejected before preparation or same-call code and input; exact retained requirements remain a no-op.
 Restart resolves the cumulative candidate and inspects its embedding configuration before retirement.
@@ -46,9 +47,18 @@ The table assumes the session admits the operation; a conflicting operation or g
 | Requirements without code or control                          | Validate and prepare additions. Before the first worker starts, retain them without starting it; an idle worker can apply supported live changes.                                                                                                    | None; nonempty stdin is rejected.                                             | Live preparation can commit some changes before a later step fails; see below. A stopped worker with new additions returns `[restart required]`.                                                                                                        | No preparation deadline.                                                                                                                           |
 | Interrupt with a cell, optionally with requirements and stdin | Signal the active resolver first, otherwise the worker; acknowledge delivery; queue stdin; wait 100 milliseconds; settle the previous evaluation. Only if it has stopped, report deferred requirement errors, prepare additions, and admit the cell. | The interrupted generation, which must remain current through cell admission. | An acknowledged interrupt and queued input remain effective if a later step fails. An active previous evaluation prevents the new cell from running; it is not queued for later.                                                                        | After admission of the new cell. If the previous evaluation remains active, return its available state and the cell-not-run error after the grace. |
 | Interrupt without a cell, optionally with stdin               | Signal the active resolver first, otherwise the worker; acknowledge delivery; queue stdin; wait 100 milliseconds; observe the current operation. Requirements are not accepted.                                                                      | The interrupted generation.                                                   | Interrupt and input may already have affected the operation. An interrupt delivery failure prevents subsequent stdin enqueue.                                                                                                                           | After the grace if the call can attach to an evaluation; otherwise it returns current status. `0` requests immediate observation after the grace.  |
-| Restart, optionally with requirements, stdin, and a cell      | Validate, resolve, and commit any declared additions; retire the worker; start its replacement, preparing pending defaults if needed. Only after replacement succeeds, queue stdin and admit any cell.                                               | Only the replacement generation. Old unread input is discarded.               | Failure resolving declared additions before retirement leaves the current worker and retained configuration unchanged, but may change host caches. Retirement or replacement failure does not roll back the environment or restore old in-memory state. | Only after admission of a following cell. Resolution, retirement, and replacement startup have no `timeout_ms` deadline.                           |
+| Restart, optionally with requirements, stdin, and a cell      | Validate, resolve, and commit any declared additions or replacement; retire the worker; start its replacement, preparing pending defaults if needed. Only after replacement succeeds, queue stdin and admit any cell.                                | Only the replacement generation. Old unread input is discarded.               | Failure resolving declared additions before retirement leaves the current worker and retained configuration unchanged, but may change host caches. Retirement or replacement failure does not roll back the environment or restore old in-memory state. | Only after admission of a following cell. Resolution, retirement, and replacement startup have no `timeout_ms` deadline.                           |
 | Empty poll                                                    | Attach to the current evaluation and collect output, or return idle output immediately. Do not start an initial or stopped worker.                                                                                                                   | None.                                                                         | No code or requirements are submitted.                                                                                                                                                                                                                  | From attachment to an evaluation. An idle poll returns immediately.                                                                                |
 | Stdin without code or control                                 | Queue input and observe the active evaluation, or start an initial/stopped worker if needed, queue input, and collect idle output.                                                                                                                   | The generation accepting the input.                                           | Queued bytes can be consumed even if subsequent observation fails.                                                                                                                                                                                      | From attachment to an active evaluation. With no evaluation, startup and input submission have no `timeout_ms` deadline.                           |
+
+The preparation rows describe `add`, the default action.
+For `set` and `reset`, a changed declaration with a live worker requires explicit restart and is rejected before resolution or mutation otherwise.
+Without a live worker, standalone replacement resolves and retains the complete candidate without starting a worker.
+Omitted `set` fields are empty; `reset` restores startup defaults.
+An unchanged replacement skips preparation, while an explicit restart still takes effect.
+`get` bypasses evaluation and preparation admission, reads the committed snapshot, and returns immediately without starting a worker or collecting output.
+It rejects code, stdin, control, and requirement payloads.
+See [requirements actions](REQUIREMENTS.md#inspecting-and-replacing-requirements).
 
 Input ordering guarantees enqueue order, not consumption by a particular read.
 An already waiting read can consume same-generation input before the new cell begins, including while an interrupted operation unwinds.
@@ -77,10 +87,12 @@ Idle stdin awaits preparation, startup, and input submission without a `timeout_
 
 ## Output and retained files
 
+Requirement inspection returns the complete manifest in structured content; large manifests use a short text notice instead of a truncated declaration.
 Every complete result shares an 8 KiB rendered UTF-8 text budget, including preparation, old-worker output, replacement-cell output, input and lifecycle notices, and failures.
 Oversized output returns a bounded beginning and latest tail; images use a separate allowance.
 A poll consumes its newly observed interval, including omitted text, without replaying the middle in later responses.
 Retained raw cell logs are flushed at response cuts and remain accessible during evaluation.
-Their paths belong to the Console server's recording workspace, which is the controller workspace for remote and container targets.
+Their paths are relative to the server's launch directory when its `.agents/console` exists, or absolute under its Console home directory (`~/.agents/console` by default, or `MCP_CONSOLE_HOME`) otherwise.
+For remote and container targets, both locations are on the controller.
 Reading these logs requires a filesystem tool that can access that location and does not change polling state.
 See [output and errors](BUILTIN_RUNTIME.md#output-and-notices) for preview, retention, and loss reporting.
