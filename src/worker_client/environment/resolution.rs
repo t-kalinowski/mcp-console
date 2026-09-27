@@ -69,21 +69,20 @@ impl Client {
             },
         };
         let early_python = match (&python_candidate, early_resolver) {
-            (Some(candidate), Some(resolver)) if resolver.has_direct_local_uv() => Some(
+            (Some(candidate), Some(resolver)) if resolver.direct_uv => Some(
                 self.resolve_managed_python_host(generation, candidate.clone(), resolver, None)?,
             ),
             _ => None,
         };
         let pending_python = if let RResolver::Pending(setup) = &environment.r_resolver {
-            let mut python = setup.python_resolver.clone();
+            let python = setup.python_resolver.clone();
             let mut stop_handle = None;
-            let result = setup.bootstrap.prepare(
-                &mut python,
-                |handle: crate::resolver::ResolverStopHandle| {
+            let result = setup
+                .bootstrap
+                .prepare(|handle: crate::resolver::ResolverStopHandle| {
                     stop_handle = Some(handle.clone());
                     self.register_resolver_stop_handle(generation, handle)
-                },
-            );
+                });
             self.clear_resolver_stop_handle(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             let resolver = classify_resolver_result(result, stop_handle.as_ref())?;
@@ -115,7 +114,7 @@ impl Client {
             self.resolve_duckdb_extensions(generation, std::slice::from_ref(target), &extensions)?;
         }
         if let Some(candidate) = python_candidate {
-            let mut resolver = match pending_python {
+            let resolver = match pending_python {
                 Some(resolver) => resolver,
                 None => environment
                     .python
@@ -133,30 +132,6 @@ impl Client {
             let selected = if let Some(selected) = early_python {
                 selected
             } else {
-                if !resolver.has_uv() {
-                    self.ensure_startup(generation)
-                        .map_err(EnvironmentResolutionFailure::Operation)?;
-                    let RResolver::Configured(r_resolver) = &environment.r_resolver else {
-                        unreachable!("managed Python bootstrap requires a configured R resolver");
-                    };
-                    let managed_r = environment
-                        .r
-                        .as_ref()
-                        .expect("managed Python bootstrap has resolved R");
-                    let mut stop_handle = None;
-                    let result = r_resolver.resolve_uv(
-                        managed_r,
-                        &resolver,
-                        |handle: crate::resolver::ResolverStopHandle| {
-                            stop_handle = Some(handle.clone());
-                            self.register_resolver_stop_handle(generation, handle)
-                        },
-                    );
-                    self.clear_resolver_stop_handle(generation)
-                        .map_err(EnvironmentResolutionFailure::Operation)?;
-                    resolver
-                        .set_resolved_uv(classify_resolver_result(result, stop_handle.as_ref())?);
-                }
                 self.resolve_managed_python_host(
                     generation,
                     candidate,
@@ -164,6 +139,22 @@ impl Client {
                     environment.r.as_ref(),
                 )?
             };
+            if let Some(crate::local_runtime::Selection::Python {
+                selected: inspected,
+                managed,
+                ..
+            }) = &mut environment.local_runtime
+            {
+                **inspected = selected
+                    .native()
+                    .ok_or_else(|| {
+                        EnvironmentResolutionFailure::Operation(
+                            "resolver did not return Python embedding configuration".into(),
+                        )
+                    })?
+                    .clone();
+                *managed = Some(selected.clone());
+            }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
         self.ensure_startup(generation)
@@ -193,9 +184,15 @@ impl Client {
             .into_iter()
             .collect();
         let result = match resolver {
-            super::super::RResolver::Discover => {
-                crate::resolver::resolve_r(requirements, on_started)
-            }
+            super::super::RResolver::Discover => self
+                .0
+                .resolver
+                .as_ref()
+                .expect("local resolver broker")
+                .call(
+                    crate::resolver::preparation::Operation::R { requirements },
+                    on_started,
+                ),
             super::super::RResolver::Configured(configuration) => {
                 configuration.resolve_r(requirements, on_started)
             }
@@ -267,7 +264,13 @@ impl Client {
                 self.0
                     .target
                     .as_ref()
-                    .and_then(crate::target_session::Session::ssh_preparation),
+                    .and_then(crate::target_session::Session::ssh_preparation)
+                    .or(self.0.resolver.as_ref())
+                    .ok_or_else(|| {
+                        EnvironmentResolutionFailure::Operation(
+                            "resolver broker is unavailable".into(),
+                        )
+                    })?,
                 managed_r,
                 extensions,
                 |handle| {

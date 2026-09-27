@@ -101,7 +101,7 @@ impl Session {
         matches!(self, Self::Ssh(_))
     }
 
-    pub fn ssh_preparation(&self) -> Option<&crate::ssh::preparation::Preparation> {
+    pub fn ssh_preparation(&self) -> Option<&crate::resolver::preparation::Preparation> {
         match self {
             Self::Ssh(session) => session.preparation.as_ref(),
             _ => None,

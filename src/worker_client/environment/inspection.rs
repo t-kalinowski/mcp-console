@@ -72,7 +72,7 @@ impl Environment {
             } else {
                 vec![]
             },
-            python: if managed && self.manages_python() {
+            python: if self.manages_python() {
                 crate::worker_protocol::default_python_requirement_manifest().packages
             } else {
                 vec![]
@@ -135,24 +135,11 @@ impl Environment {
 
 impl Client {
     pub(crate) fn inspect_requirements(&self) -> serde_json::Value {
-        let mut snapshot = self
-            .0
+        self.0
             .requirements_snapshot
             .lock()
             .expect("requirements snapshot lock")
-            .clone();
-        if let Some(crate::local_runtime::Selection::Python {
-            managed: Some(managed),
-            ..
-        }) = &self.0.local_runtime
-        {
-            let python = managed.requirements();
-            snapshot["requirements"]["python"] = serde_json::json!(python.packages);
-            snapshot["requirements"]["python_version"] = serde_json::json!(python.python_version);
-            snapshot["requirements"]["exclude_newer"] = serde_json::json!(python.exclude_newer);
-            snapshot["prepared"] = true.into();
-        }
-        snapshot
+            .clone()
     }
 
     pub(in crate::worker_client) fn record_requirements(
@@ -179,5 +166,15 @@ impl Client {
             .requirements_snapshot
             .lock()
             .expect("requirements snapshot lock") = environment.inspection();
+        if self.python_preparation() {
+            let selected = environment
+                .python
+                .as_ref()
+                .and_then(PythonEnvironment::managed)
+                .expect("managed Python preparation retains an environment");
+            if let Some(transcript) = self.0.recording.lock().expect("recording lock").as_ref() {
+                transcript.python_environment_accepted(&selected.requirements().packages);
+            }
+        }
     }
 }

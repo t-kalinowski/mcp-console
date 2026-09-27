@@ -7,6 +7,7 @@ use super::requirements::push_duckdb_r_target;
 
 #[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
+    pub(in crate::worker_client) local_runtime: Option<crate::local_runtime::Selection>,
     pub(in crate::worker_client) custom_worker: bool,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.
@@ -31,26 +32,6 @@ pub(in crate::worker_client) enum PythonEnvironment {
 impl PythonEnvironment {
     pub(in crate::worker_client) fn uses_managed(configured: Option<&std::ffi::OsStr>) -> bool {
         !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
-    }
-
-    #[cfg(not(unix))]
-    pub(in crate::worker_client) fn builtin(
-        configured: Option<OsString>,
-        resolver: crate::resolver::ManagedPythonResolverConfiguration,
-        managed_r: Option<&crate::resolver::ManagedR>,
-        on_started: impl FnOnce(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
-        if let Some(configured) = configured
-            && !configured.is_empty()
-            && configured != "managed"
-        {
-            return Ok(Self::UserSelected(configured));
-        }
-        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
-        Ok(Self::Managed {
-            selected,
-            resolver: crate::resolver::execution::PythonConfiguration::Local(resolver),
-        })
     }
 
     pub(in crate::worker_client) fn bare(configured: Option<OsString>) -> Self {

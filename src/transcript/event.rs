@@ -36,6 +36,9 @@ pub(super) enum Event<'a> {
         action: &'a str,
         snapshot: &'a Value,
     },
+    PythonEnvironmentAccepted {
+        packages: &'a [String],
+    },
     ToolCall {
         call_id: u64,
         request_id: &'a RequestId,

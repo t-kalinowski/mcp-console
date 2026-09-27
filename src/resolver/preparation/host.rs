@@ -1,130 +1,62 @@
 use std::io;
-use std::path::PathBuf;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
-use super::{Discovery, Input, Operation, Output, Selections};
-use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
+use super::{Input, Output};
+use crate::resolver::{ResolverControlOutcome, ResolverStopHandle};
 use crate::target_launch::transfer::{Io, duplicate};
 
-struct Context {
-    bootstrap: Option<resolver::ManagedRBootstrap>,
-    r: Option<resolver::ManagedRResolverConfiguration>,
-    python: resolver::ManagedPythonResolverConfiguration,
-    rscript: PathBuf,
-    managed_python: bool,
+enum Context {
+    Local(Box<crate::resolver::broker::Context>),
+    Remote {
+        launch: Option<crate::resolver::broker::Launch>,
+        connection: Option<super::Preparation>,
+    },
 }
 
 impl Context {
     fn discover(
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Discovery), String> {
-        let python = resolver::ManagedPythonResolverConfiguration::capture();
-        let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
-        let configured_python = std::env::var("RETICULATE_PYTHON").ok();
-        let managed_python = !configured_python
-            .as_ref()
-            .is_some_and(|python| !python.is_empty() && python != "managed");
-        let discovery = Discovery {
-            managed: bootstrap.is_some(),
-            selections: Selections {
-                r_home: Some(
-                    rscript
-                        .parent()
-                        .and_then(std::path::Path::parent)
-                        .ok_or("remote Rscript has no R home")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                python: configured_python,
-            },
-        };
-        Ok((
-            Self {
-                bootstrap,
-                r: None,
-                python,
-                rscript,
-                managed_python,
-            },
-            discovery,
-        ))
+        &mut self,
+        started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<super::Discovery, String> {
+        match self {
+            Self::Local(context) => context.discover(started),
+            Self::Remote { launch, connection } => {
+                let (broker, discovery) = super::Preparation::local(
+                    launch.take().expect("captured remote launch"),
+                    started,
+                )?;
+                *connection = Some(broker);
+                Ok(discovery)
+            }
+        }
     }
-
     fn execute(
         &mut self,
-        operation: Operation,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        operation: super::Operation,
+        started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
-        match operation {
-            Operation::Bootstrap => {
-                let bootstrap = self
-                    .bootstrap
-                    .as_ref()
-                    .ok_or("remote dynamic environment resolution is unavailable")?;
-                // Capture choices once; a failed selected bootstrap remains an error.
-                if self.r.is_none() {
-                    self.r = Some(bootstrap.prepare(&mut self.python, on_started)?);
-                }
-                Ok(serde_json::Value::Null)
-            }
-            Operation::R { requirements } => {
-                let configuration = self
-                    .r
-                    .as_ref()
-                    .ok_or("remote R bootstrap has not been prepared")?;
-                let r = resolver::resolve_r_with(configuration, requirements, on_started)?;
-                serde_json::to_value(r).map_err(|error| error.to_string())
-            }
-            Operation::Python { requirements, r } => {
-                let r = r.map(|r| r.on_host(&self.rscript));
-                self.prepare_uv(r.as_ref(), on_started)?;
-                let python = resolver::resolve_python_manifest_for_remote(
-                    requirements,
-                    &self.python,
-                    r.as_ref(),
-                    on_started,
-                )?;
-                serde_json::to_value(python).map_err(|error| error.to_string())
-            }
-            Operation::PythonVersion { constraints, r } => {
-                let r = r.on_host(&self.rscript);
-                self.prepare_uv(Some(&r), on_started)?;
-                resolver::resolve_python_version_for_remote(
-                    constraints,
-                    &self.python,
-                    &r,
-                    on_started,
-                )
-                .map(serde_json::Value::String)
-            }
-            Operation::Duckdb { r, extensions } => {
-                let r = r.on_host(&self.rscript);
-                resolver::resolve_duckdb_extensions(&r, &extensions, on_started)?;
-                Ok(serde_json::Value::Null)
-            }
+        match self {
+            Self::Local(context) => context.execute(operation, started),
+            Self::Remote { connection, .. } => connection
+                .as_ref()
+                .expect("remote broker")
+                .call(operation, started),
         }
     }
-
-    fn prepare_uv(
-        &mut self,
-        r: Option<&resolver::ManagedR>,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(), String> {
-        if !self.managed_python {
-            return Err("managed Python requirements are disabled because the session uses a user-selected Python environment".into());
+    fn release(self) -> Result<(), String> {
+        match self {
+            Self::Local(context) => context.release(),
+            Self::Remote { connection, .. } => connection.map_or(Ok(()), |broker| broker.close()),
         }
-        if !self.python.has_uv() {
-            let r = r.ok_or("remote Python bootstrap requires managed R")?;
-            let configuration = self
-                .r
-                .as_ref()
-                .ok_or("remote R bootstrap has not been prepared")?;
-            let uv = configuration.resolve_uv(r, &self.python, on_started)?;
-            self.python.set_resolved_uv(uv);
+    }
+    fn quarantine(self) -> Result<(), String> {
+        match self {
+            Self::Local(context) => context.quarantine(),
+            // Dropping a connection sends an explicitly unconfirmed close.
+            Self::Remote { .. } => Ok(()),
         }
-        Ok(())
     }
 }
 
@@ -180,16 +112,19 @@ pub(super) fn run() -> Result<(), String> {
         build,
         workspace,
         selections,
+        launch,
+        no_sandbox,
+        settings,
     } = super::read(&mut input)?
     else {
-        return Err("expected SSH preparation open".into());
+        return Err("expected resolver preparation open".into());
     };
     if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-        return Err("incompatible SSH preparation protocol or Console build".into());
+        return Err("incompatible resolver preparation protocol or Console build".into());
     }
     crate::target_launch::enter_workspace(&workspace)?;
-    // Only these runtime selections cross the workload boundary. This is the
-    // single-threaded entry point; later worker environment changes cannot reach it.
+    let remote = launch.is_none();
+    let mut settings = settings;
     for (name, value) in [
         ("R_HOME", selections.r_home),
         ("RETICULATE_PYTHON", selections.python),
@@ -198,9 +133,21 @@ pub(super) fn run() -> Result<(), String> {
             if value.contains('\0') {
                 return Err(format!("remote {name} selection must not contain NUL"));
             }
-            unsafe { std::env::set_var(name, value) };
+            settings.environment.insert(name.into(), value);
         }
     }
+    let launch = match launch {
+        Some(launch) => *launch,
+        None => crate::resolver::broker::Launch::capture(no_sandbox, settings)?,
+    };
+    let context = if remote {
+        Context::Remote {
+            launch: Some(launch),
+            connection: None,
+        }
+    } else {
+        Context::Local(Box::new(crate::resolver::broker::Context::new(launch)?))
+    };
     let (events, received) = mpsc::channel();
     let (outgoing, output) = mpsc::channel::<Output>();
     let (input_cancelled, input_cancel) = io::pipe().map_err(|e| e.to_string())?;
@@ -243,10 +190,13 @@ pub(super) fn run() -> Result<(), String> {
     let (jobs, work) = mpsc::channel();
     let job_events = events.clone();
     let worker = thread::spawn(move || {
-        let mut context = perform(0, &job_events, Context::discover, |(_, discovery)| {
-            serde_json::to_value(discovery).expect("discovery serializes")
-        })?
-        .0;
+        let mut context = context;
+        let _ = perform(
+            0,
+            &job_events,
+            |started| context.discover(started),
+            |discovery| serde_json::to_value(discovery).expect("discovery serializes"),
+        );
         for (id, operation) in work {
             let _ = perform(
                 id,
@@ -255,13 +205,14 @@ pub(super) fn run() -> Result<(), String> {
                 Clone::clone,
             );
         }
-        Ok::<(), String>(())
+        Ok::<_, String>(context)
     });
     let mut active = Some(0);
     let mut last_id = 0;
     let mut handle: Option<ResolverStopHandle> = None;
     let mut pending: Option<ResolverControlOutcome> = None;
     let mut closing = false;
+    let mut release = None;
     let mut failure = None;
     let mut confirmed = true;
     while active.is_some() || !closing {
@@ -277,7 +228,7 @@ pub(super) fn run() -> Result<(), String> {
                 handle = None;
                 pending = None;
                 if jobs.send((id, operation)).is_err() {
-                    failure = Some("remote preparation executor stopped".into());
+                    failure = Some("resolver preparation executor stopped".into());
                     closing = true;
                     active = None;
                 }
@@ -319,17 +270,20 @@ pub(super) fn run() -> Result<(), String> {
                 handle = None;
                 let _ = outgoing.send(message);
                 if !confirmed {
-                    failure = Some("remote preparation retirement is unconfirmed".into());
+                    failure = Some("resolver preparation retirement is unconfirmed".into());
                     closing = true;
                 }
             }
-            Event::Input(Ok(Input::Close)) => closing = true,
+            Event::Input(Ok(Input::Close { release: requested })) => {
+                closing = true;
+                release = Some(requested);
+            }
             Event::Input(Err(error)) | Event::OutputFailed(error) => {
                 failure = Some(error);
                 closing = true;
             }
             _ => {
-                failure = Some("unexpected SSH preparation request".into());
+                failure = Some("unexpected resolver preparation request".into());
                 closing = true;
             }
         }
@@ -338,11 +292,17 @@ pub(super) fn run() -> Result<(), String> {
         }
     }
     drop(jobs);
-    let _ = worker
+    let context = worker
         .join()
-        .map_err(|_| "remote preparation executor panicked")?;
+        .map_err(|_| "resolver preparation executor panicked")??;
     drop(input_cancel);
     let _ = input_task.join();
+    if !confirmed || release == Some(false) {
+        context.quarantine()?;
+    } else {
+        // On owner loss, retained native launchers still hold their own locks.
+        context.release()?;
+    }
     if failure.is_none() && confirmed {
         let _ = outgoing.send(Output::Closed);
     } else {

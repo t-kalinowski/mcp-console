@@ -51,7 +51,7 @@ impl ResolverControl for Control {
                     control: ResolverControlOutcome::Cancelled,
                     reply: None,
                 })
-                .map_err(|_| "SSH preparation owner stopped".to_string())?;
+                .map_err(|_| "resolver preparation owner stopped".to_string())?;
         }
         Ok(())
     }
@@ -73,7 +73,7 @@ impl ResolverControl for Control {
         }
         response
             .recv()
-            .map_err(|_| "SSH preparation control lost its acknowledgment".to_string())?
+            .map_err(|_| "resolver preparation control lost its acknowledgment".to_string())?
     }
     fn control_outcome(&self) -> Option<ResolverControlOutcome> {
         *self.state.outcome.lock().expect("preparation control lock")
@@ -114,9 +114,49 @@ impl Preparation {
     pub(crate) fn open(
         session: &crate::ssh::Session,
         selections: Selections,
+        no_sandbox: bool,
+        settings: crate::resolver::broker::Settings,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut command = session.command_for("ssh-prepare")?;
+        let command = session.command_for("ssh-prepare")?;
+        let open = Input::Open {
+            version: super::VERSION,
+            build: env!("CARGO_PKG_VERSION").into(),
+            workspace: session.target.workspace.clone(),
+            selections,
+            launch: None,
+            no_sandbox,
+            settings,
+        };
+        Self::open_with(command, open, session.blocked.clone(), on_started)
+    }
+
+    pub(crate) fn local(
+        launch: crate::resolver::broker::Launch,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, Discovery), String> {
+        let mut command =
+            std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+        command.env_clear().current_dir("/").arg("resolver");
+        let open = Input::Open {
+            version: super::VERSION,
+            build: env!("CARGO_PKG_VERSION").into(),
+            workspace: launch.workspace.to_string_lossy().into_owned(),
+            selections: Selections::default(),
+            launch: Some(Box::new(launch)),
+            no_sandbox: false,
+            settings: Default::default(),
+        };
+        Self::open_with(command, open, Arc::new(Mutex::new(None)), on_started)
+    }
+
+    fn open_with(
+        mut command: std::process::Command,
+        open: Input,
+        blocked: Arc<Mutex<Option<String>>>,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, Discovery), String> {
+        super::encode(&open)?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -124,12 +164,12 @@ impl Preparation {
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
         let mut child = command
             .spawn()
-            .map_err(|error| format!("cannot start SSH preparation: {error}"))?;
+            .map_err(|error| format!("cannot start resolver preparation: {error}"))?;
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
         let (aborted, abort) = io::pipe().map_err(|e| e.to_string())?;
-        let stdout = child.stdout.take().expect("SSH preparation stdout");
-        let stdin = child.stdin.take().expect("SSH preparation stdin");
+        let stdout = child.stdout.take().expect("resolver preparation stdout");
+        let stdin = child.stdin.take().expect("resolver preparation stdin");
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
         let read_events = events.clone();
         let reader = thread::spawn(move || {
@@ -139,11 +179,11 @@ impl Preparation {
                     let message = super::read(&mut input)?;
                     let closed = matches!(message, Output::Closed);
                     if closed && input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
-                        return Err("unexpected stdout after SSH preparation shutdown".into());
+                        return Err("unexpected stdout after resolver preparation shutdown".into());
                     }
                     read_events
                         .send(Event::Received(Ok(message)))
-                        .map_err(|_| "SSH preparation owner stopped")?;
+                        .map_err(|_| "resolver preparation owner stopped")?;
                     if closed {
                         return Ok::<(), String>(());
                     }
@@ -177,20 +217,13 @@ impl Preparation {
             events: events.clone(),
             sequence: AtomicU64::new(1),
             closed: AtomicBool::new(false),
-            blocked: session.blocked.clone(),
+            blocked: blocked.clone(),
         }));
         let pending = Pending {
             id: 0,
             state: state.clone(),
             reply,
             chunks: None,
-        };
-        let blocked = session.blocked.clone();
-        let open = Input::Open {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-            workspace: session.target.workspace.clone(),
-            selections,
         };
         thread::spawn(move || {
             let _ = run(received, &outgoing, pending, open, &blocked);
@@ -215,11 +248,11 @@ impl Preparation {
         }
         let discovery = response
             .recv()
-            .map_err(|_| "SSH preparation discovery stopped".to_string())
+            .map_err(|_| "resolver preparation discovery stopped".to_string())
             .and_then(|result| result)
             .and_then(|discovery| {
                 serde_json::from_value(discovery)
-                    .map_err(|error| format!("invalid remote capability result: {error}"))
+                    .map_err(|error| format!("invalid resolver capability result: {error}"))
             });
         match discovery {
             Ok(discovery) => Ok((connection, discovery)),
@@ -237,7 +270,7 @@ impl Preparation {
         operation: Operation,
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<T, String> {
-        if let Some(error) = &*self.0.blocked.lock().map_err(|_| "SSH session lock")? {
+        if let Some(error) = &*self.0.blocked.lock().map_err(|_| "resolver session lock")? {
             return Err(error.clone());
         }
         let id = self.0.sequence.fetch_add(1, Ordering::SeqCst);
@@ -260,7 +293,7 @@ impl Preparation {
                 state,
                 reply,
             })
-            .map_err(|_| "SSH preparation owner stopped")?;
+            .map_err(|_| "resolver preparation owner stopped")?;
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
             let _ = response.recv();
@@ -268,10 +301,10 @@ impl Preparation {
         }
         let value = response
             .recv()
-            .map_err(|_| "SSH preparation owner stopped".to_string())??;
+            .map_err(|_| "resolver preparation owner stopped".to_string())??;
         serde_json::from_value(value).map_err(|error| {
-            let error = format!("invalid remote preparation result: {error}");
-            *self.0.blocked.lock().expect("SSH session lock") = Some(error.clone());
+            let error = format!("invalid resolver preparation result: {error}");
+            *self.0.blocked.lock().expect("resolver session lock") = Some(error.clone());
             error
         })
     }
@@ -284,10 +317,10 @@ impl Preparation {
         self.0
             .events
             .send(Event::Close(Some(reply)))
-            .map_err(|_| "SSH preparation owner stopped")?;
+            .map_err(|_| "resolver preparation owner stopped")?;
         response
             .recv()
-            .map_err(|_| "SSH preparation shutdown lost its acknowledgment".to_string())?
+            .map_err(|_| "resolver preparation shutdown lost its acknowledgment".to_string())?
     }
 }
 
@@ -308,15 +341,15 @@ fn run(
     let result = (|| {
         outgoing
             .send(open)
-            .map_err(|_| "SSH preparation writer stopped")?;
+            .map_err(|_| "resolver preparation writer stopped")?;
         loop {
             let event = match deadline {
                 Some(deadline) => received
                     .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                    .map_err(|_| "SSH preparation setup or retirement deadline exceeded")?,
+                    .map_err(|_| "resolver preparation setup or retirement deadline exceeded")?,
                 None => received
                     .recv()
-                    .map_err(|_| "SSH preparation owner stopped")?,
+                    .map_err(|_| "resolver preparation owner stopped")?,
             };
             match event {
                 Event::Run {
@@ -333,13 +366,13 @@ fn run(
                     });
                     outgoing
                         .send(request)
-                        .map_err(|_| "SSH preparation writer stopped")?;
+                        .map_err(|_| "resolver preparation writer stopped")?;
                 }
                 Event::Control { id, control, reply } => {
                     if active.as_ref().is_some_and(|pending| pending.id == id) {
                         outgoing
                             .send(Input::Control { id, control })
-                            .map_err(|_| "SSH preparation writer stopped")?;
+                            .map_err(|_| "resolver preparation writer stopped")?;
                         if control == ResolverControlOutcome::Cancelled {
                             deadline = Some(Instant::now() + Duration::from_secs(7));
                         }
@@ -350,16 +383,21 @@ fn run(
                 }
                 Event::Received(Ok(Output::Hello { version, build })) if !hello => {
                     if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-                        return Err("incompatible SSH preparation protocol or Console build".into());
+                        return Err(
+                            "incompatible resolver preparation protocol or Console build".into(),
+                        );
                     }
                     hello = true;
+                    deadline = None;
                 }
                 Event::Received(Ok(Output::Controlled { id, result })) if hello => {
                     let Some((expected, control, reply)) = controls.pop_front() else {
-                        return Err("unsolicited SSH preparation control acknowledgment".into());
+                        return Err(
+                            "unsolicited resolver preparation control acknowledgment".into()
+                        );
                     };
                     if id != expected {
-                        return Err("mismatched SSH preparation control acknowledgment".into());
+                        return Err("mismatched resolver preparation control acknowledgment".into());
                     }
                     if result == Ok(true)
                         && let Some(pending) = active.as_ref().filter(|pending| pending.id == id)
@@ -379,8 +417,12 @@ fn run(
                     let pending = active
                         .as_mut()
                         .filter(|pending| pending.id == id)
-                        .ok_or("mismatched SSH preparation result chunk")?;
-                    pending.chunks.get_or_insert_default().push_str(&text);
+                        .ok_or("mismatched resolver preparation result chunk")?;
+                    let chunks = pending.chunks.get_or_insert_default();
+                    if chunks.len() + text.len() > super::LIMIT {
+                        return Err("preparation result exceeds 1 MiB".into());
+                    }
+                    chunks.push_str(&text);
                 }
                 Event::Received(Ok(Output::Completed {
                     id,
@@ -391,16 +433,18 @@ fn run(
                     let pending = active
                         .as_mut()
                         .filter(|pending| pending.id == id)
-                        .ok_or("mismatched SSH preparation result")?;
+                        .ok_or("mismatched resolver preparation result")?;
                     let result = match (pending.chunks.take(), result) {
                         (None, Some(result)) => result,
                         (Some(chunks), None) => serde_json::from_str(&chunks).map_err(|error| {
-                            format!("invalid chunked SSH preparation result: {error}")
+                            format!("invalid chunked resolver preparation result: {error}")
                         })?,
-                        _ => return Err("SSH preparation requires one complete result".into()),
+                        _ => return Err("resolver preparation requires one complete result".into()),
                     };
                     if !confirmed {
-                        return Err("remote preparation process cleanup failed".into());
+                        return Err(result.err().unwrap_or_else(|| {
+                            "resolver preparation process cleanup failed".into()
+                        }));
                     }
                     pending.state.confirmed.store(true, Ordering::SeqCst);
                     pending.state.finished.store(true, Ordering::SeqCst);
@@ -419,10 +463,10 @@ fn run(
                         .expect("preparation control lock");
                     let result = result.and_then(|value| match outcome {
                         Some(ResolverControlOutcome::Cancelled) => {
-                            Err("remote preparation cancelled".into())
+                            Err("resolver preparation cancelled".into())
                         }
                         Some(ResolverControlOutcome::Interrupted) => {
-                            Err("remote preparation interrupted".into())
+                            Err("resolver preparation interrupted".into())
                         }
                         None => Ok(value),
                     });
@@ -436,13 +480,14 @@ fn run(
                     }
                 }
                 Event::Close(reply) => {
+                    let release = reply.is_some();
                     if let Some(reply) = reply {
                         closing.push(reply);
                     }
                     if !close_requested {
                         outgoing
-                            .send(Input::Close)
-                            .map_err(|_| "SSH preparation writer stopped")?;
+                            .send(Input::Close { release })
+                            .map_err(|_| "resolver preparation writer stopped")?;
                         close_requested = true;
                         deadline = Some(Instant::now() + Duration::from_secs(7));
                     }
@@ -456,19 +501,19 @@ fn run(
                 Event::Exited => {
                     deadline = Some(Instant::now() + Duration::from_secs(1));
                 }
-                _ => return Err("unexpected SSH preparation event".into()),
+                _ => return Err("unexpected resolver preparation event".into()),
             }
         }
     })();
     if let Err(error) = &result {
-        *blocked.lock().expect("SSH session lock") = Some(format!(
-            "SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: {error}"
+        *blocked.lock().expect("resolver session lock") = Some(format!(
+            "resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: {error}"
         ));
     }
     if let Some(pending) = active {
         pending.state.finished.store(true, Ordering::SeqCst);
         let _ = pending.reply.send(Err(format!(
-            "SSH preparation retirement is unconfirmed: {}",
+            "resolver preparation retirement is unconfirmed: {}",
             result
                 .as_ref()
                 .err()
@@ -478,7 +523,9 @@ fn run(
     }
     for (_, _, reply) in controls {
         if let Some(reply) = reply {
-            let _ = reply.send(Err("SSH preparation control lost its acknowledgment".into()));
+            let _ = reply.send(Err(
+                "resolver preparation control lost its acknowledgment".into()
+            ));
         }
     }
     for reply in closing {

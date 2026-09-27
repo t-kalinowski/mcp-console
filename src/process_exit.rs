@@ -57,7 +57,7 @@ impl ChildExitWaiter {
     }
 }
 
-fn wait_for_direct_child_exit(process_id: libc::pid_t) -> Result<(), String> {
+pub(crate) fn wait_for_direct_child_exit(process_id: libc::pid_t) -> Result<(), String> {
     loop {
         match observe_direct_child(process_id) {
             Ok(true) => return Ok(()),

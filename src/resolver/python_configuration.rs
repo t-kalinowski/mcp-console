@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
-use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ManagedPythonResolverConfiguration {
-    environment: Arc<BTreeMap<OsString, OsString>>,
+    #[serde(with = "super::data::environment")]
+    environment: BTreeMap<OsString, OsString>,
     explicit_uv: Option<OsString>,
     reticulate_uv: Option<OsString>,
     uv: Option<OsString>,
@@ -25,7 +25,7 @@ impl ManagedPythonResolverConfiguration {
             .filter(|uv| uv.as_os_str() != OsStr::new("managed"))
             .cloned();
         Self {
-            environment: Arc::new(environment),
+            environment,
             explicit_uv,
             reticulate_uv,
             uv,

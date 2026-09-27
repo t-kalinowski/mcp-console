@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -51,12 +51,44 @@ impl Selections {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Discovery {
     pub managed: bool,
+    pub direct_uv: bool,
     pub selections: Selections,
+    pub runtime: Option<crate::local_runtime::Selection>,
+    pub python: Option<ManagedPython>,
+    pub protected: Vec<std::path::PathBuf>,
+    #[serde(default)]
+    pub lease: Option<std::path::PathBuf>,
+    pub extension_directory: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub matplotlib_cache: Option<std::path::PathBuf>,
+}
+
+impl Discovery {
+    pub(crate) fn protect_worker(
+        &self,
+        policy: &mut crate::settings::SandboxSettings,
+        workspace: &std::path::Path,
+    ) -> Result<(), String> {
+        crate::resolver::broker::protect_worker(policy, workspace, &self.protected)?;
+        if let Some(cache) = &self.matplotlib_cache
+            && let Some(environment) = policy
+                .entry("environment")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+        {
+            environment.insert(
+                "MCP_CONSOLE_MATPLOTLIB_CACHE".into(),
+                serde_json::json!(cache),
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Operation {
+    Discover,
     Bootstrap,
     R {
         requirements: Vec<String>,
@@ -83,6 +115,9 @@ enum Input {
         build: String,
         workspace: String,
         selections: Selections,
+        launch: Option<Box<crate::resolver::broker::Launch>>,
+        no_sandbox: bool,
+        settings: crate::resolver::broker::Settings,
     },
     Run {
         id: u64,
@@ -92,7 +127,9 @@ enum Input {
         id: u64,
         control: ResolverControlOutcome,
     },
-    Close,
+    Close {
+        release: bool,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -163,7 +200,7 @@ impl Output {
 fn encode(message: &impl Serialize) -> Result<Vec<u8>, String> {
     let bytes = serde_json::to_vec(message).map_err(|error| error.to_string())?;
     if bytes.len() > LIMIT {
-        return Err("SSH preparation message exceeds 1 MiB".into());
+        return Err("resolver preparation message exceeds 1 MiB".into());
     }
     Ok(bytes)
 }
@@ -178,17 +215,21 @@ fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String
 }
 
 fn read<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let bytes = crate::target_launch::read_payload(reader, LIMIT, super::PROTOCOL)
-        .map_err(|error| error.to_string())?;
+    let bytes = crate::target_launch::read_payload(
+        reader,
+        LIMIT,
+        crate::target_launch::Protocol("resolver"),
+    )
+    .map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid SSH preparation message: {error}"))
+        .map_err(|error| format!("invalid resolver preparation message: {error}"))
 }
 
 pub(crate) fn run() -> Result<(), String> {
     #[cfg(unix)]
     return host::run();
     #[cfg(not(unix))]
-    Err("SSH preparation requires macOS or Linux".into())
+    Err("resolver preparation requires macOS or Linux".into())
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -230,6 +271,21 @@ impl WorkerEnvironment {
                     command.env_remove("RETICULATE_PYTHON");
                 }
             }
+        }
+        if let Some(runtime) = &self.discovery.runtime {
+            let mut runtime = runtime.clone();
+            if let crate::local_runtime::Selection::Python {
+                selected, managed, ..
+            } = &mut runtime
+                && let Some(python) = &self.python
+            {
+                **selected = python
+                    .native()
+                    .ok_or("remote resolver omitted Python embedding configuration")?
+                    .clone();
+                *managed = Some(python.clone());
+            }
+            runtime.configure(command)?;
         }
         Ok(())
     }

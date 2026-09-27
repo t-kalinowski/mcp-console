@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
@@ -69,6 +69,7 @@ pub(crate) struct ResolverOutput {
 }
 
 pub(crate) struct ResolverProcess {
+    native: bool,
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
@@ -76,16 +77,51 @@ pub(crate) struct ResolverProcess {
     waiting: Arc<Mutex<bool>>,
 }
 
+type OutputReader = Receiver<io::Result<Vec<u8>>>;
+
 impl ResolverProcess {
     pub(crate) fn new() -> Self {
         let (events, event_receiver) = mpsc::channel();
         Self {
+            native: false,
             events,
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
             cleanup: Arc::new(AtomicBool::new(false)),
             waiting: Arc::new(Mutex::new(false)),
         }
+    }
+
+    pub(crate) fn native() -> Self {
+        Self {
+            native: true,
+            ..Self::new()
+        }
+    }
+
+    pub(crate) fn spawn(
+        &self,
+        command: &mut Command,
+    ) -> io::Result<(Child, OutputReader, OutputReader)> {
+        let (stdout_exit, stdout_done) = io::pipe()?;
+        let (stderr_exit, stderr_done) = io::pipe()?;
+        let mut child = command.spawn()?;
+        let stdout = read_bounded_output(crate::process_output::RelayOutput::new(
+            child.stdout.take().expect("resolver stdout"),
+            stdout_exit,
+        ));
+        let stderr = read_bounded_output(crate::process_output::RelayOutput::new(
+            child.stderr.take().expect("resolver stderr"),
+            stderr_exit,
+        ));
+        self.cleanup.store(false, Ordering::SeqCst);
+        *self.waiting.lock().expect("resolver phase lock") = true;
+        watch_resolver_exit(
+            child.id(),
+            self.events.clone(),
+            vec![stdout_done, stderr_done],
+        );
+        Ok((child, stdout, stderr))
     }
 
     pub(crate) fn stop_handle(&self) -> ResolverStopHandle {
@@ -95,14 +131,6 @@ impl ResolverProcess {
             cleanup: self.cleanup.clone(),
             waiting: self.waiting.clone(),
         })
-    }
-
-    // Mark the spawned child active before publishing its stop handle. An
-    // interrupt in that gap must wait for the child's actual signal result.
-    pub(crate) fn watch_exit(&self, pid: u32) {
-        self.cleanup.store(false, Ordering::SeqCst);
-        *self.waiting.lock().expect("resolver phase lock") = true;
-        watch_resolver_exit(pid, self.events.clone());
     }
 
     fn finish_wait(&self, kind: &str) -> Result<(), String> {
@@ -143,7 +171,11 @@ impl ResolverProcess {
         program: &Path,
         kind: &str,
     ) -> Result<(), String> {
-        let result = stop_resolver(child, program, kind);
+        let result = if self.native {
+            retire_native(child, None)
+        } else {
+            stop_resolver(child, program, kind)
+        };
         self.cleanup.store(result.is_ok(), Ordering::SeqCst);
         let _ = self.finish_wait(kind);
         result.map(|_| ())
@@ -229,13 +261,23 @@ pub(crate) fn completed_write() -> Receiver<io::Result<()>> {
     receiver
 }
 
-pub(crate) fn read_output(
+fn read_bounded_output(
     mut output: impl io::Read + Send + 'static,
 ) -> Receiver<io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
-    let _ = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = output.read_to_end(&mut bytes).map(|_| bytes);
+    thread::spawn(move || {
+        let result = (|| {
+            let mut bytes = Vec::new();
+            output
+                .by_ref()
+                .take((super::broker::LIMIT + 1) as u64)
+                .read_to_end(&mut bytes)?;
+            if bytes.len() > super::broker::LIMIT {
+                io::copy(&mut output, &mut io::sink())?;
+                return Err(io::Error::other("resolver output exceeds 1 MiB"));
+            }
+            Ok(bytes)
+        })();
         let _ = sender.send(result);
     });
     receiver
@@ -251,7 +293,9 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
 
 pub(crate) fn resolver_command(program: &Path) -> Command {
     let mut command = Command::new(program);
-    command.process_group(0);
+    if !super::workload::active() {
+        command.process_group(0);
+    }
     // SAFETY: the closure calls only libc signal functions after fork and
     // before exec. Resolver programs must not inherit an ignored or blocked
     // SIGINT from the MCP host.
@@ -273,28 +317,15 @@ pub(crate) fn resolver_command(program: &Path) -> Command {
     command
 }
 
-fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
+fn watch_resolver_exit(
+    pid: u32,
+    events: Sender<ResolverEvent>,
+    notifications: Vec<io::PipeWriter>,
+) {
     let _ = thread::spawn(move || {
-        let result = loop {
-            let mut status = MaybeUninit::<libc::siginfo_t>::uninit();
-            // SAFETY: `status` points to writable storage and `pid` identifies
-            // the direct child. `WNOWAIT` leaves its status for `Child::wait`.
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    pid as libc::id_t,
-                    status.as_mut_ptr(),
-                    libc::WEXITED | libc::WNOWAIT,
-                )
-            };
-            if result == 0 {
-                break Ok(());
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                break Err(error);
-            }
-        };
+        let result = crate::process_exit::wait_for_direct_child_exit(pid as libc::pid_t)
+            .map_err(io::Error::other);
+        drop(notifications);
         let _ = events.send(ResolverEvent::Exited(result));
     });
 }
@@ -315,9 +346,14 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
     cleanup: &AtomicBool,
+    native: bool,
 ) -> Result<ExitStatus, String> {
     let stop = |child: &mut Child| {
-        let result = stop_resolver(child, program, kind);
+        let result = if native {
+            retire_native(child, None)
+        } else {
+            stop_resolver(child, program, kind)
+        };
         cleanup.store(result.is_ok(), Ordering::SeqCst);
         result
     };
@@ -330,27 +366,44 @@ fn wait_for_resolver_exit(
             Ok(ResolverEvent::Interrupt {
                 reply,
                 clear_marker,
-            }) => match interrupt_resolver(child) {
-                Ok(ResolverInterrupt::Signaled) => {
-                    let _ = reply.send(Ok(()));
+            }) => {
+                if native {
+                    let result = retire_native(child, Some(reply));
+                    cleanup.store(result.is_ok(), Ordering::SeqCst);
+                    return result.and_then(|_| Err(format!("{kind} resolution interrupted")));
                 }
-                Ok(ResolverInterrupt::AlreadyExited) => {
-                    let _ = reply.send(Ok(()));
-                }
-                Err(error) => {
-                    if let Some(control) = clear_marker {
-                        clear_control(control.as_ref(), CONTROL_INTERRUPTED, true);
+                match interrupt_resolver(child) {
+                    Ok(ResolverInterrupt::Signaled) => {
+                        let _ = reply.send(Ok(()));
                     }
-                    let message = format!(
-                        "failed to interrupt {kind} resolver `{}`: {error}",
-                        program.display()
-                    );
-                    let _ = reply.send(Err(message.clone()));
-                    let _ = stop(child);
-                    return Err(message);
+                    Ok(ResolverInterrupt::AlreadyExited) => {
+                        let _ = reply.send(Ok(()));
+                    }
+                    Err(error) => {
+                        if let Some(control) = clear_marker {
+                            clear_control(control.as_ref(), CONTROL_INTERRUPTED, true);
+                        }
+                        let message = format!(
+                            "failed to interrupt {kind} resolver `{}`: {error}",
+                            program.display()
+                        );
+                        let _ = reply.send(Err(message.clone()));
+                        let _ = stop(child);
+                        return Err(message);
+                    }
                 }
-            },
+            }
             Ok(ResolverEvent::Exited(Ok(()))) => {
+                if native {
+                    let status = child.wait().map_err(|e| e.to_string())?;
+                    cleanup.store(status.success(), Ordering::SeqCst);
+                    if !status.success() {
+                        return Err(format!(
+                            "native resolver retirement is unconfirmed ({status})"
+                        ));
+                    }
+                    return Ok(status);
+                }
                 return stop(child);
             }
             Ok(ResolverEvent::Exited(Err(error))) => {
@@ -383,8 +436,20 @@ fn wait_for_resolver(
         program,
         kind,
         &resolver.cleanup,
+        resolver.native,
     );
     let phase_result = resolver.finish_wait(kind);
+    if resolver.native
+        && let Err(error) = status
+    {
+        let stderr = receive_result(stderr, "stderr reader", kind)?.map_err(|e| e.to_string())?;
+        let diagnostic = String::from_utf8_lossy(&stderr);
+        return Err(if diagnostic.is_empty() {
+            error
+        } else {
+            format!("{error}: {}", diagnostic.trim_end())
+        });
+    }
     let status = status?;
     phase_result?;
     let write_result = receive_result(input, "stdin writer", kind)?;
@@ -398,6 +463,39 @@ fn wait_for_resolver(
         stdout,
         stderr,
     })
+}
+
+fn retire_native(
+    child: &mut Child,
+    acknowledged: Option<Sender<Result<(), String>>>,
+) -> Result<ExitStatus, String> {
+    let mut exit = crate::process_exit::ChildExitWaiter::start(child.id())?;
+    // The runner owns descendants and turns retirement SIGTERM into exit 0.
+    let signaled = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    if let Some(reply) = acknowledged {
+        let error = io::Error::last_os_error();
+        let result = if signaled == 0 || error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(())
+        } else {
+            Err(format!("failed to interrupt native resolver: {error}"))
+        };
+        // Signal delivery is distinct from the later cleanup barrier.
+        let _ = reply.send(result);
+    }
+    if !exit.wait(std::time::Duration::from_secs(6))? {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(
+            "native resolver required forced termination; retirement is unconfirmed".into(),
+        );
+    }
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!(
+            "native resolver retirement is unconfirmed ({status})"
+        ));
+    }
+    Ok(status)
 }
 
 fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
@@ -437,6 +535,14 @@ fn resolver_has_exited(pid: u32) -> io::Result<bool> {
 }
 
 fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
+    // Workload children share the enclosing lifetime's group. The outer native
+    // runner (or the explicit direct-mode group) retires all remaining children.
+    if super::workload::active() {
+        if !resolver_has_exited(child.id()).map_err(|e| e.to_string())? {
+            child.kill().map_err(|e| e.to_string())?;
+        }
+        return child.wait().map_err(|e| e.to_string());
+    }
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     if result < 0 {

@@ -75,6 +75,11 @@ fn launch(
             std::path::Path::new(&bootstrap.workspace),
         )?
     };
+    if native && let Some(environment) = &bootstrap.environment {
+        environment
+            .discovery
+            .protect_worker(&mut policy, std::path::Path::new(&bootstrap.workspace))?;
+    }
     let mut command = Command::new(&executable);
     if !native {
         super::WorkloadEnvironment::from_policy(&policy)
@@ -117,7 +122,15 @@ fn launch(
                 }
             }
         }
-        supervise(probe, false, true, Some(deadline), confirmed, protocol)?;
+        supervise(
+            probe,
+            false,
+            true,
+            Some(deadline),
+            confirmed,
+            protocol,
+            None,
+        )?;
     }
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
@@ -133,13 +146,25 @@ fn launch(
             command.arg(&executable);
         }
         command.arg("image-runtime-probe");
-        return supervise(command, false, native, Some(deadline), confirmed, protocol);
+        return supervise(
+            command,
+            false,
+            native,
+            Some(deadline),
+            confirmed,
+            protocol,
+            None,
+        );
     }
     if native {
         command.arg(&executable);
     }
     command.arg("worker-relay").arg(&executable).arg("worker");
-    supervise(command, true, native, None, confirmed, protocol)
+    let lease = bootstrap
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.discovery.lease.as_deref());
+    supervise(command, true, native, None, confirmed, protocol, lease)
 }
 
 struct Owner {
@@ -199,6 +224,7 @@ fn supervise(
     deadline: Option<Instant>,
     confirmed: &mut bool,
     protocol: super::Protocol,
+    lease: Option<&std::path::Path>,
 ) -> Result<(), String> {
     let label = protocol.0;
     command
@@ -206,6 +232,9 @@ fn supervise(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
     crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
+    if sandbox && let Some(lease) = lease {
+        crate::resolver::broker::inherit_lease(&mut command, lease)?;
+    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("cannot launch remote runtime: {error}"))?;

@@ -1227,23 +1227,8 @@ impl Client {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
-            let preparation = client
-                .0
-                .target
-                .as_ref()
-                .and_then(crate::target_session::Session::ssh_preparation)
-                .map(|preparation| {
-                    let preparation = preparation.clone();
-                    // The two SSH retirement bounds run together. A lost
-                    // preparation connection must not extend worker shutdown.
-                    std::thread::spawn(move || preparation.close())
-                });
             let stopped = stop_handles.shutdown(deadline);
             let retired = client.finish_worker_retirement().map(|_| ());
-            let preparation = preparation.map_or(Ok(()), |task| {
-                task.join()
-                    .map_err(|_| "SSH preparation shutdown task panicked")?
-            });
             let worker = match (stopped, retired) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -1251,6 +1236,20 @@ impl Client {
                     "{error}; additionally failed to retire worker I/O: {retirement_error}"
                 )),
             };
+            let preparation = (|| {
+                if worker.is_ok()
+                    && let Some(resolver) = client.0.resolver.as_ref().or_else(|| {
+                        client
+                            .0
+                            .target
+                            .as_ref()
+                            .and_then(crate::target_session::Session::ssh_preparation)
+                    })
+                {
+                    resolver.close()?;
+                }
+                Ok(())
+            })();
             match (worker, preparation) {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
