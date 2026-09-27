@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::resolver::{ManagedPython, ManagedPythonResolverConfiguration, ResolverStopHandle};
+use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const PREPARATION_DISABLED: &str = "live requirements are unavailable in Python sessions without R; install packages before starting the session";
@@ -34,7 +34,7 @@ impl Selection {
 
     pub(crate) fn python(
         configured: Option<OsString>,
-        resolver: &ManagedPythonResolverConfiguration,
+        resolver: &crate::resolver::execution::PythonConfiguration,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
@@ -52,9 +52,10 @@ impl Selection {
             };
             (executable, None)
         } else if resolver.has_uv() {
-            let managed = crate::resolver::resolve_python_manifest(
+            let managed = crate::resolver::execution::resolve_python_manifest(
                 crate::worker_protocol::default_python_requirement_manifest(),
                 resolver,
+                None,
                 on_started,
             )?;
             (managed.python().to_path_buf(), Some(managed))

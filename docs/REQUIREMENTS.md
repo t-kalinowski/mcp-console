@@ -8,12 +8,16 @@ This guide describes preparation before a cell, standalone preparation, and requ
 [Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
 
 Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
-When `uv` is available, the existing local host resolver prepares the default Python manifest before MCP readiness and retains the result for replacement workers.
+When `uv` is available, the local `mcp-console resolve` process prepares the default Python manifest before MCP readiness, and the server retains the result for replacement workers.
 This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
 Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
 Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
 Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
 The remaining preparation and SQL behavior in this document applies to sessions with R.
+
+Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
+Its private JSON exchange carries requirement manifests, resolved environment data, controls, and cleanup receipts.
+The server retains the same declarations and commits candidates only after preparation completes.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
 Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
@@ -430,7 +434,7 @@ That validator is separate from explicit `requirements.r`, so restricting runtim
 The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
 Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
 It passes that exact `Rscript` to `ir` and uses it for DuckDB resolution.
-When Python is server-managed, the server-selected `uv` executable creates and updates the environment directly.
+When Python is server-managed, the host resolver's selected `uv` executable creates and updates the environment directly.
 Python version inventory and selection run directly through the same `uv` executable.
 For local host resolution, Python preparation does not inspect or validate a managed R library and does not invoke `R`, `Rscript`, or `ir`.
 When direct `uv` is available, the server prepares the Python candidate before the R library candidate; it still commits the complete prestart environment only after all candidates succeed.
@@ -526,11 +530,11 @@ It must also apply its first managed R library before loading DuckDB; a DuckDB n
 
 ## Host resolution and trust
 
-For local execution, the resolver permissions and startup environment described below belong to the server.
+For local execution, the resolver permissions and startup environment described below belong to the `resolve` subprocess, which runs with the server account's permissions and inherited startup environment.
 For [SSH execution](SSH.md#trusted-preparation), they belong to the trusted preparation owner on the execution host.
 
 On macOS and Linux, the default worker sandbox denies direct network access and regular writes outside its private temporary directory and any [explicit writable roots](SANDBOX_CONFIGURATION.md#additional-writable-paths).
-Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
+Dependency resolution is a deliberate exception to that boundary: the local `resolve` subprocess launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
 With `serve --no-sandbox`, the worker and loaded package or extension code use the selected host account's or container's filesystem, process, and network access.
 The requirement validation and trusted-resolver rules apply in both modes.
 
@@ -544,8 +548,8 @@ Resolver inputs do not contain submitted cells or `send` stdin:
 
 - Explicit R requirements and validated automatic package names become individual process arguments to `ir`, which receives a constant R program.
 - Validated Python requirements, including bare distributions inferred from imports, become separate `uv tool run --with` arguments; the selected version and optional exclusion date use `--python` and `--exclude-newer`, and resolver standard input is closed.
-- The resolved interpreter path is returned through a server-created output file, not standard output or evaluated R source.
-- Validated Python version constraints remain in server memory; Rust filters the JSON inventory returned by direct `uv python list`, whose standard input is closed.
+- The resolved interpreter path is returned through a resolver-created output file, not standard output or evaluated R source.
+- Validated Python version constraints remain in server memory and are sent to the resolver command; Rust filters the JSON inventory returned by direct `uv python list`, whose standard input is closed.
 - DuckDB extension names are validated JSON data and are not submitted SQL.
 
 Evaluated R code can trigger managed R resolution through the built-in `library()` and `loadNamespace()` bridge.
@@ -554,15 +558,15 @@ A plain name restricts resolver syntax, but the selected package's installation 
 Evaluated Python imports and reticulate APIs can trigger managed Python resolution, but the same named-registry and version-constraint validation applies before a host resolver starts.
 Host resolution and managed-environment startup may run accepted distributions' installation, build, or initialization code with server permissions; use only packages you trust.
 
-### Server-owned `uv` configuration
+### Host resolver `uv` configuration
 
 An explicit `RETICULATE_UV` startup value is retained.
-Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
+Otherwise the host resolver selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
 An invalid explicit executable fails when invoked; the server does not replace it with a `PATH` executable.
 Direct Python version inventory and managed-environment creation receive that stable selection.
-When `RETICULATE_UV=managed`, the server resolves reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
+When `RETICULATE_UV=managed`, the host resolver obtains reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
 The reticulate bootstrap invocation receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
-When the server starts, it captures inherited `UV_*` variables except `UV_OFFLINE`.
+When the server starts, the host resolver command captures inherited `UV_*` variables except `UV_OFFLINE`.
 Before each managed-Python or bootstrap resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
 Changes made later by evaluated R or Python code therefore cannot configure host resolution.
 
@@ -571,7 +575,7 @@ It does not add reticulate's separately registered virtualenv directories to `PA
 Enabled `UV_MANAGED_PYTHON` and `UV_NO_MANAGED_PYTHON` settings are normalized to their equivalent `UV_PYTHON_PREFERENCE` values before direct calls, and recognized disabled aliases are removed.
 This avoids conflicting command-line and environment selectors while preserving the requested source policy.
 Conflicting or invalid source settings remain unchanged so `uv` reports them normally.
-Managed-environment creation passes each validated requirement as its own argument and removes its server-created interpreter-path output file after the resolver call.
+Managed-environment creation passes each validated requirement as its own argument and removes its resolver-created interpreter-path output file after the resolver call.
 Local Python resolution uses the captured `uv` configuration without a managed R library; SSH preparation retains its existing `R_LIBS` behavior.
 It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.
 Ordinary Matplotlib cache-warm failures remain best effort, but an interrupt during cache warming fails the preparation before its candidate environment can be committed.

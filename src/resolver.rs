@@ -5,6 +5,11 @@ pub(crate) enum ResolverControlOutcome {
 }
 
 pub(crate) mod execution;
+pub(crate) mod preparation;
+
+pub(crate) fn run() -> Result<(), String> {
+    preparation::run_local()
+}
 
 #[cfg(unix)]
 mod managed_duckdb;
@@ -39,10 +44,12 @@ pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 
 #[cfg(unix)]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
+#[cfg(all(test, unix))]
+use managed_python::resolve_python_manifest;
 #[cfg(unix)]
 pub(crate) use managed_python::{
-    ManagedPython, resolve_python_manifest, resolve_python_manifest_for_remote,
-    resolve_python_version, resolve_python_version_for_remote,
+    ManagedPython, resolve_python_manifest_for_remote, resolve_python_version,
+    resolve_python_version_for_remote,
 };
 #[cfg(unix)]
 pub(crate) use managed_r::{

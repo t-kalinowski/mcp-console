@@ -130,6 +130,7 @@ struct ClientInner {
     runtime_r_requirements: Vec<String>,
     dynamic_resolution: bool,
     local_runtime: Option<crate::local_runtime::Selection>,
+    local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
     target: Option<crate::target_session::Session>,
     recording: Mutex<Option<crate::transcript::Transcript>>,
 }
@@ -393,50 +394,78 @@ impl Client {
         sandbox_settings: crate::settings::SandboxSettings,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
+        #[cfg(not(unix))]
         let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         let local_runtime;
+        let local_preparation;
         #[cfg(unix)]
         let (r, duckdb_extensions, python, r_resolver) =
             if !crate::local_runtime::Selection::r_is_present() {
+                let (preparation, discovery) =
+                    crate::resolver::preparation::Preparation::open_local(
+                        crate::resolver::preparation::Mode::PythonOnly,
+                        on_started,
+                    )?;
+                let resolver = crate::resolver::execution::PythonConfiguration::Local {
+                    preparation: preparation.clone(),
+                    has_uv: discovery
+                        .local_has_uv
+                        .ok_or("local Python discovery has no uv result")?,
+                };
                 local_runtime = Some(crate::local_runtime::Selection::python(
                     configured_python,
-                    &python_resolver.without_r_bootstrap(),
+                    &resolver,
                     on_started,
                 )?);
+                local_preparation = Some(preparation);
                 (None, Default::default(), None, RResolver::Disabled)
             } else {
-                let (bootstrap, rscript) = crate::resolver::discover(&python_resolver, on_started)?;
-                let home = rscript
-                    .parent()
-                    .and_then(std::path::Path::parent)
-                    .ok_or("discovered R executable has no R home")?;
-                local_runtime = Some(crate::local_runtime::Selection::R {
-                    home: home.to_path_buf(),
-                });
-                match bootstrap {
-                    Some(bootstrap) => (
+                let (preparation, discovery) =
+                    crate::resolver::preparation::Preparation::open_local(
+                        crate::resolver::preparation::Mode::R,
+                        on_started,
+                    )?;
+                use std::os::unix::ffi::OsStringExt;
+                let home = PathBuf::from(OsString::from_vec(
+                    discovery
+                        .local_r_home_bytes
+                        .ok_or("local R discovery has no R home")?,
+                ));
+                local_runtime = Some(crate::local_runtime::Selection::R { home });
+                local_preparation = Some(preparation.clone());
+                if discovery.managed {
+                    (
                         None,
                         Default::default(),
                         None,
                         RResolver::Pending(BuiltinSetup {
-                            bootstrap: crate::resolver::execution::Bootstrap::Local(bootstrap),
-                            python_resolver: crate::resolver::execution::PythonConfiguration::Local(
-                                python_resolver,
+                            bootstrap: crate::resolver::execution::Bootstrap::Local(
+                                preparation.clone(),
                             ),
+                            python_resolver:
+                                crate::resolver::execution::PythonConfiguration::Local {
+                                    preparation,
+                                    has_uv: discovery
+                                        .local_has_uv
+                                        .ok_or("local R discovery has no uv result")?,
+                                },
                             configured_python,
                         }),
-                    ),
-                    None => (
+                    )
+                } else {
+                    (
                         None,
                         Default::default(),
                         Some(PythonEnvironment::bare(configured_python)),
                         RResolver::Disabled,
-                    ),
+                    )
                 }
             };
+        #[cfg(not(unix))]
+        let local_preparation = None;
         #[cfg(not(unix))]
         let (r, duckdb_extensions, python, r_resolver) = (
             Option::<crate::resolver::ManagedR>::None,
@@ -464,9 +493,9 @@ impl Client {
                 r_resolver,
             }),
         );
-        Arc::get_mut(&mut client.0)
-            .expect("new client")
-            .local_runtime = local_runtime;
+        let inner = Arc::get_mut(&mut client.0).expect("new client");
+        inner.local_runtime = local_runtime;
+        inner.local_preparation = Mutex::new(local_preparation);
         Ok(client)
     }
 
@@ -512,6 +541,7 @@ impl Client {
             environment: environment.map(Mutex::new),
             dynamic_resolution,
             local_runtime: None,
+            local_preparation: Mutex::new(None),
             target: None,
             recording: Mutex::new(None),
         }))
@@ -1643,6 +1673,15 @@ impl Client {
     ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
+            #[cfg(unix)]
+            if let Some(preparation) = &*self
+                .0
+                .local_preparation
+                .lock()
+                .map_err(|_| "local preparation lock poisoned".to_string())?
+            {
+                preparation.check_ready()?;
+            }
             let _startup = self.reserve_worker_startup(&generation)?;
             let mut environment = match &self.0.environment {
                 Some(environment) => Some(

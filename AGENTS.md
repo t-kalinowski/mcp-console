@@ -56,7 +56,8 @@ Omitted target and explicit local host selection share the existing local launch
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
 SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
 Its default command uses remote PATH `mcp-console`, falling back to `uvx mcp-console` only when absent; configured argv prefixes run without executable preflight validation.
-The preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
+The SSH preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
+Local host preparation uses the hidden `resolve` subcommand over JSON lines; it captures resolver choices once, runs R, Python, and DuckDB resolvers, and confirms child cleanup before the server commits results.
 Only explicit remote R_HOME and RETICULATE_PYTHON workload selections also inform preparation.
 Never discover controller interpreters, invoke controller resolvers, or validate remote paths on the controller.
 Require explicit result and resolver cleanup confirmation before committing an environment; uncertain preparation retirement blocks further preparation and replacement.
@@ -166,7 +167,7 @@ The suite covers client-server MCP, server-relay JSONL, relay-worker sideband an
 `docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX.md` owns the Console policy and external runner boundary.
 Keep these invariants intact:
 
-- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolver orchestration and result commits.
   By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
   `serve --no-sandbox` skips the native runner at the selected target.
   Docker containers and Docker Sandbox microVMs retain their outer enforcement and retirement; host execution retains direct-worker cleanup limits.
@@ -203,7 +204,7 @@ Keep these invariants intact:
 - `src/target_session.rs` — selected SSH/Docker/SBX sessions, shared compute probes and controller replacement blocking, and generation-owned retirement receipts and resource names.
 - `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, local ownership helper, and confirmed container retirement.
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
-- `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
+- `src/resolver/preparation.rs`, `src/resolver/preparation/{client,host}.rs` — typed local and SSH preparation connections, JSON transports, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
 - `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from effective target/provider metadata, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
@@ -242,7 +243,7 @@ Keep these invariants intact:
 
 ### Resolvers and sandbox
 
-- `src/resolver.rs`, `src/resolver/python_configuration.rs`, `src/resolver/` — retained host environments, captured local `uv` selection, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
+- `src/resolver.rs`, `src/resolver/python_configuration.rs`, `src/resolver/` — host resolver entry point, retained environments, captured local `uv` selection, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
 - `src/resolver/programs/` — compile-time R programs for DuckDB extension preparation, R-library resolution, and `uv` discovery.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — immutable runner launch configuration, macOS policy additions, and ordinary child inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.

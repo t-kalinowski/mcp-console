@@ -18,7 +18,8 @@ MCP client
 mcp-console server                         host
     ├── generation, relay lifetime, and operation owner
     ├── retained environments, output, and recording
-    ├──── host resolvers                    R, Python, and DuckDB setup
+    ├──── mcp-console resolve               host preparation owner
+    │       └── resolver process groups     R, Python, and DuckDB setup
     │
     │ ordinary child stdin/stdout; inherited stderr
     ▼
@@ -50,6 +51,12 @@ Local and SSH host execution use that account's permissions and temporary-direct
 Docker retains its outer container boundary and retirement.
 Docker Sandbox compute enforcement retains its outer microVM and provider policy, including with `--no-sandbox`; it does not use an inner native runner.
 Available R, Python, and DuckDB dependency resolution runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
+
+For local sessions, the server opens the hidden `mcp-console resolve` command before managed-runtime discovery and keeps that host process for the session.
+It exchanges JSON lines on the command's standard streams: the server sends complete requirement manifests and operation controls, and the command returns resolved environment data with a cleanup receipt.
+The server still owns the retained manifest, candidate commits, worker generations, and interrupt routing.
+The preparation owner captures host resolver choices once and retires each child process group before returning its result.
+Custom workers open the command when they first request host preparation.
 
 For a configured SSH target, the process chain is:
 
@@ -272,7 +279,7 @@ Reticulate then attaches its conversion and event runtime to the running interpr
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
 Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
-When R is absent, the server resolves the default Python manifest through the existing local host resolver, or selects PATH Python when uv is absent, and inspects that executable before MCP readiness.
+When R is absent, the local resolver command prepares the default Python manifest, or the server selects PATH Python when uv is absent, and the server inspects that executable before MCP readiness.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
 The same coordinator constructs an absent R integration, native Python runtime, and no R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
@@ -337,7 +344,7 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-For a local host target, the built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
+For a local host target, the built-in server opens the host resolver command, which captures a stable resolver configuration and detects its capability without installing an environment.
 The Python configuration captures an explicit `RETICULATE_UV` selection or `uv` on `PATH` independently of R discovery.
 R bootstrap prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
 It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.

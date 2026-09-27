@@ -70,6 +70,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::Resolve => match resolver::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::DockerSandboxOwner => match docker_sandbox::run_owner() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),

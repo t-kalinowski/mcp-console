@@ -1,51 +1,83 @@
-use std::io;
+use std::ffi::OsStr;
+use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 use std::time::Instant;
 
-use super::{Discovery, Input, Operation, Output, Selections};
+use super::{Discovery, Input, Mode, Operation, Output, Selections};
 use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 use crate::target_launch::transfer::{Io, duplicate};
 
 struct Context {
+    local: bool,
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
-    rscript: PathBuf,
+    rscript: Option<PathBuf>,
     managed_python: bool,
 }
 
 impl Context {
     fn discover(
+        mode: Mode,
+        local: bool,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        let configured_python = std::env::var_os("RETICULATE_PYTHON");
+        let managed_python = !configured_python
+            .as_deref()
+            .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
+        let configured_python = configured_python.and_then(|python| python.into_string().ok());
+        if !matches!(mode, Mode::R) {
+            let python =
+                resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
+            let has_uv = python.has_uv();
+            return Ok((
+                Self {
+                    local,
+                    bootstrap: None,
+                    r: None,
+                    python,
+                    rscript: None,
+                    managed_python,
+                },
+                Discovery {
+                    managed: false,
+                    selections: Selections {
+                        r_home: None,
+                        python: configured_python,
+                    },
+                    local_r_home_bytes: None,
+                    local_has_uv: local.then_some(has_uv),
+                },
+            ));
+        }
         let python = resolver::ManagedPythonResolverConfiguration::capture();
         let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
-        let configured_python = std::env::var("RETICULATE_PYTHON").ok();
-        let managed_python = !configured_python
-            .as_ref()
-            .is_some_and(|python| !python.is_empty() && python != "managed");
+        let home = rscript
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or("remote Rscript has no R home")?;
         let discovery = Discovery {
             managed: bootstrap.is_some(),
             selections: Selections {
-                r_home: Some(
-                    rscript
-                        .parent()
-                        .and_then(std::path::Path::parent)
-                        .ok_or("remote Rscript has no R home")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
+                r_home: Some(home.to_string_lossy().into_owned()),
                 python: configured_python,
             },
+            local_r_home_bytes: local.then(|| {
+                use std::os::unix::ffi::OsStrExt;
+                home.as_os_str().as_bytes().to_vec()
+            }),
+            local_has_uv: local.then(|| python.has_uv()),
         };
         Ok((
             Self {
+                local,
                 bootstrap,
                 r: None,
                 python,
-                rscript,
+                rscript: Some(rscript),
                 managed_python,
             },
             discovery,
@@ -77,19 +109,25 @@ impl Context {
                 let r = resolver::resolve_r_with(configuration, requirements, on_started)?;
                 serde_json::to_value(r).map_err(|error| error.to_string())
             }
+            Operation::ResolveRStandalone { requirements } => {
+                let r = resolver::resolve_r(requirements, on_started)?;
+                self.rscript = Some(r.rscript().to_path_buf());
+                serde_json::to_value(r).map_err(|error| error.to_string())
+            }
             Operation::Python { requirements, r } => {
-                let r = r.map(|r| r.on_host(&self.rscript));
+                let r =
+                    r.map(|r| r.on_host(self.rscript.as_ref().expect("managed R has an Rscript")));
                 self.prepare_uv(r.as_ref(), on_started)?;
                 let python = resolver::resolve_python_manifest_for_remote(
                     requirements,
                     &self.python,
-                    r.as_ref(),
+                    if self.local { None } else { r.as_ref() },
                     on_started,
                 )?;
                 serde_json::to_value(python).map_err(|error| error.to_string())
             }
             Operation::PythonVersion { constraints, r } => {
-                let r = r.on_host(&self.rscript);
+                let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
                 self.prepare_uv(Some(&r), on_started)?;
                 resolver::resolve_python_version_for_remote(
                     constraints,
@@ -99,8 +137,26 @@ impl Context {
                 )
                 .map(serde_json::Value::String)
             }
+            Operation::LocalPythonVersion { constraints, r } => {
+                let r =
+                    r.map(|r| r.on_host(self.rscript.as_ref().expect("managed R has an Rscript")));
+                self.prepare_uv(r.as_ref(), on_started)?;
+                let version =
+                    resolver::resolve_python_version(constraints, &self.python, on_started)?;
+                Ok(serde_json::Value::String(version))
+            }
+            Operation::Uv { r } => {
+                let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
+                if let Some(uv) = self.python.selected_uv() {
+                    return serde_json::to_value(uv).map_err(|error| error.to_string());
+                }
+                let configuration = self.r.as_ref().ok_or("R bootstrap has not been prepared")?;
+                let uv = configuration.resolve_uv(&r, &self.python, on_started)?;
+                self.python.set_resolved_uv(uv.clone());
+                serde_json::to_value(uv).map_err(|error| error.to_string())
+            }
             Operation::Duckdb { r, extensions } => {
-                let r = r.on_host(&self.rscript);
+                let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
                 resolver::resolve_duckdb_extensions(&r, &extensions, on_started)?;
                 Ok(serde_json::Value::Null)
             }
@@ -169,36 +225,47 @@ fn perform<T>(
     result
 }
 
-pub(super) fn run() -> Result<(), String> {
+pub(super) fn run(local: bool) -> Result<(), String> {
     let mut input = Io::new(
         duplicate(0)?,
         None,
-        Some(Instant::now() + super::SETUP_TIMEOUT),
+        (!local).then(|| Instant::now() + super::SETUP_TIMEOUT),
     )?;
+    let first: Input = if local {
+        super::read_jsonl(&mut input)?
+    } else {
+        super::read(&mut input)?
+    };
     let Input::Open {
         version,
         build,
         workspace,
         selections,
-    } = super::read(&mut input)?
+        mode,
+    } = first
     else {
         return Err("expected SSH preparation open".into());
     };
     if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
         return Err("incompatible SSH preparation protocol or Console build".into());
     }
-    crate::target_launch::enter_workspace(&workspace)?;
-    // Only these runtime selections cross the workload boundary. This is the
-    // single-threaded entry point; later worker environment changes cannot reach it.
-    for (name, value) in [
-        ("R_HOME", selections.r_home),
-        ("RETICULATE_PYTHON", selections.python),
-    ] {
-        if let Some(value) = value {
-            if value.contains('\0') {
-                return Err(format!("remote {name} selection must not contain NUL"));
+    if !local {
+        if !matches!(mode, Mode::R) {
+            return Err("SSH preparation requires R discovery".into());
+        }
+        crate::target_launch::enter_workspace(&workspace)?;
+        // Only these runtime selections cross the workload boundary. This is the
+        // single-threaded entry point; later worker environment changes cannot reach it.
+        for (name, value) in [
+            ("R_HOME", selections.r_home),
+            ("RETICULATE_PYTHON", selections.python),
+        ] {
+            if let Some(value) = value {
+                if value.contains('\0') {
+                    return Err(format!("remote {name} selection must not contain NUL"));
+                }
+                unsafe { std::env::set_var(name, value) };
             }
-            unsafe { std::env::set_var(name, value) };
         }
     }
     let (events, received) = mpsc::channel();
@@ -208,10 +275,14 @@ pub(super) fn run() -> Result<(), String> {
     let input_events = events.clone();
     let input_task = thread::spawn(move || {
         let result = (|| {
-            let mut input = Io::new(duplicate(0)?, Some(input_cancelled), None)?;
+            let mut input = BufReader::new(Io::new(duplicate(0)?, Some(input_cancelled), None)?);
             loop {
                 input_events
-                    .send(Event::Input(Ok(super::read(&mut input)?)))
+                    .send(Event::Input(Ok(if local {
+                        super::read_jsonl(&mut input)?
+                    } else {
+                        super::read(&mut input)?
+                    })))
                     .map_err(|_| "preparation owner stopped")?;
             }
             #[allow(unreachable_code)]
@@ -226,7 +297,7 @@ pub(super) fn run() -> Result<(), String> {
         let result = (|| {
             let mut writer = Io::new(duplicate(1)?, Some(output_cancelled), None)?;
             for message in output {
-                message.write(&mut writer)?;
+                message.write(&mut writer, local)?;
             }
             Ok::<(), String>(())
         })();
@@ -243,9 +314,12 @@ pub(super) fn run() -> Result<(), String> {
     let (jobs, work) = mpsc::channel();
     let job_events = events.clone();
     let worker = thread::spawn(move || {
-        let mut context = perform(0, &job_events, Context::discover, |(_, discovery)| {
-            serde_json::to_value(discovery).expect("discovery serializes")
-        })?
+        let mut context = perform(
+            0,
+            &job_events,
+            |started| Context::discover(mode, local, started),
+            |(_, discovery)| serde_json::to_value(discovery).expect("discovery serializes"),
+        )?
         .0;
         for (id, operation) in work {
             let _ = perform(

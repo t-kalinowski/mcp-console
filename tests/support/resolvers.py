@@ -11,10 +11,27 @@ from support.client import McpClient
 from support.execution import Execution
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
+
+
+def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
+    owners = [
+        child
+        for child in child_process_identities(server)
+        if subprocess.run(
+            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == f"{binary} resolve"
+    ]
+    assert len(owners) == 1, owners
+    return owners[0]
 
 
 def recording_ir_environment(
@@ -184,8 +201,8 @@ def resolver_interrupt_permission_environment(
     environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
     environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
-    # The interposer removes its loader variable after reaching the server, so
-    # the resolver and Zod do not inherit it.
+    # The server passes the interposer to its direct resolver owner. That child
+    # removes the loader variable before launching ir or the worker.
     environment[LOADER_VARIABLE] = str(
         build_interposer(temporary_path, "killpg_denial_interposer")
     )

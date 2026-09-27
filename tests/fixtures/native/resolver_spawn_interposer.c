@@ -9,13 +9,13 @@
 
 static atomic_uint fork_count = 0;
 
-static int is_server(void) {
+static int is_resolver(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
-    return server != NULL && strtol(server, NULL, 10) == getpid();
+    return server != NULL && strtol(server, NULL, 10) == getppid();
 }
 
 __attribute__((constructor)) static void prevent_child_injection(void) {
-    if (is_server()) {
+    if (is_resolver()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
         unsetenv("LD_PRELOAD");
     }
@@ -24,7 +24,7 @@ __attribute__((constructor)) static void prevent_child_injection(void) {
 static pid_t checkpoint_fork(void) {
     const char *armed = getenv("MCP_CONSOLE_TEST_SPAWN_ARMED");
     const char *ordinal = getenv("MCP_CONSOLE_TEST_SPAWN_ORDINAL");
-    if (is_server() && armed != NULL && access(armed, F_OK) == 0 &&
+    if (is_resolver() && armed != NULL && access(armed, F_OK) == 0 &&
         atomic_fetch_add(&fork_count, 1) + 1 == strtoul(ordinal, NULL, 10)) {
         int started = open(getenv("MCP_CONSOLE_TEST_SPAWN_STARTED"), O_WRONLY);
         int release = open(getenv("MCP_CONSOLE_TEST_SPAWN_RELEASE"), O_RDONLY);
