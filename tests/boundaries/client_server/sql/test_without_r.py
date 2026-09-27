@@ -1,5 +1,6 @@
 """Public MCP SQL coverage with no R executable visible to the local server."""
 
+import json
 import os
 import re
 import shutil
@@ -64,6 +65,12 @@ def test_managed_python_starts_without_home_until_extension_requested(
                 python="identity = object(); original = id(identity); print('ready')"
             )
             assert last_tool_text(client) == "ready\n"
+            live = client.send(
+                requirements={"duckdb": ["fts"]},
+                python="identity = None",
+            )
+            assert live.get("isError"), live
+            assert "HOME" in last_result_text(client)
             denied = client.send(
                 control="restart",
                 requirements={"duckdb": ["fts"]},
@@ -155,6 +162,102 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
             return _replace_paths(
                 client.finish()[3:], [first_temporary, second_temporary]
             )
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_adds_extensions_to_idle_worker_without_losing_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        env = dict(environment(root), HOME=str(home))
+        if execution == DIRECT:
+            env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
+            env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
+        with McpClient(
+            installed_binary(binary, root), execution.serve(), env
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+                    import sqlite3
+                    import sys
+
+                    identity = object()
+                    identity_id = id(identity)
+                    worker_pid = os.getpid()
+                    interpreter = sys.executable
+                    managed = sql_connection()
+                    selected = sqlite3.connect(":memory:")
+                    selected.execute("CREATE TABLE chosen(value INTEGER)")
+                    selected.execute("INSERT INTO chosen VALUES (17)")
+                    console_sql_connection(selected)
+                    print("state ready")
+                    """)
+            )
+            assert last_tool_text(client) == "state ready\n"
+            prepared = client.send(
+                requirements={"duckdb": ["fts"], "python": ["duckdb"]}
+            )
+            assert not prepared.get("isError"), prepared
+            assert (
+                len(
+                    list(
+                        (home / ".duckdb/extensions").glob("v*/**/fts.duckdb_extension")
+                    )
+                )
+                == 1
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    assert os.getpid() == worker_pid
+                    assert sys.executable == interpreter
+                    assert id(identity) == identity_id
+                    assert sql_connection() is selected
+                    assert managed.execute("SELECT value FROM retained").fetchone() == (42,)
+                    assert selected.execute("SELECT value FROM chosen").fetchone() == (17,)
+                    console_sql_connection(None)
+                    assert sql_connection() is managed
+                    print("state retained")
+                    """)
+            )
+            assert last_tool_text(client) == "state retained\n"
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client)
+            client.send(
+                requirements={"duckdb": ["excel"]},
+                sql="SET autoinstall_known_extensions = false; LOAD excel; SELECT value FROM retained",
+            )
+            assert "42" in last_tool_text(client)
+            client.send(
+                requirements={"duckdb": ["json"]},
+                python="assert os.getpid() == worker_pid and id(identity) == identity_id; print('Python cell retained')",
+            )
+            assert last_tool_text(client) == "Python cell retained\n"
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                "excel",
+                "fts",
+                "json",
+            ]
+            client.send(
+                control="restart",
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            assert "Error:" not in last_tool_text(client)
+            client.send(python="import os; os._exit(47)")
+            assert "status 47" in last_result_text(client)
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD excel")
+            assert "Error:" not in last_tool_text(client)
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -341,7 +444,6 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             client.send(sql="SELECT value FROM chosen")
             assert "17" in last_tool_text(client)
             failed = client.send(
-                control="restart",
                 requirements={"duckdb": ["not_a_real_duckdb_extension"]},
                 stdin="retained input\n",
                 sql="DROP TABLE retained",
@@ -385,20 +487,104 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             )
             assert last_tool_text(client) == "old worker intact\n"
             live = client.send(
-                requirements={"duckdb": ["json"]},
+                requirements={
+                    "duckdb": ["json"],
+                    "python": ["absent-fixture-distribution"],
+                },
                 python="identity = None",
             )
             assert live.get("isError"), live
             assert "control: restart" in last_result_text(client)
+            for requirements in (
+                {"duckdb": ["json"], "python_version": [">=3.11"]},
+                {"duckdb": ["json"], "exclude_newer": "2026-01-01"},
+                {
+                    "action": "set",
+                    "python": ["duckdb==1.5.5"],
+                    "duckdb": ["fts", "json"],
+                },
+                {"action": "reset"},
+            ):
+                denied = client.send(requirements=requirements)
+                assert denied.get("isError"), denied
+                assert 'control="restart"' in last_result_text(client)
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["fts"]
             client.send(
                 python="assert id(identity) == identity_id; print('still intact')"
             )
             assert last_tool_text(client) == "still intact\n"
+            unchanged = client.send(
+                requirements={
+                    "action": "set",
+                    "python": ["duckdb==1.5.5"],
+                    "duckdb": ["fts"],
+                }
+            )
+            assert not unchanged.get("isError"), unchanged
             client.send(
                 requirements={"duckdb": ["fts"]},
                 python="assert id(identity) == identity_id; print('no-op')",
             )
             assert last_tool_text(client) == "no-op\n"
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_live_extension_additions_require_an_idle_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            dict(environment(root), HOME=str(home)),
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"duckdb": ["json"]})
+            client.send(
+                python="identity = object(); identity_id = id(identity); answer = input('answer> ')",
+            )
+            assert "[waiting for stdin]" in last_tool_text(client)
+            busy = client.send(
+                requirements={"duckdb": ["fts"]},
+                python="identity = None",
+            )
+            assert busy.get("isError"), busy
+            assert "already evaluating a cell" in last_result_text(client)
+            retained = client.send(requirements={"duckdb": ["json"]})
+            assert not retained.get("isError"), retained
+            client.send(stdin="kept\n")
+            client.send(
+                python="assert id(identity) == identity_id and answer == 'kept'; print('input retained')"
+            )
+            assert last_tool_text(client) == "input retained\n"
+
+            client.send(
+                python="import pdb; pdb.set_trace(); print('debugger continued')"
+            )
+            assert "[waiting for stdin]" in last_tool_text(client)
+            busy = client.send(requirements={"duckdb": ["fts"]})
+            assert busy.get("isError"), busy
+            assert "already evaluating a cell" in last_result_text(client)
+            denied = client.send(
+                control="interrupt",
+                requirements={"duckdb": ["json"]},
+                python="identity = None",
+            )
+            assert denied.get("isError"), denied
+            client.send(stdin="continue\n")
+            assert "debugger continued" in last_result_text(client)
+            client.send(
+                python="assert id(identity) == identity_id; print('still live')"
+            )
+            assert last_tool_text(client) == "still live\n"
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["json"]
             return client.finish()[3:]
 
 
@@ -426,7 +612,7 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                 client.initialize_and_list_tools()
                 client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
                 client.send(
-                    python="import sysconfig; site = sysconfig.get_paths()['purelib']; identity = object(); identity_id = id(identity); print(site)"
+                    python="import os, sysconfig; site = sysconfig.get_paths()['purelib']; identity = object(); identity_id = id(identity); pid = os.getpid(); print(site)"
                 )
                 site = Path(last_tool_text(client).strip())
                 hook = site / "sitecustomize.py"
@@ -448,11 +634,14 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                 )
                 try:
                     pending = client.start_send(
-                        control="restart",
                         requirements={"duckdb": ["fts"]},
                         sql="DROP TABLE retained",
                     )
                     started.wait("Python DuckDB resolver entered")
+                    inspected = client.send(requirements={"action": "get"})
+                    assert (
+                        inspected["structuredContent"]["requirements"]["duckdb"] == []
+                    )
                     interrupt = client.start_send(control="interrupt")
                     client.receive_many([pending, interrupt])
                     assert pending["result"].get("isError"), pending
@@ -466,7 +655,7 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                 client.send(sql="SELECT value FROM retained")
                 assert "42" in last_tool_text(client)
                 client.send(
-                    python="assert id(identity) == identity_id; print('still live')"
+                    python="assert id(identity) == identity_id and os.getpid() == pid; print('still live')"
                 )
                 assert last_tool_text(client) == "still live\n"
                 records = client.finish()[3:]
@@ -857,20 +1046,46 @@ def test_records_managed_sql_cells(
         root = Path(directory)
         workspace = root / "workspace"
         workspace.mkdir()
+        home = root / "home"
+        home.mkdir()
         (root / "uv").symlink_to(shutil.which("uv"))
         with McpClient(
             installed_binary(binary, root),
             execution.serve(),
-            environment(root),
+            dict(environment(root), HOME=str(home)),
             workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.send(sql="SELECT 42 AS recorded")
+            added = client.send(requirements={"duckdb": ["json"]})
+            assert not added.get("isError"), added
             client.send(python='sql_connection().execute("SELECT 1").fetchone()')
             records = client.finish()[3:]
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         markdown = (session / "transcript.md").read_text()
         quarto = (session / "transcript.qmd").read_text()
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        additions = [
+            event
+            for event in events
+            if event["event"] == "tool_call"
+            and event["request"].get("arguments", {}).get("requirements")
+            == {"duckdb": ["json"]}
+        ]
+        assert len(additions) == 1, additions
+        assert any(
+            event["event"] == "tool_result"
+            and event["call_id"] == additions[0]["call_id"]
+            for event in events
+        )
+        assert not any(event["event"] == "requirements_selected" for event in events)
+        assert '"duckdb": [\n      "json"\n' in markdown
+        assert "[prepared]" in markdown
+        assert "Requirements selected" not in markdown
+        assert "execute:\n  eval: false" not in quarto
         assert "```sql\nSELECT 42 AS recorded\n```" in markdown
         assert "```{sql}\nSELECT 42 AS recorded\n```" in quarto
         assert (

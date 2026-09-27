@@ -30,14 +30,16 @@ result:
         console_sql_connection(connection) selects a user-owned DB-API
         connection and console_sql_connection(None) restores managed DuckDB.
         Register Python data frames explicitly with
-        sql_connection().register(name, frame). R cells, live requirements, and
-        automatic package installation are unavailable in this session. Console
-        manages Python through uv. Explicit requirements.python and
-        requirements.duckdb prepare packages and extensions before the first
-        worker starts or with control: restart. Changed requirements on a
-        running worker require an explicit restart; already retained
-        requirements are a no-op. Restart resets objects and retains the
-        accepted environment.
+        sql_connection().register(name, frame). R cells, live Python changes,
+        and automatic package installation are unavailable in this session. Idle
+        DuckDB extension additions preserve the worker and selected SQL
+        connection. Console manages Python through uv. Explicit
+        requirements.python and requirements.duckdb prepare packages and
+        extensions before the first worker starts or with control: restart. An
+        idle worker can add DuckDB extensions without replacement, using the
+        accepted Python and shared cache. Python changes and changed declaration
+        replacements require restart; retained requirements are a no-op. Restart
+        resets objects and retains the accepted environment.
 
 
         Send one complete `python` or `sql` cell per call. Code-bearing calls
@@ -78,11 +80,12 @@ result:
               One complete Python cell in persistent state. The final expression
               displays automatically. Use input() for managed stdin; Matplotlib plots
               return as PNG images when installed. sql_connection() returns the active
-              SQL connection. requirements.python and requirements.duckdb prepare
-              packages and extensions before first use, or with control: restart
-              before the replacement runs this cell. Live requirement changes,
-              automatic installation, and R integration are unavailable. Use
-              timeout_ms: 0 then poll for background execution.
+              SQL connection. requirements.duckdb can add extensions to an idle worker
+              before this cell without replacing it. Changed requirements.python and
+              declaration replacements require control: restart; both requirement
+              fields also work before first use or during restart. Automatic
+              installation and R integration are unavailable. Use timeout_ms: 0 then
+              poll for background execution.
             type:
               - string
               - "null"
@@ -97,11 +100,11 @@ result:
               connection, and console_sql_connection(None) restores managed DuckDB
               without discarding its catalog. A query with columns returns a bounded
               preview. SQL errors leave the Python session usable. requirements.duckdb
-              prepares named extensions before startup or explicit restart; LOAD runs
-              later in the worker. SQL never installs them automatically through
-              Console. If DuckDB is unavailable, add duckdb with requirements.python
-              and control: restart or select a custom connection. R cells are
-              unavailable.
+              prepares extensions before startup, during restart, or on an idle
+              running worker before this cell; LOAD runs later in the worker. SQL
+              never installs them automatically through Console. If DuckDB is
+              unavailable, add duckdb with requirements.python and control: restart or
+              select a custom connection. R cells are unavailable.
             type:
               - string
               - "null"
@@ -129,14 +132,19 @@ result:
               with action=add (the default), replace the declaration with action=set,
               or restore defaults with action=reset. Applies to a Console-managed uv
               environment. Supported before the first worker starts, alone or with a
-              Python or SQL cell, and with control: restart, with or without code.
-              Additions accumulate in the retained declaration, initially NumPy,
-              pandas, and DuckDB but no extensions. An explicit set, including an
-              empty set, remains exactly that declaration. A changed live environment
-              requires restart; retained requirements are a no-op. The Python
-              candidate is inspected before its extensions are prepared and before
-              worker retirement. Automatic installation is unavailable. Standalone
-              preparation cannot queue stdin.
+              Python or SQL cell, and with control: restart, with or without code. An
+              idle worker also accepts extension-only additions without replacement,
+              including requests that repeat retained Python requirements. Additions
+              accumulate in the retained declaration, initially NumPy, pandas, and
+              DuckDB but no extensions. Changed Python packages, interpreter
+              constraints, exclusion dates, and set/reset declarations require
+              restart; unchanged declarations are a no-op. Unsupported mixed requests
+              fail before any part is prepared. Live extension preparation uses the
+              accepted Python and captured cache; it commits only after host
+              installation succeeds in the current generation. The Python candidate is
+              inspected for startup or restart preparation before its extensions are
+              prepared and before worker retirement. Automatic installation is
+              unavailable. Standalone preparation cannot queue stdin.
             type:
               - object
               - "null"
@@ -174,10 +182,11 @@ result:
                   Validated DuckDB extension names for the managed connection, for example
                   fts. The host runs the accepted Python environment's DuckDB installation
                   API with its default repository and signature checks. Preparation does
-                  not LOAD extensions or run cells. Additions before first use or with
-                  control: restart are supported; changed live declarations require
-                  restart. DuckDB must be included in requirements.python when an exact
-                  set would otherwise omit it.
+                  not LOAD extensions or run cells. Idle action=add changes preserve the
+                  worker, Python objects, managed catalog, and selected connection;
+                  startup and restart preparation are also supported. Changed set/reset
+                  declarations require restart. DuckDB must be included in
+                  requirements.python when an exact set would otherwise omit it.
                 type: array
                 items:
                   type: string

@@ -23,8 +23,9 @@ Local sessions can run Python and SQL without R.
 When R is absent, Console uses `uv` from `PATH` to resolve its default environment.
 To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; that mode never invokes uv and disables package preparation.
 These sessions support Python, SQL, input, plots, interrupts, restart, and recording.
-SQL uses a lazy in-memory DuckDB connection or a selected Python DB-API connection; live requirements and automatic package installation remain unavailable.
+SQL uses a lazy in-memory DuckDB connection or a selected Python DB-API connection; automatic package installation remains unavailable.
 When Console manages Python through uv, `requirements.python` and `requirements.duckdb` prepare packages and extensions before first use or with an explicit restart.
+An idle running session can also add DuckDB extensions without replacing the worker or its SQL catalog; Python changes and declaration replacements still require restart.
 With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
 See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 

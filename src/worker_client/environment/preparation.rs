@@ -81,10 +81,10 @@ impl Client {
             if delta.is_empty() {
                 return Ok(PrepareResult::Prepared);
             }
-            if self.python_only() {
+            self.require_explicit_restart(&delta)?;
+            if self.python_only() && !delta.is_live_duckdb_only() {
                 return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
             }
-            self.require_explicit_restart(&delta)?;
             if matches!(intent, PreparationIntent::Standalone)
                 && self.requirement_change_state(generation)?
                     == RequirementChangeState::RestartRequired
@@ -121,24 +121,6 @@ impl Client {
             .worker
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
-        if self.python_only() && !matches!(*worker, WorkerState::Initial) {
-            // The fast path already returned for retained requirements. If
-            // startup held the environment lock, recheck after acquiring it.
-            if available_environment.is_none() {
-                let environment = environment
-                    .lock()
-                    .map_err(|_| "worker environment lock poisoned".to_string())?;
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements.take().expect("pending requirements"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-            }
-            return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
-        }
         let environment_preparation = if let WorkerState::Running(running) = &*worker {
             match running.reserve_environment_preparation() {
                 Ok(reservation) => Ok(Some(reservation)),
@@ -174,6 +156,15 @@ impl Client {
                 (environment, delta)
             }
         };
+        if self.python_only() {
+            match &*worker {
+                WorkerState::Initial => {}
+                WorkerState::Running(_) if delta.is_live_duckdb_only() => {}
+                WorkerState::Running(_) | WorkerState::Stopped => {
+                    return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
+                }
+            }
+        }
         let includes_r = delta.r_changed;
         let _environment_preparation = match environment_preparation {
             Ok(reservation) => reservation,
@@ -220,7 +211,16 @@ impl Client {
             } else {
                 None
             };
-            if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
+            if self.python_only() && duckdb_changed {
+                let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
+                if let Err(failure) = self.resolve_python_duckdb_extensions_for_environment(
+                    generation,
+                    &environment,
+                    &extensions,
+                ) {
+                    return self.finish_environment_resolution_failure(generation, intent, failure);
+                }
+            } else if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
                 let mut targets = Vec::new();
                 if duckdb_changed {
                     targets.extend(environment.duckdb_r_targets.iter().cloned());
