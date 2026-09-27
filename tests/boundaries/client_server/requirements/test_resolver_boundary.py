@@ -604,6 +604,16 @@ def test_real_build_hook_and_result_substitution(binary: Path) -> Transcript:
             .replace("@HOST_CACHE@", str(host_cache / "escaped"))
             .replace("@SECRET@", str(secret))
             .replace("@CC@", shutil.which("cc"))
+            .replace(
+                '"@RELEASE_FILES@"',
+                repr(
+                    {
+                        path: Path(path).read_text()
+                        for path in ["/etc/os-release", "/etc/redhat-release"]
+                        if Path(path).is_file()
+                    }
+                ),
+            )
         )
         with source_repository(root, program) as url:
             environment = dict(

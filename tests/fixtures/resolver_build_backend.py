@@ -11,12 +11,16 @@ OUTSIDE = "@OUTSIDE@"
 HOST_CACHE = "@HOST_CACHE@"
 SECRET = "@SECRET@"
 CC = "@CC@"
+RELEASE_FILES = "@RELEASE_FILES@"
 
 
 def build_wheel(
     wheel_directory: str, config_settings=None, metadata_directory=None
 ) -> str:
     evidence = {}
+    # pak and renv use these files to select compatible Linux binary packages.
+    for path, expected in RELEASE_FILES.items():
+        assert Path(path).read_text() == expected, path
     for name, path in [("outside", OUTSIDE), ("host_cache", HOST_CACHE)]:
         try:
             Path(path).write_text("build hook escaped")

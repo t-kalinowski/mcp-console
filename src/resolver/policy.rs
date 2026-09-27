@@ -349,6 +349,9 @@ impl Launch {
             "/etc/ld.so.conf.d",
             // Debian library links (including BLAS) pass through alternatives.
             "/etc/alternatives",
+            // pak and renv need distribution metadata to select Linux binaries.
+            "/etc/os-release",
+            "/etc/redhat-release",
             "/etc/resolv.conf",
             "/etc/nsswitch.conf",
             "/etc/hosts",
