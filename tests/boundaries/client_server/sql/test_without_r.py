@@ -14,7 +14,7 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import build_interposer
-from support.normalization import code, normalize_python_traceback_paths
+from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, requires
 
@@ -245,8 +245,8 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
             )
             assert failed.get("isError")
             assert "fixture Python resolution failed" in last_result_text(client)
-            failed["content"][0]["text"] = normalize_python_traceback_paths(
-                failed["content"][0]["text"]
+            failed["content"][0]["text"] = normalize_python_resolution_error(
+                failed["content"][0]["text"], "fixture Python resolution failed"
             )
             assert declaration() == ["numpy", "pandas", "duckdb"]
             client.send(sql="SELECT value FROM retained")
