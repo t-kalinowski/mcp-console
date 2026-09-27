@@ -110,7 +110,13 @@ impl Context {
                 serde_json::to_value(r).map_err(|error| error.to_string())
             }
             Operation::ResolveRStandalone { requirements } => {
-                let r = resolver::resolve_r(requirements, on_started)?;
+                let r = if let Some(configuration) = &self.r {
+                    resolver::resolve_r_with(configuration, requirements, on_started)?
+                } else {
+                    resolver::resolve_r(requirements, on_started, |configuration| {
+                        self.r = Some(configuration);
+                    })?
+                };
                 self.rscript = Some(r.rscript().to_path_buf());
                 serde_json::to_value(r).map_err(|error| error.to_string())
             }

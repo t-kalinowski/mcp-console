@@ -492,19 +492,20 @@ fn run(
                         .outcome
                         .lock()
                         .expect("preparation control lock");
-                    let result = if local {
-                        result
+                    let control_label = if local {
+                        "local resolver"
                     } else {
-                        result.and_then(|value| match outcome {
-                            Some(ResolverControlOutcome::Cancelled) => {
-                                Err("remote preparation cancelled".into())
-                            }
-                            Some(ResolverControlOutcome::Interrupted) => {
-                                Err("remote preparation interrupted".into())
-                            }
-                            None => Ok(value),
-                        })
+                        "remote preparation"
                     };
+                    let result = result.and_then(|value| match outcome {
+                        Some(ResolverControlOutcome::Cancelled) => {
+                            Err(format!("{control_label} cancelled"))
+                        }
+                        Some(ResolverControlOutcome::Interrupted) => {
+                            Err(format!("{control_label} interrupted"))
+                        }
+                        None => Ok(value),
+                    });
                     let _ = active
                         .take()
                         .expect("active preparation")
