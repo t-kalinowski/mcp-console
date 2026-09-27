@@ -63,6 +63,8 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
             McpClient(
                 binary,
                 execution.serve(
+                    "-c",
+                    'extends=":workspace"',
                     "--worker",
                     str(fixtures / "zod"),
                     "--relay",
@@ -78,7 +80,7 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
             ) as client,
         ):
             try:
-                client.initialize_and_list_tools()
+                client.initialize()
                 running = "\n[running; poll with an empty send]"
                 assert client.send(r="42", timeout_ms=0)["content"] == [
                     {"type": "text", "text": running}

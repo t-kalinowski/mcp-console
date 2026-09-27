@@ -36,9 +36,11 @@ def test_preserves_queued_inspection_interrupt(
             Path(temporary_directory), "queued_inspection_interrupt"
         )
         with McpClient(
-            binary, execution.serve(), current_directory=Path(temporary_directory)
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
         ) as client:
-            client.initialize_and_list_tools()
+            client.initialize()
             client.send(
                 # fmt: r
                 r=code(f"""
@@ -118,9 +120,11 @@ def test_cancels_native_inspection_and_retries(
         pid = None
         try:
             with McpClient(
-                binary, execution.serve(), current_directory=Path(temporary_directory)
+                binary,
+                execution.serve("-c", 'extends=":workspace"'),
+                current_directory=Path(temporary_directory),
             ) as client:
-                client.initialize_and_list_tools()
+                client.initialize()
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -292,9 +296,11 @@ def test_console_configures_selected_python(
                 capture_output=True,
             )
             with McpClient(
-                binary, execution.serve(), current_directory=Path(temporary_directory)
+                binary,
+                execution.serve("-c", 'extends=":workspace"'),
+                current_directory=Path(temporary_directory),
             ) as client:
-                client.initialize_and_list_tools()
+                client.initialize()
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -371,9 +377,11 @@ def test_python_first_initializes_before_reticulate_attaches(
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
         with McpClient(
-            binary, execution.serve(), current_directory=Path(temporary_directory)
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
         ) as client:
-            client.initialize_and_list_tools()
+            client.initialize()
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -456,9 +464,11 @@ def test_r_first_initializes_before_reticulate_attaches(
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
         with McpClient(
-            binary, execution.serve(), current_directory=Path(temporary_directory)
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
         ) as client:
-            client.initialize_and_list_tools()
+            client.initialize()
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -536,9 +546,11 @@ def test_retries_attachment_without_reinitializing_python(
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
         with McpClient(
-            binary, execution.serve(), current_directory=Path(temporary_directory)
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
         ) as client:
-            client.initialize_and_list_tools()
+            client.initialize()
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})

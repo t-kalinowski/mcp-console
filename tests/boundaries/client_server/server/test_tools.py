@@ -574,11 +574,11 @@ def test_bounds_argument_decoding_errors(
         started = workspace / "worker-started"
         with McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", 'extends=":workspace"', "--worker", str(zod)),
             {**os.environ, "MCP_CONSOLE_TEST_ZOD_STARTED": str(started)},
             current_directory=workspace,
         ) as client:
-            client.initialize_and_list_tools()
+            client.initialize()
             results = []
             for arguments, kind, ending in cases:
                 result = client.send(**arguments)
