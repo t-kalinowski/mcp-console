@@ -518,28 +518,29 @@ impl Client {
         };
         let client = self.clone();
         let commit_generation = generation.clone();
-        let commit = Box::new(move |result| match result {
-            Ok(None) => client
-                .old_generation_commit_disposition(&commit_generation)
-                .map(|disposition| match disposition {
-                    OldGenerationCommitDisposition::Commit => PreparationOutcome::Completed(Ok(())),
-                    OldGenerationCommitDisposition::DiscardForReplacement => {
-                        PreparationOutcome::DiscardedByReplacement
-                    }
-                }),
-            Ok(Some(_)) => {
-                Err("native Python preparation returned an unexpected resolver candidate".into())
-            }
-            Err(error) => client
-                .require_restart_for_requirement_changes(&commit_generation)
-                .map(|disposition| match disposition {
-                    OldGenerationCommitDisposition::Commit => {
-                        PreparationOutcome::Completed(Err(requirement_restart_error(error)))
-                    }
-                    OldGenerationCommitDisposition::DiscardForReplacement => {
-                        PreparationOutcome::DiscardedByReplacement
-                    }
-                }),
+        let commit = Box::new(move |result| {
+            let (disposition, result) = match result {
+                Ok(None) => (
+                    client.old_generation_commit_disposition(&commit_generation)?,
+                    Ok(()),
+                ),
+                Ok(Some(_)) => {
+                    return Err(
+                        "native Python preparation returned an unexpected resolver candidate"
+                            .into(),
+                    );
+                }
+                Err(error) => (
+                    client.require_restart_for_requirement_changes(&commit_generation)?,
+                    Err(requirement_restart_error(error)),
+                ),
+            };
+            Ok(match disposition {
+                OldGenerationCommitDisposition::Commit => PreparationOutcome::Completed(result),
+                OldGenerationCommitDisposition::DiscardForReplacement => {
+                    PreparationOutcome::DiscardedByReplacement
+                }
+            })
         });
         match running.prepare_python(Vec::new(), false, Some((candidate, inspected)), commit) {
             Ok(PreparationOutcome::Completed(Ok(()))) => Ok(PrepareResult::Prepared),

@@ -245,26 +245,16 @@ impl Client {
         .map_err(|error| EnvironmentResolutionFailure::Host(error.to_string()))?;
 
         if !environment.duckdb_extensions.is_empty() {
-            let mut provisional = environment.clone();
-            provisional
-                .python
-                .as_mut()
-                .expect("managed native Python exists")
-                .replace_managed(candidate.clone())
-                .map_err(EnvironmentResolutionFailure::Operation)?;
-            if let Some(crate::local_runtime::Selection::Python { selected, .. }) =
-                &mut provisional.local_runtime
-            {
-                **selected = inspected.clone();
-            }
-            self.resolve_python_duckdb_extensions_for_environment(
+            self.resolve_python_duckdb_extensions(
                 generation,
-                &provisional,
+                &candidate,
+                resolver,
                 &environment
                     .duckdb_extensions
                     .iter()
                     .cloned()
                     .collect::<Vec<_>>(),
+                environment.local_runtime.as_ref(),
             )?;
         }
         Ok((candidate, inspected))
@@ -453,17 +443,13 @@ impl Client {
             })?
             .managed_parts()
             .map_err(EnvironmentResolutionFailure::Operation)?;
-        let directory = environment
-            .local_runtime
-            .as_ref()
-            .and_then(crate::local_runtime::Selection::duckdb_extension_directory)
-            .ok_or_else(|| {
-                EnvironmentResolutionFailure::Operation(
-                    "DuckDB extension preparation requires an absolute HOME at server startup"
-                        .to_string(),
-                )
-            })?;
-        self.resolve_python_duckdb_extensions(generation, selected, resolver, extensions, directory)
+        self.resolve_python_duckdb_extensions(
+            generation,
+            selected,
+            resolver,
+            extensions,
+            environment.local_runtime.as_ref(),
+        )
     }
 
     fn resolve_python_duckdb_extensions(
@@ -472,8 +458,16 @@ impl Client {
         selected: &crate::resolver::ManagedPython,
         resolver: &crate::resolver::execution::PythonConfiguration,
         extensions: &[String],
-        extension_directory: &std::path::Path,
+        runtime: Option<&crate::local_runtime::Selection>,
     ) -> Result<(), EnvironmentResolutionFailure> {
+        let extension_directory = runtime
+            .and_then(crate::local_runtime::Selection::duckdb_extension_directory)
+            .ok_or_else(|| {
+                EnvironmentResolutionFailure::Operation(
+                    "DuckDB extension preparation requires an absolute HOME at server startup"
+                        .to_string(),
+                )
+            })?;
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
         let mut stop_handle = None;

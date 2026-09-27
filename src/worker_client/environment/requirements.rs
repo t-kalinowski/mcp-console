@@ -256,9 +256,6 @@ impl RequirementDelta {
         &self,
         environment: &Environment,
     ) -> Result<(), String> {
-        if !self.is_live_python_only() {
-            return Ok(());
-        }
         let retained = environment.declaration().python_manifest();
         let mut names = BTreeMap::new();
         for requirement in &retained.packages {

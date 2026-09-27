@@ -139,7 +139,7 @@ In particular, raw output written before a `completed` or preparation-result fra
 | `{"kind":"prepare_r","library":"..."}`                            | Apply this resolved R library to the live R search path.                                  |
 | `{"kind":"r_resolved","library":"..."}`                           | Return the provisional library selected for the current `resolve_r` request.              |
 | `{"kind":"r_resolution_failed","failure":"host","message":"..."}` | Fail the current `resolve_r` request. `failure` is `host`, `interrupted`, or `operation`. |
-| `{"kind":"prepare_python","packages":["py-yaml12"]}`              | Add these package requirements through the live managed-Python preparation operation.     |
+| `{"kind":"prepare_python","packages":["py-yaml12"]}`              | Prepare reticulate requirements, or activate the optional `native` candidate (below).     |
 | `{"kind":"python_resolved","python":"..."}`                       | Return the interpreter path selected for the current `resolve_python` request.            |
 | `{"kind":"python_resolution_failed","message":"..."}`             | Return an ordinary failure for the current `resolve_python` request.                      |
 | `{"kind":"python_version_resolved","version":"3.12.11"}`          | Return the version selected for the current `resolve_python_version` request.             |
@@ -190,6 +190,34 @@ A Python requirement manifest has this shape:
 
 `packages` is required.
 `python_version` and `exclude_newer` are optional and are omitted when empty or absent.
+
+`prepare_python.native`, when present, contains two required fields: `selected`, the inspected native candidate configuration, and `requirements`, its complete retained requirement manifest.
+The native form requires an empty `packages` array:
+
+```json
+{
+  "kind": "prepare_python",
+  "packages": [],
+  "native": {
+    "selected": {
+      "embedding": {
+        "python": "/candidate/bin/python",
+        "libpython": "/running/lib/libpython3.12.so",
+        "python_home": "/running"
+      },
+      "prefix": "/candidate",
+      "exec_prefix": "/candidate",
+      "base_prefix": "/running",
+      "base_exec_prefix": "/running"
+    },
+    "requirements": { "packages": ["numpy", "pandas", "duckdb", "py-yaml12"] }
+  }
+}
+```
+
+All native configuration fields shown above are required strings, with `embedding` grouping the executable, shared-library path, and embedding home.
+They come from inspecting the approved candidate; they do not select another interpreter or add constraints to the retained declaration.
+Omitting `native`, or setting it to null, preserves the reticulate preparation form.
 
 `resolve_python.request` contains two required manifests:
 
@@ -310,8 +338,8 @@ Transport, framing, sideband, and unexpected-response failures still fail the wo
 `prepare_python` is an idle-only operation for a server-managed worker.
 The worker performs additive preparation and replies with exactly one `python_prepared` or `python_preparation_failed` result.
 
-Preparation may make nested `resolve_python` and `resolve_python_version` requests.
-A typical live activation is:
+With no `native` candidate, preparation uses the R/reticulate adapter and may make nested `resolve_python` and `resolve_python_version` requests.
+A typical reticulate activation is:
 
 ```text
 server -> worker  {"kind":"prepare_python","packages":["py-yaml12"]}
@@ -324,6 +352,18 @@ worker -> server  {"kind":"python_prepared"}
 `python_prepared` is payload-free.
 Before Python initialization it may report successful manifest materialization without a live `python_activated` event.
 After initialization, any new resolved environment that the worker activates must be reported with `python_activated` before `python_prepared`.
+
+The native form is used for idle local managed sessions without R.
+Before sending it, the server validates an effective add-only declaration, resolves the complete candidate against the running executable, inspects it, checks libpython compatibility, and prepares its retained DuckDB extensions.
+The worker activates only the supplied candidate through the shared native activation operation; this form makes no nested resolver requests.
+On success, it updates its active native configuration and sends `python_activated` with the supplied retained manifest before `python_prepared`.
+The server matches that receipt to the candidate owned by the active preparation operation and commits the manifest, managed environment, and native launch configuration for the current generation.
+Successful native preparation without an activation receipt, or a duplicate or mismatched receipt, is a protocol failure.
+Plain restart and crash replacement use the committed configuration; a later cell failure does not undo activation.
+
+An activation exception retains its original Python diagnostics and produces `python_preparation_failed`; the server requires restart before further requirement changes and withholds same-call input and code.
+Activation-script side effects are not rolled back.
+Native activation does not replace Python objects, the loaded DuckDB runtime, its catalog, or the selected SQL connection.
 
 ### Nested managed-Python resolution
 

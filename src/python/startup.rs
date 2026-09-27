@@ -178,21 +178,18 @@ impl Runtime {
             candidate_executable: &candidate.embedding.python,
             running_libpython: &running.embedding.libpython,
         };
-        let result = super::activate_managed_environment(input);
+        let result = super::activate_managed_environment(input).and_then(|()| {
+            match super::library::configure_native_child_environment(candidate) {
+                Ok(true) => Ok(()),
+                Ok(false) => Err(super::ActivationFailure::PythonException),
+                Err(error) => Err(super::ActivationFailure::Infrastructure(error)),
+            }
+        });
         match result {
-            Ok(()) => match super::library::configure_native_child_environment(candidate) {
-                Ok(true) => {
-                    self.native = Some(candidate.clone());
-                    Ok(PreparationOutcome::Prepared)
-                }
-                Ok(false) => {
-                    super::library::display_setup_exception()?;
-                    Ok(PreparationOutcome::Failed {
-                        message: "Python activation failed; restart required".into(),
-                    })
-                }
-                Err(message) => Ok(PreparationOutcome::Failed { message }),
-            },
+            Ok(()) => {
+                self.native = Some(candidate.clone());
+                Ok(PreparationOutcome::Prepared)
+            }
             Err(super::ActivationFailure::PythonException) => {
                 // The native setup slot retains the original Python traceback.
                 super::library::display_setup_exception()?;

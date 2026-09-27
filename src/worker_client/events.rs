@@ -221,7 +221,7 @@ impl WorkerOperationState {
                 ..
             }) => {
                 let (managed, selected) = candidate.as_ref();
-                if *activated || managed.requirements() != &requirements.clone().normalized() {
+                if *activated || managed.requirements() != requirements {
                     return Err("worker activated an unexpected native Python candidate".into());
                 }
                 *activated = true;
