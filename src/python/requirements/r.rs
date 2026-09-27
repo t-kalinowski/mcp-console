@@ -10,10 +10,14 @@ use std::ffi::CStr;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use harp::object::{RObject, is_identical, r_null_or_try_into};
+use harp::object::{RObject, is_identical};
 use libr::SEXP;
 
 use super::{Characters, Manifest, Requirements};
+
+mod activation;
+
+pub(super) use activation::check_activation;
 
 #[derive(Clone, Copy)]
 enum Field {
@@ -82,97 +86,6 @@ pub extern "C-unwind" fn mcp_console_python_requirements_get() -> harp::Result<S
     let (value, metadata) =
         snapshot.ok_or_else(|| harp::anyhow!("managed Python requirements are not installed"))?;
     Ok(metadata.to_r(&value)?.sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_requirements_set(
-    value: SEXP,
-    activation: SEXP,
-) -> harp::Result<SEXP> {
-    let pending = STATE.with(|state| {
-        let state = state.borrow();
-        state
-            .requirements
-            .pending_activation
-            .clone()
-            .zip(state.pending_metadata.clone())
-    });
-    if let Some((pending, metadata)) = pending
-        && !is_identical(activation, metadata.to_r(&pending)?.sexp)
-    {
-        return Err(harp::anyhow!(
-            "Python requirement update does not match pending activation"
-        ));
-    }
-    let (value, metadata) = Metadata::from_r(value)?;
-    let (previous, committed) = STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        let previous = (
-            state.current_metadata.replace(Rc::new(metadata)),
-            state.pending_metadata.take(),
-        );
-        (previous, state.requirements.commit(value))
-    });
-    // Release protection and publish only after leaving the state borrow.
-    drop(previous);
-    if committed {
-        publish_activation(activation)?;
-    }
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activation_pending() -> harp::Result<SEXP> {
-    let pending = STATE.with(|state| state.borrow().requirements.activation_pending());
-    Ok(RObject::from(pending).sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activation_record(
-    activation: SEXP,
-) -> harp::Result<SEXP> {
-    check_activation()?;
-    // Called only after native activation and process-environment setup
-    // succeed. An earlier failure leaves ordinary snapshot restoration inert.
-    let (activation, metadata) = Metadata::from_r(activation)?;
-    let previous = STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        state.requirements.pending_activation = Some(activation);
-        state.pending_metadata.replace(Rc::new(metadata))
-    });
-    drop(previous);
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_initialized(activation: SEXP) -> harp::Result<SEXP> {
-    // Initial startup has its own successful reticulate hook, with no pending
-    // late activation or subsequent requirement write to commit it.
-    publish_activation(activation)?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-pub(super) fn check_activation() -> harp::Result<()> {
-    STATE
-        .with(|state| state.borrow().requirements.check_activation())
-        .map_err(|error| harp::anyhow!("{error}"))
-}
-
-#[allow(clippy::result_large_err)]
-fn publish_activation(activation: SEXP) -> harp::Result<()> {
-    // The bridge still supplies its normalized projection in this order.
-    let activation = RObject::view(activation);
-    let requirements = crate::worker_protocol::PythonRequirementManifest {
-        packages: activation.vector_elt(0)?.try_into()?,
-        python_version: activation.vector_elt(1)?.try_into()?,
-        exclude_newer: r_null_or_try_into(activation.vector_elt(2)?)?,
-    };
-    crate::worker::publish_python_activation(requirements).map_err(|error| harp::anyhow!("{error}"))
 }
 
 #[allow(clippy::result_large_err)]

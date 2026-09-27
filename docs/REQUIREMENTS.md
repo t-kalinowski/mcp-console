@@ -378,8 +378,13 @@ Explicit Python preparation and automatic imports use the native requirement own
 It snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`; managed declarations use the same native transition decisions.
 The R adapter preserves declaration conversion and history, live version and package checks, and candidate configuration lookup.
 Before Python initializes, the worker materializes the complete manifest.
-After initialization, Console checks the candidate's `libpython` against reticulate's live configuration and activates the compatible environment without replacing the interpreter or its objects.
-It runs the selected activation hook, updates Python's executable and any loaded multiprocessing module, and completes process-environment setup before recording pending activation.
+After initialization, the R adapter looks up reticulate's candidate configuration and converts its selected Python path, `libpython`, and executable to native strings, along with the running interpreter's `libpython`.
+The shared native activation operation compares the two `libpython` strings exactly before touching the interpreter.
+It does not select or inspect an interpreter or resolve requirements.
+For a compatible candidate, it uses the existing CPython activation hook to update the environment without replacing the interpreter or its objects, including Python's executable, any loaded multiprocessing module, and process setup.
+The operation distinguishes a compatibility rejection, an infrastructure error, and a Python exception retained with its traceback by CPython's setup-error mechanism.
+The R adapter still translates a retained exception through reticulate's condition and interrupt boundary.
+Only after activation and process setup succeed does the adapter record pending activation.
 Reticulate then accepts the returned configuration and writes the requirement binding that publishes `PythonActivated`.
 
 The server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
