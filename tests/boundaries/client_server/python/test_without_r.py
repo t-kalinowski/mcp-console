@@ -2,6 +2,8 @@
 
 import json
 import os
+import select
+import time
 import subprocess
 import shutil
 import sys
@@ -804,9 +806,17 @@ def test_shutdown_cancels_sans_r_python_preparation(
                     )
                     started.wait("resolver entered before input closure")
                     assert os.read(alive, 1) == b"1"
+                    deadline = time.monotonic() + 10
                     client.stdin.close()
-                    assert client.process.wait(timeout=10) == 0
-                    assert os.read(alive, 1) == b"", "resolver survived shutdown"
+                    assert client.process.wait(timeout=deadline - time.monotonic()) == 0
+                    # Host retirement reaps the leader after signaling its group.
+                    # Observe descendant descriptor closure, not scheduler order.
+                    readable, _, _ = select.select(
+                        [alive], [], [], max(0, deadline - time.monotonic())
+                    )
+                    assert readable and os.read(alive, 1) == b"", (
+                        "resolver survived shutdown"
+                    )
                     records.append(
                         {
                             "restart": restart,
