@@ -400,6 +400,7 @@ def test_prepares_managed_python_at_startup_and_restart(
             requirement_schema = schema["properties"]["requirements"]
             assert set(requirement_schema["properties"]) == {
                 "python",
+                "duckdb",
                 "action",
                 "python_version",
                 "exclude_newer",
