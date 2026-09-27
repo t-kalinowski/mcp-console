@@ -81,10 +81,12 @@ See the [concrete escape scenario and trust boundary](REQUIREMENTS.md#host-resol
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
 In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the first worker starts, alone or with a Python or SQL cell.
-Once a worker is running, changed requirements require `control: "restart"`, with or without accompanying code.
+Once a worker is running, idle `action: "add"` calls can prepare DuckDB extensions without replacement, with or without accompanying Python or SQL code.
+Already-retained Python requirements may accompany them as no-ops.
+Python package or constraint changes and changed `set` or `reset` declarations still require `control: "restart"`.
 Requirements already retained are a no-op, including on a running worker.
 Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
-Live additions are rejected without changing the environment or silently restarting.
+Unsupported mixed live requests are rejected before any part is prepared.
 
 Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with no default extensions.
 `python_version` and `exclude_newer` use the ordinary requirements contract.
@@ -93,6 +95,10 @@ The same extension preparation occurs before first startup; if DuckDB is absent,
 Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
 Interrupting preparation stops its resolver operation and discards the candidate before any worker retirement.
 Same-call code and input are sent only after successful replacement.
+For an idle live extension addition, the resolver uses the accepted managed Python and captured shared cache without changing packages or the interpreter.
+It installs extension files outside the worker; a later user `LOAD` uses the existing managed connection and catalog.
+Host failure or cancellation leaves the worker, selected connection, and committed declaration unchanged; same-call code and input are not sent.
+Downloads already written to the cache may remain.
 After retirement begins, ordinary retirement and replacement failure semantics apply; the retired worker cannot be restored.
 The mutable session environment commits the manifest, executable, and inspected embedding configuration together.
 Discarding a candidate leaves the accepted selection unchanged; resolver cache, installation, and build effects may remain.
@@ -466,7 +472,7 @@ Results that report columns use the bounded preview path below, while results wi
 Each selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
 Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
 The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
-DuckDB extension requirements prepare the managed R-backed provider or the local sans-R managed Python provider before worker startup or restart.
+DuckDB extension requirements prepare the managed R-backed provider or the local sans-R managed Python provider before worker startup or restart; idle sans-R managed sessions also support additive extension preparation.
 They do not alter a selected DB-API connection; prepare Python drivers and their dependencies through `requirements.python`.
 The R-specific managed conveniences below apply only to the R-backed provider.
 

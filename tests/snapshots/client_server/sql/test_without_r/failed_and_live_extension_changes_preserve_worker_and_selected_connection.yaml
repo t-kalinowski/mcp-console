@@ -63,7 +63,6 @@ result:
   isError: false
 ---
 send:
-  control: restart
   requirements:
     duckdb:
       - not_a_real_duckdb_extension
@@ -74,7 +73,7 @@ result:
   content:
     - type: text
       text: |-
-        [DuckDB extension resolution failed with exit status: 1: Traceback (most recent call last):
+        DuckDB extension resolution failed with exit status: 1: Traceback (most recent call last):
           File "<string>", line 32, in <module>
         _duckdb.HTTPException: HTTP Error: Failed to download extension "not_a_real_duckdb_extension" at URL "<DuckDB extension URL>" (HTTP 404)
 
@@ -203,14 +202,114 @@ send:
   requirements:
     duckdb:
       - json
+    python:
+      - absent-fixture-distribution
   python: identity = None
 result:
   content:
     - type: text
       text: >-
-        live requirements are unavailable without R; use requirements.python or
-        requirements.duckdb with control: restart to prepare a new environment
+        changed requirements other than idle DuckDB extension additions require
+        control: restart in a Python session without R
   isError: true
+---
+send:
+  requirements:
+    duckdb:
+      - json
+    python_version:
+      - ">=3.11"
+result:
+  content:
+    - type: text
+      text: >-
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
+  isError: true
+---
+send:
+  requirements:
+    duckdb:
+      - json
+    exclude_newer: 2026-01-01
+result:
+  content:
+    - type: text
+      text: >-
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
+  isError: true
+---
+send:
+  requirements:
+    action: set
+    python:
+      - duckdb==1.5.5
+    duckdb:
+      - fts
+      - json
+result:
+  content:
+    - type: text
+      text: >-
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
+  isError: true
+---
+send:
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: >-
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "duckdb==1.5.5"
+            ],
+            "duckdb": [
+              "fts"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - duckdb==1.5.5
+      duckdb:
+        - fts
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
 ---
 send:
   python: assert id(identity) == identity_id; print('still intact')
@@ -219,6 +318,19 @@ result:
     - type: text
       text: |
         still intact
+  isError: false
+---
+send:
+  requirements:
+    action: set
+    python:
+      - duckdb==1.5.5
+    duckdb:
+      - fts
+result:
+  content:
+    - type: text
+      text: "[prepared]"
   isError: false
 ---
 send:

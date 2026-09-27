@@ -9,6 +9,18 @@ result:
   isError: false
 ---
 send:
+  requirements:
+    duckdb:
+      - fts
+  python: identity = None
+result:
+  content:
+    - type: text
+      text: >-
+        DuckDB extension preparation requires an absolute HOME at server startup
+  isError: true
+---
+send:
   control: restart
   requirements:
     duckdb:

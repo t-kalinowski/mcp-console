@@ -237,6 +237,13 @@ impl RequirementDelta {
     pub(in crate::worker_client) fn is_empty(&self) -> bool {
         !self.duckdb_changed && self.python_candidate.is_none() && !self.r_changed
     }
+
+    pub(super) fn is_live_duckdb_only(&self) -> bool {
+        self.duckdb_changed
+            && !self.restart_required
+            && self.python_candidate.is_none()
+            && !self.r_changed
+    }
 }
 
 pub(super) fn merge_r_requirements(

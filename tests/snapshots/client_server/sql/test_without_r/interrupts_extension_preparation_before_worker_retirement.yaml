@@ -12,8 +12,8 @@ result:
 ---
 send:
   python: >-
-    import sysconfig; site = sysconfig.get_paths()['purelib']; identity =
-    object(); identity_id = id(identity); print(site)
+    import os, sysconfig; site = sysconfig.get_paths()['purelib']; identity
+    = object(); identity_id = id(identity); pid = os.getpid(); print(site)
 result:
   content:
     - type: text
@@ -22,7 +22,6 @@ result:
   isError: false
 ---
 send:
-  control: restart
   requirements:
     duckdb:
       - fts
@@ -30,8 +29,49 @@ send:
 result:
   content:
     - type: text
-      text: "[DuckDB extension resolution failed with exit status: 130: ]"
+      text: "DuckDB extension resolution failed with exit status: 130: "
   isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
 ---
 send:
   control: interrupt
@@ -96,7 +136,9 @@ result:
   isError: false
 ---
 send:
-  python: assert id(identity) == identity_id; print('still live')
+  python: >-
+    assert id(identity) == identity_id and os.getpid() == pid; print('still
+    live')
 result:
   content:
     - type: text
