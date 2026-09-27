@@ -195,6 +195,11 @@ def test_resolver_uses_selected_developer_tools(binary: Path) -> Transcript:
         developer = Path(
             subprocess.check_output(["xcode-select", "-p"], text=True).strip()
         )
+        # Full Xcode has required frameworks beside Contents/Developer. Exercise
+        # that layout even when the host normally selects CommandLineTools.
+        bundles = sorted(Path("/Applications").glob("Xcode*.app/Contents/Developer"))
+        if bundles:
+            developer = bundles[0]
         venv = root / "python"
         subprocess.run(
             [str(Path(sys.executable).resolve()), "-m", "venv", "--without-pip", venv],
@@ -581,7 +586,7 @@ def test_python_manifest_reset_and_recording(binary: Path) -> TranscriptWithComp
             )
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("cc"))
 def test_real_build_hook_and_result_substitution(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory).resolve()
@@ -598,6 +603,7 @@ def test_real_build_hook_and_result_substitution(binary: Path) -> Transcript:
             .replace("@OUTSIDE@", str(outside))
             .replace("@HOST_CACHE@", str(host_cache / "escaped"))
             .replace("@SECRET@", str(secret))
+            .replace("@CC@", shutil.which("cc"))
         )
         with source_repository(root, program) as url:
             environment = dict(
@@ -627,6 +633,7 @@ def test_real_build_hook_and_result_substitution(binary: Path) -> Transcript:
                     == "denied"
                 ), evidence
                 assert "403" in evidence["network"], evidence
+                assert evidence["compiler"] == "native build succeeded", evidence
                 assert Path(evidence["working_directory"]).is_relative_to(
                     root / "cache/mcp-console/resolver/payload"
                 ), evidence

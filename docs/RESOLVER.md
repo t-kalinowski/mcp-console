@@ -54,7 +54,8 @@ ${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/resolver/
 ```
 
 The resolver has an explicit native read allowlist for system libraries, selected runtime installations, executable tools, and certificates.
-On macOS, it captures `DEVELOPER_DIR` or the stored system developer-directory selection and grants read access to that toolchain.
+On macOS, it captures `DEVELOPER_DIR` or the stored system developer-directory selection and grants read access to that toolchain, including the selected Xcode bundle and its system license receipt.
+Apple tool shims may report denied attempts to use their host lookup cache; those attempts do not receive extra filesystem permissions.
 It does not receive the worker's host-readable profile, workspace grants, home credentials, or host package caches.
 Its HOME and XDG directories, uv caches and installations, ir libraries, R/renv caches, Matplotlib cache, and native private temporary directory are beneath payload.
 Ordinary host caches are neither seeded nor mounted for reuse.

@@ -2,12 +2,15 @@
 
 from pathlib import Path
 import errno
+import os
+import subprocess
 import urllib.request
 import zipfile
 
 OUTSIDE = "@OUTSIDE@"
 HOST_CACHE = "@HOST_CACHE@"
 SECRET = "@SECRET@"
+CC = "@CC@"
 
 
 def build_wheel(
@@ -42,6 +45,16 @@ def build_wheel(
     else:
         evidence["network"] = "connected"
     evidence["working_directory"] = str(Path.cwd())
+    executable = Path.cwd() / "native-probe"
+    compiled = subprocess.run(
+        [CC, "-x", "c", "-", "-o", str(executable)],
+        input='#include <stdio.h>\nint main(void) { puts("native build succeeded"); }\n',
+        text=True,
+        capture_output=True,
+        env={**os.environ, "PATH": "/usr/bin:/bin"},
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    evidence["compiler"] = subprocess.check_output([executable], text=True).strip()
     wheel = "resolver_probe-1.0-py3-none-any.whl"
     # At interpreter exit, substitute both path-discovery and inspection results.
     # Readers must retain the original file descriptor rather than reopen it.

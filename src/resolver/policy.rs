@@ -137,7 +137,13 @@ impl Launch {
                     "DEVELOPER_DIR".into(),
                     developer.to_string_lossy().into_owned(),
                 );
-                readable.push(developer);
+                // xcodebuild loads shared frameworks beside Contents/Developer.
+                // Read the selected application bundle, or the standalone CLT.
+                let toolchain = developer
+                    .ancestors()
+                    .find(|path| path.extension() == Some(OsStr::new("app")))
+                    .unwrap_or(&developer);
+                readable.push(toolchain.to_owned());
             }
         }
         for (program, variable) in [
@@ -274,6 +280,10 @@ impl Launch {
         environment.insert("UV_NO_CONFIG".into(), "1".into());
         environment.insert("UV_NO_ENV_FILE".into(), "1".into());
         environment.insert("UV_NO_CACHE".into(), "0".into());
+        // xcrun's lookup cache is outside TMPDIR. Native permissions also deny
+        // cache attempts by Apple tool shims which ignore this xcrun setting.
+        #[cfg(target_os = "macos")]
+        environment.insert("xcrun_nocache".into(), "1".into());
         environment.insert("R_LIBS_USER".into(), "NULL".into());
         environment.insert("R_LIBS_SITE".into(), "NULL".into());
         environment.insert(
@@ -311,6 +321,7 @@ impl Launch {
             "/usr/sbin",
             "/usr/lib",
             "/usr/lib64",
+            "/usr/libexec",
             "/usr/share",
             "/usr/include",
             "/bin",
@@ -320,6 +331,7 @@ impl Launch {
             "/System",
             "/Library/Frameworks",
             "/Library/Developer/CommandLineTools",
+            "/Library/Preferences/com.apple.dt.Xcode.plist",
             "/opt/homebrew/bin",
             "/opt/homebrew/opt",
             "/opt/homebrew/lib",

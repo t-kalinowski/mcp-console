@@ -13,5 +13,6 @@ result:
       text: >
         {"outside": "denied", "host_cache": "denied", "secret": "denied",
         "network": "<urlopen error Tunnel connection failed: 403 Forbidden>",
-        "working_directory": "<source-build-directory>"}
+        "working_directory": "<source-build-directory>", "compiler": "native
+        build succeeded"}
   isError: false
