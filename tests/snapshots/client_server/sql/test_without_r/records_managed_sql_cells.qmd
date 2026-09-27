@@ -14,14 +14,11 @@ ir:
     - duckdb
 ---
 
-```{python}
-import numpy, pandas
-
-retained = 42
-retained
+```{sql}
+SELECT 42 AS recorded
 ```
 
 ```{python}
-retained
+sql_connection().execute("SELECT 1").fetchone()
 ```
 

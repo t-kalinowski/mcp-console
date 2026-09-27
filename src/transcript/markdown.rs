@@ -99,7 +99,13 @@ impl QuartoWriter {
                     .map(|requirement| (*requirement).to_string()),
             );
         }
-        if dynamic_resolution || python_preparation {
+        if python_preparation {
+            writer.python_requirements.extend(
+                crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
+        } else if dynamic_resolution {
             writer.python_requirements.extend(
                 crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
                     .iter()

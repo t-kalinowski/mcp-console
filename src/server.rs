@@ -324,7 +324,6 @@ impl ConsoleServer {
         let languages = if python_only {
             Languages {
                 r: false,
-                sql: false,
                 ..languages
             }
         } else {
@@ -420,7 +419,7 @@ impl ConsoleServer {
             }
         }
         if python_only {
-            python_only::configure(description, properties, python_preparation);
+            python_only::configure(description, properties, python_preparation, languages.sql);
         }
         if !dynamic_resolution && !python_preparation {
             let requirements = properties
@@ -484,9 +483,8 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
         if let Some(cell) = cell.as_ref()
             && !self.languages.enables(cell.language)
         {
-            if self.worker.python_only() && !matches!(cell.language, crate::cell::Language::Python)
-            {
-                return Err("R and SQL cells are unavailable in Python sessions without R".into());
+            if self.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
+                return Err("R cells are unavailable in Python sessions without R".into());
             }
             return Err(format!(
                 "`{}` cells are disabled by `{LANGUAGES_ENV}`",

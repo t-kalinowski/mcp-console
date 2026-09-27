@@ -73,7 +73,15 @@ impl Environment {
                 vec![]
             },
             python: if self.manages_python() {
-                crate::worker_protocol::default_python_requirement_manifest().packages
+                if self
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only)
+                {
+                    crate::worker_protocol::default_native_python_requirement_manifest().packages
+                } else {
+                    crate::worker_protocol::default_python_requirement_manifest().packages
+                }
             } else {
                 vec![]
             },

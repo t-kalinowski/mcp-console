@@ -12,7 +12,7 @@ struct Coordinator {
     writer: crate::sideband::Writer,
     r: Integration,
     python: crate::python::Runtime,
-    sql: Option<crate::sql::Bridge>,
+    sql: crate::sql::Bridge,
 }
 
 pub(crate) fn run() -> Result<(), Box<dyn Error>> {
@@ -40,7 +40,8 @@ fn run_session() -> Result<(), Box<dyn Error>> {
             core::initialize(reader, writer.clone())?;
             let r = Integration::new(None)?;
             let python = crate::python::Runtime::native(&selected, managed)?;
-            (r, python, None)
+            let sql = crate::sql::Bridge::native();
+            (r, python, sql)
         } else {
             let r_home = crate::local_runtime::r_home()?;
             #[cfg(target_os = "linux")]
@@ -50,7 +51,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
             core::initialize(reader, writer.clone())?;
             let r = Integration::new(Some(embedded_r::Runtime::initialize()?))?;
             let python = crate::python::Runtime::initialize()?;
-            let sql = Some(crate::sql::Bridge::initialize()?);
+            let sql = crate::sql::Bridge::initialize()?;
             (r, python, sql)
         };
     writer.send(&WorkerMessage::Ready)?;
@@ -209,7 +210,7 @@ fn evaluate_cell(
     cell: Cell,
     r: &Integration,
     python: &mut crate::python::Runtime,
-    sql: &mut Option<crate::sql::Bridge>,
+    sql: &mut crate::sql::Bridge,
 ) -> Result<(), String> {
     r.idle()?;
     if core::is_shutting_down() {
@@ -238,10 +239,7 @@ fn evaluate_cell(
         let result = match cell.language {
             Language::R => r.evaluate_r(cell.source),
             Language::Python => python.evaluate(&cell.source),
-            Language::Sql => sql
-                .as_mut()
-                .expect("SQL admission requires R")
-                .evaluate(&cell.source),
+            Language::Sql => sql.evaluate(&cell.source),
         };
         core::finish_cell();
         if graphics {

@@ -11,6 +11,7 @@ ir:
   python-packages:
     - numpy
     - pandas
+    - duckdb
     - more-itertools
     - py-yaml12
     - six

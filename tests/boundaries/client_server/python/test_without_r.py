@@ -144,7 +144,7 @@ def test_inspects_and_replaces_managed_requirements(
                 assert snapshot["runtime_requirements"] == {"r": [], "python": []}
                 return snapshot["requirements"]["python"]
 
-            assert declaration() == ["numpy", "pandas"]
+            assert declaration() == ["numpy", "pandas", "duckdb"]
             client.send(requirements={"action": "set", "python": ["six"]})
             assert declaration() == ["six"]
             client.send(python="import six; retained = 42; retained")
@@ -163,7 +163,7 @@ def test_inspects_and_replaces_managed_requirements(
             ]
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration() == ["numpy", "pandas"]
+            assert declaration() == ["numpy", "pandas", "duckdb"]
             client.send(python="import numpy, pandas; 42")
             assert last_result_text(client) == "42\n"
             return client.finish()[3:]
@@ -395,7 +395,8 @@ def test_prepares_managed_python_at_startup_and_restart(
             )
             assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
             schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
-            assert {"r", "sql"}.isdisjoint(schema["properties"])
+            assert "r" not in schema["properties"]
+            assert "sql" in schema["properties"]
             requirement_schema = schema["properties"]["requirements"]
             assert set(requirement_schema["properties"]) == {
                 "python",
@@ -522,7 +523,7 @@ def test_prepares_managed_python_at_startup_and_restart(
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         quarto = (session / "transcript.qmd").read_text()
         assert "  packages: []\n" in quarto
-        for package in ("numpy", "pandas", "py-yaml12", "more-itertools"):
+        for package in ("numpy", "pandas", "duckdb", "py-yaml12", "more-itertools"):
             assert f"    - {package}\n" in quarto
     return TranscriptWithCompanions(
         records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
@@ -685,7 +686,12 @@ def test_failed_managed_preparation_preserves_worker_and_input(
                 if event["event"] == "python_environment_accepted"
             ]
             assert len(accepted) == 1, accepted
-            assert set(accepted[0]["packages"]) == {"numpy", "pandas", "py-yaml12"}
+            assert set(accepted[0]["packages"]) == {
+                "numpy",
+                "pandas",
+                "duckdb",
+                "py-yaml12",
+            }
             return records
         finally:
             started.close()
@@ -862,11 +868,9 @@ def test_resolves_default_python_without_r(
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             schema = client.transcript[-1]["result"]["tools"][0]
-            assert {"r", "sql"}.isdisjoint(schema["inputSchema"]["properties"])
-            assert (
-                "without R" in schema["description"]
-                or "R and SQL" in schema["description"]
-            )
+            assert "r" not in schema["inputSchema"]["properties"]
+            assert "sql" in schema["inputSchema"]["properties"]
+            assert "without R" in schema["description"]
             client.send(
                 # fmt: python
                 python=code("""
@@ -911,7 +915,6 @@ def test_resolves_default_python_without_r(
             assert last_result_text(client) == "43\n", client.transcript[-1]
             for request in (
                 {"r": "1"},
-                {"sql": "SELECT 1"},
                 {"requirements": {"python": ["six"]}},
                 {"requirements": {"r": ["cli"]}},
                 {"requirements": {"duckdb": ["json"]}},
@@ -1800,6 +1803,7 @@ def test_records_managed_python_defaults(
             """  python-packages:
     - numpy
     - pandas
+    - duckdb
 """
             in quarto
         ), quarto

@@ -102,13 +102,14 @@ impl Runtime {
                     crate::local_runtime::IMPORT_DISABLED
                 }),
             },
-            false,
+            true,
         )
         .and_then(|configured| {
             if !configured {
                 return Err("native Python setup did not complete".into());
             }
             super::library::configure_native_environment(configuration)?;
+            super::library::configure_native_sql()?;
             if !super::library::disable_matplotlib_show()? {
                 return Err("Python plotting setup did not complete".into());
             }
