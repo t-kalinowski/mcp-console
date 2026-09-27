@@ -380,6 +380,26 @@ def test_cold_r_python_and_duckdb_storage(binary: Path) -> Transcript:
                 stdin="must not be queued\n",
             )
             assert client.transcript[-1]["result"].get("isError"), client.transcript[-1]
+            error = last_result_text(client)
+            progress, diagnostic_start, diagnostic = error.partition("Error: \n")
+            prefix = "[R package resolution failed with exit status: 1: "
+            assert progress.startswith(prefix) and "Resolving" in progress, error
+            assert "Could not solve package dependencies" in diagnostic, error
+            assert "mcpconsolenosuchpackage" in diagnostic, error
+            # ir forces pak's progress display on. Its cache messages, elapsed
+            # times and animation ticks vary; preserve the complete error below.
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                prefix
+                + "<cache-dependent installer progress>\n"
+                + diagnostic_start
+                + diagnostic
+            )
+            client.transcript[-1]["transcript_normalization"] = {
+                "target": "result.content[0].text",
+                "replacements": {
+                    "cache_dependent_installer_progress": "<cache-dependent installer progress>"
+                },
+            }
             client.send(python="assert id(retained) == retained_id; print('preserved')")
             assert last_result_text(client) == "preserved\n", client.transcript[-1]
             for host_cache in host_caches:

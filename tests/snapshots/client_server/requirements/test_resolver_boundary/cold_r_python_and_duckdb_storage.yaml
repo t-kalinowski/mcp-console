@@ -54,8 +54,49 @@ send:
 result:
   content:
     - type: text
-      text: "[R package resolution failed with exit status: 1: Installed 1 package in 1ms\n! Optional package `pillar` is not available for pak.\n  Use `pak::pak_install_extra()` to install optional packages.\n  Use `options(pak.no_extra_messages = TRUE)` to suppress this message.\n\nℹ Loading metadata database\n✔ Loading metadata database ... done\n\n\r⸨             ⸩ Found  12  deps for  0/12  pkgs [⠋] Resolving standard (CRAN/Bi…\n⸨             ⸩ Found  12  deps for  0/12  pkgs [⠙] Resolving standard (CRAN/Bi…\nError: \n! error in pak subprocess\nCaused by error: \n! Could not solve package dependencies:\n* DBI: dependency conflict\n* arrow: dependency conflict\n* duckdb: dependency conflict\n* jsonlite: dependency conflict\n* mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.\n* nanoarrow: dependency conflict\n* pillar: dependency conflict\n* praise: dependency conflict\n* reticulate: dependency conflict\n* tibble: dependency conflict\n* tidyverse: dependency conflict\n* utf8: dependency conflict\n---\nBacktrace:\n1. global ir_resolve_main()\n2. global ir_resolve_refs(refs_in)\n3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)\n4. pak:::remote(function(...) { …\n5. err$throw(res$error)\n---\nSubprocess backtrace:\n1. base::withCallingHandlers(cli_message = function(msg) { …\n2. get(\"pkg_deps_internal\", asNamespace(\"pak\"))(...)\n3. pak:::pkg_deps_internal2(pkg, upgrade, dependencies)\n4. deps$stop_for_solution_error()\n5. private$plan$stop_for_solve_error()\n6. pkgdepends:::pkgplan_stop_for_solve_error(self, private)\n7. base::throw(new_error(\"Could not solve package dependencies:\\n\", msg, …\n8. | base::signalCondition(cond)\n9. global (function (e) …\nExecution halted\nir: dependency resolution failed]"
+      text: |-
+        [R package resolution failed with exit status: 1: <cache-dependent installer progress>
+        Error: 
+        ! error in pak subprocess
+        Caused by error: 
+        ! Could not solve package dependencies:
+        * DBI: dependency conflict
+        * arrow: dependency conflict
+        * duckdb: dependency conflict
+        * jsonlite: dependency conflict
+        * mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.
+        * nanoarrow: dependency conflict
+        * pillar: dependency conflict
+        * praise: dependency conflict
+        * reticulate: dependency conflict
+        * tibble: dependency conflict
+        * tidyverse: dependency conflict
+        * utf8: dependency conflict
+        ---
+        Backtrace:
+        1. global ir_resolve_main()
+        2. global ir_resolve_refs(refs_in)
+        3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)
+        4. pak:::remote(function(...) { …
+        5. err$throw(res$error)
+        ---
+        Subprocess backtrace:
+        1. base::withCallingHandlers(cli_message = function(msg) { …
+        2. get("pkg_deps_internal", asNamespace("pak"))(...)
+        3. pak:::pkg_deps_internal2(pkg, upgrade, dependencies)
+        4. deps$stop_for_solution_error()
+        5. private$plan$stop_for_solve_error()
+        6. pkgdepends:::pkgplan_stop_for_solve_error(self, private)
+        7. base::throw(new_error("Could not solve package dependencies:\n", msg, …
+        8. | base::signalCondition(cond)
+        9. global (function (e) …
+        Execution halted
+        ir: dependency resolution failed]
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  replacements:
+    cache_dependent_installer_progress: <cache-dependent installer progress>
 ---
 send:
   python: assert id(retained) == retained_id; print('preserved')
