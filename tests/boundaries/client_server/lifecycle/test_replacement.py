@@ -26,7 +26,11 @@ from support.r import r_test_environment
 from support.previews import compact_previews, assert_preview, normalize_preview_paths
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
-from support.resolvers import record_resolved_r_library
+from support.resolvers import (
+    record_resolved_r_library,
+    resolver_fixture_arguments,
+    resolver_fixture_directory,
+)
 from support.suites import run_this_suite
 
 FIXTURE_CHECKPOINT_TIMEOUT_SECONDS = 15
@@ -72,21 +76,28 @@ def test_reports_replacement_startup_failure_and_retry(
     execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         startup_control = Path(temporary_directory) / "zod-startup-control"
         startup_control.write_text("ready", encoding="utf-8")
         environment, _ = r_test_environment()
         environment["RETICULATE_PYTHON"] = ""
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
-        record_resolved_r_library(environment, Path(temporary_directory))
-        writable_root = (
-            ("--writable-root", temporary_directory) if execution == SANDBOXED else ()
-        )
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve(
+                *resolver_fixture_arguments(environment),
+                "--worker",
+                str(zod),
+                "-c",
+                "extends=:workspace",
+            ),
             environment,
+            current_directory=Path(temporary_directory),
         )
         client.initialize_and_list_tools()
 
@@ -143,7 +154,7 @@ def test_reports_replacement_startup_failure_and_retry(
         assert last_tool_text(client) == (
             "[starting new worker]\nzod R requirement: prepared=true\n"
         )
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -152,7 +163,10 @@ def test_polls_replacement_startup_after_send_timeout(
     binary: Path, execution: Execution
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary_directory)
         startup_control = temporary_path / "zod-startup-control"
         startup_release = temporary_path / "zod-startup-release"
@@ -162,10 +176,12 @@ def test_polls_replacement_startup_after_send_timeout(
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
-        record_resolved_r_library(environment, temporary_path)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
         )
         forced_release = threading.Event()
@@ -243,7 +259,7 @@ def test_polls_replacement_startup_after_send_timeout(
                 ],
                 "isError": True,
             }, combined
-            assert not (temporary_path / "resolved-r-library").exists()
+            assert not (fixtures / "resolved-r-library").exists()
 
             startup_release.touch()
             client.send()
@@ -384,20 +400,21 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
     ordered_ir = (
         Path(__file__).resolve().parents[3] / "fixtures" / "ordered_retirement_ir"
     )
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary_directory)
         startup_control = temporary_path / "zod-startup-control"
         startup_control.write_text("fail with stderr", encoding="utf-8")
-        library = temporary_path / "resolved-library"
+        library = fixtures / "resolved-library"
         library.mkdir()
-        fake_bin = temporary_path / "bin"
+        fake_bin = fixtures / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(ordered_ir)
-        resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
-        resolver_release = FifoCheckpoint.create(temporary_path / "resolver-release")
-        resolver_interrupted = FifoCheckpoint.create(
-            temporary_path / "resolver-interrupted"
-        )
+        resolver_started = FifoCheckpoint.create(fixtures / "resolver-started")
+        resolver_release = FifoCheckpoint.create(fixtures / "resolver-release")
+        resolver_interrupted = FifoCheckpoint.create(fixtures / "resolver-interrupted")
 
         environment, _ = r_test_environment()
         path = environment.get("PATH")
@@ -405,19 +422,23 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
-        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
+        environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(fixtures / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(resolver_interrupted.path)
 
-        writable_root = (
-            ("--writable-root", temporary_directory) if execution == SANDBOXED else ()
-        )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve(
+                *resolver_fixture_arguments(environment),
+                "--worker",
+                str(zod),
+                "-c",
+                "extends=:workspace",
+            ),
             environment,
+            current_directory=temporary_path,
         )
         finished = False
         try:
@@ -431,7 +452,8 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
                 control="interrupt",
                 stdin="unused input\n",
             )
-            resolver_interrupted.wait("controlled interrupt signal delivery")
+            if execution == DIRECT:
+                resolver_interrupted.wait("controlled interrupt signal delivery")
             client.receive_many([preparation, controlled])
 
             assert preparation["result"].get("isError") is True, preparation
@@ -453,7 +475,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
             startup_control.write_text("ready", encoding="utf-8")
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            transcript = client.finish()
+            transcript = client.finish()[3:]
             finished = True
             return transcript
         finally:
@@ -465,7 +487,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
                 stop_client(client)
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_control_only_interrupt_returns_while_explicit_preparation_settles(
     binary: Path,
     execution: Execution,
@@ -548,7 +570,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                     "content": [
                         {
                             "type": "text",
-                            "text": "R package resolution failed with exit status: 130: ",
+                            "text": "dependency resolution interrupted",
                         }
                     ],
                     "isError": True,

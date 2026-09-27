@@ -1,6 +1,7 @@
 //! Bounded ordered text projection, independent of raw-file retention.
 
 use super::{Content, utf8_prefix_length};
+use crate::text_preview::TextPreview as Control;
 
 /// Complete rendered tool-result text, including all Console notices.
 pub(crate) const TEXT_BYTES: usize = 8 * 1024;
@@ -99,7 +100,7 @@ impl Preview {
     }
 
     pub(super) fn notice(&mut self, text: String) {
-        self.control(Control::new(text));
+        self.control(Control::new(text, TEXT_BYTES));
     }
 
     fn control(&mut self, mut control: Control) {
@@ -531,86 +532,4 @@ pub(super) fn suffix_start(text: &str, limit: usize) -> usize {
         start += 1;
     }
     start
-}
-
-/// Retain the two ends of dynamic control details without losing omission
-/// accounting when an unclaimed response is composed and bounded again.
-#[derive(Clone, Default)]
-pub(super) struct Control {
-    head: String,
-    tail: String,
-    omitted: u64,
-}
-
-impl Control {
-    fn new(text: String) -> Self {
-        let mut control = Self {
-            head: text,
-            ..Self::default()
-        };
-        control.trim(TEXT_BYTES);
-        control
-    }
-
-    fn bytes(&self) -> u64 {
-        self.head.len() as u64 + self.tail.len() as u64 + self.omitted
-    }
-
-    fn marker(&self) -> String {
-        if self.omitted == 0 {
-            String::new()
-        } else {
-            format!(
-                "[… omitted {} rendered UTF-8 bytes; not retained …]",
-                self.omitted
-            )
-        }
-    }
-
-    fn render(&self) -> String {
-        format!("{}{}{}", self.head, self.marker(), self.tail)
-    }
-
-    fn len(&self) -> usize {
-        self.head.len() + self.marker().len() + self.tail.len()
-    }
-
-    fn ends_with_newline(&self) -> bool {
-        if self.omitted == 0 {
-            self.head.ends_with('\n')
-        } else {
-            self.tail.ends_with('\n')
-        }
-    }
-
-    fn trim(&mut self, limit: usize) -> bool {
-        if self.len() <= limit {
-            return true;
-        }
-        let total = self.bytes();
-        let mut omitted = total;
-        loop {
-            let marker = format!("[… omitted {omitted} rendered UTF-8 bytes; not retained …]");
-            if marker.len() > limit {
-                return false;
-            }
-            let budget = limit - marker.len();
-            let head = utf8_prefix_length(&self.head, budget / 2);
-            let tail_text = if self.omitted == 0 {
-                &self.head
-            } else {
-                &self.tail
-            };
-            let tail = suffix_start(tail_text, budget - budget / 2);
-            let next = total - head as u64 - (tail_text.len() - tail) as u64;
-            if next == omitted {
-                self.tail = tail_text[tail..].to_owned();
-                // Drop the original allocation as well as its visible middle.
-                self.head = self.head[..head].to_owned();
-                self.omitted = omitted;
-                return true;
-            }
-            omitted = next;
-        }
-    }
 }

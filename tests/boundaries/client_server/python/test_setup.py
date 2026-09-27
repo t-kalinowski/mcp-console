@@ -35,13 +35,12 @@ def test_preserves_queued_inspection_interrupt(
         probe = build_interposer(
             Path(temporary_directory), "queued_inspection_interrupt"
         )
-        serve = (
-            execution.serve("--writable-root", temporary_directory)
-            if execution == SANDBOXED
-            else execution.serve()
-        )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with McpClient(
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
+        ) as client:
+            client.initialize()
             client.send(
                 # fmt: r
                 r=code(f"""
@@ -120,13 +119,12 @@ def test_cancels_native_inspection_and_retries(
         release = FifoCheckpoint.create(site / "inspection-release")
         pid = None
         try:
-            serve = (
-                execution.serve("--writable-root", temporary_directory)
-                if execution == SANDBOXED
-                else execution.serve()
-            )
-            with McpClient(binary, serve) as client:
-                client.initialize_and_list_tools()
+            with McpClient(
+                binary,
+                execution.serve("-c", 'extends=":workspace"'),
+                current_directory=Path(temporary_directory),
+            ) as client:
+                client.initialize()
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -297,13 +295,12 @@ def test_console_configures_selected_python(
                 check=True,
                 capture_output=True,
             )
-            serve = (
-                execution.serve("--writable-root", temporary_directory)
-                if execution == SANDBOXED
-                else execution.serve()
-            )
-            with McpClient(binary, serve) as client:
-                client.initialize_and_list_tools()
+            with McpClient(
+                binary,
+                execution.serve("-c", 'extends=":workspace"'),
+                current_directory=Path(temporary_directory),
+            ) as client:
+                client.initialize()
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -379,13 +376,12 @@ def test_python_first_initializes_before_reticulate_attaches(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
-        serve = (
-            execution.serve("--writable-root", temporary_directory)
-            if execution == SANDBOXED
-            else execution.serve()
-        )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with McpClient(
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
+        ) as client:
+            client.initialize()
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -467,13 +463,12 @@ def test_r_first_initializes_before_reticulate_attaches(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
-        serve = (
-            execution.serve("--writable-root", temporary_directory)
-            if execution == SANDBOXED
-            else execution.serve()
-        )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with McpClient(
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
+        ) as client:
+            client.initialize()
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -550,13 +545,12 @@ def test_retries_attachment_without_reinitializing_python(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
-        serve = (
-            execution.serve("--writable-root", temporary_directory)
-            if execution == SANDBOXED
-            else execution.serve()
-        )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with McpClient(
+            binary,
+            execution.serve("-c", 'extends=":workspace"'),
+            current_directory=Path(temporary_directory),
+        ) as client:
+            client.initialize()
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})

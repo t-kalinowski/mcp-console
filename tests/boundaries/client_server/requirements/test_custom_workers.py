@@ -16,11 +16,16 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.events import Events
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import capture_process_identity, kill_processes
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
-from support.resolvers import record_resolved_r_library
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.resolvers import (
+    record_resolved_r_library,
+    resolver_fixture_arguments,
+    resolver_fixture_directory,
+)
 from support.suites import run_this_suite
 
 PNG_1X1 = (
@@ -108,17 +113,20 @@ def standalone_preparation(
         / "scripted_relay.py"
     )
     ir = Path(__file__).resolve().parents[3] / "fixtures" / "ordered_retirement_ir"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary = Path(temporary_directory)
-        library = temporary / "standalone-candidate"
+        library = fixtures / "standalone-candidate"
         library.mkdir()
-        fake_bin = temporary / "bin"
+        fake_bin = fixtures / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(ir)
-        resolver_started = FifoCheckpoint.create(temporary / "resolver-started")
-        resolver_release = FifoCheckpoint.create(temporary / "resolver-release")
+        resolver_started = FifoCheckpoint.create(fixtures / "resolver-started")
+        resolver_release = FifoCheckpoint.create(fixtures / "resolver-release")
         worker_started = temporary / "zod-started"
-        resolver_counter = temporary / "ir-counter"
+        resolver_counter = fixtures / "ir-counter"
         environment, _ = r_test_environment()
         path = environment.get("PATH")
         assert path is not None, "PATH is required"
@@ -132,7 +140,13 @@ def standalone_preparation(
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), "--relay", str(relay)),
+            execution.serve(
+                *resolver_fixture_arguments(environment),
+                "--worker",
+                str(zod),
+                "--relay",
+                str(relay),
+            ),
             environment,
         )
         finished = False
@@ -296,8 +310,7 @@ def test_custom_worker_keeps_first_r_resolver_selection(
     binary: Path, execution: Execution
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         first, second = root / "first", root / "second"
         first.mkdir()
         second.mkdir()
@@ -311,7 +324,13 @@ def test_custom_worker_keeps_first_r_resolver_selection(
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
         unexpected = root / "unexpected-ir"
         environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
-        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client = McpClient(
+            binary,
+            execution.serve(
+                "--worker", str(zod), *resolver_fixture_arguments(environment)
+            ),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["praise"]})
         assert last_tool_text(client) == "[prepared]", client.transcript[-1]
@@ -332,8 +351,7 @@ def test_custom_worker_keeps_selection_after_failed_first_manifest(
     binary: Path, execution: Execution
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
         first, second = root / "first", root / "second"
         first.mkdir()
         second.mkdir()
@@ -348,7 +366,13 @@ def test_custom_worker_keeps_selection_after_failed_first_manifest(
         environment["MCP_CONSOLE_TEST_IR_FAIL_ONCE"] = str(root / "first-failed")
         unexpected = root / "unexpected-ir"
         environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
-        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client = McpClient(
+            binary,
+            execution.serve(
+                "--worker", str(zod), *resolver_fixture_arguments(environment)
+            ),
+            environment,
+        )
         client.initialize_and_list_tools()
         failed = client.send(requirements={"r": ["praise"]})
         assert failed["isError"] is True, failed
@@ -367,8 +391,8 @@ def test_custom_worker_keeps_selection_after_failed_first_manifest(
         return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@executions(DIRECT)
+@requires(NATIVE_FIXTURES)
 def test_interrupt_after_local_resolver_exit_rejects_success(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -378,8 +402,8 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
         / "finished_ir_with_open_stdout"
     )
     zod = fixture.with_name("zod")
-    with tempfile.TemporaryDirectory() as temporary, Events() as exits:
-        root = Path(temporary)
+    with resolver_fixture_directory(binary, execution) as root:
+        interposer = build_interposer(root, "resolver_exit_interposer")
         fake_bin = root / "bin"
         fake_bin.mkdir()
         (fake_bin / "ir").symlink_to(fixture)
@@ -388,6 +412,8 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
         started = FifoCheckpoint.create(root / "ir-started")
         ir_release = FifoCheckpoint.create(root / "ir-release")
         holder_release = FifoCheckpoint.create(root / "holder-release")
+        exited = FifoCheckpoint.create(root / "exit-started")
+        exit_release = FifoCheckpoint.create(root / "exit-release")
         environment, _ = r_test_environment()
         environment["PATH"] = os.pathsep.join((str(fake_bin), environment["PATH"]))
         environment.update(
@@ -398,29 +424,47 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
                 "MCP_CONSOLE_TEST_IR_STARTED": str(started.path),
                 "MCP_CONSOLE_TEST_IR_RELEASE": str(ir_release.path),
                 "MCP_CONSOLE_TEST_IR_HOLDER_RELEASE": str(holder_release.path),
+                "MCP_CONSOLE_TEST_EXIT_STARTED": str(exited.path),
+                "MCP_CONSOLE_TEST_EXIT_RELEASE": str(exit_release.path),
             }
         )
-        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client = McpClient(
+            binary,
+            execution.serve(
+                *resolver_fixture_arguments(environment),
+                "-c",
+                "resolver.environment."
+                + LOADER_VARIABLE
+                + "="
+                + json.dumps(str(interposer)),
+                "--worker",
+                str(zod),
+            ),
+            environment,
+        )
         holder_identity = None
         try:
             client.initialize_and_list_tools()
             pending = client.start_send(requirements={"r": ["praise"]})
             started.wait("resolver output retained after its child exits")
-            ir_pid = int((root / "ir-pid").read_text())
             holder_identity = capture_process_identity(
                 int((root / "holder-pid").read_text())
             )
-            exits.watch_process(ir_pid)
             ir_release.release()
-            assert ir_pid in exits.wait(10), "resolver child did not exit"
+            # Hold exit publication after the actual installer has exited.
+            # Native mode retires this whole workload; the direct coordinator
+            # instead accepts SIGINT and must reject the otherwise valid result.
+            exited.wait("installer exited before resolver completion")
 
             client.send(control="interrupt", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
             holder_release.release()
+            exit_release.release()
             client.receive(pending)
             assert pending["result"]["isError"] is True, pending
             assert (
-                "local resolver interrupted" in pending["result"]["content"][0]["text"]
+                "dependency resolution interrupted"
+                == pending["result"]["content"][0]["text"]
             )
             state = client.send(requirements={"action": "get"})["structuredContent"]
             assert state["requirements"]["r"] == [], state
@@ -428,12 +472,15 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
         finally:
             ir_release.release()
             holder_release.release()
+            exit_release.release()
             stop_client(client)
             if holder_identity is not None:
                 kill_processes((holder_identity,))
             started.close()
             ir_release.close()
             holder_release.close()
+            exited.close()
+            exit_release.close()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -444,7 +491,10 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary)
         isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
@@ -452,10 +502,12 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
         environment["TMPDIR"] = temporary
-        record_resolved_r_library(environment, temporary_path)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
         )
         client.initialize_and_list_tools()
@@ -587,7 +639,10 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary)
         isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
@@ -595,10 +650,12 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
         environment["TMPDIR"] = temporary
-        record_resolved_r_library(environment, temporary_path)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
         )
         client.initialize_and_list_tools()
@@ -630,17 +687,22 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary)
         isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        record_resolved_r_library(environment, temporary_path)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
         )
         client.initialize_and_list_tools()
@@ -663,15 +725,20 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary)
-        failure = temporary_path / "fail-r-resolution"
+        failure = fixtures / "fail-r-resolution"
         environment["TMPDIR"] = temporary
         environment["MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE"] = str(failure)
-        record_resolved_r_library(environment, temporary_path)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
         )
         client.initialize_and_list_tools()
@@ -774,17 +841,22 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixtures,
+    ):
         temporary_path = Path(temporary)
         isolated_library = temporary_path / "isolated-library"
         isolated_library.mkdir()
         environment["R_LIBS"] = str(isolated_library)
         environment["R_LIBS_SITE"] = str(isolated_library)
         environment["R_LIBS_USER"] = str(isolated_library)
-        record_resolved_r_library(environment, temporary_path)
+        record_resolved_r_library(environment, fixtures)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                *resolver_fixture_arguments(environment), "--worker", str(zod)
+            ),
             environment,
         )
         client.initialize_and_list_tools()

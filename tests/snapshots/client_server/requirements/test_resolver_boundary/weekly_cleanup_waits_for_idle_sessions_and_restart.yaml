@@ -1,0 +1,58 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-only.yaml
+---
+send:
+  python: |
+    import errno
+    from pathlib import Path
+    for path in ['<fixture>/cache/mcp-console/resolver/payload/retained-payload', '<fixture>/cache/mcp-console/resolver/control/metadata.json', '<console-executable>']:
+        try:
+            with Path(path).open("r+b"):
+                pass
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS), error
+            print("write denied")
+        else:
+            raise AssertionError("protected file was writable")
+result:
+  content:
+    - type: text
+      text: |
+        write denied
+        write denied
+        write denied
+  isError: false
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-only.yaml
+---
+send:
+  python: retained = 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+  python: print('restarted')
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        restarted
+        [done]
+  isError: false
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-only.yaml
+---
+send:
+  python: print('fresh payload')
+result:
+  content:
+    - type: text
+      text: |
+        fresh payload
+  isError: false

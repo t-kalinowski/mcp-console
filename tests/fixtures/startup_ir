@@ -27,10 +27,13 @@ if gated and (claim := os.environ.get("MCP_CONSOLE_TEST_STARTUP_CLAIM")):
         os.close(descriptor)
 if gated:
     signal.signal(signal.SIGINT, lambda signum, _frame: sys.exit(128 + signum))
+    if path := os.environ.get("MCP_CONSOLE_TEST_STARTUP_LIFETIME"):
+        lifetime = os.open(path, os.O_WRONLY)
+        os.set_inheritable(lifetime, True)
     descendant = os.fork()
     if descendant == 0:
-        identity = Path(os.environ["MCP_CONSOLE_TEST_STARTUP_IDENTITY"])
-        identity.write_text(f"{os.getppid()} {os.getpid()}\n", encoding="utf-8")
+        if path := os.environ.get("MCP_CONSOLE_TEST_STARTUP_IDENTITY"):
+            Path(path).write_text(f"{os.getppid()} {os.getpid()}\n", encoding="utf-8")
         with open(
             os.environ["MCP_CONSOLE_TEST_STARTUP_RELEASE"], "rb", buffering=0
         ) as gate:

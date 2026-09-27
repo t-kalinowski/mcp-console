@@ -55,7 +55,6 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        roots = ("--writable-root", temporary) if execution == SANDBOXED else ()
         with (
             closing(FifoCheckpoint.create(directory / "partial-release")) as release,
             closing(
@@ -64,11 +63,12 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
             McpClient(
                 binary,
                 execution.serve(
+                    "-c",
+                    'extends=":workspace"',
                     "--worker",
                     str(fixtures / "zod"),
                     "--relay",
                     str(fixtures / "server_relay/scripted_relay.py"),
-                    *roots,
                 ),
                 {
                     **os.environ,
@@ -80,7 +80,7 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
             ) as client,
         ):
             try:
-                client.initialize_and_list_tools()
+                client.initialize()
                 running = "\n[running; poll with an empty send]"
                 assert client.send(r="42", timeout_ms=0)["content"] == [
                     {"type": "text", "text": running}

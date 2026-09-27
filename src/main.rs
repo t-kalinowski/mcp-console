@@ -43,6 +43,7 @@ mod sql;
 mod ssh;
 mod target_launch;
 mod target_session;
+mod text_preview;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -70,7 +71,11 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::Resolve => match resolver::run() {
+        cli::Command::Resolve => match resolver::broker::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
+        cli::Command::ResolverWorkload => match resolver::workload::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -114,7 +119,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SshPrepare => match ssh::preparation::run() {
+        cli::Command::SshPrepare => match resolver::preparation::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -154,6 +159,7 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        resolver,
         source,
         policy,
         target,
@@ -176,7 +182,9 @@ fn run_server(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings, target));
+    let result = runtime.block_on(server::run(
+        worker, relay, no_sandbox, settings, target, resolver,
+    ));
     // `server::run` has already joined service and worker shutdown. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.

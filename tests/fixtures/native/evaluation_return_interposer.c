@@ -31,17 +31,9 @@ static void await_release(const char *name);
 static void select_worker_mutex(uintptr_t mutex);
 
 __attribute__((constructor)) static void initialize(void) {
-    const char *owner = getenv("MCP_CONSOLE_TEST_COMPLETION_SERVER");
-    if (owner == NULL) {
-        server_pid = getpid();
-        char pid[32];
-        snprintf(pid, sizeof(pid), "%ld", (long)server_pid);
-        setenv("MCP_CONSOLE_TEST_COMPLETION_SERVER", pid, 1);
-    } else {
-        server_pid = (pid_t)strtol(owner, NULL, 10);
-        unsetenv("DYLD_INSERT_LIBRARIES");
-        unsetenv("LD_PRELOAD");
-    }
+    server_pid = getpid();
+    unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
 #ifdef __linux__
     native_read = dlsym(RTLD_NEXT, "read");
     native_syscall = dlsym(RTLD_NEXT, "syscall");

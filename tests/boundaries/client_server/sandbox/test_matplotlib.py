@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import json
 import plistlib
 import sys
 import tempfile
@@ -46,7 +47,7 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
                 test "$#" -eq 2
                 test "$1" = "-xml"
                 test "$2" = "SPFontsDataType"
-                : > "$TMPDIR/mcp-console-font-discovery"
+                : > "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_MARKER"
                 /bin/cat "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"
                 """),
             encoding="utf-8",
@@ -73,29 +74,48 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(profiler_output)
+        payload = temporary / "host-cache/mcp-console/resolver/payload"
+        discovery = payload / "matplotlib/mcp-console-font-discovery"
+        environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_MARKER"] = str(discovery)
         environment["PATH"] = os.pathsep.join((str(probe.parent), path))
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPL_IGNORE_SYSTEM_FONTS", None)
         client = McpClient(
             binary,
-            SANDBOXED.serve(),
+            SANDBOXED.serve(
+                "-c",
+                "resolver.environment="
+                + json.dumps(
+                    {
+                        name: environment[name]
+                        for name in (
+                            "FONTCONFIG_FILE",
+                            "MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT",
+                            "MCP_CONSOLE_TEST_SYSTEM_PROFILER_MARKER",
+                        )
+                    }
+                ),
+                "-c",
+                "resolver.readable_roots="
+                + json.dumps(
+                    [
+                        str(probe.parent),
+                        str(profiler_output),
+                        str(fontconfig),
+                    ]
+                ),
+            ),
             environment,
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
-        host_discovery = temporary / "mcp-console-font-discovery"
-        assert host_discovery.is_file()
-        persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
+        client.send(requirements={"python": ["matplotlib"]})
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
+        assert discovery.is_file()
+        persistent_caches = list((payload / "matplotlib").glob("fontlist-v*.json"))
         assert len(persistent_caches) == 1, persistent_caches
         persistent_cache_bytes = persistent_caches[0].read_bytes()
-        host_discovery.unlink()
+        discovery.unlink()
 
         client.send(
             # fmt: python
@@ -181,11 +201,7 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
         assert len(persistent_caches) == 1, persistent_caches
         assert persistent_caches[0].read_bytes() == persistent_cache_bytes
         assert not (persistent_caches[0].parent / "fontlist-v999.json").exists()
-        assert not list(
-            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
-                "fontlist-v*.json"
-            )
-        )
+        assert not list(host_matplotlib.glob("fontlist-v*.json"))
         return transcript
 
 
@@ -250,7 +266,12 @@ def test_explicit_matplotlib_config_is_read_only(binary: Path) -> Transcript:
         transcript = client.finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
-        caches = list(inherited.glob("fontlist-v*.json"))
+        assert not list(inherited.glob("fontlist-v*.json"))
+        caches = list(
+            (temporary / "host-cache/mcp-console/resolver/payload/matplotlib").glob(
+                "fontlist-v*.json"
+            )
+        )
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(

@@ -5,7 +5,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub(crate) use crate::resolver::preparation;
+use crate::resolver::preparation;
 use crate::target_launch::{self, Bootstrap, Protocol, Retirement, VERSION};
 
 pub(crate) const PROTOCOL: Protocol = Protocol("SSH");
@@ -16,7 +16,7 @@ pub(crate) struct Session {
     roots: Vec<PathBuf>,
     pub(crate) blocked: Arc<Mutex<Option<String>>>,
     pub preparation: Option<preparation::Preparation>,
-    discovery: Option<preparation::Discovery>,
+    discovery: Option<Box<preparation::Discovery>>,
 }
 
 impl Session {
@@ -88,7 +88,7 @@ impl Session {
                 .discovery
                 .clone()
                 .map(|discovery| preparation::WorkerEnvironment {
-                    discovery,
+                    discovery: *discovery,
                     r: managed_r.cloned(),
                     python: python.cloned(),
                 }),
@@ -99,13 +99,20 @@ impl Session {
     pub fn discover(
         &mut self,
         policy: &crate::settings::SandboxSettings,
+        no_sandbox: bool,
+        resolver_settings: crate::resolver::broker::Settings,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<preparation::Discovery, String> {
         let selections = preparation::Selections::from_policy(policy);
-        let (preparation, discovery) =
-            preparation::Preparation::open(self, selections, on_started)?;
+        let (preparation, discovery) = preparation::Preparation::open(
+            self,
+            selections,
+            no_sandbox,
+            resolver_settings,
+            on_started,
+        )?;
         self.preparation = Some(preparation);
-        self.discovery = Some(discovery.clone());
+        self.discovery = Some(Box::new(discovery.clone()));
         Ok(discovery)
     }
 

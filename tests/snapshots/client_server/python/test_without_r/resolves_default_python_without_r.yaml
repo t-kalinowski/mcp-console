@@ -1,5 +1,5 @@
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as python-managed MCP initialization for this execution mode
 ---
 send:
   python: |
@@ -95,8 +95,8 @@ result:
   content:
     - type: text
       text: >-
-        live requirements are unavailable in Python sessions without R; install
-        packages before starting the session
+        live Python requirements are unavailable without R; use
+        requirements.python with control: restart to prepare a new environment
   isError: true
 ---
 send:
@@ -116,8 +116,7 @@ result:
   content:
     - type: text
       text: >-
-        live requirements are unavailable in Python sessions without R; install
-        packages before starting the session
+        R and DuckDB requirements are unavailable in Python sessions without R
   isError: true
 ---
 send:
@@ -137,8 +136,7 @@ result:
   content:
     - type: text
       text: >-
-        live requirements are unavailable in Python sessions without R; install
-        packages before starting the session
+        R and DuckDB requirements are unavailable in Python sessions without R
   isError: true
 ---
 send:
@@ -160,7 +158,7 @@ result:
           File "<mcp-console:python:e8>", line 1, in <module>
         ModuleNotFoundError: No module named 'mcp_console_package_that_does_not_exist'.
 
-        automatic package installation is unavailable in Python sessions without R; install packages before starting the session
+        automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart
   isError: false
 ---
 send:

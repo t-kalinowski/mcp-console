@@ -11,7 +11,7 @@ mode = (root / "inspection-mode").read_text(encoding="utf-8").strip()
 
 if mode.startswith("inspection-"):
     inspecting = len(sys.argv) == 2 and Path(sys.argv[1]).name.startswith(
-        "mcp-console-python-inspection-"
+        "mcp-console-result-"
     )
     mode = mode.removeprefix("inspection-") if inspecting else "quiet"
     if inspecting:

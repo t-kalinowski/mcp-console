@@ -16,6 +16,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
+from support.resolvers import resolver_fixture_arguments, resolver_fixture_directory
 from support.suites import run_this_suite
 
 
@@ -428,15 +429,18 @@ def test_uses_200_column_default_after_r_initializes_python(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_prints_requirements_with_host_uv_cache(
+def test_prints_requirements_with_captured_resolver_configuration(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        resolver_fixture_directory(binary, execution) as resolver_directory,
+    ):
         temporary = Path(temporary_directory)
         environment = os.environ.copy()
         trusted_cache = temporary / "trusted-uv-cache"
         worker_cache = temporary / "worker-uv-cache"
-        uv_record = temporary / "uv-environment.jsonl"
+        uv_record = resolver_directory / "uv-environment.jsonl"
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
         environment["RETICULATE_UV"] = str(
@@ -450,7 +454,7 @@ def test_prints_requirements_with_host_uv_cache(
         environment["UV_OFFLINE"] = "1"
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
             current_directory=temporary,
         )
@@ -482,7 +486,11 @@ def test_prints_requirements_with_host_uv_cache(
         ]
         assert records, "runtime managed resolution did not invoke uv"
         expected = {
-            "UV_CACHE_DIR": str(trusted_cache),
+            "UV_CACHE_DIR": str(
+                resolver_directory.parent / "uv/cache"
+                if execution == SANDBOXED
+                else trusted_cache
+            ),
             "UV_DEFAULT_INDEX": "https://pypi.org/simple",
             "UV_OFFLINE": None,
         }

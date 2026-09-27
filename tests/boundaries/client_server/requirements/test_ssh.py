@@ -28,6 +28,8 @@ from support.resolvers import (
     uv_tool_run_requirements,
     send_and_collect_runtime_python_resolution,
     resolve_public_python_version,
+    resolver_fixture_arguments,
+    resolver_fixture_directory,
 )
 from support.ssh import SSH, configure, localhost, remote_command, poison_controller
 from support.previews import CONTROL_OMISSION, assert_preview
@@ -106,7 +108,10 @@ def managed_session(
     inherited_library_bytes=0,
     bootstrap_uv: bool = False,
 ):
-    with TemporaryDirectory() as temporary:
+    with (
+        TemporaryDirectory() as temporary,
+        resolver_fixture_directory(binary, execution) as fixture_directory,
+    ):
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
         local.mkdir()
@@ -121,11 +126,14 @@ def managed_session(
             }
         else:
             r_environment, ir_record = recording_ir_environment(
-                remote,
+                fixture_directory,
                 fail_requirement="console.test.failure",
                 failure_output=failure_output,
             )
-        uv_environment, uv_record = recording_uv_environment(remote)
+        uv_environment, uv_record = recording_uv_environment(fixture_directory)
+        (remote / "uv-environment.jsonl").symlink_to(
+            fixture_directory / "uv-environment.jsonl"
+        )
         if bootstrap_uv:
             # Retain only recording settings: every invocation delegates to uv.
             uv_environment = {
@@ -193,10 +201,16 @@ def managed_session(
         # Keep the aliases for worker path assertions, but give ir the stable
         # root: its shared resolution records must outlive this session's alias.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
-            cache = Path(
-                (environment.get(variable) or root / "ir-cache")
-                if bootstrap_uv and tool == "ir"
-                else subprocess.check_output([tool, "cache", "dir"], text=True).strip()
+            cache = (
+                fixture_directory.parent / ("ir" if tool == "ir" else "uv/cache")
+                if execution.name == "sandbox"
+                else Path(
+                    (environment.get(variable) or root / "ir-cache")
+                    if bootstrap_uv and tool == "ir"
+                    else subprocess.check_output(
+                        [tool, "cache", "dir"], text=True
+                    ).strip()
+                )
             )
             remote_cache = remote / f"{tool}-cache"
             cache.mkdir(parents=True, exist_ok=True)
@@ -223,6 +237,7 @@ def managed_session(
         }
         if selected_python:
             override["RETICULATE_PYTHON"] = sys.executable
+        fixture_arguments = resolver_fixture_arguments(environment)
         configure(
             local,
             remote,
@@ -233,7 +248,11 @@ def managed_session(
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
             with McpClient(
-                binary, execution.serve(), controller, local, response_timeout=180
+                binary,
+                execution.serve(*fixture_arguments),
+                controller,
+                local,
+                response_timeout=180,
             ) as client:
                 client.initialize_and_list_tools()
                 assert not ir_run_records(ir_record)
@@ -312,7 +331,13 @@ def test_bootstraps_managed_requirements_through_uv(
             for line in (remote / "uv-environment.jsonl").read_text().splitlines()
         ]
         assert all(
-            entry["UV_CACHE_DIR"] == str(remote / "uv-cache") for entry in records
+            entry["UV_CACHE_DIR"]
+            == str(
+                (remote / "uv-cache").resolve()
+                if execution.name == "sandbox"
+                else remote / "uv-cache"
+            )
+            for entry in records
         )
         transcript = client.finish()
         return json.loads(
@@ -401,7 +426,12 @@ def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:
         ]
         assert all(
             entry["UV_OFFLINE"] is None
-            and entry["UV_CACHE_DIR"] == str(remote / "uv-cache")
+            and entry["UV_CACHE_DIR"]
+            == str(
+                (remote / "uv-cache").resolve()
+                if execution.name == "sandbox"
+                else remote / "uv-cache"
+            )
             for entry in records
         ), records
         transcript = client.finish()
@@ -554,9 +584,9 @@ def test_oversized_preparation_request_preserves_worker_and_connection(
             requirements={"r": ["x" * (1024 * 1024)]},
         )
         assert client.transcript[-1]["result"]["isError"]
-        assert last_result_text(client) == "[SSH preparation message exceeds 1 MiB]", (
-            last_result_text(client)
-        )
+        assert (
+            last_result_text(client) == "[resolver preparation message exceeds 1 MiB]"
+        ), last_result_text(client)
         assert ir_run_records(ir_record) == baseline
         client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
         assert last_tool_text(client) == "[1] 42\n"
@@ -583,7 +613,7 @@ def test_large_successful_resolver_result_preserves_completion(binary):
         assert library.is_dir(), output
         # Use the existing library fixture for large accepted requirement strings.
         # The real remote resolver still validates and returns its host metadata.
-        ir = remote / "bin/ir"
+        ir = ir_record.parent / "bin/ir"
         ir.unlink()
         fixture = Path(__file__).resolve().parents[3] / "fixtures/ordered_retirement_ir"
         counter = remote / "ir-counter"
@@ -600,23 +630,14 @@ def test_large_successful_resolver_result_preserves_completion(binary):
                 """)
         )
         ir.chmod(0o755)
-        # Even three JSON bytes per inherited path byte put the result over the
-        # limit; its size must not depend on the temporary directory spelling.
+        # Exercise the chunked transport with a large result below its total
+        # limit. Inherited R_LIBS remains trusted launch data, not result data.
         client.send(
             requirements={"r": [f"package{i}" + "x" * 120_000 for i in range(6)]}
         )
         assert counter.read_text() == "1"
-        # R resolution succeeds with a result larger than one frame. Sending that
-        # metadata to the next DuckDB operation exceeds the request limit, which
-        # must remain an ordinary admission failure with confirmed R completion.
-        assert last_result_text(client) == "SSH preparation message exceeds 1 MiB", (
-            last_result_text(client)
-        )
+        assert last_tool_text(client) == "[prepared]"
         client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
-        assert last_tool_text(client) == "[1] 42\n"
-        ir.unlink()
-        ir.symlink_to(fixture.parent / "record_ir")
-        client.send(requirements={"r": ["praise"]}, r="sentinel")
         assert last_tool_text(client) == "[1] 42\n"
         return json.loads(
             json.dumps(client.finish()[3:])

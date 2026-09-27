@@ -60,9 +60,9 @@ impl Runtime {
         })
     }
 
-    pub(crate) fn native(selected: &NativePython) -> Result<Self, String> {
+    pub(crate) fn native(selected: &NativePython, managed: bool) -> Result<Self, String> {
         Ok(Self {
-            startup: startup::Runtime::native(selected)?,
+            startup: startup::Runtime::native(selected, managed)?,
             next_evaluation_id: 1,
         })
     }
@@ -136,7 +136,9 @@ mod platform {
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
     pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
-        let matplotlib_cache_directory = inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache");
+        let matplotlib_cache_directory = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE")
+            .map(PathBuf::from)
+            .or_else(|| inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache"));
         let matplotlib_config_directory =
             inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all

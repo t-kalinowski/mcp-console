@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -21,7 +22,9 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
-from support.resolvers import matplotlib_test_environment
+from support.resolvers import (
+    matplotlib_test_environment,
+)
 from support.suites import run_this_suite
 
 
@@ -199,7 +202,7 @@ def test_returns_r_plots_from_python_bridge(
 
 @executions(DIRECT, SANDBOXED)
 def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace"
         workspace.mkdir()
@@ -213,20 +216,24 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
-        client = McpClient(
-            binary,
-            execution.serve(),
-            environment,
-            current_directory=workspace,
+        client = clients.enter_context(
+            McpClient(
+                binary,
+                execution.serve(),
+                environment,
+                current_directory=workspace,
+            )
         )
         client.initialize_and_list_tools()
+        client.send(requirements={"python": ["matplotlib"]})
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         # fmt: r
         r = code(r"""
             reticulate::py_require("matplotlib")
             invisible(reticulate::py_config())
             """)
         client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         # fmt: python
         python = code("""
             import os
@@ -395,7 +402,7 @@ after show
 def test_inherits_explicit_matplotlib_config(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         explicit = temporary / "explicit"
         explicit.mkdir()
@@ -413,7 +420,9 @@ def test_inherits_explicit_matplotlib_config(
         environment["MATPLOTLIBRC"] = str(explicit_rc)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
-        client = McpClient(binary, execution.serve(), environment)
+        client = clients.enter_context(
+            McpClient(binary, execution.serve(), environment)
+        )
         client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
@@ -442,7 +451,14 @@ def test_inherits_explicit_matplotlib_config(
         transcript = client.finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
-        caches = list(inherited.glob("fontlist-v*.json"))
+        cache = (
+            temporary / "host-cache/mcp-console/resolver/payload/matplotlib"
+            if execution == SANDBOXED
+            else inherited
+        )
+        if execution == SANDBOXED:
+            assert not list(inherited.glob("fontlist-v*.json"))
+        caches = list(cache.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
@@ -469,7 +485,7 @@ def test_inherits_xdg_matplotlib_config(
 def inherits_matplotlib_config(
     binary: Path, execution: Execution, *, xdg: bool
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         home = temporary / "home"
         config_root = temporary / "xdg-config" if xdg else home / ".config"
@@ -528,7 +544,9 @@ def inherits_matplotlib_config(
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
-        client = McpClient(binary, execution.serve(), environment)
+        client = clients.enter_context(
+            McpClient(binary, execution.serve(), environment)
+        )
         client.initialize_and_list_tools()
         client.send(
             requirements={"python": ["matplotlib"]},
@@ -552,7 +570,14 @@ def inherits_matplotlib_config(
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client.finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
-        caches = list(font_cache.glob("fontlist-v*.json"))
+        cache = (
+            cache_root / "mcp-console/resolver/payload/matplotlib"
+            if execution == SANDBOXED
+            else font_cache
+        )
+        if execution == SANDBOXED:
+            assert not list(font_cache.glob("fontlist-v*.json"))
+        caches = list(cache.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(

@@ -45,7 +45,14 @@ pub(super) fn description(
         }
         _ => "has network access governed by the launcher's sandbox settings",
     };
+    let resolver_session = !matches!(kind, Some("docker" | "docker_sandbox"));
     let sandbox_access = match filesystem {
+        Some("restricted") if resolver_session && profile == Some(":workspace") => format!(
+            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths, resolver storage, and Console's installation are protected from writes"
+        ),
+        Some("restricted") if resolver_session => format!(
+            "can read {files}, {network_access}, and can write only in the worker's private temporary directory"
+        ),
         Some("restricted") if profile == Some(":workspace") => format!(
             "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
         ),
@@ -67,7 +74,7 @@ pub(super) fn description(
         Some("docker_sandbox") if compute_enforcement => "Evaluated code runs inside a Console-owned Docker Sandbox microVM, enforced by Docker Sandboxes and its current inherited machine/organization policy and host integrations. Both relay and worker run in the VM. Native filesystem, network, proxy, and metadata defaults do not apply. Writable shares can expose .git, .agents, and controller records. Provider rules can change during the session. --no-sandbox retains the microVM and cannot bypass Docker policy.".to_string(),
         Some("docker") if no_sandbox => "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.".to_string(),
         _ if no_sandbox => format!("Evaluated code runs without a sandbox, with {} permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.", if target.is_some() { "the remote account's" } else { "the server's" }),
-        _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."),
+        _ => format!("Evaluated code {sandbox_access}. Dependency preparation, when available, runs in a separate native resolver sandbox. Package code can write only to Console-owned resolver storage. Package downloads use a managed proxy restricted to trusted destinations; installer coordination permits loopback sockets (including host loopback services and DNS on macOS). Prepared artifacts remain untrusted and are read-only to the worker."),
     };
     if let Some(target) = target {
         description.push_str(&format!("\n\nExecution target: {target}. "));
@@ -79,7 +86,7 @@ pub(super) fn description(
                     description.push_str(" Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode.");
                 }
             }
-            _ => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
+            _ => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared through the execution host's resolver broker; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
         }
     }
     description

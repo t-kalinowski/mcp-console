@@ -103,6 +103,14 @@ impl Transcript {
         });
     }
 
+    pub(crate) fn python_environment_accepted(&self, packages: &[String]) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::PythonEnvironmentAccepted { packages }, Utc::now())
+        });
+    }
+
     pub(crate) fn target_generation(
         &self,
         container_id: Option<&str>,

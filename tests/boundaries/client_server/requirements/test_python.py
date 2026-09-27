@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import select
 import shutil
 import subprocess
 import sys
@@ -19,15 +20,14 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
-from support.events import Events
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     matplotlib_test_environment,
     named_requirement_error,
+    resolver_fixture_directory,
+    resolver_fixture_arguments,
 )
 from support.suites import run_this_suite
 
@@ -244,19 +244,21 @@ def test_materializes_lazy_python_requirements_without_initializing(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
 def test_retires_python_resolver_descendant_after_leader_exit(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         real_uv = shutil.which("uv")
         assert real_uv is not None, "uv is required"
         started = FifoCheckpoint.create(temporary / "descendant-started")
         leader_release = FifoCheckpoint.create(temporary / "leader-release")
-        lifetime = FifoCheckpoint.create(temporary / "descendant-lifetime")
-        identity = temporary / "descendant-identity"
+        lifetime = temporary / "descendant-lifetime"
+        descendant_gate = temporary / "descendant-gate"
+        os.mkfifo(lifetime)
+        os.mkfifo(descendant_gate)
+        reader = os.open(lifetime, os.O_RDONLY | os.O_NONBLOCK)
+        keeper = os.open(lifetime, os.O_WRONLY | os.O_NONBLOCK)
         wrapper = temporary / "uv"
         wrapper.write_text(
             # fmt: python
@@ -279,16 +281,12 @@ def test_retires_python_resolver_descendant_after_leader_exit(
 
                 requirement = os.environ["MCP_CONSOLE_TEST_REQUIREMENT"]
                 if requirement in sys.argv[1:]:
-                    assert os.environ.get("R_LIBS") is None
                     child = os.fork()
                     if child == 0:
-                        identity = os.environ["MCP_CONSOLE_TEST_DESCENDANT_IDENTITY"]
-                        with open(identity, "x", encoding="utf-8") as stream:
-                            stream.write(f"{os.getpid()} {os.getpgrp()}\n")
                         lifetime = os.environ["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"]
-                        with open(lifetime, "rb", buffering=0) as stream:
+                        with open(lifetime, "wb", buffering=0):
                             notify(os.environ["MCP_CONSOLE_TEST_DESCENDANT_STARTED"])
-                            stream.read(1)
+                            wait(os.environ["MCP_CONSOLE_TEST_DESCENDANT_GATE"])
                         os._exit(0)
                     wait(os.environ["MCP_CONSOLE_TEST_LEADER_RELEASE"])
 
@@ -305,14 +303,16 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         environment["RETICULATE_UV"] = str(wrapper)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_REQUIREMENT"] = "py-yaml12"
-        environment["MCP_CONSOLE_TEST_DESCENDANT_IDENTITY"] = str(identity)
         environment["MCP_CONSOLE_TEST_DESCENDANT_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_LEADER_RELEASE"] = str(leader_release.path)
-        environment["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"] = str(lifetime.path)
+        environment["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"] = str(lifetime)
+        environment["MCP_CONSOLE_TEST_DESCENDANT_GATE"] = str(descendant_gate)
 
-        client = McpClient(binary, execution.serve(), environment)
-        resolver_group = None
-        exit_events = Events()
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         try:
             client.initialize_and_list_tools()
             client.send(requirements={"r": ["DBI"]})
@@ -321,38 +321,27 @@ def test_retires_python_resolver_descendant_after_leader_exit(
                 requirements={"python": ["py-yaml12"]},
             )
             started.wait("Python resolver descendant")
-            descendant, resolver_group = map(
-                int,
-                identity.read_text(encoding="utf-8").split(),
-            )
-            assert descendant != resolver_group
-            assert resolver_group != os.getpgrp()
-            exit_events.watch_process(descendant)
-
+            os.close(keeper)
+            keeper = None
             leader_release.release()
-            assert exit_events.wait(10) == {descendant}, (
+            assert select.select([reader], [], [], 10)[0], (
                 "resolver descendant did not exit"
             )
-
+            assert os.read(reader, 1) == b"", "resolver descendant retained its pipe"
             client.receive(preparation)
             assert preparation["result"] == {
                 "content": [{"type": "text", "text": "[prepared]"}],
                 "isError": False,
             }, preparation
-            assert not process_group_exists(resolver_group), (
-                "resolver process group outlived its leader"
-            )
-            resolver_group = None
-            transcript = client.finish()
-            return transcript
+            return client.finish()
         finally:
             leader_release.release()
-            stop_process_group(resolver_group)
             stop_client(client)
-            exit_events.close()
+            if keeper is not None:
+                os.close(keeper)
+            os.close(reader)
             started.close()
             leader_release.close()
-            lifetime.close()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -384,8 +373,13 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment = matplotlib_test_environment(temporary / "host-cache")
-        cache_directory = temporary / "user-matplotlib"
-        environment["MPLCONFIGDIR"] = str(cache_directory)
+        user_cache = temporary / "user-matplotlib"
+        environment["MPLCONFIGDIR"] = str(user_cache)
+        cache_directory = (
+            temporary / "host-cache/mcp-console/resolver/payload/matplotlib"
+            if execution.name == "sandbox"
+            else user_cache
+        )
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
             binary,
@@ -398,6 +392,8 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
             requirements={"python": ["matplotlib"]},
         )
         assert last_tool_text(client) == "[prepared]"
+        if execution.name == "sandbox":
+            assert not user_cache.exists(), "warming wrote to the host Matplotlib cache"
         caches = list(cache_directory.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         caches[0].unlink()
@@ -465,18 +461,21 @@ def test_set_discards_pre_marker_python_activation(
 def restart_discards_pre_marker_activation(
     binary: Path, execution: Execution, action: dict
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         replacement_requirement = "mcp-console-restart-fixture"
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary,
             replacement_requirement,
             reuse_resolved_python_for=("py-yaml12", replacement_requirement),
         )
-        environment["TMPDIR"] = temporary_directory
+        environment["TMPDIR"] = str(temporary)
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:

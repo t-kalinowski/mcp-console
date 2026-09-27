@@ -16,9 +16,9 @@ from support.client import McpClient
 from support.native import build_interposer
 from support.macos import (
     capture_darwin_process_identity,
-    darwin_child_process_identities,
 )
 from support.normalization import code
+from support.processes import worker_launcher_identities
 
 CHECKPOINT_TIMEOUT_SECONDS = 15
 
@@ -117,7 +117,7 @@ def launcher_retirement(binary: Path) -> Iterator[LauncherRetirement]:
             client.send(control="restart")
             assert last_tool_text(client) == "[starting new worker]\n[idle]"
             server_identity = capture_darwin_process_identity(client.process.pid)
-            launchers = darwin_child_process_identities(server_identity)
+            launchers = worker_launcher_identities(server_identity, binary)
             assert len(launchers) == 1, launchers
             launcher_pid = launchers[0][0]
             exit_watch = select.kevent(

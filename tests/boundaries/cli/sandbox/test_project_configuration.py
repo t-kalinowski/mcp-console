@@ -55,14 +55,20 @@ def accepted(binary: Path, host: Path, *arguments: str) -> None:
 
 
 def invoke(binary: Path, host: Path, *arguments: str):
-    return subprocess.run(
+    with subprocess.Popen(
         [binary, *(arguments or ("serve", "--worker", "unused-worker"))],
         cwd=host,
         env={**os.environ, "MCP_CONSOLE_SANDBOX_SETTINGS": "invalid ambient settings"},
-        input="",
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-    )
+    ) as process:
+        process.wait(timeout=30)
+        stdout, stderr = process.communicate()
+        return subprocess.CompletedProcess(
+            process.args, process.returncode, stdout, stderr
+        )
 
 
 @requires(SANDBOX)
@@ -309,18 +315,39 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
         config.parent.mkdir(parents=True)
         for yaml in cases:
             config.write_text(yaml, encoding="utf-8")
-            accepted(
+            standalone = invoke(
                 binary,
                 host,
-                "serve",
-                "--worker",
-                "unused-worker",
+                "sandbox",
                 "--writable-root",
                 "future CLI",
+                "--",
+                "/bin/echo",
+                "workload started",
             )
+            assert standalone.returncode == 0, standalone
+            assert standalone.stdout == "workload started\n", standalone
+            if "filesystem" in yaml:
+                server = invoke(binary, host)
+                assert server.returncode == 1 and not server.stdout, server
+                assert "managed resolver storage requires" in server.stderr, server
+                initialized = False
+            else:
+                accepted(binary, host)
+                initialized = True
+            server = invoke(binary, host, "serve", "--writable-root", "future CLI")
+            assert server.returncode == 1 and not server.stdout, server
+            assert "managed resolver storage requires" in server.stderr, server
             assert not (host / "future café 雪").exists()
             assert not (host / "future CLI").exists()
-            transcript.append({"yaml": yaml, "initialized": True})
+            transcript.append(
+                {
+                    "yaml": yaml,
+                    "standalone_with_writable_root": True,
+                    "initialized": initialized,
+                    "server_with_writable_root_rejected": True,
+                }
+            )
     return transcript
 
 

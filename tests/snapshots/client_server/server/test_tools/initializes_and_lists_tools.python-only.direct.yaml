@@ -25,9 +25,10 @@ result:
     - name: send
       description: >-
         Persistent local Python workbench. State persists across calls. R and
-        SQL cells, requirement changes, and automatic package installation are
+        SQL cells, live package changes, and automatic installation are
         unavailable in this session. Python uses the environment selected at
         server startup; restart resets objects and retains that environment.
+        Requirement preparation is unavailable.
 
 
         Send one complete `python` cell per call. Code-bearing calls must be

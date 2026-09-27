@@ -53,7 +53,9 @@ Without a selected built-in, Console requests:
 The frontend continues to remove `DYLD_INSERT_LIBRARIES` and `LD_PRELOAD` before runner exec.
 The runner supplies its default descendant-retirement timeout (1000 ms at the pin) and full mutation of its private storage; Console does not construct or remove its path.
 The temporary layout is a runner-owned `sandbox-XXXXXX` container with a writable `data` child.
-The temporary [`--writable-root PATH`](SANDBOX_CONFIGURATION.md#additional-writable-paths) option augments the filesystem entries with explicit write access on `serve` and `sandbox`.
+The temporary [`--writable-root PATH`](SANDBOX_CONFIGURATION.md#additional-writable-paths) option augments the filesystem entries with explicit write access.
+Sandboxed local and SSH sessions use the [resolver broker](RESOLVER.md), whose artifact and launch protections require the default, `:workspace`, or `:read-only` filesystem policy without custom write rules or native extensions.
+Use `:workspace` for writes within the launch directory; custom filesystem rules remain available to standalone `sandbox` callers.
 The server retains the native policy values and resolved literal paths across worker generations and explicitly selects their child-specific environment payload at the sandbox frontend; the relay and worker do not interpret it.
 These paths are persistent user data and are never removed by sandbox retirement.
 

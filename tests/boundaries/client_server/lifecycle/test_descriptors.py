@@ -30,7 +30,6 @@ def descriptor_entry(
     execution: Execution,
     launch_path: str,
     serve_arguments: tuple[str, ...],
-    has_resolver: bool,
     environment_updates: dict[str, str] | None = None,
     launch_prefix: tuple[str, ...] = (),
 ) -> TranscriptEntry:
@@ -93,11 +92,10 @@ def descriptor_entry(
                     "isError": False,
                 }, result
                 launchers = child_process_identities(server)
-                expected = 1 + int(has_resolver)
-                assert len(launchers) == expected, launchers
+                assert len(launchers) == 2, launchers
                 for launcher in launchers:
                     assert descriptor not in process_file_descriptors(launcher), (
-                        "unlisted server descriptor remained open in a child process"
+                        "unlisted server descriptor remained open in a worker launcher or resolver broker"
                     )
                 transcript = client.finish()
                 passed = True
@@ -120,20 +118,17 @@ def test_closes_unlisted_server_descriptors_on_every_launch_path(
 ) -> Transcript:
     probe = Path(__file__).resolve().parents[3] / "fixtures" / "descriptor_probe"
     cases = (
-        ("builtin worker", (), True, None),
-        ("custom worker", ("--worker", str(probe)), False, None),
+        ("builtin worker", (), None),
+        ("custom worker", ("--worker", str(probe)), None),
         (
             "custom relay and worker",
             ("--worker", str(probe), "--relay", str(probe)),
-            False,
             {"MCP_CONSOLE_TEST_BUILTIN_RELAY": str(binary)},
         ),
     )
     return [
-        descriptor_entry(
-            binary, execution, launch_path, arguments, has_resolver, environment
-        )
-        for launch_path, arguments, has_resolver, environment in cases
+        descriptor_entry(binary, execution, launch_path, arguments, environment)
+        for launch_path, arguments, environment in cases
     ]
 
 
@@ -164,7 +159,6 @@ def test_sanitizes_descriptors_without_close_range_cloexec(binary: Path) -> Tran
                     DIRECT,
                     errno.errorcode[error],
                     (),
-                    True,
                     launch_prefix=prefix,
                 )
             )

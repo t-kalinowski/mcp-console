@@ -15,6 +15,7 @@ from support.capture import read_jsonl, read_jsonl_path
 from support.client import McpClient, stop_client
 from support.execution import Execution
 from support.events import Events
+from support.resolvers import resolver_fixture_arguments
 from support.records import ToolResult, Transcript
 
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
@@ -143,6 +144,7 @@ class ServerRelayClient:
         self.client = McpClient(
             binary,
             execution.serve(
+                *resolver_fixture_arguments(environment),
                 "--worker",
                 str(binary),
                 "--relay",

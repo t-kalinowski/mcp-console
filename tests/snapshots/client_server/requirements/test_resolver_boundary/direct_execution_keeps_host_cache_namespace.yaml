@@ -1,0 +1,22 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-managed.yaml
+---
+send:
+  python: import sys; print(sys.executable)
+result:
+  content:
+    - type: text
+      text: |
+        <resolver-payload-python>
+  isError: false
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-managed.direct.yaml
+---
+send:
+  python: import sys; print(sys.executable)
+result:
+  content:
+    - type: text
+      text: |
+        <host-python>
+  isError: false

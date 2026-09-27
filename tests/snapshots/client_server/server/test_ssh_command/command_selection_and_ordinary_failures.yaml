@@ -6,7 +6,7 @@ arguments:
   - ssh-prepare
 standard_error: |
   selected command failed
-  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer
+  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer
 ---
 selection: PATH
 arguments:
@@ -14,7 +14,7 @@ arguments:
   - ssh-prepare
 standard_error: |
   selected command failed
-  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer
+  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer
 ---
 selection: fallback
 arguments:
@@ -23,4 +23,4 @@ arguments:
   - ssh-prepare
 standard_error: |
   selected command failed
-  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer
+  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer

@@ -154,7 +154,7 @@ struct SendArguments {
     /// or stdin-only calls.
     sql: Option<String>,
     /// Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-    /// SIGINT from the active host resolver or live worker and preserves in-memory state. After
+    /// interruption of active preparation or SIGINT from the live worker and preserves in-memory state. After
     /// successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
     /// earlier evaluation or attempting an optional following cell; the cell is not run if the
     /// interrupted evaluation remains active. When `requirements` is available, restart resolves
@@ -171,7 +171,7 @@ struct SendArguments {
     /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
     /// that cell. With `control = "restart"`, they are part of the restart transaction, with or
     /// without a cell. Only add can accompany interrupt, and only when a cell follows.
-    /// Preparation does not import, attach, or load dependencies. On a code-bearing call without
+    /// Preparation does not attach dependencies in the worker. On a code-bearing call without
     /// control, preparation completes before same-call nonempty stdin is queued. Standalone
     /// preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
     /// unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
@@ -182,8 +182,8 @@ struct SendArguments {
     /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
     /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
     /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-    /// further changes require restart. Resolution runs with server permissions and may download
-    /// packages or extensions or execute installation or build code. Use only trusted requirements.
+    /// further changes require restart. Preparation may download packages and execute installation,
+    /// build, import, and inspection code in the resolver's execution environment, described above.
     requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
@@ -245,9 +245,9 @@ struct Requirements {
     /// DuckDB extension names for the managed DuckDB backend, for standalone preparation,
     /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
     /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
-    /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
+    /// letter and contain only lowercase ASCII letters, digits, and underscores. The resolver
     /// uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
-    /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
+    /// managed extension storage. `LOAD` and automatic loading happen
     /// later inside the worker.
     #[serde(default, deserialize_with = "supplied_list")]
     #[schemars(with = "Vec<String>", inner(length(min = 1, max = 64)))]
@@ -257,7 +257,7 @@ struct Requirements {
     /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
     /// Automatic R discovery accepts only plain package names. An idle worker that implements R
     /// preparation can add requirements without losing live state. Local package sources are
-    /// rejected because resolution runs with server permissions.
+    /// rejected; only supported registry and remote references are accepted.
     #[serde(default, deserialize_with = "supplied_list")]
     #[schemars(with = "Vec<String>", inner(length(min = 1)))]
     r: Option<Vec<String>>,
@@ -267,7 +267,7 @@ struct Requirements {
     /// inference needs a different distribution, a version, an extra, or an environment marker, or
     /// when the distribution should be prepared before the cell. Automatic imports infer bare
     /// distribution names only. Paths, file URLs, editable requirements, direct references, local
-    /// archives, and local projects are rejected. Preparation does not import the package. An idle
+    /// archives, and local projects are rejected. Preparation can import packages for inspection. An idle
     /// server-managed worker may activate compatible additions without losing state. A nonempty
     /// user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
     /// requirements.
@@ -299,19 +299,30 @@ impl ConsoleServer {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         target: Option<(crate::settings::Target, Vec<PathBuf>)>,
+        resolver: crate::resolver::broker::Settings,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
         let policy = sandbox_settings.clone();
         let worker = if let Some((target, roots)) = target {
-            crate::worker_client::Client::target(target, roots, no_sandbox, sandbox_settings)?
+            crate::worker_client::Client::target(
+                target,
+                roots,
+                no_sandbox,
+                sandbox_settings,
+                resolver,
+            )?
         } else {
             match (worker, relay) {
-                (Some(program), relay) => {
-                    crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
-                }
+                (Some(program), relay) => crate::worker_client::Client::new(
+                    program,
+                    relay,
+                    no_sandbox,
+                    sandbox_settings,
+                    resolver,
+                )?,
                 (None, None) => {
-                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings)?
+                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings, resolver)?
                 }
                 (None, Some(_)) => {
                     return Err("a custom relay requires a custom worker".to_string());
@@ -338,8 +349,12 @@ impl ConsoleServer {
         );
         worker.record_with(transcript.clone());
         let security = execution::description(&policy, no_sandbox, target.as_ref());
-        let tool_router =
-            Self::configured_tool_router(languages, dynamic_resolution, &security, python_only);
+        let tool_router = Self::configured_tool_router(
+            languages,
+            dynamic_resolution || worker.python_preparation(),
+            &security,
+            python_only,
+        );
         Ok(Self {
             worker,
             transcript,
@@ -371,10 +386,13 @@ impl ConsoleServer {
                 .split_once("\n\nSend one complete")
                 .expect("shared send description")
                 .1;
+            let environment = if dynamic_resolution {
+                "Explicit Python requirements prepare packages before first use or with control: restart. The complete candidate is resolved and inspected before retiring the current worker. Failed preparation preserves the accepted environment, objects and queued input. Changed requirements on a live worker need restart; retained requirements are a no-op."
+            } else {
+                "Python uses the environment selected at server startup; restart resets objects and retains that environment. Requirement preparation is unavailable."
+            };
             *description = format!(
-                "Persistent local Python workbench. State persists across calls. R and SQL cells, requirement changes, and automatic package installation are unavailable in this session. Python uses the environment selected at server startup; restart resets objects and retains that environment.
-
-Send one complete{remaining}"
+                "Persistent local Python workbench. State persists across calls. R and SQL cells, live package changes, and automatic installation are unavailable in this session. {environment}\n\nSend one complete{remaining}"
             );
             *description = description.replace("`r`, `python`, or `sql` cell", "`python` cell");
         }
@@ -446,6 +464,20 @@ Send one complete{remaining}"
                     property["description"] = description.into();
                 }
             }
+        }
+        if python_only && dynamic_resolution {
+            properties.get_mut("python").expect("Python schema")["description"] = "One complete Python cell in persistent state. requirements.python can prepare packages before first use or with control: restart, before this cell executes in the replacement. Changed live requirements require restart. Automatic installation, R integration and SQL are unavailable.".into();
+            properties.get_mut("control").expect("control schema")["description"] = "interrupt signals the live worker or retires active preparation. Requirements cannot accompany interrupt. restart prepares and inspects any candidate before retiring the worker; preparation failure preserves objects, retained requirements and queued input. On success, same-call stdin and code go only to the replacement.".into();
+            let requirements = properties
+                .get_mut("requirements")
+                .expect("requirements schema");
+            requirements["description"] = "Inspect, add, replace, or reset the server's retained Python declaration. Preparation is supported before first use or with control: restart. Changed live requirements require restart. This declaration is not an installed-package inventory.".into();
+            let fields = requirements["properties"]
+                .as_object_mut()
+                .expect("requirement fields");
+            fields.shift_remove("r");
+            fields.shift_remove("duckdb");
+            fields.get_mut("python").expect("Python requirement schema")["description"] = "Named PEP 508 registry requirements, such as polars>=1 or scikit-learn. Prepare before first use or with control: restart. Paths, file URLs, editable requirements, direct references, local archives and local projects are rejected. Automatic import installation and live additions are unavailable without R.".into();
         }
         if !dynamic_resolution {
             let requirements = properties
@@ -747,9 +779,17 @@ pub async fn run(
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
+    resolver: crate::resolver::broker::Settings,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target)
-        .map_err(std::io::Error::other)?;
+    let server = ConsoleServer::new(
+        worker,
+        relay,
+        no_sandbox,
+        sandbox_settings,
+        target,
+        resolver,
+    )
+    .map_err(std::io::Error::other)?;
     let worker = server.worker.clone();
     let deliveries = server.deliveries.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();

@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -51,20 +51,45 @@ impl Selections {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Discovery {
     pub managed: bool,
+    pub direct_uv: bool,
     pub selections: Selections,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local_r_home_bytes: Option<Vec<u8>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local_has_uv: Option<bool>,
+    pub runtime: Option<crate::local_runtime::Selection>,
+    pub python: Option<ManagedPython>,
+    pub protected: Vec<std::path::PathBuf>,
+    #[serde(default)]
+    pub lease: Option<std::path::PathBuf>,
+    pub extension_directory: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub matplotlib_cache: Option<std::path::PathBuf>,
+}
+
+impl Discovery {
+    pub(crate) fn protect_worker(
+        &self,
+        policy: &mut crate::settings::SandboxSettings,
+        workspace: &std::path::Path,
+    ) -> Result<(), String> {
+        crate::resolver::broker::protect_worker(policy, workspace, &self.protected)?;
+        if let Some(cache) = &self.matplotlib_cache
+            && let Some(environment) = policy
+                .entry("environment")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+        {
+            environment.insert(
+                "MCP_CONSOLE_MATPLOTLIB_CACHE".into(),
+                serde_json::json!(cache),
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Operation {
+    Discover,
     Bootstrap,
-    ResolveRStandalone {
-        requirements: Vec<String>,
-    },
     R {
         requirements: Vec<String>,
     },
@@ -74,33 +99,12 @@ pub(crate) enum Operation {
     },
     PythonVersion {
         constraints: Vec<String>,
-        r: ManagedR,
-    },
-    LocalPythonVersion {
-        constraints: Vec<String>,
         r: Option<ManagedR>,
-    },
-    Uv {
-        r: ManagedR,
     },
     Duckdb {
         r: ManagedR,
         extensions: Vec<String>,
     },
-}
-
-#[derive(Clone, Copy, Default, Deserialize, Serialize)]
-pub(crate) enum Mode {
-    #[default]
-    R,
-    PythonOnly,
-    Custom,
-}
-
-impl Mode {
-    fn is_r(&self) -> bool {
-        matches!(self, Self::R)
-    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -111,8 +115,9 @@ enum Input {
         build: String,
         workspace: String,
         selections: Selections,
-        #[serde(default, skip_serializing_if = "Mode::is_r")]
-        mode: Mode,
+        launch: Option<Box<crate::resolver::broker::Launch>>,
+        no_sandbox: bool,
+        settings: crate::resolver::broker::Settings,
     },
     Run {
         id: u64,
@@ -122,7 +127,9 @@ enum Input {
         id: u64,
         control: ResolverControlOutcome,
     },
-    Close,
+    Close {
+        release: bool,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -150,14 +157,7 @@ enum Output {
 }
 
 impl Output {
-    fn write(&self, writer: &mut impl Write, local: bool) -> Result<(), String> {
-        let write_message = |writer: &mut _, message: &Self| {
-            if local {
-                write_jsonl(writer, message)
-            } else {
-                write(writer, message)
-            }
-        };
+    fn write(&self, writer: &mut impl Write) -> Result<(), String> {
         let Self::Completed {
             id,
             result: Some(result),
@@ -165,18 +165,18 @@ impl Output {
             confirmed,
         } = self
         else {
-            return write_message(writer, self);
+            return write(writer, self);
         };
         let result = serde_json::to_string(result).map_err(|error| error.to_string())?;
         if result.len() <= LIMIT / 8 {
-            return write_message(writer, self);
+            return write(writer, self);
         }
         // JSON can expand each text byte to six bytes. Leave room for the
         // envelope; only the terminal receipt completes the assembled result.
         let mut tail = result.as_str();
         while !tail.is_empty() {
             let end = tail.floor_char_boundary((LIMIT / 8).min(tail.len()));
-            write_message(
+            write(
                 writer,
                 &Self::ResultChunk {
                     id: *id,
@@ -185,7 +185,7 @@ impl Output {
             )?;
             tail = &tail[end..];
         }
-        write_message(
+        write(
             writer,
             &Self::Completed {
                 id: *id,
@@ -200,7 +200,7 @@ impl Output {
 fn encode(message: &impl Serialize) -> Result<Vec<u8>, String> {
     let bytes = serde_json::to_vec(message).map_err(|error| error.to_string())?;
     if bytes.len() > LIMIT {
-        return Err("SSH preparation message exceeds 1 MiB".into());
+        return Err("resolver preparation message exceeds 1 MiB".into());
     }
     Ok(bytes)
 }
@@ -215,52 +215,21 @@ fn write(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String
 }
 
 fn read<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let bytes = crate::target_launch::read_payload(reader, LIMIT, crate::ssh::PROTOCOL)
-        .map_err(|error| error.to_string())?;
+    let bytes = crate::target_launch::read_payload(
+        reader,
+        LIMIT,
+        crate::target_launch::Protocol("resolver"),
+    )
+    .map_err(|error| error.to_string())?;
     serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid SSH preparation message: {error}"))
-}
-
-fn write_jsonl(writer: &mut impl Write, message: &impl Serialize) -> Result<(), String> {
-    let bytes = encode(message)?;
-    writer
-        .write_all(&bytes)
-        .and_then(|()| writer.write_all(b"\n"))
-        .and_then(|()| writer.flush())
-        .map_err(|error| error.to_string())
-}
-
-fn read_jsonl<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T, String> {
-    let mut bytes = Vec::new();
-    loop {
-        let mut byte = [0];
-        let count = reader.read(&mut byte).map_err(|error| error.to_string())?;
-        if count == 0 {
-            return Err("resolver input closed".into());
-        }
-        if byte[0] == b'\n' {
-            break;
-        }
-        bytes.push(byte[0]);
-        if bytes.len() > LIMIT {
-            return Err("resolver JSON line exceeds 1 MiB".into());
-        }
-    }
-    serde_json::from_slice(&bytes).map_err(|error| format!("invalid resolver JSON: {error}"))
+        .map_err(|error| format!("invalid resolver preparation message: {error}"))
 }
 
 pub(crate) fn run() -> Result<(), String> {
     #[cfg(unix)]
-    return host::run(false);
+    return host::run();
     #[cfg(not(unix))]
-    Err("SSH preparation requires macOS or Linux".into())
-}
-
-pub(crate) fn run_local() -> Result<(), String> {
-    #[cfg(unix)]
-    return host::run(true);
-    #[cfg(not(unix))]
-    Err("host resolution requires macOS or Linux".into())
+    Err("resolver preparation requires macOS or Linux".into())
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -302,6 +271,21 @@ impl WorkerEnvironment {
                     command.env_remove("RETICULATE_PYTHON");
                 }
             }
+        }
+        if let Some(runtime) = &self.discovery.runtime {
+            let mut runtime = runtime.clone();
+            if let crate::local_runtime::Selection::Python {
+                selected, managed, ..
+            } = &mut runtime
+                && let Some(python) = &self.python
+            {
+                **selected = python
+                    .native()
+                    .ok_or("remote resolver omitted Python embedding configuration")?
+                    .clone();
+                *managed = Some(python.clone());
+            }
+            runtime.configure(command)?;
         }
         Ok(())
     }

@@ -56,24 +56,7 @@ result:
 
         MCP Console inferred the PyPI distribution `mcp_console_blocked_automatic_import` from the import `mcp_console_blocked_automatic_import`, but automatic package resolution failed:
 
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.XX",
-          "packages": [
-            "numpy",
-            "pandas",
-            "mcp_console_blocked_automatic_import"
-          ],
-          "python_version": [
-            "3.12.XX"
-          ]
-        }
-        uv output:
-        Traceback (most recent call last):
-          File "<workspace>/tests/fixtures/checkpoint_uv", line <line>, in <module>
-            raise KeyboardInterrupt from None
-        KeyboardInterrupt
+        dependency resolution interrupted
 
         Import names and PyPI distribution names can differ. Retry with the correct distribution declared through `requirements.python` in the `send` call, for example:
 

@@ -27,6 +27,7 @@ from support.macos import (
 )
 from support.normalization import code
 from support.processes import (
+    worker_launcher_identities,
     host_process_id,
     process_exists,
     process_group_exists,
@@ -455,8 +456,8 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
             assert os.getpgid(relay_target) == worker_group
-            (supervisor,) = darwin_child_process_identities(
-                capture_darwin_process_identity(client.process.pid)
+            (supervisor,) = worker_launcher_identities(
+                capture_darwin_process_identity(client.process.pid), binary
             )
             assert relay_target != supervisor[0], "helper targeted the sandbox runner"
             assert worker_pid != relay_target, (
@@ -582,8 +583,8 @@ def test_restart_reports_stalled_sandbox_supervisor(binary: Path) -> Transcript:
                 wait_for_marker(temporary_path, "zod-process-group", client)
             )
             assert os.getpgid(relay_target) == worker_group
-            (supervisor,) = darwin_child_process_identities(
-                capture_darwin_process_identity(client.process.pid)
+            (supervisor,) = worker_launcher_identities(
+                capture_darwin_process_identity(client.process.pid), binary
             )
             assert relay_target != supervisor[0], "helper targeted the sandbox runner"
             assert worker_pid != relay_target, (

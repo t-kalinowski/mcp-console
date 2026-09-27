@@ -220,7 +220,7 @@ Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines 
 The relay preserves the optional `import_resolution` object unchanged.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.
-It does not run host resolvers, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.
+It does not request preparation, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.
 It keeps no nested-resolver wait state and applies no special queueing to these frames.
 Unknown event kinds and fields are rejected.
 Payload-free events contain exactly the shown `kind` field: `ready`, `input_received`, `input_cancelled`, `python_prepared`, `completed`, `stdout_closed`, `stderr_closed`, `worker_sideband_closed`, and `shutdown_started` reject every additional field.

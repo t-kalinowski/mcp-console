@@ -1,0 +1,21 @@
+; Runtime IPC needed with restricted reads. Do not use :minimal: its platform
+; defaults expose /etc and system preference/database trees to networked code.
+(allow mach-lookup
+  (global-name "com.apple.secinitd")
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.trustd.agent"))
+(allow system-mac-syscall
+  (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))
+(allow system-mac-syscall (mac-policy-name "vnguard"))
+(allow file-map-executable
+  (subpath "/System/Library")
+  (subpath "/usr/lib"))
+; realpath walks every ancestor of selected runtime and scratch paths. Metadata
+; access does not grant directory listing or file contents.
+(allow file-read-metadata)
+(allow file-read* file-test-existence (literal "/"))
+(allow file-read-data file-test-existence file-write-data (subpath "/dev/fd"))
+(allow sysctl-read
+  (sysctl-name "security.mac.lockdown_mode_state")
+  (sysctl-name "machdep.ptrauth_enabled"))

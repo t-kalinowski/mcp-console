@@ -20,19 +20,15 @@ from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.processes import (
-    capture_process_identity,
-    child_process_identities,
-    live_processes,
-)
 from support.records import Transcript
 from support.r import r_test_environment, reference_r_error
-from support.requirements import PROCESS_EVENTS, command, requires
+from support.requirements import command, requires
 from support.resolvers import (
     ir_requirements,
     ir_run_records,
-    local_resolver_owner,
     recording_ir_environment,
+    resolver_fixture_arguments,
+    resolver_fixture_directory,
 )
 from support.suites import run_this_suite
 
@@ -188,11 +184,15 @@ def send_and_compare_r_error(
 def test_resolves_missing_r_packages_during_evaluation(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         directory = Path(temporary)
         packages = ("mcpfirst", "mcpsecond")
         environment, _ = recording_fixture_r_environment(directory, packages)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
 
         client.send(python="python_sentinel = 40")
@@ -240,11 +240,15 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         directory = Path(temporary)
         package = "mcpsqlcallback"
         environment, record = recording_fixture_r_environment(directory, (package,))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
 
         # fmt: r
@@ -298,7 +302,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
 def test_resolves_reached_r_packages_at_runtime(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         directory = Path(temporary)
         packages = (
             "mcplibrary",
@@ -312,7 +316,11 @@ def test_resolves_reached_r_packages_at_runtime(
         )
         environment, record = recording_fixture_r_environment(directory, packages)
         environment["PKG_SUBPROCESS_TIMEOUT"] = "0"
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["DBI"]})
         assert last_result_text(client) == "[prepared]"
@@ -394,9 +402,13 @@ def test_retains_automatic_r_package_after_error_and_restart(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["DBI"]})
         assert last_result_text(client) == "[prepared]"
@@ -430,7 +442,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
 def test_preserves_missing_package_conditions_after_resolution_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, record = recording_ir_environment(
             Path(temporary), fail_requirement="notloaded.pkg"
         )
@@ -488,7 +500,11 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
             text=True,
             check=True,
         )
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        ) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
                 if restart:
@@ -525,11 +541,15 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
 def test_matches_base_r_missing_package_error_display(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, _ = recording_ir_environment(
             Path(temporary), fail_requirement="notloaded.pkg"
         )
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        ) as client:
             client.initialize_and_list_tools()
             client.send(r="options(showErrorCalls = TRUE)")
             for source in (
@@ -554,12 +574,16 @@ def test_does_not_resolve_unreached_package_loads(
     binary: Path, execution: Execution
 ) -> Transcript:
     missing = "mcpconsolenotarealpackage"
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, record = recording_ir_environment(
             Path(temporary),
             fail_requirement=missing,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["DBI"]})
         assert last_result_text(client) == "[prepared]"
@@ -587,9 +611,13 @@ def test_does_not_resolve_unreached_package_loads(
 def test_rejects_non_package_runtime_names_before_ir(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["DBI"]})
         assert last_result_text(client) == "[prepared]"
@@ -632,9 +660,13 @@ def test_preserves_base_r_loading_semantics_without_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["DBI"]})
         assert last_result_text(client) == "[prepared]"
@@ -774,15 +806,17 @@ def test_preserves_base_r_loading_semantics_without_resolution(
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
+    with (
+        tempfile.TemporaryDirectory() as workspace,
+        resolver_fixture_directory(binary, execution) as directory,
+    ):
         fixture = Path(__file__).resolve().parents[3] / "fixtures" / "load_all"
-        package = directory / "package"
+        package = Path(workspace) / "package"
         shutil.copytree(fixture, package)
         environment, record = recording_ir_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
             current_directory=package,
         )
@@ -836,9 +870,13 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
         assert last_result_text(client) == "[done]"
@@ -901,12 +939,16 @@ def test_restart_discards_unactivated_r_candidate(
     binary: Path, execution: Execution
 ) -> Transcript:
     checkpoint_name = "automatic-r-activation-before-report"
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         directory = Path(temporary)
         package = "mcprestart"
         environment, record = recording_fixture_r_environment(directory, (package,))
-        environment["TMPDIR"] = temporary
-        client = McpClient(binary, execution.serve(), environment)
+        environment["TMPDIR"] = str(temporary)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -998,7 +1040,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
     execution: Execution,
 ) -> Transcript:
     package = "mcppreparation"
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         directory = Path(temporary)
         environment, record = recording_fixture_r_environment(directory, (package,))
         started = FifoCheckpoint.create(directory / "ir-started")
@@ -1006,7 +1048,11 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         resolver_released = False
         finished = False
         try:
@@ -1064,13 +1110,13 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"))
+@requires(command("ir"))
 def test_interrupts_automatic_r_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
     package = "RcppRoll"
-    with tempfile.TemporaryDirectory() as temporary:
+    with resolver_fixture_directory(binary, execution) as temporary:
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
         started = FifoCheckpoint.create(directory / "ir-started")
@@ -1078,7 +1124,16 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
-        client = McpClient(binary, execution.serve(), environment)
+        lifetime = directory / "ir-lifetime"
+        os.mkfifo(lifetime)
+        reader = os.open(lifetime, os.O_RDONLY | os.O_NONBLOCK)
+        keeper = os.open(lifetime, os.O_WRONLY | os.O_NONBLOCK)
+        environment["MCP_CONSOLE_TEST_IR_LIFETIME"] = str(lifetime)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -1087,9 +1142,6 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             )
             assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
-            server = capture_process_identity(client.process.pid)
-            owner = local_resolver_owner(server, binary)
-            existing_children = child_process_identities(owner)
 
             # fmt: r
             r = code(r"""
@@ -1102,12 +1154,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             client.send(r=r, timeout_ms=0)
             assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("automatic R resolver")
-            resolver = [
-                child
-                for child in child_process_identities(owner)
-                if child not in existing_children
-            ]
-            assert len(resolver) == 1, resolver
+            os.close(keeper)
+            keeper = None
             wait_for_evaluation_output(
                 client,
                 "Error: R package resolution interrupted\n",
@@ -1115,10 +1163,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                 completion_timeout_seconds=client.response_timeout,
                 control="interrupt",
             )
-            # Keep the FIFO blocked until interruption has reaped this resolver.
-            assert live_processes(resolver) == [], (
-                "interrupt did not reap the R resolver"
-            )
+            assert select.select([reader], [], [], 10)[0], "R resolver did not retire"
+            assert os.read(reader, 1) == b"", "R resolver retained its lifetime pipe"
             assert len(ir_run_records(record)) == baseline + 1
 
             client.send(
@@ -1136,6 +1182,9 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             release.release()
             started.close()
             release.close()
+            if keeper is not None:
+                os.close(keeper)
+            os.close(reader)
             if not passed:
                 stop_client(client)
 

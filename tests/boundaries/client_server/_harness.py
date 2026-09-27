@@ -24,13 +24,14 @@ from typing import Self
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import last_result_text
-from support.checkpoints import release_fixture_checkpoint
+from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
 from support.client import McpClient, TextReader
 from support.events import Events
 from support.execution import SANDBOXED, Execution
 from support.processes import (
     capture_process_identity,
     child_process_identities,
+    worker_launcher_identities,
     host_process_id,
     process_group_exists,
     stop_process_group,
@@ -564,6 +565,7 @@ def wait_for_stopped_worker(
     recorded_workers: list[tuple[int, int]],
     client: McpClient,
     execution: Execution,
+    binary: Path,
 ) -> tuple[Path, int, int]:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     while True:
@@ -587,8 +589,8 @@ def wait_for_stopped_worker(
                     # The native stage now execs the relay as its group leader.
                     # The server's direct child is the runner outside that group.
                     assert parent_id == process_group
-                    (supervisor,) = child_process_identities(
-                        capture_process_identity(client.process.pid)
+                    (supervisor,) = worker_launcher_identities(
+                        capture_process_identity(client.process.pid), binary
                     )
                     expected_parent = supervisor[0]
                 else:
@@ -625,6 +627,25 @@ def wait_for_stopped_worker(
             f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
         )
         time.sleep(0.01)
+
+
+def interrupt_paused_preparation(client: McpClient, release: FifoCheckpoint) -> None:
+    brokers = child_process_identities(capture_process_identity(client.process.pid))
+    assert len(brokers) == 1, brokers
+    owners = child_process_identities(brokers[0])
+    assert len(owners) == 1, owners
+    owner = owners[0][0]
+    # Hold the native launcher's retirement, or the direct coordinator's result,
+    # until interrupt delivery has been acknowledged. Interpreter signal handlers
+    # remain unchanged, including their failure status after interruption.
+    os.kill(owner, signal.SIGSTOP)
+    try:
+        wait_for_stopped_process(owner, os.getpgid(owner), client, "resolver owner")
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_result_text(client) == "\n[running; poll with an empty send]"
+    finally:
+        release.release()
+        os.kill(owner, signal.SIGCONT)
 
 
 def wait_for_stopped_process(

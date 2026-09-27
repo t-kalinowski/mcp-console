@@ -4,16 +4,19 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::resolver::{ManagedPython, ResolverStopHandle};
+use crate::resolver::{ManagedPython, ManagedPythonResolverConfiguration, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
+pub(crate) const LIVE_PREPARATION_DISABLED: &str = "live Python requirements are unavailable without R; use requirements.python with control: restart to prepare a new environment";
 pub(crate) const PREPARATION_DISABLED: &str = "live requirements are unavailable in Python sessions without R; install packages before starting the session";
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
+pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart";
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Selection {
     R {
+        #[serde(with = "crate::resolver::data::path")]
         home: PathBuf,
     },
     Python {
@@ -29,16 +32,18 @@ impl Selection {
     pub(crate) fn r_is_present() -> bool {
         // An explicit but invalid R_HOME, or a broken discovered installation,
         // must stay on the R path and report its own failure.
-        std::env::var_os("R_HOME").is_some() || crate::resolver::find_path_entry("R").is_some()
+        std::env::var_os("R_HOME").is_some()
+            || std::env::var_os("MCP_CONSOLE_RESOLVER_R").is_some()
+            || crate::resolver::find_path_entry("R").is_some()
     }
 
     pub(crate) fn python(
         configured: Option<OsString>,
-        resolver: &crate::resolver::execution::PythonConfiguration,
+        resolver: &ManagedPythonResolverConfiguration,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
-        let (executable, managed) = if let Some(explicit) = &explicit {
+        let (executable, mut managed) = if let Some(explicit) = &explicit {
             let executable = PathBuf::from(explicit);
             let executable = if executable.components().count() == 1 {
                 crate::resolver::find_path_entry(
@@ -52,16 +57,14 @@ impl Selection {
             };
             (executable, None)
         } else if resolver.has_uv() {
-            let managed = crate::resolver::execution::resolve_python_manifest(
+            let managed = crate::resolver::resolve_python_manifest(
                 crate::worker_protocol::default_python_requirement_manifest(),
                 resolver,
-                None,
                 on_started,
             )?;
             (managed.python().to_path_buf(), Some(managed))
         } else {
-            let executable = crate::resolver::find_path_entry("python3")
-                .or_else(|| crate::resolver::find_path_entry("python"))
+            let executable = std::env::var_os("MCP_CONSOLE_RESOLVER_PYTHON").map(PathBuf::from)
                 .ok_or("R is unavailable and neither `uv`, `python3`, nor `python` was found on PATH; install uv or CPython with a shared libpython and restart MCP Console")?;
             (executable, None)
         };
@@ -70,6 +73,9 @@ impl Selection {
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
         let selected = crate::python::inspect_native(&executable, on_started)?;
+        if let Some(managed) = &mut managed {
+            managed.set_native(selected.clone());
+        }
         Ok(Self::Python {
             selected: Box::new(selected),
             explicit,

@@ -63,9 +63,13 @@ pub enum Command {
     #[command(hide = true)]
     Worker,
 
-    /// Run the internal host resolver
+    /// Private resolver broker; requests and results use the preparation protocol
     #[command(hide = true)]
     Resolve,
+
+    /// Resolver workload, launched only after native enforcement
+    #[command(hide = true)]
+    ResolverWorkload,
 
     #[command(hide = true)]
     DockerOwner,

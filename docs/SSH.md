@@ -57,11 +57,12 @@ It uses the local cwd for built-ins, relative policy paths, and `--writable-root
 
 ## Runtime selection and policy
 
-The local server captures the target, selected built-in, native policy adjustments, and repeatable `--writable-root` arguments once.
+The local server captures the target, selected built-in, and native policy adjustments once.
 Every remote launch consumes that structured snapshot without reading remote YAML.
 Later local or remote configuration edits cannot change the session's target or selected policy.
 The helper applies Console's additions and native preflight on the execution host, including that host's platform defaults.
-Relative filesystem entries and CLI writable roots resolve against the fixed remote workspace.
+The workspace profile resolves against the fixed remote workspace.
+Sandboxed managed sessions reject custom filesystem entries and CLI writable roots because they can override resolver artifact protections.
 Literal paths retain their existing semantics: no tilde or environment expansion and no symlink canonicalization by Console.
 Native modes, proxy fields, omitted values, and explicit nulls retain the [sandbox configuration](SANDBOX_CONFIGURATION.md) behavior and runner validation.
 
@@ -107,12 +108,13 @@ Managed Python uses the existing server callbacks and retained manifest; the wor
 A separate authenticated SSH connection runs a private preparation owner outside the worker sandbox.
 It remains available without a relay or worker, including for discovery and standalone `send(requirements=...)`.
 Its operations are limited to bootstrap preparation, R libraries, Python manifests and version selection, and DuckDB extensions.
-They call the same embedded resolver implementation used locally.
-The private requests carry no shell programs, source code, executable choices, or arbitrary environment overrides.
+The transport starts the same safe-environment resolver broker used locally.
+Trusted launch settings are separate from operation requirements; requirements carry no shell programs, source code, executable choices, or environment overrides.
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
-Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 3 is unchanged.
+Results use bounded chunks followed by the cleanup receipt, with a 1 MiB assembled limit.
+Installer diagnostics retain bounded beginning and end previews without changing the failure classification.
+Launch protocol version 3 carries the selected environment and explicit isolation provider; preparation protocol version 4 carries the broker launch context and complete inspected candidates.
 Both require a matching Console package version.
 Older preinstalled-only peers fail compatibility checks before MCP readiness.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
@@ -120,14 +122,14 @@ Python resolution retains the existing treatment of `UV_OFFLINE`, `UV_NO_CACHE`,
 
 The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations.
 The preparation owner retains trusted resolver configuration, not session manifests or activation decisions.
-Each operation runs its own resolver process groups and reports an explicit result and cleanup status before the server can commit a candidate.
-An interrupt accepted between resolver stages remains owned by that preparation operation and applies to its next resolver.
+Each operation runs inside the native resolver sandbox and reports its result only after trusted native cleanup, before the server can commit a candidate.
+An interrupt accepted between resolver stages remains owned by that preparation operation and prevents its next resolver from starting.
 An ordinary installation failure with confirmed cleanup retains the existing transaction behavior, including preservation of a healthy old worker during failed restart preparation.
 Missing, malformed, or truncated results, failed cleanup, and detected transport loss prevent further preparation and worker replacement in that session.
 Preparation is never automatically replayed after uncertain completion.
 
-Accepted requirements retain the [existing trust boundary](REQUIREMENTS.md#host-resolution-and-trust): installation and build code may execute with the remote account's trusted setup permissions.
-Preparation has the remote account's network access, independently of workload restrictions.
+Accepted requirements use the [resolver boundary](RESOLVER.md): installation, build, import, and inspection code run inside a separate native sandbox with isolated storage and a default-deny package-source proxy.
+Explicit `--no-sandbox` preparation uses the remote account permissions and ordinary host caches.
 Automatic R requests still accept only plain package names, explicit R references remain subject to `IR_NO_LOCAL_SOURCES`, and Python requirements, version constraints, and DuckDB extension names retain their validators.
 
 A configured sandbox proxy runs on the remote host; its host-local addresses refer to that host.
@@ -140,8 +142,8 @@ Host-key verification remains under the user's OpenSSH configuration.
 Console can use an existing shared connection but never manages or terminates its master.
 Authentication, executable lookup, bootstrap, and native setup diagnostics remain visible on stderr.
 The connection timeout is 10 seconds.
-Discovery and each worker launch have a separate 30-second setup deadline, including command-prefix bootstrap and, for worker launch, preflight and readiness.
-Dependency installation has no 30-second deadline.
+Preparation connection setup and each worker launch have a separate 30-second setup deadline.
+After the preparation handshake, runtime discovery and dependency installation have no fixed deadline.
 An ordinary cell may return running while defaults or automatic dependencies resolve; explicit preparation retains its ordering and wait semantics.
 `send.timeout_ms` never cancels a resolver.
 Interrupt and cancellation messages identify the preparation operation and reach its remote resolver process group, independently of the worker connection.

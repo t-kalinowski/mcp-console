@@ -36,6 +36,9 @@ def checkpoint() -> None:
 
     if "MCP_CONSOLE_TEST_UV_INTERRUPTED" in os.environ:
         signal.signal(signal.SIGINT, report_interrupt)
+    if lifetime := os.environ.get("MCP_CONSOLE_TEST_UV_LIFETIME"):
+        descriptor = os.open(lifetime, os.O_WRONLY)
+        os.set_inheritable(descriptor, True)
 
     notify(os.environ["MCP_CONSOLE_TEST_UV_STARTED"])
 

@@ -5,19 +5,14 @@
 This document describes how MCP Console prepares and retains R packages, Python packages, and DuckDB extensions.
 The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timing, control and stdin ordering, failure effects, and wait timeouts.
 This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
-[Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
+[Host resolution and trust](#host-resolution-and-trust) explains the independent resolver sandbox and trusted launch configuration.
 
-Local [Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) resolve only their initial environment.
-When `uv` is available, the local `mcp-console resolve` process prepares the default Python manifest before MCP readiness, and the server retains the result for replacement workers.
-This does not invoke R, Rscript, or `ir`, and no installation runs inside the sandboxed worker.
-Executable inspection uses isolated Python mode, excluding workspace imports, `PYTHONPATH`, and the user site; the selected installation and its environment remain trusted.
-Without `uv`, a Python executable on `PATH` supplies its preinstalled packages.
-Live requirement additions and automatic import resolution are unavailable in this mode, including when Console resolved the initial environment itself.
-The remaining preparation and SQL behavior in this document applies to sessions with R.
-
-Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
-Its private JSON exchange carries requirement manifests, resolved environment data, controls, and cleanup receipts.
-The server retains the same declarations and commits candidates only after preparation completes.
+[Python sessions without R](BUILTIN_RUNTIME.md#python-sessions-without-r) use the same broker and resolver sandbox.
+Managed sessions prepare Python requirements before first use or with restart.
+Changed live requirements require restart; automatic missing-import installation remains unavailable.
+Preparation and full interpreter inspection complete before the current worker is retired.
+Without uv, an explicitly selected or PATH Python uses preinstalled packages.
+The R and SQL sections below apply to sessions with R.
 
 Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
 Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
@@ -81,10 +76,10 @@ The MCP transport remains available during this preparation: interrupt targets t
 A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
 
 Host resolution for changed requirements submitted through `send` also has no deadline.
-The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
+The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` retires the active native resolver workload (or sends SIGINT in direct mode), and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
-The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the worker.
+The default DuckDB extensions are installed in the resolver's managed extension storage but are loaded only when DuckDB needs them inside the worker.
 
 A custom worker skips all three default preparations.
 Its more limited requirements contract is described under [Custom workers](#custom-workers).
@@ -148,7 +143,8 @@ An unchanged replacement requires no preparation, but an explicitly requested re
 Changing these constraints with a live worker requires restart.
 `set` clears omitted constraints; `reset` restores startup constraints (currently none).
 Captured resolver settings such as `UV_*` remain startup configuration and are not rewritten by these session operations.
-User-selected Python, Python sessions without R, bare runtimes, Docker, and Docker Sandbox retain their existing preparation limits; inspection does not enable new preparation paths.
+User-selected Python, bare runtimes, Docker, and Docker Sandbox retain their preparation limits.
+Python-only managed sessions support changes before first use or with restart.
 
 Committed replacements are recorded with their declaration and call ID in the event journal and Markdown transcript.
 Quarto records the environment boundaries, including Python constraints, and disables automatic execution after a replacement.
@@ -322,7 +318,7 @@ After a worker starts, requests that add to the retained environment are availab
 
 - R additions can update a worker that implements live R preparation.
 - Compatible Python additions can update an idle server-managed built-in worker.
-- DuckDB extensions are installed on the host without replacing the worker.
+- DuckDB extensions are prepared in the resolver environment without replacing the worker.
 
 Live R and Python preparation is noninteractive.
 Use `send` to satisfy and collect any managed input requested by an idle R callback before preparing R or Python requirements.
@@ -376,7 +372,7 @@ Worker loss before either point loses the uncommitted declaration.
 
 ### Live DuckDB preparation
 
-DuckDB extension installation occurs entirely on the host.
+DuckDB extension installation occurs inside the independent resolver sandbox on the execution host, unless `--no-sandbox` is selected.
 There is no DuckDB-specific live-worker request or receipt.
 The server installs the complete retained extension set for each relevant resolved R library, so the current worker and later generations can use the extension with their DuckDB version.
 It then retains the extension names without changing the worker's R, Python, SQL, or catalog state.
@@ -384,7 +380,7 @@ It then retains the extension names without changing the worker's R, Python, SQL
 Preparation does not load extension code.
 A later `LOAD` or DuckDB automatic load occurs inside the worker, which is sandboxed by default.
 With `serve --no-sandbox`, extension code uses the selected host account's or container's filesystem, process, and network access.
-DuckDB chooses its compiled default extension repository and version-and-platform native cache; MCP Console does not accept a repository, URL, path, or version selector.
+DuckDB chooses its compiled default extension repository and version-and-platform storage beneath the resolver payload; MCP Console does not accept a repository, URL, path, or version selector.
 
 When a DuckDB request also needs a new R library, the worker still uses live R preparation for that library.
 Its success and failure semantics therefore follow the R rules above.
@@ -434,12 +430,13 @@ That validator is separate from explicit `requirements.r`, so restricting runtim
 The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
 Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
 It passes that exact `Rscript` to `ir` and uses it for DuckDB resolution.
-When Python is server-managed, the host resolver's selected `uv` executable creates and updates the environment directly.
+When Python is server-managed, the server-selected `uv` executable creates and updates the environment directly.
 Python version inventory and selection run directly through the same `uv` executable.
 For local host resolution, Python preparation does not inspect or validate a managed R library and does not invoke `R`, `Rscript`, or `ir`.
 When direct `uv` is available, the server prepares the Python candidate before the R library candidate; it still commits the complete prestart environment only after all candidates succeed.
-SSH preparation continues to supply its selected managed R library through `R_LIBS`.
-The R resolver prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
+Local and SSH Python preparation use the same captured uv configuration without passing a managed R library to uv.
+The R resolver prepends the resolved managed library to its captured R_LIBS.
+Sandboxed preparation replaces ambient libraries with owned bootstrap storage; explicit direct execution preserves the inherited entries.
 
 The server prefers `ir` from `PATH`.
 If `ir` is absent and `uv` is present, it runs `uv tool run --from r-lib-ir ir`.
@@ -447,9 +444,9 @@ It does not fall back when a selected PATH entry fails to start, resolve, or rep
 The selected `ir` must be version 0.4.0 or later.
 The server passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.
 Every invocation sets `IR_NO_LOCAL_SOURCES=1`, so `ir` rejects direct or transitive installation from the local filesystem.
-The `uv` path may download `r-lib-ir`; remote package installation and build code still run with server permissions.
+The uv path may download r-lib-ir; bootstrap and package code run inside the resolver sandbox.
 
-When `ir` is the only command on `PATH` and managed Python is selected, the server first resolves the default R library, then runs a fixed `reticulate:::uv_binary()` program through that library's exact `Rscript`.
+When `ir` is the only command on `PATH` and managed Python is selected, the broker first resolves the default R library, then runs the embedded uv bootstrap program through that library's exact `Rscript` inside the resolver sandbox.
 The resulting `uv` executable becomes the session's managed-Python resolver.
 When neither command is on `PATH`, the server checks the selected ambient R installation for this capability before accepting MCP input and invokes it during first-use preparation.
 A usable ambient reticulate can bootstrap `uv`, which then supplies `ir`.
@@ -524,64 +521,44 @@ The server supplies the retained library through `R_LIBS` at worker launch.
 A running custom worker must implement live R preparation for explicit additions.
 If it opts into runtime resolution, it must confirm or reject each provisional library as specified by the [worker protocol](WORKER_PROTOCOL.md).
 
-Prepared extensions remain in DuckDB's native default cache.
-A custom worker must use that cache when it loads them.
+Prepared extensions remain in the managed extension directory supplied at launch.
+A custom worker must use `MCP_CONSOLE_EXTENSION_DIRECTORY` when it loads them.
 It must also apply its first managed R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside this contract.
 
 ## Host resolution and trust
 
-For local execution, the resolver permissions and startup environment described below belong to the `resolve` subprocess, which runs with the server account's permissions and inherited startup environment.
-For [SSH execution](SSH.md#trusted-preparation), they belong to the trusted preparation owner on the execution host.
+The [resolver boundary](RESOLVER.md) defines the private broker, native policy, trusted configuration, isolated storage, result validation, and lifetime leases.
+Local and SSH preparation use the same implementation on the execution host.
+The broker handles data and native launches.
+Every interpreter probe, package import, installation, build, cache warming, and extension preparation runs in the separate resolver sandbox.
 
-On macOS and Linux, the default worker sandbox denies direct network access and regular writes outside its private temporary directory and any [explicit writable roots](SANDBOX_CONFIGURATION.md#additional-writable-paths).
-Dependency resolution is a deliberate exception to that boundary: the local `resolve` subprocess launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
-With `serve --no-sandbox`, the worker and loaded package or extension code use the selected host account's or container's filesystem, process, and network access.
-The requirement validation and trusted-resolver rules apply in both modes.
+Requirements cannot select commands, writable roots, or network policy.
+Installer subprocesses can write only beneath Console's resolver payload.
+Package downloads use trusted destinations through the native managed proxy, with a separate [native loopback allowance](RESOLVER.md#native-policy-and-storage) for installer coordination.
+They cannot read ordinary host caches or home credentials.
+Prepared artifacts remain untrusted and read-only to workers.
+No interpreter or returned library is loaded by the unsandboxed broker or server.
 
-Host resolvers may access the network and their normal caches.
-R and Python package installation can execute package installation or build code with the server's filesystem and process permissions.
-Managed Python environment startup and Matplotlib font-cache warming can also import or execute selected package code.
-Use only trusted requirements and trusted resolver configuration.
-`IR_NO_LOCAL_SOURCES` and the Python and DuckDB validation rules reduce the accepted input surface; they do not make arbitrary remote packages safe.
+Python isolated mode and the R, Python, and DuckDB syntax validators are not the security boundary.
+`--no-sandbox` explicitly uses host permissions and ordinary host caches; accepted packages must be trusted in that mode.
 
-Resolver inputs do not contain submitted cells or `send` stdin:
+The broker and runner start with a minimal environment.
+Captured resolver settings are data until enforcement is active.
+`resolver.environment` can configure package sources; `resolver.allowed_hosts` permits their native proxy host patterns, including necessary artifact and redirect hosts.
+Workspace configuration is not rediscovered during preparation.
+Worker changes cannot alter the captured configuration.
 
-- Explicit R requirements and validated automatic package names become individual process arguments to `ir`, which receives a constant R program.
-- Validated Python requirements, including bare distributions inferred from imports, become separate `uv tool run --with` arguments; the selected version and optional exclusion date use `--python` and `--exclude-newer`, and resolver standard input is closed.
-- The resolved interpreter path is returned through a resolver-created output file, not standard output or evaluated R source.
-- Validated Python version constraints remain in server memory and are sent to the resolver command; Rust filters the JSON inventory returned by direct `uv python list`, whose standard input is closed.
-- DuckDB extension names are validated JSON data and are not submitted SQL.
+The sandbox owns HOME, XDG directories, uv cache and managed Python locations, ir libraries, supporting R caches, extension storage, and scratch space under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/resolver/payload`.
+There is no host cache reuse or seeding.
+A session lease protects retained environments across idle periods and restarts; weekly cleanup runs only after confirmed release.
+See [cleanup and uncertain owner loss](RESOLVER.md#lifetimes-and-weekly-cleanup).
 
-Evaluated R code can trigger managed R resolution through the built-in `library()` and `loadNamespace()` bridge.
-Only validated plain names cross that worker-to-server boundary, and every automatic `ir` invocation still sets `IR_NO_LOCAL_SOURCES=1`.
-A plain name restricts resolver syntax, but the selected package's installation or build code still runs with server permissions; use only packages you trust.
-Evaluated Python imports and reticulate APIs can trigger managed Python resolution, but the same named-registry and version-constraint validation applies before a host resolver starts.
-Host resolution and managed-environment startup may run accepted distributions' installation, build, or initialization code with server permissions; use only packages you trust.
+Result helpers retain their original descriptors instead of reopening result paths.
+The broker validates returned manifests, paths, and Python embedding configuration only after trusted native cleanup.
+Installation failure preserves the previous accepted state; unconfirmed cleanup blocks replacement.
 
-### Host resolver `uv` configuration
-
-An explicit `RETICULATE_UV` startup value is retained.
-Otherwise the host resolver selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
-An invalid explicit executable fails when invoked; the server does not replace it with a `PATH` executable.
-Direct Python version inventory and managed-environment creation receive that stable selection.
-When `RETICULATE_UV=managed`, the host resolver obtains reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
-The reticulate bootstrap invocation receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
-When the server starts, the host resolver command captures inherited `UV_*` variables except `UV_OFFLINE`.
-Before each managed-Python or bootstrap resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
-Changes made later by evaluated R or Python code therefore cannot configure host resolution.
-
-Direct version discovery uses `uv`'s managed and system inventories under the server's startup `PATH`.
-It does not add reticulate's separately registered virtualenv directories to `PATH`, so a system interpreter must be discoverable by `uv` there.
-Enabled `UV_MANAGED_PYTHON` and `UV_NO_MANAGED_PYTHON` settings are normalized to their equivalent `UV_PYTHON_PREFERENCE` values before direct calls, and recognized disabled aliases are removed.
-This avoids conflicting command-line and environment selectors while preserving the requested source policy.
-Conflicting or invalid source settings remain unchanged so `uv` reports them normally.
-Managed-environment creation passes each validated requirement as its own argument and removes its resolver-created interpreter-path output file after the resolver call.
-Local Python resolution uses the captured `uv` configuration without a managed R library; SSH preparation retains its existing `R_LIBS` behavior.
-It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.
-Ordinary Matplotlib cache-warm failures remain best effort, but an interrupt during cache warming fails the preparation before its candidate environment can be committed.
-
-The built-in worker forces `UV_OFFLINE=1` before user code runs, including with `serve --no-sandbox`.
-This setting configures `uv`; only the default sandbox supplies a process-level network restriction.
+The built-in worker still sets `UV_OFFLINE=1` before user code runs, including with `serve --no-sandbox`.
+That setting configures uv; native policy provides the process-level network restriction in sandboxed sessions.
 
 ## Failure atomicity and cache effects
 
@@ -590,9 +567,9 @@ A failure does not change the retained manifest or replace the current worker.
 The same pre-start transaction is used for requirements declared by a cell, and any failure prevents that cell from being dispatched.
 For inline restart, the same failure also prevents stdin enqueue and worker replacement.
 
-That transaction covers server-owned state, not external resolver caches.
+That transaction covers server-owned state, not resolver cache contents.
 `ir`, `uv`, reticulate, and DuckDB may download, build, or install files before a later step fails.
-For example, an earlier extension in a failed multi-extension request can remain in DuckDB's native cache without entering the retained extension set.
+For example, an earlier extension in a failed multi-extension request can remain in managed extension storage without entering the retained extension set.
 A future request may reuse such cache entries.
 
 Live preparation has worker-confirmed commit boundaries.

@@ -1,0 +1,6 @@
+---
+error: >-
+  mcp-console stdout closed before replying: return_code=1,
+  stderr='Console and its native runner must be installed outside resolver
+  storage\nresolver preparation retirement is unconfirmed: truncated
+  resolver frame length: failed to fill whole buffer\n'

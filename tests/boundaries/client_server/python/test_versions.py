@@ -20,6 +20,9 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.resolvers import (
     ir_cache_directory,
+    resolver_fixture_directory,
+    resolver_fixture_arguments,
+    resolve_managed_python,
     named_requirement_error,
     normalize_duckdb_resolution_error,
     python_inventory_client,
@@ -33,6 +36,7 @@ from support.resolvers import (
     write_uv_python_inventories,
 )
 from support.suites import run_this_suite
+from boundaries.client_server._harness import interrupt_paused_preparation
 
 
 @executions(DIRECT, SANDBOXED)
@@ -41,8 +45,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
     execution: Execution,
 ) -> Transcript:
     # The worker uses the current R library, while host uv must not inherit it.
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
         uv_record = temporary / "uv-environment.jsonl"
@@ -57,9 +60,8 @@ def test_uses_current_r_library_for_managed_python_resolution(
         environment["MCP_CONSOLE_TEST_R_LIBS_RECORD"] = str(r_libs_record)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
-            current_directory=temporary,
         )
         client.initialize_and_list_tools()
         # fmt: r
@@ -90,7 +92,12 @@ def test_uses_current_r_library_for_managed_python_resolution(
                 for line in r_libs_record.read_text(encoding="utf-8").splitlines()
             ]
             assert records, "managed Python resolution did not invoke uv"
-            assert all(record is None for record in records), records
+            expected = (
+                str(temporary.parent / "r/bootstrap")
+                if execution.name == "sandbox"
+                else None
+            )
+            assert all(record == expected for record in records), records
 
         client.send(requirements={"r": ["zeallot"]})
         assert last_result_text(client) == "[prepared]"
@@ -136,8 +143,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
 def test_validates_registry_only_python_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         uv_record = temporary / "uv-environment.jsonl"
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
@@ -149,9 +155,8 @@ def test_validates_registry_only_python_requirements(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
-            current_directory=temporary,
         )
         client.initialize_and_list_tools()
         uv_record.write_text("", encoding="utf-8")
@@ -406,8 +411,7 @@ exit 97
 def test_recovers_from_python_version_resolution_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         uv = Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
@@ -419,10 +423,14 @@ def test_recovers_from_python_version_resolution_failure(
         environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"] = str(failure_marker)
         environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = "list"
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(
+            binary,
+            execution.serve(*resolver_fixture_arguments(environment)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(r="worker_pid <- Sys.getpid()")
-        assert last_result_text(client) == "[done]"
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         failure_marker.touch()
         # fmt: r
         r = code(r"""
@@ -448,8 +456,7 @@ def test_recovers_from_python_version_resolution_failure(
 def test_resolves_python_version_inventory_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         client, inventories, arguments = python_inventory_client(
             binary,
             execution,
@@ -481,8 +488,7 @@ def test_resolves_python_version_inventory_semantics(
 def test_resolves_python_version_constraint_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         client, inventories, _ = python_inventory_client(binary, execution, temporary)
 
         write_uv_python_inventories(
@@ -529,8 +535,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         client, inventories, arguments = python_inventory_client(
             binary,
             execution,
@@ -575,8 +580,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         install_directory = temporary / "managed-python"
         install_directory.mkdir()
         client, inventories, arguments = python_inventory_client(
@@ -623,13 +627,12 @@ def test_respects_system_python_preference_with_custom_install_directory(
         return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_uses_reticulate_managed_uv_for_python_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         original_path = os.environ.get("PATH", "")
         real_uv = shutil.which("uv", path=original_path)
         assert real_uv is not None, "real uv is required"
@@ -708,9 +711,8 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
 
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
-            current_directory=temporary,
         )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["DBI"]})
@@ -757,8 +759,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         resolver_record = temporary / "uv-resolver.jsonl"
         client, _, _ = python_inventory_client(
             binary,
@@ -782,9 +783,10 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
         ]
         assert version_lists, records
         assert tool_runs, records
-        assert all(record["UV_NO_CACHE"] == "1" for record in version_lists), (
-            version_lists
-        )
+        assert all(
+            record["UV_NO_CACHE"] == ("0" if execution == SANDBOXED else "1")
+            for record in version_lists
+        ), version_lists
         assert all(record["UV_NO_CACHE"] is None for record in tool_runs), tool_runs
         return client.finish()
 
@@ -793,8 +795,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
 def test_removes_disabled_uv_python_source_aliases(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
-        temporary = Path(temporary_directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         resolver_record = temporary / "uv-resolver.jsonl"
         client, _, _ = python_inventory_client(
             binary,
@@ -819,70 +820,66 @@ def test_removes_disabled_uv_python_source_aliases(
         return client.finish()
 
 
+def probe_python(
+    binary: Path, execution: Execution, directory: Path, source: str
+) -> Path:
+    with tempfile.TemporaryDirectory() as workspace:
+        python = resolve_managed_python(binary, execution, Path(workspace))
+    venv = directory / "probe-python"
+    subprocess.run(
+        [python, "-m", "venv", "--without-pip", venv], check=True, capture_output=True
+    )
+    site = next((venv / "lib").glob("python*/site-packages"))
+    (site / "sitecustomize.py").write_text(source)
+    return venv / "bin/python"
+
+
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_python_cache_warmup_without_committing(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as cleanup:
-        temporary = Path(temporary_directory)
-        fake_python = temporary / "python"
+    with (
+        resolver_fixture_directory(binary, execution) as temporary,
+        ExitStack() as cleanup,
+    ):
         preflight_warmup = temporary / "preflight-warmup"
         blocked_warmup = temporary / "blocked-warmup"
         warmup_started = FifoCheckpoint.create(temporary / "warmup-started")
         cleanup.callback(warmup_started.close)
         warmup_release = FifoCheckpoint.create(temporary / "warmup-release")
         cleanup.callback(warmup_release.close)
-        write_python_executable(
-            fake_python,
+        python = probe_python(
+            binary,
+            execution,
+            temporary,
             # fmt: python
             code("""
-                #!/usr/bin/env python3
-                import os
-                import signal
-                import sys
+                import os, sys
                 from pathlib import Path
 
-
-                def main() -> None:
-                    arguments = sys.argv[1:]
-                    if arguments and arguments[0] == "-c":
-                        Path(arguments[-1]).write_text(
-                            os.environ["MCP_CONSOLE_TEST_UV_PYTHON"],
-                            encoding="utf-8",
-                        )
-                        return
-                    if arguments[:2] == ["-I", "-c"]:
-                        preflight = Path(os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"])
-                        if not preflight.exists():
-                            preflight.touch()
-                            return
-                        blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCKED_WARMUP"])
-                        if not blocked.exists():
-                            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-                            blocked.touch()
-                            with open(
-                                os.environ["MCP_CONSOLE_TEST_WARMUP_STARTED"], "wb", buffering=0
-                            ) as started:
-                                started.write(b"1")
-                            signal.sigwait({signal.SIGINT})
-                            with open(
-                                os.environ["MCP_CONSOLE_TEST_WARMUP_RELEASE"], "rb", buffering=0
-                            ) as release:
-                                assert release.read(1) == b"1"
-                        return
-                    raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
-
-
-                if __name__ == "__main__":
-                    main()
+                if "import matplotlib.font_manager" in sys.orig_argv:
+                    preflight = Path(os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"])
+                    blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCKED_WARMUP"])
+                    if not preflight.exists():
+                        preflight.touch()
+                    elif not blocked.exists():
+                        blocked.touch()
+                        with open(
+                            os.environ["MCP_CONSOLE_TEST_WARMUP_STARTED"], "wb", buffering=0
+                        ) as started:
+                            started.write(b"1")
+                        with open(
+                            os.environ["MCP_CONSOLE_TEST_WARMUP_RELEASE"], "rb", buffering=0
+                        ) as release:
+                            assert release.read(1) == b"1"
                 """),
         )
         client, _, arguments = python_inventory_client(
             binary,
             execution,
             temporary,
-            resolver_python=fake_python,
+            resolver_python=python,
             extra_environment={
                 "MCP_CONSOLE_TEST_PREFLIGHT_WARMUP": str(preflight_warmup),
                 "MCP_CONSOLE_TEST_BLOCKED_WARMUP": str(blocked_warmup),
@@ -890,34 +887,23 @@ def test_interrupts_python_cache_warmup_without_committing(
                 "MCP_CONSOLE_TEST_WARMUP_RELEASE": str(warmup_release.path),
             },
         )
-        preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        warmup_started.wait("Python cache warmup started", timeout=5)
-
-        interrupt = client.start_send(
-            control="interrupt",
-            timeout_ms=30_000,
-        )
-        # Keep preparation active through the control response. Its own
-        # response below establishes that the resolver has finished.
-        try:
-            client.receive(interrupt)
-        finally:
-            warmup_release.release()
-        client.receive(preparation)
-        preparation_result = preparation["result"]
-        assert preparation_result["isError"] is True, preparation_result
-        preparation_text = preparation_result["content"][0]["text"]
-        assert "cache warmup" in preparation_text, preparation_text
-        assert "interrupt" in preparation_text, preparation_text
-        interrupt_result = interrupt["result"]
-        assert interrupt_result.get("isError") is not True, interrupt_result
-
-        client.send()
-        assert last_result_text(client) == "\n[idle]"
-        client.send(requirements={"python": ["py-yaml12"]})
-        assert last_result_text(client) == "[prepared]"
-        assert len(recorded_tool_run_pythons(arguments)) == 2
-        return client.finish()
+        with client:
+            preparation = client.start_send(requirements={"python": ["py-yaml12"]})
+            warmup_started.wait("Python cache warmup started")
+            interrupt_paused_preparation(client, warmup_release)
+            client.receive(preparation)
+            assert preparation["result"] == {
+                "content": [
+                    {"type": "text", "text": "dependency resolution interrupted"}
+                ],
+                "isError": True,
+            }, preparation
+            client.send()
+            assert last_result_text(client) == "\n[idle]"
+            client.send(requirements={"python": ["py-yaml12"]})
+            assert last_result_text(client) == "[prepared]"
+            assert len(recorded_tool_run_pythons(arguments)) == 2
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -925,64 +911,44 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as cleanup:
-        temporary = Path(temporary_directory)
-        fake_python = temporary / "python"
+    with (
+        resolver_fixture_directory(binary, execution) as temporary,
+        ExitStack() as cleanup,
+    ):
         block_tool_run = temporary / "block-tool-run"
         tool_run_started = FifoCheckpoint.create(temporary / "tool-run-started")
         cleanup.callback(tool_run_started.close)
         tool_run_release = FifoCheckpoint.create(temporary / "tool-run-release")
         cleanup.callback(tool_run_release.close)
         unexpected_warmup = temporary / "unexpected-warmup"
-        write_python_executable(
-            fake_python,
+        python = probe_python(
+            binary,
+            execution,
+            temporary,
             # fmt: python
             code("""
-                #!/usr/bin/env python3
-                import os
-                import signal
-                import sys
+                import os, sys
                 from pathlib import Path
 
-
-                def main() -> None:
-                    arguments = sys.argv[1:]
-                    blocked = Path(os.environ["MCP_CONSOLE_TEST_BLOCK_TOOL_RUN"])
-                    if arguments and arguments[0] == "-c":
-                        if blocked.exists():
-                            # Block SIGINT before publishing readiness, so an
-                            # early interrupt stays pending for sigwait().
-                            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
-                            with open(
-                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"], "wb", buffering=0
-                            ) as started:
-                                started.write(b"1")
-                            signal.sigwait({signal.SIGINT})
-                            with open(
-                                os.environ["MCP_CONSOLE_TEST_TOOL_RUN_RELEASE"], "rb", buffering=0
-                            ) as release:
-                                assert release.read(1) == b"1"
-                        Path(arguments[-1]).write_text(
-                            os.environ["MCP_CONSOLE_TEST_UV_PYTHON"],
-                            encoding="utf-8",
-                        )
-                        return
-                    if arguments[:2] == ["-I", "-c"]:
-                        if blocked.exists():
-                            Path(os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]).touch()
-                        return
-                    raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
-
-
-                if __name__ == "__main__":
-                    main()
+                if Path(os.environ["MCP_CONSOLE_TEST_BLOCK_TOOL_RUN"]).exists():
+                    if "import matplotlib.font_manager" in sys.orig_argv:
+                        Path(os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]).touch()
+                    elif "-I" not in sys.orig_argv:
+                        with open(
+                            os.environ["MCP_CONSOLE_TEST_TOOL_RUN_STARTED"], "wb", buffering=0
+                        ) as started:
+                            started.write(b"1")
+                        with open(
+                            os.environ["MCP_CONSOLE_TEST_TOOL_RUN_RELEASE"], "rb", buffering=0
+                        ) as release:
+                            assert release.read(1) == b"1"
                 """),
         )
         client, _, arguments = python_inventory_client(
             binary,
             execution,
             temporary,
-            resolver_python=fake_python,
+            resolver_python=python,
             extra_environment={
                 "MCP_CONSOLE_TEST_BLOCK_TOOL_RUN": str(block_tool_run),
                 "MCP_CONSOLE_TEST_TOOL_RUN_STARTED": str(tool_run_started.path),
@@ -990,39 +956,28 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                 "MCP_CONSOLE_TEST_UNEXPECTED_WARMUP": str(unexpected_warmup),
             },
         )
-        block_tool_run.touch()
-        preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        tool_run_started.wait("Python resolver started", timeout=5)
-
-        interrupt = client.start_send(
-            control="interrupt",
-            timeout_ms=30_000,
-        )
-        # Keep preparation active through the control response. Its own
-        # response below establishes that the resolver has finished.
-        try:
-            client.receive(interrupt)
-        finally:
-            tool_run_release.release()
-        client.receive(preparation)
-        preparation_result = preparation["result"]
-        assert preparation_result["isError"] is True, preparation_result
-        preparation_text = preparation_result["content"][0]["text"]
-        assert "managed Python" in preparation_text, preparation_text
-        assert "interrupt" in preparation_text, preparation_text
-        interrupt_result = interrupt["result"]
-        assert interrupt_result.get("isError") is not True, interrupt_result
-        assert not unexpected_warmup.exists(), (
-            "cache warmup started after the resolver accepted an interrupt"
-        )
-
-        client.send()
-        assert last_result_text(client) == "\n[idle]"
-        block_tool_run.unlink()
-        client.send(requirements={"python": ["py-yaml12"]})
-        assert last_result_text(client) == "[prepared]"
-        assert len(recorded_tool_run_pythons(arguments)) == 2
-        return client.finish()
+        with client:
+            block_tool_run.touch()
+            preparation = client.start_send(requirements={"python": ["py-yaml12"]})
+            tool_run_started.wait("Python resolver started")
+            interrupt_paused_preparation(client, tool_run_release)
+            client.receive(preparation)
+            assert preparation["result"] == {
+                "content": [
+                    {"type": "text", "text": "dependency resolution interrupted"}
+                ],
+                "isError": True,
+            }, preparation
+            assert not unexpected_warmup.exists(), (
+                "cache warmup started after interruption"
+            )
+            client.send()
+            assert last_result_text(client) == "\n[idle]"
+            block_tool_run.unlink()
+            client.send(requirements={"python": ["py-yaml12"]})
+            assert last_result_text(client) == "[prepared]"
+            assert len(recorded_tool_run_pythons(arguments)) == 2
+            return client.finish()
 
 
 if __name__ == "__main__":

@@ -3,35 +3,69 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import Execution
-from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
 
 
-def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
-    owners = [
-        child
-        for child in child_process_identities(server)
-        if subprocess.run(
-            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        == f"{binary} resolve"
-    ]
-    assert len(owners) == 1, owners
-    return owners[0]
+@contextmanager
+def resolver_fixture_directory(binary: Path, execution: Execution):
+    """Keep native fixture writes in a leased resolver payload."""
+    if execution.name == "direct":
+        with tempfile.TemporaryDirectory() as directory:
+            yield Path(directory)
+        return
+    with McpClient(binary, ("serve", "--worker", str(FIXTURES / "zod"))) as lease:
+        lease.initialize_and_list_tools()
+        cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+        payload = cache / "mcp-console/resolver/payload"
+        with tempfile.TemporaryDirectory(prefix="fixture-", dir=payload) as directory:
+            yield Path(directory)
+
+
+def resolver_fixture_arguments(environment: dict[str, str]) -> tuple[str, ...]:
+    """Explicit trusted settings for test probes, without extra write grants."""
+    # Fixture scripts need the base interpreter, not the runner's cached venv.
+    environment["PATH"] = os.pathsep.join(
+        (str(Path(sys.executable).resolve().parent), environment["PATH"])
+    )
+    settings = {
+        name: value
+        for name, value in environment.items()
+        if name.startswith("MCP_CONSOLE_TEST_")
+    }
+    return (
+        "-c",
+        "resolver.environment=" + json.dumps(settings),
+        "-c",
+        "resolver.readable_roots="
+        + json.dumps(
+            [sys.base_prefix, str(FIXTURES)]
+            + [
+                str(Path(environment[name]).resolve())
+                for name in ("MCP_CONSOLE_TEST_REAL_UV", "MCP_CONSOLE_TEST_REAL_IR")
+                if name in environment
+            ]
+            + [
+                path
+                for path in environment.get(
+                    "MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES", ""
+                ).split(os.pathsep)
+                if path
+            ]
+        ),
+    )
 
 
 def recording_ir_environment(
@@ -160,62 +194,6 @@ def record_resolved_r_library(environment: dict[str, str], directory: Path) -> N
     environment["MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"] = str(identity)
 
 
-def resolver_interrupt_permission_environment(
-    temporary_path: Path,
-) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path, Path]:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    fake_bin = temporary_path / "bin"
-    fake_bin.mkdir()
-    fake_ir = fake_bin / "ir"
-    fake_ir.write_text(
-        code(r"""
-            #!/bin/sh
-
-            set -eu
-            if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
-              printf 'ir 0.4.0\n'
-              exit 0
-            fi
-            exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
-            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
-            printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
-            IFS= read -r _ <&3
-            """),
-        encoding="utf-8",
-    )
-    fake_ir.chmod(0o755)
-
-    path = environment.get("PATH")
-    assert path is not None, "PATH is required"
-    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
-    environment["TMPDIR"] = str(temporary_path)
-    denied_interrupt = temporary_path / "resolver-sigint-denied"
-    resolver_watches = temporary_path / "resolver-watches"
-    resolver_watches.mkdir()
-    resolver_group = temporary_path / "resolver-group"
-    resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
-    resolver_lifetime = FifoCheckpoint.create(temporary_path / "resolver-lifetime")
-    environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
-    environment["MCP_CONSOLE_TEST_RESOLVER_WATCHES"] = str(resolver_watches)
-    environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
-    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
-    environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
-    # The server passes the interposer to its direct resolver owner. That child
-    # removes the loader variable before launching ir or the worker.
-    environment[LOADER_VARIABLE] = str(
-        build_interposer(temporary_path, "killpg_denial_interposer")
-    )
-    return (
-        environment,
-        resolver_started,
-        resolver_lifetime,
-        resolver_group,
-        denied_interrupt,
-        resolver_watches,
-    )
-
-
 def fake_ir_environment(root: Path, libraries: list[Path]) -> dict[str, str]:
     environment, _ = r_test_environment()
     fake_bin = root / "bin"
@@ -305,6 +283,9 @@ def python_inventory_client(
     resolver_record: Path | None = None,
     extra_environment: dict[str, str] | None = None,
 ) -> tuple[McpClient, Path, Path]:
+    if execution.name == "sandbox" and resolver_python == Path(sys.executable):
+        with tempfile.TemporaryDirectory() as workspace:
+            resolver_python = resolve_managed_python(binary, execution, Path(workspace))
     real_uv = shutil.which("uv")
     assert real_uv is not None, "real uv is required"
     environment = os.environ.copy()
@@ -329,13 +310,12 @@ def python_inventory_client(
         environment.update(extra_environment)
     client = McpClient(
         binary,
-        execution.serve(),
+        execution.serve(*resolver_fixture_arguments(environment)),
         environment,
-        current_directory=directory,
     )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["DBI"]})
-    assert last_result_text(client) == "[prepared]"
+    assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")
     if resolver_record is not None:
         resolver_record.write_text("", encoding="utf-8")
@@ -538,7 +518,7 @@ def send_and_collect_runtime_python_resolution(
 
         if output != "[done]" or not chunks:
             chunks.append(output)
-        collected = "".join(chunks)
+        collected = "".join(chunks) or "[done]"
 
         calls = client.transcript[call_start:]
         submitted = calls[0]

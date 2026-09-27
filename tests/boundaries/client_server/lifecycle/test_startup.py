@@ -8,10 +8,9 @@ import select
 import shutil
 import sys
 import tempfile
-import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -24,17 +23,12 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.processes import (
-    ProcessIdentity,
-    capture_process_identity,
-    kill_processes,
-)
 from support.normalization import code
 from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
-from support.events import Events
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
+from support.requirements import NATIVE_FIXTURES, command, requires
+from support.resolvers import resolver_fixture_arguments, resolver_fixture_directory
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -46,27 +40,16 @@ class StartupFixture:
     root: Path
     started: FifoCheckpoint
     release: FifoCheckpoint
-    exits: Events
-    identities: list[ProcessIdentity] = field(default_factory=list)
+    lifetime: int
 
     def wait_for_resolver(self) -> None:
         self.started.wait("first-use resolver")
-        identity = self.root / "identity"
-        pids = set(map(int, identity.read_text(encoding="utf-8").split()))
-        assert len(pids) == 2, pids
-        self.identities = [capture_process_identity(pid) for pid in pids]
-        for pid in pids:
-            self.exits.watch_process(pid)
 
     def wait_for_resolver_exit(self) -> None:
-        pending = {identity[0] for identity in self.identities}
-        deadline = time.monotonic() + 5
-        while pending:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, f"resolver processes did not exit: {pending}"
-            observed = self.exits.wait(remaining)
-            assert observed, f"resolver processes did not exit: {pending}"
-            pending.difference_update(observed)
+        assert select.select([self.lifetime], [], [], 5)[0], (
+            "resolver processes did not exit"
+        )
+        assert os.read(self.lifetime, 1) == b"", "resolver retained its lifetime pipe"
 
     def invocations(self) -> list[dict[str, object]]:
         record = self.root / "resolver.jsonl"
@@ -84,8 +67,7 @@ def startup_fixture(
     phase: str = "all",
     server_environment: dict[str, str] | None = None,
 ) -> Iterator[StartupFixture]:
-    with tempfile.TemporaryDirectory() as directory, Events() as exits:
-        temporary = Path(directory)
+    with resolver_fixture_directory(binary, execution) as temporary:
         fake_bin = temporary / "bin"
         fake_bin.mkdir()
         fixtures = Path(__file__).resolve().parents[3] / "fixtures"
@@ -97,6 +79,9 @@ def startup_fixture(
         (fake_bin / "python3").symlink_to(sys.executable)
         started = FifoCheckpoint.create(temporary / "started")
         release = FifoCheckpoint.create(temporary / "release")
+        lifetime = temporary / "lifetime"
+        os.mkfifo(lifetime)
+        reader = os.open(lifetime, os.O_RDONLY | os.O_NONBLOCK)
         environment, _ = r_test_environment()
         real_ir = shutil.which("ir")
         real_uv = shutil.which("uv")
@@ -120,7 +105,7 @@ def startup_fixture(
                 "MCP_CONSOLE_TEST_REAL_UV": real_uv,
                 "MCP_CONSOLE_TEST_STARTUP_PHASE": phase,
                 "MCP_CONSOLE_TEST_STARTUP_CLAIM": str(temporary / "gate-claimed"),
-                "MCP_CONSOLE_TEST_STARTUP_IDENTITY": str(temporary / "identity"),
+                "MCP_CONSOLE_TEST_STARTUP_LIFETIME": str(lifetime),
                 "MCP_CONSOLE_TEST_STARTUP_RECORD": str(temporary / "resolver.jsonl"),
                 "MCP_CONSOLE_TEST_STARTUP_STARTED": str(started.path),
                 "MCP_CONSOLE_TEST_STARTUP_RELEASE": str(release.path),
@@ -129,31 +114,24 @@ def startup_fixture(
         environment.update(server_environment or {})
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve(*resolver_fixture_arguments(environment)),
             environment,
             response_timeout=5,
         )
-        fixture = StartupFixture(client, temporary, started, release, exits)
+        fixture = StartupFixture(client, temporary, started, release, reader)
         try:
             yield fixture
         finally:
-            # An early handshake failure can leave the resolver gated before
-            # the test gets to observe it. Capture its identity before cleanup.
-            if (
-                not fixture.identities
-                and select.select([started.descriptor], [], [], 0)[0]
-            ):
-                fixture.wait_for_resolver()
             try:
                 client.close()
             finally:
-                kill_processes(fixture.identities)
+                os.close(reader)
                 started.close()
                 release.close()
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_preserves_initialize_buffered_during_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -171,7 +149,7 @@ def test_preserves_initialize_buffered_during_startup(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_initializes_before_uv_bootstrap_installation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -182,7 +160,7 @@ def test_initializes_before_uv_bootstrap_installation(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_prepares_python_before_r_bootstrap_validation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -215,7 +193,7 @@ def test_prepares_python_before_r_bootstrap_validation(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_first_cell_prepares_defaults_after_running_response(
     binary: Path,
     execution: Execution,
@@ -308,7 +286,7 @@ def test_first_cell_prepares_defaults_after_running_response(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_explicit_preparation_keeps_its_wait_precondition(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -337,7 +315,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_cancels_resolver_discovery_when_stdin_closes(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -361,7 +339,7 @@ def test_cancels_resolver_discovery_when_stdin_closes(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_cancels_default_preparation_when_stdin_closes(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -385,7 +363,7 @@ def test_cancels_default_preparation_when_stdin_closes(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(command("ir"), command("uv"))
 def test_interrupts_first_use_preparation_without_running_cell(
     binary: Path,
     execution: Execution,
@@ -407,7 +385,7 @@ def test_interrupts_first_use_preparation_without_running_cell(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_restart_replaces_first_use_cell_and_stdin(
     binary: Path, execution: Execution
 ) -> Transcript:

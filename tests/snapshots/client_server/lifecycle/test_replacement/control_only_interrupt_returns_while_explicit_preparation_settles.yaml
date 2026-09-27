@@ -8,7 +8,7 @@ send:
 result:
   content:
     - type: text
-      text: "R package resolution failed with exit status: 130: "
+      text: dependency resolution interrupted
   isError: true
 ---
 send:
@@ -39,7 +39,7 @@ send:
 result:
   content:
     - type: text
-      text: "R package resolution failed with exit status: 130: "
+      text: dependency resolution interrupted
   isError: true
 ---
 send:

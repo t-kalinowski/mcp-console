@@ -1,0 +1,108 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    r:
+      - praise
+    python:
+      - six
+    duckdb:
+      - httpfs
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: cat(normalizePath(find.package('praise')))
+result:
+  content:
+    - type: text
+      text: <resolver-payload>/r-library/praise
+  isError: false
+---
+send:
+  python: import six; retained = object(); retained_id = id(retained)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: LOAD httpfs; SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    r:
+      - mcpconsolenosuchpackage
+  python: raise AssertionError('failed preparation ran code')
+  stdin: |
+    must not be queued
+result:
+  content:
+    - type: text
+      text: |-
+        [R package resolution failed with exit status: 1: <cache-dependent installer progress>
+        Error: 
+        ! error in pak subprocess
+        Caused by error: 
+        ! Could not solve package dependencies:
+        * DBI: dependency conflict
+        * arrow: dependency conflict
+        * duckdb: dependency conflict
+        * jsonlite: dependency conflict
+        * mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.
+        * nanoarrow: dependency conflict
+        * pillar: dependency conflict
+        * praise: dependency conflict
+        * reticulate: dependency conflict
+        * tibble: dependency conflict
+        * tidyverse: dependency conflict
+        * utf8: dependency conflict
+        ---
+        Backtrace:
+        1. global ir_resolve_main()
+        2. global ir_resolve_refs(refs_in)
+        3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)
+        4. pak:::remote(function(...) { …
+        5. err$throw(res$error)
+        ---
+        Subprocess backtrace:
+        1. base::withCallingHandlers(cli_message = function(msg) { …
+        2. get("pkg_deps_internal", asNamespace("pak"))(...)
+        3. pak:::pkg_deps_internal2(pkg, upgrade, dependencies)
+        4. deps$stop_for_solution_error()
+        5. private$plan$stop_for_solve_error()
+        6. pkgdepends:::pkgplan_stop_for_solve_error(self, private)
+        7. base::throw(new_error("Could not solve package dependencies:\n", msg, …
+        8. | base::signalCondition(cond)
+        9. global (function (e) …
+        Execution halted
+        ir: dependency resolution failed]
+  isError: true
+transcript_normalization:
+  target: result.content[0].text
+  replacements:
+    cache_dependent_installer_progress: <cache-dependent installer progress>
+---
+send:
+  python: assert id(retained) == retained_id; print('preserved')
+result:
+  content:
+    - type: text
+      text: |
+        preserved
+  isError: false

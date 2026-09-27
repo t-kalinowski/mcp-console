@@ -140,7 +140,7 @@ result:
           control:
             description: |-
               Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-              SIGINT from the active host resolver or live worker and preserves in-memory state. After
+              interruption of active preparation or SIGINT from the live worker and preserves in-memory state. After
               successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
               earlier evaluation or attempting an optional following cell; the cell is not run if the
               interrupted evaluation remains active. When `requirements` is available, restart resolves
@@ -162,7 +162,7 @@ result:
               Requirements alone perform standalone preparation. With one cell, they are preconditions of
               that cell. With `control = "restart"`, they are part of the restart transaction, with or
               without a cell. Only add can accompany interrupt, and only when a cell follows.
-              Preparation does not import, attach, or load dependencies. On a code-bearing call without
+              Preparation does not attach dependencies in the worker. On a code-bearing call without
               control, preparation completes before same-call nonempty stdin is queued. Standalone
               preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
               unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
@@ -173,8 +173,8 @@ result:
               resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
               a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
               and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-              further changes require restart. Resolution runs with server permissions and may download
-              packages or extensions or execute installation or build code. Use only trusted requirements.
+              further changes require restart. Preparation may download packages and execute installation,
+              build, import, and inspection code in the resolver's execution environment, described above.
             type:
               - object
               - "null"
@@ -212,9 +212,9 @@ result:
                   DuckDB extension names for the managed DuckDB backend, for standalone preparation,
                   preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
                   JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
-                  letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
+                  letter and contain only lowercase ASCII letters, digits, and underscores. The resolver
                   uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
-                  native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
+                  managed extension storage. `LOAD` and automatic loading happen
                   later inside the worker.
                 type: array
                 items:
@@ -228,7 +228,7 @@ result:
                   to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
                   Automatic R discovery accepts only plain package names. An idle worker that implements R
                   preparation can add requirements without losing live state. Local package sources are
-                  rejected because resolution runs with server permissions.
+                  rejected; only supported registry and remote references are accepted.
                 type: array
                 items:
                   type: string
@@ -241,7 +241,7 @@ result:
                   inference needs a different distribution, a version, an extra, or an environment marker, or
                   when the distribution should be prepared before the cell. Automatic imports infer bare
                   distribution names only. Paths, file URLs, editable requirements, direct references, local
-                  archives, and local projects are rejected. Preparation does not import the package. An idle
+                  archives, and local projects are rejected. Preparation can import packages for inspection. An idle
                   server-managed worker may activate compatible additions without losing state. A nonempty
                   user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
                   requirements.

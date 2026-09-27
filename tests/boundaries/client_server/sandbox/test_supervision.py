@@ -127,7 +127,13 @@ def _observed_processx_generation(
     with tempfile.TemporaryDirectory() as directory:
         environment = os.environ.copy()
         with observed_sandbox_descendants(Path(directory), environment) as observe:
-            client = McpClient(binary, SANDBOXED.serve(), environment)
+            # Observe worker descendants; the independent resolver must not
+            # inherit this worker-launch instrumentation.
+            client = McpClient(
+                binary,
+                SANDBOXED.serve("-c", 'resolver.environment.DYLD_INSERT_LIBRARIES=""'),
+                environment,
+            )
             generation: _Generation | None = None
             try:
                 client.initialize_and_list_tools()

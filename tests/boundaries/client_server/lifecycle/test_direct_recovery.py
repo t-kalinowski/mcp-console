@@ -19,6 +19,7 @@ from support.processes import (
     kill_processes,
     live_processes,
     signal_process,
+    worker_launcher_identities,
 )
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, WORKER, requires
@@ -43,7 +44,7 @@ def test_replaces_direct_relay_after_sigkill(binary: Path) -> Transcript:
             client.send(r="echo ready")
             assert last_tool_text(client) == "zod: ready\n"
             server = capture_process_identity(client.process.pid)
-            (relay,) = child_process_identities(server)
+            (relay,) = worker_launcher_identities(server, binary)
             (worker,) = child_process_identities(relay)
             identities.extend((relay, worker))
 
@@ -71,7 +72,7 @@ def test_replaces_direct_relay_after_sigkill(binary: Path) -> Transcript:
                 }
             ], result
             assert live_processes((relay,)) == []
-            (replacement,) = child_process_identities(server)
+            (replacement,) = worker_launcher_identities(server, binary)
             assert replacement != relay
             identities.append(replacement)
             identities.extend(child_process_identities(replacement))

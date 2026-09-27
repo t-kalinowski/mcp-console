@@ -226,7 +226,9 @@ impl RequirementDelta {
                 && manages_python
                 && (pending || python != current.python_manifest()))
             .then_some(python),
-            r_changed: changed && (pending || candidate.r != current.r || environment.r.is_none()),
+            r_changed: changed
+                && !matches!(environment.r_resolver, super::super::RResolver::Disabled)
+                && (pending || candidate.r != current.r || environment.r.is_none()),
             r_requirements: candidate.r,
         })
     }

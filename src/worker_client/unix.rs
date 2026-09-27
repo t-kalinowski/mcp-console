@@ -141,6 +141,7 @@ impl WorkerRuntime {
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             target,
+            resolver_lease,
             local_runtime,
             executable,
             arguments,
@@ -198,11 +199,11 @@ impl WorkerRuntime {
         if target.is_none() {
             // Never accept an ambient internal selection for custom workers.
             command.env_remove(crate::local_runtime::ENVIRONMENT);
-            if let Some(runtime) = local_runtime {
-                runtime.configure(&mut command)?;
-            }
             if let Some(python) = python {
                 python.configure_worker(&mut command);
+            }
+            if let Some(runtime) = local_runtime {
+                runtime.configure(&mut command)?;
             }
             if let Some(managed_r) = managed_r {
                 managed_r.configure_worker(&mut command)?;
@@ -226,6 +227,9 @@ impl WorkerRuntime {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
+        if !no_sandbox && let Some(lease) = resolver_lease {
+            crate::resolver::broker::inherit_lease(&mut command, lease)?;
+        }
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
         let (output_exit, notify_output_exit) = std::io::pipe()

@@ -9,6 +9,9 @@ See [Docker Sandbox execution](DOCKER_SANDBOX.md) for its complete schema and se
 That provider accepts only `provider`, `environment`, and `inherit_environment` under `sandbox`; native restrictions, top-level `extends`, and CLI writable roots are rejected.
 It uses Docker's existing policy without applying native defaults or requiring a native companion.
 The native policy configuration below applies to native selection.
+Native local and SSH `serve` sessions protect resolver storage and launch components from worker writes.
+They accept the default, `:workspace`, and `:read-only` filesystem profiles without custom filesystem rules or native extensions; see [resolver policy](RESOLVER.md).
+The custom filesystem examples below apply to standalone `sandbox` launches.
 
 `serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the launch working directory, then `~/.agents/console/config.yaml` if the project file is absent.
 No ancestors are searched.
@@ -214,7 +217,8 @@ target:
 
 The server reads YAML locally and captures the target and user policy once.
 It sends these settings as bounded structured data; the remote helper verifies the existing absolute workspace and materializes policy there without discovering remote YAML.
-Platform defaults, relative filesystem entries, workspace special paths, and `serve --writable-root` use the remote host and workspace.
+Platform defaults and workspace special paths use the remote host and workspace.
+Local and SSH sessions reject custom filesystem entries and `serve --writable-root` because these can override resolver artifact protections.
 The native sandbox and any proxy run remotely.
 `sandbox.environment` and `inherit_environment` retain their workload meaning, including with direct SSH execution; they do not forward the workload environment to SSH or trusted preparation.
 Explicit remote `R_HOME` and `RETICULATE_PYTHON` values are conveyed separately as runtime selections so preparation targets the worker's runtime; the rest of the environment map remains workload-only.
@@ -240,17 +244,19 @@ Setting `MCP_CONSOLE_SANDBOX_CONFIG` alone does not change either command's poli
 
 ## Additional writable paths
 
-`serve` and `sandbox` accept repeatable `--writable-root PATH` arguments:
+Standalone `sandbox` accepts repeatable `--writable-root PATH` arguments:
 
 ```sh
-mcp-console serve --writable-root './output files' --writable-root /path/to/cache
+mcp-console sandbox --writable-root './output files' --writable-root /path/to/cache -- Rscript analysis.R
 ```
 
 This temporary argument does not define the eventual configuration interface.
 Paths may name directories, individual files, or locations that do not exist yet.
 Console does not inspect, create, or remove them; it leaves filesystem handling to the runner.
 Paths must be valid UTF-8 to fit the runner's configuration transport.
-Relative paths resolve against the launch working directory before workload startup, and the server retains the absolute paths across worker restarts and replacements.
+Relative paths resolve against the launch working directory before workload startup.
+Local and SSH `serve` sessions require the supported filesystem profiles above; use `extends: :workspace` to allow writes beneath the workspace.
+Prepared Docker targets retain their existing custom-root support and keep absolute paths across worker restarts and replacements.
 Paths retain spaces and Unicode; symlink components remain subject to the runner's native writable-root validation.
 
 The paths augment the default filesystem policy for the workload and its subprocesses.

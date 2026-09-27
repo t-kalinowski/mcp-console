@@ -18,12 +18,12 @@ send:
 result:
   content:
     - type: text
-      text: managed Python resolution interrupted
+      text: dependency resolution interrupted
   isError: true
 ---
 send:
   control: interrupt
-  timeout_ms: 30000
+  timeout_ms: 0
 result:
   content:
     - type: text

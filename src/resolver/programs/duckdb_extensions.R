@@ -19,9 +19,9 @@ base::local({
     duckdb::duckdb(
       dbdir = ":memory:",
       config = list(
-        # Suppress DuckDB-R's storage policy while leaving DuckDB core to use
-        # its compiled default extension directory.
-        extension_directory = "",
+        # Managed preparation selects its owned storage. Explicit direct
+        # execution keeps DuckDB core's default directory.
+        extension_directory = Sys.getenv("MCP_CONSOLE_EXTENSION_DIRECTORY", ""),
         secret_directory = base::file.path(storage, "stored-secrets"),
         temp_directory = base::file.path(storage, "spill")
       )

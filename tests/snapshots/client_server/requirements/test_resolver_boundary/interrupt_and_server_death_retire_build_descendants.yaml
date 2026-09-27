@@ -1,0 +1,47 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-managed.yaml
+---
+send:
+  python: retained = 42
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - resolver-probe==1.0
+  python: raise AssertionError('candidate cell must not run')
+result:
+  content:
+    - type: text
+      text: "[dependency resolution interrupted]"
+  isError: true
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  python: print(retained)
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+shutdown: input_closed
+detached_source_build_descendant: retired
+---
+shutdown: server_death
+detached_source_build_descendant: retired

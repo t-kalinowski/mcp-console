@@ -112,6 +112,10 @@ impl QuartoWriter {
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
         let changed = match event {
             Event::SessionStarted { .. } => true,
+            Event::PythonEnvironmentAccepted { packages } => {
+                self.python_requirements = packages.to_vec();
+                true
+            }
             Event::RequirementsSelected {
                 call_id,
                 action,
@@ -375,6 +379,10 @@ impl ProjectionWriter {
 
 fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), String> {
     match &envelope.event {
+        Event::PythonEnvironmentAccepted { packages } => {
+            document.push_str("## Accepted Python environment\n\n");
+            push_json(document, &json!({"packages": packages}))
+        }
         Event::SessionStarted {
             session,
             working_directory,
