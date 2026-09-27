@@ -335,6 +335,8 @@ impl Launch {
             "/etc/ld.so.cache",
             "/etc/ld.so.conf",
             "/etc/ld.so.conf.d",
+            // Debian library links (including BLAS) pass through alternatives.
+            "/etc/alternatives",
             "/etc/resolv.conf",
             "/etc/nsswitch.conf",
             "/etc/hosts",

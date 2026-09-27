@@ -29,6 +29,7 @@ Python registry syntax, automatic R package names, explicit ir reference framing
 The private broker transport uses versioned, length-prefixed JSON frames bounded to 1 MiB, including assembled results.
 The workload receives bounded versioned JSON through stdin and returns JSON through stdout.
 Installer logs and native diagnostics use separate captured streams.
+Their bounded text previews retain the beginning and end with UTF-8 omission counts; a large installer log does not invalidate the protocol result.
 No submitted cells or interactive stdin enter preparation requests.
 
 The broker and native runner start with an empty environment.
