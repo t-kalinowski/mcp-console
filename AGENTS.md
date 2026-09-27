@@ -166,7 +166,7 @@ The suite covers client-server MCP, server-relay JSONL, relay-worker sideband an
 `docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX.md` owns the Console policy and external runner boundary.
 Keep these invariants intact:
 
-- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and resolver requests.
   By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
   `serve --no-sandbox` skips the native runner at the selected target.
   Docker containers and Docker Sandbox microVMs retain their outer enforcement and retirement; host execution retains direct-worker cleanup limits.
@@ -184,7 +184,8 @@ Keep these invariants intact:
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
   Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 registry requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
-  Accepted installation or build code may execute with server permissions.
+  The private resolver broker owns policy and data; installation, build, import, discovery, and inspection code execute only inside its independent native sandbox unless --no-sandbox is explicit.
+  See docs/RESOLVER.md.
 - Treat submitted R, Python, and SQL as shell-class capability and enforce isolation at the worker-process boundary unless `serve --no-sandbox` is selected.
   Keep complete code cells separate from interactive `stdin`, and keep the MCP adapter independent of interpreter implementation details.
 - Production R and Python programs under `src/` are included in the binary at compile time.
@@ -203,8 +204,10 @@ Keep these invariants intact:
 - `src/target_session.rs` — selected SSH/Docker/SBX sessions, shared compute probes and controller replacement blocking, and generation-owned retirement receipts and resource names.
 - `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, local ownership helper, and confirmed container retirement.
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
-- `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
-- `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
+- `src/resolver/preparation.rs`, `src/resolver/preparation/{client,host}.rs` — shared local/SSH broker connection, trusted launch data, operation-scoped control, and native cleanup receipts.
+- `src/resolver/execution.rs` — broker calls, preserving server-owned environment transactions.
+- `src/resolver/{broker,policy,storage,workload}.rs` — data-only owner, independent native policy, protected leases and weekly cleanup, and sandboxed preparation execution.
+- `src/resolver/result_file.rs` — retained result descriptors; no privileged reopening of sandbox result paths.
 - `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from effective target/provider metadata, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
@@ -231,11 +234,11 @@ Keep these invariants intact:
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/local_runtime.rs` — captured local R availability or inspected Python selection, retained host-resolved environments, and direct-worker temporary storage.
+- `src/local_runtime.rs` — captured local R availability or inspected Python selection, retained broker-resolved environments, and direct-worker temporary storage.
 - `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — native interpreter startup, inspection of an already-selected executable, shared post-initialization setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
 - `src/python/requirements.rs`, `src/python/requirements/r.rs` — native requirement values, declaration transitions, preparation orchestration, live activation through the CPython library, and pending activation key, with R field layout, attributes, encodings, history, identity comparison, and notification conversion confined to the active-binding adapter.
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate selection and attachment adapter, Console embedding-configuration handoff, candidate lookup, declaration checks, and automatic-resolution forwarding.
-  R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator, with initial host resolution only.
+  R-present sessions initialize R eagerly; sessions without R use the same coordinator and native Python evaluator, with broker preparation before first use or restart.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.

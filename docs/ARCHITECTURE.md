@@ -18,7 +18,8 @@ MCP client
 mcp-console server                         host
     ├── generation, relay lifetime, and operation owner
     ├── retained environments, output, and recording
-    ├──── host resolvers                    R, Python, and DuckDB setup
+    ├──── resolver broker                  policy, storage, leases, validation
+    │       └── native resolver sandbox    uv / ir / R / Python / builds
     │
     │ ordinary child stdin/stdout; inherited stderr
     ▼
@@ -49,7 +50,8 @@ With `serve --no-sandbox`, the relay skips the native runner at its selected exe
 Local and SSH host execution use that account's permissions and temporary-directory environment.
 Docker retains its outer container boundary and retirement.
 Docker Sandbox compute enforcement retains its outer microVM and provider policy, including with `--no-sandbox`; it does not use an inner native runner.
-Available R, Python, and DuckDB dependency resolution runs in separate host processes; [requirements and environments](REQUIREMENTS.md) defines its trust boundary.
+Available R, Python, and DuckDB dependency resolution uses the separate [resolver broker](RESOLVER.md).
+With explicit `--no-sandbox`, its workloads use host permissions and ordinary host caches.
 
 For a configured SSH target, the process chain is:
 
@@ -64,8 +66,8 @@ It consumes captured user policy, applies remote application defaults and prefli
 The runner retains enforcement, private storage, and descendant cleanup.
 Direct SSH execution skips the sandbox at the same target.
 A separate local OpenSSH child connects to the remote `ssh-prepare` owner for capability discovery and dependency operations.
-That owner captures trusted resolver settings once and runs the existing resolver functions outside the worker sandbox.
-It reports operation completion only after its resolver groups retire.
+That owner captures trusted resolver settings once and starts the same safe-environment resolver broker on the execution host.
+The broker enforces a separate native sandbox and accepts completion only after trusted native retirement.
 The local server retains requirements, candidates, and activation decisions; remote execution never enters controller runtime discovery or resolver processes.
 See [SSH execution](SSH.md) for configuration and prerequisites.
 
@@ -169,7 +171,7 @@ The server owns the logical console session and all state that must survive a wo
 - worker lifecycle and generation ownership;
 - relay-generation launch and retirement through an ordinary child process;
 - retained R, Python, and DuckDB requirements;
-- host resolver launch, interruption, cancellation, and result commits;
+- broker requests, interruption, cancellation, and environment commits;
 - evaluation, preparation, stdin, inline control, restart, and replacement admission;
 - the pending output tape, output budgets, response boundaries, and MCP response assembly;
 - response-delivery ownership; and
@@ -271,8 +273,8 @@ The Rust Python facade loads and retains that file-backed `libpython`, initializ
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
-Local runtime availability is captured at server startup in `src/local_runtime.rs` and passed through internal launch configuration to each worker.
-When R is absent, the server resolves the default Python manifest through the existing local host resolver, or selects PATH Python when uv is absent, and inspects that executable before MCP readiness.
+Local runtime availability is discovered through `src/local_runtime.rs` inside the resolver sandbox at server startup and passed through internal launch configuration to each worker.
+When R is absent, the broker resolves the default Python manifest, or selects PATH Python when uv is absent, and inspects that executable inside the resolver sandbox before MCP readiness.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
 The same coordinator constructs an absent R integration, native Python runtime, and no R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
@@ -337,10 +339,12 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-For a local host target, the built-in server first captures a stable host resolver configuration and detects its capability without installing an environment.
+For a local host target, the server captures trusted resolver configuration and opens the private broker before MCP readiness.
+The broker discovers runtime capability inside its native sandbox.
+Python-only sessions without an explicit interpreter prepare and inspect their initial managed Python environment at this point.
 The Python configuration captures an explicit `RETICULATE_UV` selection or `uv` on `PATH` independently of R discovery.
 R bootstrap prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
-It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
+R-present sessions retain the selected bootstrap as pending setup and accept MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
 An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
 With directly available `uv`, local Python preparation runs before R library preparation and does not require a managed R library; reticulate bootstrap remains the R-backed fallback when direct `uv` is unavailable.
 For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
@@ -381,16 +385,16 @@ Inner-launcher failure and outer-resource removal remain separate outcomes.
 
 The waits retain distinct owners and allowances:
 
-| Wait                                                          | Owner                             | Allowance                                                       |
-| ------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------- |
-| Target bootstrap/preflight and controller worker readiness    | `target_launch::SETUP_TIMEOUT`    | 30 seconds per setup wait                                       |
-| SSH preparation discovery                                     | `ssh::preparation::SETUP_TIMEOUT` | 30 seconds; dependency operations have no installation deadline |
-| Disposable compute runtime probe                              | `target_session::PROBE_TIMEOUT`   | 40 seconds                                                      |
-| Docker owner after probe cancellation / generation retirement | Docker profile                    | 8 / 6 seconds                                                   |
-| SBX owner after probe cancellation / generation retirement    | SBX profile                       | 20 / 20 seconds                                                 |
-| SSH transport during generation retirement                    | SSH adapter                       | 6 seconds                                                       |
-| Local launcher after retirement request                       | Worker orchestration              | 6 seconds                                                       |
-| Target-side inner launcher retirement                         | Target launcher                   | 6 seconds, then a 1-second forced-exit wait                     |
+| Wait                                                          | Owner                                  | Allowance                                                       |
+| ------------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------- |
+| Target bootstrap/preflight and controller worker readiness    | `target_launch::SETUP_TIMEOUT`         | 30 seconds per setup wait                                       |
+| Resolver preparation transport setup                          | `resolver::preparation::SETUP_TIMEOUT` | 30 seconds; dependency operations have no installation deadline |
+| Disposable compute runtime probe                              | `target_session::PROBE_TIMEOUT`        | 40 seconds                                                      |
+| Docker owner after probe cancellation / generation retirement | Docker profile                         | 8 / 6 seconds                                                   |
+| SBX owner after probe cancellation / generation retirement    | SBX profile                            | 20 / 20 seconds                                                 |
+| SSH transport during generation retirement                    | SSH adapter                            | 6 seconds                                                       |
+| Local launcher after retirement request                       | Worker orchestration                   | 6 seconds                                                       |
+| Target-side inner launcher retirement                         | Target launcher                        | 6 seconds, then a 1-second forced-exit wait                     |
 
 Provider CLI deadlines belong to their adapters: Docker setup commands and owner-request reads allow 10 seconds; cleanup listing, stop, removal, and confirmation each allow 2 seconds.
 SBX version and owner-request reads allow 10 seconds, creation 25 seconds, listing 2 seconds, and forced removal 10 seconds.
@@ -438,7 +442,7 @@ A runtime R callback sent after live preparation begins is a protocol failure.
 
 For a request, the server verifies the worker generation and validates the supplied plain package names.
 It serializes access to the retained environment and host resolver, merges the names into the complete retained R requirement set, and returns the existing managed environment without invoking `ir` when that set is unchanged.
-Otherwise it resolves the complete candidate on the host and prepares every retained DuckDB extension for that candidate library.
+Otherwise it asks the resolver broker to prepare the complete candidate and every retained DuckDB extension for that candidate library inside the resolver sandbox.
 The server rechecks the generation and returns the candidate path without committing it.
 
 The worker applies the candidate through its managed `.libPaths()` bridge, then reports either activation or activation failure.
@@ -462,7 +466,7 @@ The Python finder calls a process-lifetime R closure through reticulate.
 That closure adds the distribution to reticulate's additive manifest and materializes it through the same helper used by explicit live Python preparation.
 The worker then uses the existing synchronous `ResolvePython` request; the relay only forwards that message and its reply.
 
-The server resolves a complete managed-Python candidate on the host and returns it provisionally.
+The server asks the broker to resolve and inspect a complete managed-Python candidate inside the resolver sandbox and returns it provisionally.
 Reticulate checks compatibility with the live interpreter and activates the environment without replacing Python or the worker.
 Its active manifest binding submits the requirement write to Console's native owner, which matches and commits the pending activation before reporting `PythonActivated`.
 The server commits only a matching candidate owned by the current generation.
@@ -486,7 +490,7 @@ Resolver interruption and lifecycle cancellation are tracked as typed outcomes f
 
 ### Explicit restart
 
-When restart includes requirements, the server first resolves the candidate retained environment outside the sandbox.
+When restart includes requirements, the server first resolves and inspects the complete candidate through the separate resolver sandbox.
 A resolution failure leaves the existing worker generation in place.
 After resolution succeeds, or immediately for an unchanged restart, the server closes admission to the old generation, settles any active response ownership, retires and reaps the relay and worker, then starts the replacement from the retained environment.
 For `send(control = "restart")`, that transaction continues under the same admission boundary through same-call stdin enqueue and reservation of the optional cell against the ready replacement.

@@ -21,7 +21,8 @@ See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [
 
 Local sessions can run Python without R.
 When R is absent, Console uses `uv` to resolve its default Python environment, or uses `python3` then `python` from `PATH` when `uv` is absent.
-These sessions support Python execution, input, plots, interrupts, restart, and recording; requirement changes, automatic package installation, and SQL are unavailable.
+These sessions support Python execution, input, plots, interrupts, restart, and recording.
+Managed Python requirements can be prepared before first use or with restart; automatic import installation and SQL are unavailable.
 With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
 See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 
@@ -125,8 +126,9 @@ Trusted [project configuration](docs/SANDBOX_CONFIGURATION.md#project-configurat
 Linux requires mounted `/proc` and permission for the native sandbox's namespace and policy operations; see [host requirements](docs/LINUX_COMPATIBILITY.md).
 Restricted containers or host security policy may prevent startup.
 
-Dependency preparation runs **outside the worker sandbox** and may execute trusted installation, build, or initialization code with host permissions.
-Use only trusted requirements and resolver configuration.
+Dependency preparation uses a separate [resolver sandbox](docs/RESOLVER.md), with isolated caches and a managed package-source proxy.
+Its broker handles policy and data; package installation, builds, imports, and inspection run inside that sandbox.
+Explicit `--no-sandbox` preparation uses host permissions and ordinary host caches.
 See the [dependency trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust).
 
 There is one implicit session and cells run sequentially.

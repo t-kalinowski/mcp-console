@@ -25,7 +25,11 @@ mcp-console sandbox -c 'sandbox.environment={LABEL: analysis, MODE: "batch"}' --
 Dotted keys address nested mappings.
 For example, `-c foo.bar=baz` contributes `{foo: {bar: baz}}`, and `-c 'foo.bar={baz: [far, faz]}'` contributes a nested mapping and list.
 The application validates the resulting configuration against its current schema; these illustrative `foo` keys are not current application settings.
-See [sandbox configuration](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for supported settings.
+See [sandbox configuration](SANDBOX_CONFIGURATION.md), [resolver configuration](RESOLVER.md#native-policy-and-storage), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for supported settings.
+
+`resolver` configures dependency preparation independently of `sandbox`, which configures the worker.
+Resolver settings are trusted launch data; submitted requirements cannot override them.
+Use `resolver.environment.RETICULATE_PYTHON` to select an interpreter for preparation and the worker, or set `RETICULATE_PYTHON` in the launch environment.
 
 Inline values accept:
 
@@ -67,7 +71,9 @@ Only the final configuration is validated against the application schema.
 These rules apply to every key, including `kind` and `extends`; the layering module has no field-specific merge rules.
 Changing a discriminator does not remove sibling fields inherited from the project file.
 Configuration defaults, built-in profile expansion, target selection, and native policy validation happen after layering.
-Existing `--writable-root` grants are added after layering; `--no-sandbox` retains its documented execution behavior.
+For standalone `sandbox` and prepared Docker targets, `--writable-root` grants are added after layering.
+Local and SSH `serve` sessions reject custom filesystem grants to protect resolver storage; use `extends: :workspace` for workspace writes.
+`--no-sandbox` retains its documented execution behavior.
 
 The server captures the resulting settings once and retains them across worker restarts.
 Selected execution hosts consume that captured configuration without rediscovering the controller's project file or CLI arguments.

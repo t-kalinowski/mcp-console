@@ -51,9 +51,9 @@ Local sessions discover R through `R_HOME` or `R` on `PATH`.
 If neither exists, ordinary `mcp-console serve` starts a Python session without requiring an interpreter-selection variable or another launch flag.
 An invalid explicit `R_HOME` or a broken discovered R installation reports an R error; it does not select Python instead.
 
-With `uv` available, the server uses its existing host resolver and default Python manifest (`numpy` and `pandas`) to select and retain an ephemeral environment.
+With uv available, the resolver broker prepares and retains the default Python manifest (`numpy` and `pandas`).
 Resolution honors the captured resolver configuration, cache handling, and Python version ranking.
-It runs outside the worker sandbox and may install packages with server permissions.
+Preparation and executable inspection run inside the independent [resolver sandbox](RESOLVER.md).
 An available resolver that fails reports the failure without trying a different interpreter.
 With no `uv`, selection checks `python3` then `python` on `PATH`; the selected CPython must provide a usable shared embedding library.
 If no interpreter is available, the error asks the user to install `uv` or CPython and restart the server.
@@ -61,7 +61,8 @@ Existing explicit `RETICULATE_PYTHON` selection remains supported.
 Its captured value is preserved when sandbox environment inheritance is disabled or project environment settings provide a different value.
 
 The session retains the selected environment and executable across cells, restarts, and worker replacement.
-A restart clears Python objects, but does not resolve another environment.
+A restart clears Python objects and preserves the accepted environment unless same-call requirements request a change.
+The complete candidate resolves and is inspected before worker retirement; failed preparation preserves objects, requirements, and unread stdin.
 The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
 The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME` and `PYTHONPLATLIBDIR`.
 Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
@@ -72,13 +73,16 @@ Retirement does not delete resolver caches or the retained environment.
 
 Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
 Interrupts received while the worker is idle do not interrupt the next Python cell.
-When `uv` resolved the initial environment, the generated Quarto document declares its NumPy and pandas defaults without enabling live requirements.
+When uv manages Python, the generated Quarto document records its accepted package declaration, including defaults and successful explicit changes.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
-To use additional packages, prepare a Python environment before starting Console and make it available through the PATH fallback or existing explicit-selection interface.
-Requirement changes, automatic missing-import installation, R cells, and SQL cells are unavailable.
+For managed Python, submit `requirements.python` before first use or with `control: "restart"`.
+Changed requirements on a live worker require restart; repeated accepted requirements are a no-op.
+Existing user-selected environments still require preinstalled packages.
+Automatic missing-import installation, R cells, and SQL cells are unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
-This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
+SSH uses the same runtime discovery on its execution host.
+Prepared Docker/SBX targets retain their existing runtime requirements.
 
 ## Cells and polling
 

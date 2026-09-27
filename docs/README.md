@@ -28,6 +28,7 @@ Source and public acceptance tests remain the final authority when prose disagre
 ## Implementers and protocol reviewers
 
 - [Implemented architecture](ARCHITECTURE.md) is the source of truth for the current process structure, responsibility boundaries, worker-generation ownership, and lifecycle at an architectural level.
+- [Resolver boundary](RESOLVER.md) describes the private preparation broker, native policy, isolated storage, result validation, leases, and cleanup.
 - [Sandbox integration](SANDBOX.md) describes Console policy defaults, the verified executable handoff, native platform requirements, and lifetime limits.
 - [Sandbox configuration](SANDBOX_CONFIGURATION.md) defines explicit JSON environment input, target overrides, lifecycle settings, and shell, Python, and R callers.
 - [Worker protocol](WORKER_PROTOCOL.md) is the exact relay-worker wire protocol and custom-worker contract.
