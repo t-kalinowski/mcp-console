@@ -11,6 +11,7 @@ import signal
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,9 +22,11 @@ from support.assertions import assert_result_content, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.events import Events
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import command, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.ssh import (
     SSH,
     client_environment,
@@ -44,6 +47,7 @@ def ssh_session(
     selected: bool = False,
     with_uv: bool = True,
     python_name: str = ".venv/bin/python",
+    input_receipt: tuple[Path, Path] | None = None,
 ):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -91,17 +95,45 @@ def ssh_session(
             config.write_text(json.dumps(settings))
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
-            with McpClient(binary, execution.serve(), controller, local) as client:
+            executable = binary
+            if input_receipt is not None:
+                blocked, release = input_receipt
+                library = build_interposer(root, "relay_stdout_read_interposer")
+                controller.update(
+                    {
+                        "MCP_CONSOLE_TEST_RELAY_READ_MATCH": '"kind":"input_received"',
+                        "MCP_CONSOLE_TEST_RELAY_READ_BLOCKED": str(blocked),
+                        "MCP_CONSOLE_TEST_RELAY_READ_RELEASE": str(release),
+                    }
+                )
+                executable = root / "controller-console"
+                executable.write_text(
+                    "#!/bin/sh\n"
+                    'export MCP_CONSOLE_TEST_RELAY_READ_PID="$$"\n'
+                    f"export {LOADER_VARIABLE}={shlex.quote(str(library))}\n"
+                    f'exec {shlex.quote(str(binary))} "$@"\n'
+                )
+                executable.chmod(0o755)
+            with McpClient(executable, execution.serve(), controller, local) as client:
                 yield client, remote, local
             assert not trap.exists()
 
 
-@requires(SSH, command("uv"))
+@requires(SSH, command("uv"), NATIVE_FIXTURES, PROCESS_EVENTS)
 @executions(DIRECT, SANDBOXED)
 def test_managed_sql_first_and_live_python(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with ssh_session(binary, execution) as (client, _, _):
+    with (
+        TemporaryDirectory() as temporary,
+        closing(FifoCheckpoint.create(Path(temporary) / "input-blocked")) as blocked,
+        closing(FifoCheckpoint.create(Path(temporary) / "input-release")) as release,
+        ssh_session(binary, execution, input_receipt=(blocked.path, release.path)) as (
+            client,
+            _,
+            local,
+        ),
+    ):
         client.initialize_and_list_tools()
         tools = client.transcript[-1]["result"]["tools"]
         assert "sql" in tools[0]["inputSchema"]["properties"]
@@ -116,8 +148,31 @@ def test_managed_sql_first_and_live_python(
         assert busy["isError"] and "already evaluating" in last_result_text(client)
         client.send(requirements={"python": ["numpy"]})
         assert last_result_text(client) == "[prepared]"
-        client.send(stdin="ready\n")
-        assert "ready" in last_result_text(client)
+        pending = client.start_send(stdin="ready\n")
+        try:
+            blocked.wait("SSH input receipt before controller dispatch")
+            client.receive(pending)
+            assert last_result_text(client) == "\n[waiting for stdin]", pending
+            # Queueing input does not guarantee receipt within the 100 ms input
+            # grace. Keep that partial response, then observe the ordered output
+            # after releasing the actual receipt before polling for completion.
+            session = next((local / ".agents/console/sessions").iterdir())
+            recorded = session / "outputs/call-000004.log"
+            deadline = time.monotonic() + 10
+            with Events() as events:
+                events.watch_file(recorded)
+                events.watch_process(client.process.pid)
+                release.release()
+                while "'ready'\n" not in recorded.read_text():
+                    assert client.process.poll() is None
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0 and events.wait(remaining), (
+                        "controller did not capture the consumed SSH input"
+                    )
+            client.send()
+            assert last_result_text(client) == "'ready'\n"
+        finally:
+            release.release()
         client.send(
             requirements={"python": ["py-yaml12"]},
             stdin="live input\n",
