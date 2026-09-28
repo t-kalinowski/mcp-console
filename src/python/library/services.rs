@@ -218,7 +218,8 @@ unsafe extern "C" fn resolve_import_request(
         let request = services.text(request)?;
         let resolution = serde_json::from_str(&request)
             .map_err(|error| format!("invalid Python import request: {error}"))?;
-        let response = services.without_gil(|| crate::python::resolve_native_import(resolution))?;
+        let response =
+            services.without_gil(|| crate::python::resolve_managed_import(resolution))?;
         Ok(unsafe {
             (services.api.unicode_from_string_and_size)(
                 response.as_ptr().cast(),

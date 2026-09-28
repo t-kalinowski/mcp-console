@@ -14,7 +14,7 @@ send:
     before <- reticulate::py_require()
     namespace <- asNamespace("reticulate")
     invisible(suppressMessages(base::trace(
-      "python_config",
+      "python_config_impl",
       tracer = quote(stop(structure(
         list(message = "activation interrupted", call = NULL),
         class = c("interrupt", "condition")

@@ -240,7 +240,7 @@ impl Client {
             generation,
             requirements,
             resolver,
-            None,
+            environment.r.as_ref(),
             Some(current.python()),
         )?;
         let inspected = self.inspect_managed_python(generation, &candidate, resolver)?;
@@ -250,7 +250,13 @@ impl Client {
         )
         .map_err(|error| EnvironmentResolutionFailure::Host(error.to_string()))?;
 
-        if !extensions.is_empty() {
+        if !extensions.is_empty()
+            && environment
+                .local_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.duckdb_extension_directory())
+                .is_some()
+        {
             self.resolve_python_duckdb_extensions(
                 generation,
                 &candidate,

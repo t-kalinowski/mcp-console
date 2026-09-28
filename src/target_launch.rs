@@ -16,10 +16,11 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v5 carries compositional R/Python selections in both launch handoffs.
-// SSH omits the prepared-target probe selector.
-pub(crate) const VERSION: u32 = 5;
-pub(crate) const SSH_VERSION: u32 = 5;
+// v6 accepts Python activation failures during preparation and idle callbacks,
+// as well as cells. Older servers reject these receipts and stop the worker.
+// The compositional selection payload and preparation protocol remain unchanged.
+pub(crate) const VERSION: u32 = 6;
+pub(crate) const SSH_VERSION: u32 = 6;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;

@@ -1027,12 +1027,16 @@ def test_retries_matplotlib_setup_after_interrupt(
         # Its public input request is the checkpoint for a real interrupt.
         # fmt: r
         r = code(r"""
+            options(reticulate.python.afterInitialized = function() {
             reticulate::py_run_string(r"---(
             import sys
             import types
 
             class InterruptingPyplot(types.ModuleType):
                 interrupted = False
+
+                def show(self, *args):
+                    raise AssertionError("default show was not replaced")
 
                 def __setattr__(self, name, value):
                     if name == "show" and not self.interrupted:
@@ -1046,15 +1050,12 @@ def test_retries_matplotlib_setup_after_interrupt(
                 def close(self, *args):
                     pass
 
+            InterruptingPyplot.show.__module__ = "matplotlib.pyplot"
             sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
-
-            import _mcp_console
-
-            def configure_again(*args):
-                raise AssertionError("Python runtime configured twice")
-
-            _mcp_console.configure_import_resolution = configure_again
+            runtime_identity = object()
+            runtime_identity_id = id(runtime_identity)
             )---")
+            })
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"
@@ -1076,6 +1077,7 @@ def test_retries_matplotlib_setup_after_interrupt(
         client.send(
             # fmt: python
             python=code("""
+                assert id(runtime_identity) == runtime_identity_id
                 sys.modules["matplotlib.pyplot"].show()
                 42
                 """)
@@ -1092,17 +1094,23 @@ def test_reports_matplotlib_setup_error_once(
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
-            reticulate::py_run_string(
-              r"---(
+            options(reticulate.python.afterInitialized = function() {
+              reticulate::py_run_string(
+                r"---(
             import sys
 
             class FailingPyplot:
+                def show(self, *args):
+                    pass
+
                 def __setattr__(self, name: str, value: object) -> None:
                     raise ValueError("matplotlib setup failed")
 
+            FailingPyplot.show.__module__ = "matplotlib.pyplot"
             sys.modules["matplotlib.pyplot"] = FailingPyplot()
             )---"
-            )
+              )
+            })
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"

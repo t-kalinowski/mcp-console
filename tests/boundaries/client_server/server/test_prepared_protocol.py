@@ -88,7 +88,7 @@ def test_native_probe_projects_capabilities_without_controller_paths(
 def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 5"),
+        ("probe-version", "expected protocol 6"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),

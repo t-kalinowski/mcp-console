@@ -14,7 +14,7 @@ pub(crate) use activation::{
 
 use r::{Adapter, Declaration, Record, Value};
 
-type Result<T> = std::result::Result<T, r::Error>;
+type RResult<T> = std::result::Result<T, r::Error>;
 
 // Character payloads retain NA and the original bytes. Decoding to UTF-8 here
 // would change byte-marked or native-encoded R strings. Encoding tags and vector
@@ -30,10 +30,18 @@ struct Manifest {
 
 #[derive(Default)]
 struct Requirements {
+    // The live projection is worker state, not server acceptance. The exact R
+    // representation below also retains provisional (unmaterialized) values.
+    live: Option<crate::worker_protocol::NativePythonActivation>,
+    resolved: Option<crate::worker_protocol::NativePythonActivation>,
     current: Option<Manifest>,
     // A transient matching key for an environment already activated by
     // Console, not a second independently mutable requirement manifest.
     pending_activation: Option<Manifest>,
+}
+
+thread_local! {
+    static STATE: std::cell::RefCell<Requirements> = std::cell::RefCell::new(Requirements::default());
 }
 
 impl Requirements {
@@ -69,7 +77,7 @@ impl Requirements {
         mut candidate: Record,
         request: Declaration,
         initialized: bool,
-    ) -> Result<(Record, Value)> {
+    ) -> RResult<(Record, Value)> {
         let current_packages = candidate.get("packages")?;
         let current_cutoff = candidate.get("exclude_newer")?;
         let mut activate = false;
@@ -163,7 +171,7 @@ impl Requirements {
         Ok((candidate, config))
     }
 
-    fn prepare(adapter: &Adapter, packages: Value) -> Result<Option<String>> {
+    fn prepare(adapter: &Adapter, packages: Value) -> RResult<Option<String>> {
         let snapshot = adapter.call("current_requirements", &[])?;
         let result = (|| {
             // Keep the public declaration boundary, including reticulate's
@@ -188,4 +196,187 @@ impl Requirements {
             Err(interrupt) => Err(interrupt),
         }
     }
+}
+
+use super::NativePython;
+use crate::worker_protocol::{
+    NativePythonActivation, PythonImportResolution, PythonRequirementManifest, PythonResolveRequest,
+};
+
+pub(crate) enum ActivationOutcome {
+    Prepared,
+    Rejected(String),
+    Failed(String),
+}
+
+pub(crate) fn initialize(
+    selected: &NativePython,
+    requirements: PythonRequirementManifest,
+) -> Result<(), String> {
+    STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        if state.live.is_some() {
+            return Err("managed Python state is already initialized".into());
+        }
+        state.live = Some(NativePythonActivation {
+            selected: selected.clone(),
+            requirements: requirements.normalized(),
+        });
+        Ok(())
+    })
+}
+
+fn snapshot() -> Result<NativePythonActivation, String> {
+    STATE
+        .with(|state| state.borrow().live.clone())
+        .ok_or_else(|| "managed Python state is unavailable".into())
+}
+
+pub(super) fn resolved(candidate: NativePythonActivation) {
+    STATE.with(|state| state.borrow_mut().resolved = Some(candidate));
+}
+
+pub(super) fn resolved_selection() -> Option<NativePython> {
+    STATE.with(|state| {
+        state
+            .borrow()
+            .resolved
+            .as_ref()
+            .map(|value| value.selected.clone())
+    })
+}
+
+pub(super) fn activation_failed() -> Result<(), String> {
+    let candidate = STATE
+        .with(|state| state.borrow().resolved.clone())
+        .ok_or("Python activation has no resolved candidate")?;
+    crate::worker::publish_python_activation_failure(candidate.requirements)
+}
+
+pub(super) fn validate_selected(candidate: &NativePython) -> Result<(), ActivationFailure> {
+    let running =
+        super::library::selected_configuration().map_err(ActivationFailure::BeforeMutation)?;
+    ensure_libpython_compatible(&candidate.embedding.libpython, &running.embedding.libpython)
+}
+
+pub(super) fn accept(requirements: PythonRequirementManifest) -> Result<(), String> {
+    let requirements = requirements.normalized();
+    STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let candidate = state
+            .resolved
+            .as_ref()
+            .filter(|candidate| candidate.requirements == requirements)
+            .or_else(|| {
+                state
+                    .live
+                    .as_ref()
+                    .filter(|candidate| candidate.requirements == requirements)
+            })
+            .ok_or("Python activation has no matching inspected candidate")?
+            .clone();
+        state.live = Some(candidate);
+        Ok(())
+    })
+}
+
+pub(crate) fn activate(candidate: &NativePythonActivation) -> Result<ActivationOutcome, String> {
+    match activate_selected(&candidate.selected) {
+        Ok(()) => {
+            STATE.with(|state| state.borrow_mut().live = Some(candidate.clone()));
+            Ok(ActivationOutcome::Prepared)
+        }
+        Err(
+            error @ (ActivationFailure::Incompatible { .. } | ActivationFailure::BeforeMutation(_)),
+        ) => Ok(ActivationOutcome::Rejected(error.to_string())),
+        Err(ActivationFailure::PythonException) => {
+            super::library::display_activation_exception()?;
+            Ok(ActivationOutcome::Failed(
+                "Python activation failed; restart required".into(),
+            ))
+        }
+        Err(error) => Ok(ActivationOutcome::Failed(format!(
+            "{error}; Python activation failed; restart required"
+        ))),
+    }
+}
+
+/// Mutate only the live interpreter. The caller commits its declaration and
+/// reports activation afterwards, through its own condition/metadata adapter.
+pub(super) fn activate_selected(candidate: &NativePython) -> Result<(), ActivationFailure> {
+    let running =
+        super::library::selected_configuration().map_err(ActivationFailure::BeforeMutation)?;
+    activate_managed_environment(ActivationInput {
+        candidate_python: &candidate.embedding.python,
+        candidate_libpython: &candidate.embedding.libpython,
+        candidate_executable: &candidate.embedding.python,
+        running_libpython: &running.embedding.libpython,
+    })?;
+    match super::library::configure_native_child_environment(candidate) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ActivationFailure::PythonException),
+        Err(error) => Err(ActivationFailure::Infrastructure(error)),
+    }
+}
+
+pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<String, String> {
+    let current = snapshot()?;
+    if current
+        .requirements
+        .packages
+        .contains(&resolution.distribution)
+    {
+        return Ok(ready());
+    }
+    let mut requirements = current.requirements;
+    requirements.packages.push(resolution.distribution.clone());
+    let requirements = requirements.normalized();
+    let request = PythonResolveRequest {
+        requirements: requirements.clone(),
+        retained_requirements: requirements.clone(),
+        import_resolution: Some(resolution.clone()),
+    };
+    let candidate = match crate::worker::resolve_python(request) {
+        Ok(candidate) => candidate,
+        Err(error) => return Ok(failed(error)),
+    };
+    if candidate.requirements != requirements {
+        return Err("native Python resolver returned an unexpected declaration".into());
+    }
+    if let Err(error) = validate_selected(&candidate.selected) {
+        return Ok(failed(error.to_string()));
+    }
+    let projection = match r::project_import(&candidate.selected, &resolution.distribution) {
+        Ok(projection) => projection,
+        Err(error) => return Ok(failed(error)),
+    };
+    resolved(candidate.clone());
+    match activate(&candidate)? {
+        ActivationOutcome::Prepared => {
+            if let Some(projection) = projection {
+                if let Err(error) = projection.commit() {
+                    crate::worker::publish_python_activation_failure(candidate.requirements)?;
+                    return Ok(failed(format!(
+                        "{error}; Python activation failed; restart required"
+                    )));
+                }
+            } else {
+                crate::worker::publish_python_activation(candidate.requirements)?;
+            }
+            Ok(ready())
+        }
+        ActivationOutcome::Rejected(error) => Ok(failed(error)),
+        ActivationOutcome::Failed(error) => {
+            crate::worker::publish_python_activation_failure(candidate.requirements)?;
+            Ok(failed(error))
+        }
+    }
+}
+
+fn ready() -> String {
+    r#"{"kind":"ready"}"#.into()
+}
+
+fn failed(message: String) -> String {
+    serde_json::json!({ "kind": "failed", "message": message }).to_string()
 }

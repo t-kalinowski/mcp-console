@@ -61,9 +61,62 @@ struct Metadata {
 
 #[derive(Default)]
 struct State {
-    requirements: Requirements,
+    adapter: Option<Rc<RObject>>,
     current_metadata: Option<Rc<Metadata>>,
     pending_metadata: Option<Rc<Metadata>>,
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_requirements_attach(
+    adapter: SEXP,
+) -> harp::Result<SEXP> {
+    let adapter = Rc::new(RObject::view(adapter).clone());
+    let previous = STATE.with(|state| state.borrow_mut().adapter.replace(adapter));
+    drop(previous);
+    unsafe { Ok(libr::R_NilValue) }
+}
+
+pub(super) struct Projection {
+    adapter: Rc<RObject>,
+    value: Value,
+}
+
+pub(super) fn project_import(
+    selected: &crate::python::NativePython,
+    distribution: &str,
+) -> Result<Option<Projection>, String> {
+    let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
+        return Ok(None);
+    };
+    let encoded = serde_json::to_string(selected).map_err(|error| error.to_string())?;
+    let (encoded, distribution) = harp::exec::r_sandbox(|| {
+        (
+            Value(RObject::from(encoded)),
+            Value(RObject::from(distribution)),
+        )
+    })
+    .map_err(|error| error.to_string())?;
+    let value = Adapter(adapter.sexp)
+        .call("project_import", &[&encoded, &distribution])
+        .map_err(message)?;
+    Ok(Some(Projection { adapter, value }))
+}
+
+impl Projection {
+    pub(super) fn commit(self) -> Result<(), String> {
+        Adapter(self.adapter.sexp)
+            .call("commit_import", &[&self.value])
+            .map(|_| ())
+            .map_err(message)
+    }
+}
+
+fn message(error: Error) -> String {
+    match error {
+        Error::Message(message) => message,
+        Error::Interrupt(_) => "Python requirement projection interrupted".into(),
+    }
 }
 
 thread_local! {
@@ -77,10 +130,8 @@ thread_local! {
 pub extern "C-unwind" fn mcp_console_python_requirements_get() -> harp::Result<SEXP> {
     let snapshot = STATE.with(|state| {
         let state = state.borrow();
-        state
-            .requirements
-            .current
-            .clone()
+        super::STATE
+            .with(|state| state.borrow().current.clone())
             .zip(state.current_metadata.clone())
     });
     let (value, metadata) =
@@ -285,54 +336,54 @@ impl Value {
         self.0.length() == 0
     }
 
-    pub(super) fn copy(&self) -> super::Result<Self> {
+    pub(super) fn copy(&self) -> super::RResult<Self> {
         harp::exec::r_sandbox(|| Self(self.0.clone())).map_err(from_r_error)
     }
 
-    pub(super) fn identical(&self, other: &Self) -> super::Result<bool> {
+    pub(super) fn identical(&self, other: &Self) -> super::RResult<bool> {
         harp::exec::r_sandbox(|| is_identical(self.0.sexp, other.0.sexp)).map_err(from_r_error)
     }
 
-    pub(super) fn text(&self) -> super::Result<String> {
+    pub(super) fn text(&self) -> super::RResult<String> {
         harp::exec::r_sandbox(|| String::try_from(&self.0))
             .map_err(from_r_error)?
             .map_err(from_r_error)
     }
 
-    pub(super) fn boolean(&self) -> super::Result<bool> {
+    pub(super) fn boolean(&self) -> super::RResult<bool> {
         harp::exec::r_sandbox(|| bool::try_from(self.0.clone()))
             .map_err(from_r_error)?
             .map_err(from_r_error)
     }
 
-    pub(super) fn union(&self, other: &Self) -> super::Result<Self> {
+    pub(super) fn union(&self, other: &Self) -> super::RResult<Self> {
         let combined = base_call("c", &[self, other])?;
         base_call("unique", &[&combined])
     }
 
-    pub(super) fn difference(&self, other: &Self) -> super::Result<Self> {
+    pub(super) fn difference(&self, other: &Self) -> super::RResult<Self> {
         base_call("setdiff", &[self, other])
     }
 
-    pub(super) fn disjoint(&self, other: &Self) -> super::Result<bool> {
+    pub(super) fn disjoint(&self, other: &Self) -> super::RResult<bool> {
         let matches = base_call("%in%", &[self, other])?;
         Ok(!base_call("any", &[&matches])?.boolean()?)
     }
 
-    pub(super) fn set_equal(&self, other: &Self) -> super::Result<bool> {
+    pub(super) fn set_equal(&self, other: &Self) -> super::RResult<bool> {
         base_call("setequal", &[self, other])?.boolean()
     }
 }
 
 impl Record {
-    pub(super) fn new(value: Value) -> super::Result<Self> {
+    pub(super) fn new(value: Value) -> super::RResult<Self> {
         if value.is_null() {
             return Err("Python preparation did not produce a managed manifest".into());
         }
         Ok(Self(value))
     }
 
-    pub(super) fn config(value: Value) -> super::Result<Self> {
+    pub(super) fn config(value: Value) -> super::RResult<Self> {
         if value.is_null() {
             return Err("Python activation did not produce candidate configuration".into());
         }
@@ -343,12 +394,12 @@ impl Record {
         &self.0
     }
 
-    pub(super) fn get(&self, field: &str) -> super::Result<Value> {
+    pub(super) fn get(&self, field: &str) -> super::RResult<Value> {
         let field = harp::exec::r_sandbox(|| Value(RObject::from(field))).map_err(from_r_error)?;
         base_call("[[", &[&self.0, &field])
     }
 
-    pub(super) fn set(&mut self, field: &str, value: Value) -> super::Result<()> {
+    pub(super) fn set(&mut self, field: &str, value: Value) -> super::RResult<()> {
         let field = harp::exec::r_sandbox(|| Value(RObject::from(field))).map_err(from_r_error)?;
         let value = base_call("list", &[&value])?;
         // Single-bracket assignment retains an explicitly NULL field and the
@@ -357,7 +408,7 @@ impl Record {
         Ok(())
     }
 
-    pub(super) fn append_history(&mut self, request: &Self) -> super::Result<()> {
+    pub(super) fn append_history(&mut self, request: &Self) -> super::RResult<()> {
         let event = base_call("list", &[request.value()])?;
         let history = base_call("c", &[&self.get("history")?, &event])?;
         self.set("history", history)
@@ -365,7 +416,7 @@ impl Record {
 }
 
 impl Declaration {
-    fn from_r(request: SEXP) -> super::Result<Self> {
+    fn from_r(request: SEXP) -> super::RResult<Self> {
         let record = Record(Value(RObject::view(request)));
         let action = match record.get("action")?.text()?.as_str() {
             "add" => super::Action::Add,
@@ -385,11 +436,11 @@ impl Declaration {
 }
 
 impl Adapter {
-    pub(super) fn call(&self, function: &str, arguments: &[&Value]) -> super::Result<Value> {
+    pub(super) fn call(&self, function: &str, arguments: &[&Value]) -> super::RResult<Value> {
         call(self.0, function, arguments)
     }
 
-    pub(super) fn resolve(&self, candidate: &Record, version: &Value) -> super::Result<Value> {
+    pub(super) fn resolve(&self, candidate: &Record, version: &Value) -> super::RResult<Value> {
         self.call(
             "resolve",
             &[
@@ -401,11 +452,11 @@ impl Adapter {
     }
 }
 
-fn base_call(function: &str, arguments: &[&Value]) -> super::Result<Value> {
+fn base_call(function: &str, arguments: &[&Value]) -> super::RResult<Value> {
     call(unsafe { libr::R_BaseEnv }, function, arguments)
 }
 
-fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::Result<Value> {
+fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::RResult<Value> {
     use harp::exec::{RFunction, RFunctionExt};
     let call = harp::exec::r_sandbox(|| {
         let mut call = RFunction::new("", function);
@@ -510,7 +561,7 @@ extern "C-unwind" fn python_prepare(packages: SEXP, adapter: SEXP) -> SEXP {
     })
 }
 
-fn named_list(fields: &[(&str, &Value)]) -> super::Result<Value> {
+fn named_list(fields: &[(&str, &Value)]) -> super::RResult<Value> {
     use harp::exec::{RFunction, RFunctionExt};
     harp::exec::r_sandbox(|| {
         let mut call = RFunction::new("base", "list");
@@ -525,7 +576,7 @@ fn named_list(fields: &[(&str, &Value)]) -> super::Result<Value> {
 
 // Return interrupts as conditions only at these two private R boundaries;
 // ordinary errors keep the existing message-only py_require()/prepare contract.
-fn complete(operation: impl FnOnce() -> super::Result<Value>) -> SEXP {
+fn complete(operation: impl FnOnce() -> super::RResult<Value>) -> SEXP {
     harp::exec::r_unwrap(|| match operation() {
         Ok(value) | Err(Error::Interrupt(value)) => Ok(value.0.sexp),
         Err(Error::Message(message)) => Err(message),

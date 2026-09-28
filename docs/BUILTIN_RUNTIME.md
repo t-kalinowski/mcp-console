@@ -301,6 +301,7 @@ R parse, evaluation, and print errors are console output followed by normal comp
 An evaluation or print error still preserves the effects of expressions already evaluated in that cell.
 
 Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
+Callbacks run while idle even when no further R cell is submitted; their output can arrive in a Python, SQL, or polling response.
 Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
 
 Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
@@ -373,7 +374,9 @@ Console applies the environment before Python startup hooks run; reticulate atta
 Ordinary R evaluation does not initialize Python.
 R itself still starts eagerly when available; submitting Python first does not mean R starts later.
 Console activates live managed environments through its retained CPython library.
-The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
+The shared Python runtime sets NumPy and pandas display width to 200 columns when they retain their library defaults.
+A different width selected by a Python startup hook is preserved, as are subsequent user changes.
+Matplotlib setup also runs through the shared runtime; bridge setup does not reapply these defaults.
 
 Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
 Binary buffers, native file descriptors, background threads, and fork children retain raw-stream behavior, including cached output streams and logging handlers.
@@ -415,9 +418,10 @@ Resolution starts only when execution reaches the missing import.
 Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
-In R-present sessions, the finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest.
-In managed sans-R sessions, it calls a native callback using the worker's accepted manifest.
-Both send the request through the existing host resolver exchange; the sans-R server inspects the candidate and prepares retained DuckDB extensions before activation.
+The finder calls the same native managed-requirement callback with or without R.
+The worker proposes an addition to its live declaration; the server validates it against the accepted environment and resolves and inspects the candidate on the execution host.
+A Python-owned managed SQL provider also prepares its retained DuckDB extensions before activation.
+When reticulate is attached, its compatibility adapter projects the addition into the R declaration and history without selecting another interpreter.
 After Console activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.

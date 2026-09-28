@@ -10,13 +10,22 @@ result:
   isError: false
 ---
 send:
+  python: import sys; print(sys.executable)
+result:
+  content:
+    - type: text
+      text: |
+        <running Python>
+  isError: false
+---
+send:
   python: import sklearn
 result:
   content:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e2>", line 1, in <module>
+          File "<mcp-console:python:e3>", line 1, in <module>
           File "<reticulate>/python/rpytools/loader.py", line 122, in _find_and_load_hook
             return _run_hook(name, _hook)
                    ^^^^^^^^^^^^^^^^^^^^^^
@@ -33,14 +42,11 @@ result:
         managed Python resolution failed:
         resolver input:
         {
-          "python": "3.12.XX",
+          "python": "<running Python>",
           "packages": [
             "numpy",
             "pandas",
             "scikit-learn"
-          ],
-          "python_version": [
-            "3.12.XX"
           ]
         }
         uv output:

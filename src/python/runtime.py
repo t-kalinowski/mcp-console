@@ -62,7 +62,7 @@ def _mcp_console_explicit_requirement(distribution):
     return f'requirements: {{"python": ["{distribution}"]}}'
 
 
-class _McpConsolePsutilLoader:
+class _McpConsoleModuleLoader:
     def __init__(self, loader, callback):
         self._loader = loader
         self._callback = callback
@@ -371,7 +371,7 @@ if _mcp_console_import_finder is None:
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
-        _McpConsolePsutilLoader,
+        _McpConsoleModuleLoader,
     )
     _sys.meta_path.append(_mcp_console_import_finder)
 
@@ -767,6 +767,78 @@ def _mcp_console_configure_native_child_environment(
 _mcp_console.configure_native_child_environment = (
     _mcp_console_configure_native_child_environment
 )
+
+
+class _McpConsoleModuleDefaults:
+    """Apply Python-only defaults once, after a module's ordinary loader runs."""
+
+    def __init__(
+        self,
+        sys,
+        threading,
+        finder,
+        loader,
+        disable_show,
+    ) -> None:
+        self._sys = sys
+        self._state = threading.local()
+        self._finder = finder
+        self._loader = loader
+        self._disable_show = disable_show
+        self._pending = {"numpy", "pandas", "matplotlib.pyplot"}
+
+    def apply(self, name: str) -> None:
+        module = self._sys.modules.get(name)
+        if name not in self._pending or module is None:
+            return
+        if name == "numpy":
+            # A startup hook may already have selected a display width.
+            if module.get_printoptions()["linewidth"] == 75:
+                module.set_printoptions(linewidth=200)
+        elif name == "pandas":
+            if module.get_option("display.width") == 80:
+                module.set_option("display.width", 200)
+        elif getattr(module.show, "__module__", None) == "matplotlib.pyplot":
+            self._disable_show()
+        self._pending.remove(name)
+
+    def find_spec(self, fullname: str, path=None, target=None):
+        if fullname not in self._pending or getattr(self._state, "finding", False):
+            return None
+        self._state.finding = True
+        try:
+            # Reuse ordinary finder order. This lookup excludes the resolver;
+            # a missing module reaches it through the original import instead.
+            specification = self._finder._find_spec(
+                self._sys.meta_path, fullname, path, target
+            )
+        finally:
+            self._state.finding = False
+        if specification is not None and hasattr(specification.loader, "exec_module"):
+            specification.loader = self._loader(
+                specification.loader, lambda: self.apply(fullname)
+            )
+        return specification
+
+
+_mcp_console_module_defaults = _McpConsoleModuleDefaults(
+    _sys,
+    _threading,
+    _mcp_console_import_finder,
+    _McpConsoleModuleLoader,
+    _mcp_console_disable_matplotlib_show,
+)
+_sys.meta_path.insert(0, _mcp_console_module_defaults)
+
+
+def _mcp_console_configure_module_defaults(
+    _defaults=_mcp_console_module_defaults,
+) -> None:
+    for name in tuple(_defaults._pending):
+        _defaults.apply(name)
+
+
+_mcp_console.configure_module_defaults = _mcp_console_configure_module_defaults
 
 # The runtime runs with __main__ globals and private locals. Remember its code
 # objects so cell tracebacks can omit our frames without hiding user exec() code.

@@ -410,7 +410,16 @@ impl Client {
             let commit = Box::new(move |result| {
                 let managed = match result {
                     Ok(managed) => managed,
-                    Err(error) => return Ok(PreparationOutcome::Completed(Err(error))),
+                    Err(error) => {
+                        let error = if client.requirement_change_state(&commit_generation)?
+                            == RequirementChangeState::RestartRequired
+                        {
+                            requirement_restart_error(error)
+                        } else {
+                            error
+                        };
+                        return Ok(PreparationOutcome::Completed(Err(error)));
+                    }
                 };
                 if client.old_generation_commit_disposition(&commit_generation)?
                     == OldGenerationCommitDisposition::DiscardForReplacement

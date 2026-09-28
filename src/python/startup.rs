@@ -92,6 +92,9 @@ pub(crate) fn setup_runtime(
     if !super::library::configure_environment()? {
         return Ok(false);
     }
+    if !super::library::configure_module_defaults()? {
+        return Ok(false);
+    }
     // The finder starts with automatic resolution disabled. A native caller
     // with neither input keeps that default rather than replacing its reason
     // with Python None.
@@ -136,9 +139,6 @@ pub(super) fn initialize_native(
             return Err("native Python setup did not complete".into());
         }
         super::library::configure_native_sql()?;
-        if !super::library::disable_matplotlib_show()? {
-            return Err("Python plotting setup did not complete".into());
-        }
         Ok(())
     });
     if result.is_err() {
@@ -152,8 +152,8 @@ pub(super) fn initialize_native(
             .map_err(|error| format!("managed Python launch omitted its declaration: {error}"))?;
         let manifest = serde_json::from_str(&manifest)
             .map_err(|error| format!("invalid managed Python declaration: {error}"))?;
-        super::native::initialize(configuration, manifest)?;
-        super::library::configure_native_import_resolution()?;
+        super::requirements::initialize(configuration, manifest)?;
+        super::library::configure_managed_import_resolution()?;
     }
     Ok(())
 }

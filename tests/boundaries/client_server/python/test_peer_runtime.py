@@ -95,6 +95,64 @@ def test_standalone_python_contract(binary: Path, execution: Execution) -> Trans
             return client.finish()[3:]
 
 
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_shared_module_configuration(binary: Path, execution: Execution) -> Transcript:
+    records = None
+    for with_r in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = dict(os.environ)
+            environment.pop("RETICULATE_PYTHON", None)
+            if not with_r:
+                uv = shutil.which("uv")
+                assert uv is not None
+                without_r(environment, root)
+                (Path(environment["PATH"]) / "uv").symlink_to(uv)
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                client.send(requirements={"python": ["matplotlib"]})
+                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+                # Defaults apply at the first import, not at a later cell or
+                # bridge attachment. Each module keeps subsequent user choices.
+                # fmt: python
+                source = code("""
+                    import numpy as np
+                    import pandas as pd
+                    import matplotlib.pyplot as plt
+
+                    assert np.get_printoptions()["linewidth"] == 200
+                    assert pd.get_option("display.width") == 200
+                    np.set_printoptions(linewidth=73)
+                    pd.set_option("display.width", 79)
+                    custom_show = lambda *args, **kwargs: "user show"
+                    plt.show = custom_show
+                    print("shared module defaults installed")
+                    """)
+                client.send(python=source)
+                assert (
+                    last_result_text(client) == "shared module defaults installed\n"
+                ), client.transcript[-1]
+                if with_r:
+                    client.send(
+                        r="reticulate::py_eval(\"id(custom_show) == id(__import__('matplotlib.pyplot', fromlist=['show']).show)\")"
+                    )
+                    assert last_result_text(client) == "[1] TRUE\n", client.transcript[
+                        -1
+                    ]
+                client.send(
+                    python='assert np.get_printoptions()["linewidth"] == 73; assert pd.get_option("display.width") == 79; assert plt.show is custom_show; print("user module options retained")'
+                )
+                assert last_result_text(client) == "user module options retained\n", (
+                    client.transcript[-1]
+                )
+                current = client.finish()[3:]
+                if records is None:
+                    records = current
+    assert records is not None
+    return records
+
+
 def exercise_python(client: McpClient) -> tuple[str, ...]:
     # Every configuration exercises the same evaluator and NumPy availability
     # without referring to the R/Python bridge.
@@ -663,3 +721,45 @@ def test_attaches_to_python_initialized_during_r_startup(
             client.send(r='reticulate::py_eval("id(early_object) == early_identity")')
             assert last_result_text(client) == "[1] TRUE\n", client.transcript[-1]
             return client.finish()[3:]
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_shared_managed_import_failures(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_without_r import (
+        automatic_activation_failure_requires_restart,
+        automatic_resolution_failure_and_cancel_keep_accepted_state,
+    )
+
+    records = None
+    for with_r in (False, True):
+        failures = automatic_resolution_failure_and_cancel_keep_accepted_state(
+            binary, execution, with_r=with_r
+        )
+        activation = automatic_activation_failure_requires_restart(
+            binary, execution, with_r=with_r
+        )
+        if records is None:
+            records = failures + activation
+    return records
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_shared_managed_tool_activation_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_without_r import (
+        live_python_activation_failure_requires_restart,
+    )
+
+    records = None
+    for with_r in (False, True):
+        current = live_python_activation_failure_requires_restart(
+            binary, execution, with_r=with_r
+        )
+        if records is None:
+            records = current
+    return records

@@ -6,41 +6,53 @@ The current bootstrap and ownership model is described in [ARCHITECTURE.md](../d
 The common bootstrap accepts a complete inspected Python identity with or without R.
 The launch selection can retain both runtimes.
 Reticulate no longer owns generic PythonHome, virtualenv activation, PATH, PYTHONPATH, or executable rewriting during initialization.
-It still supplies R-specific selection hints, declaration compatibility, conversion metadata, module hooks, and attachment.
+It still supplies R-specific selection hints, declaration compatibility, conversion metadata and attachment.
 
 ## Remaining managed-control boundary
 
-`src/python/native.rs` retains the R-free accepted manifest and selected configuration.
-`src/python/requirements.rs` and `requirements/r.rs` retain R declarations, their active-binding representation, history, attributes, and encodings.
-`worker_client/environment/preparation.rs` still chooses distinct live-preparation entry points according to R availability.
-Those paths already share the host resolver, inspected candidate transport, CPython activation, generation checks, and server acceptance, but do not yet share one worker declaration owner.
+The shared owner in `src/python/requirements.rs` now retains worker live identity and its normalized declaration, resolved candidates, and provisional R declaration values.
+The separate `native.rs` state and reticulate resolved-selection slot are removed.
+Reached imports use one native callback in both compositions.
+The R compatibility adapter projects metadata before activation and commits after success; declarations retain their byte/NA/attribute-preserving representation.
+Host-inspected identity supplies activation paths and library compatibility; exact-executable conversion metadata replaces generic `candidate_config()` discovery.
+NumPy, pandas, and Matplotlib setup now runs once in the common Python runtime and preserves user overrides.
+Unsafe R declaration activation failure now marks the generation restart-required, matching automatic-import activation.
 
-Unify these before making Python start without R in an R-capable session:
+This is an implemented increment, not completed peer-runtime composition.
+The remaining control edits precede late R:
 
-1. Give `requirements.rs` the single operative declaration and activation state for all workers.
-   Move the accepted normalized projection and selected identity out of `native.rs`.
-   Keep R protection and representation metadata in `requirements/r.rs`; do not replace its attribute-preserving values with normalized JSON.
-2. Route explicit preparation and reached imports through that owner, independently of bridge attachment.
-   Keep reticulate argument validation, warnings, version constraints, history, and active bindings as adapters.
-   Replace `runtime_python.rs`'s R-availability branch with operation-specific validation, preserving the distinction between a declaration and an accepted environment.
-3. Convert the inspected candidate into reticulate's compatibility configuration without a second generic candidate discovery.
-   Preserve conversion metadata and exact library compatibility checks.
-   The current `bridge.R::candidate_config` and `requirements/r/activation.rs::Adapter::activate` are the remaining boundary.
-4. Remove the R closure from ordinary automatic-import resolution once its condition conversion and mutation receipts are represented by the common owner.
-   Keep any R-facing wrapper solely for R conditions and interrupts.
+1. Replace the `python_only()` branch in `worker_client/environment/preparation.rs` and `python::Runtime::prepare()`'s required reticulate adapter with one ordinary tool-preparation operation.
+   The current `Requirements::prepare()` still calls `reticulate::py_require()` in R-present workers; native tool preparation uses a host-supplied candidate.
+   Project a detached R declaration when an adapter exists, resolve through the common owner, then activate only when Python is initialized.
+   Preserve the lazy `PythonPrepared` commit and its inspected launch identity when Python is still uninitialized.
+   Do not publish `PythonActivated` for mere materialization.
+2. Keep R argument validation, warnings, live add-only restrictions, exact conditions, and history in the compatibility adapter.
+   Keep tool set/reset semantics on the server's replacement boundary.
+   Remove the remaining parallel preparation orchestration after migration; do not retain a dispatcher over both implementations.
+3. Replace the remaining R-availability checks with idle-addition, prestart, reached-import, R-declaration, and replacement checks.
+   Reached imports already use the same declaration validation with and without R.
+   Preserve candidate resolution, interpreter mutation, and generation-checked acceptance as separate boundaries.
+4. Make `python::Runtime::evaluate()` enter ordinary shared bootstrap without first requiring `reticulate::Adapter::ensure_initialized()`.
+   Decide when R hints genuinely require R initialization, document precedence against an explicit or host-resolved selection, and attach reticulate only for integration.
+   Keep external startup adoption and independent setup/attachment retry states.
 
-`bridge.R::install_python_hooks` also still projects R's startup display width into NumPy and pandas and registers reticulate's Matplotlib load hook.
-Move the generic module-load actions into the shared Python runtime before removing this attachment prerequisite; retain R option conversion as an adapter input.
-Extend the shared exercise with array/data-frame display and first-import plotting assertions, including user overrides that must not be reset by attachment.
+The peer-runtime suite shares bootstrap/replacement, module defaults, and automatic resolver failure/cancellation/unsafe-activation exercises with and without R.
+The transition suite reuses the host-inspected rejection fixture in R-present sessions.
+The callback suite causally observes idle `later` output before retrieving it with Python or SQL, without another R cell.
+Existing lifecycle suites retain generation rejection, failed-import publication, restart/crash, and R metadata coverage.
+The two import reentry/finder fixtures now intercept ordinary Python activation (`runpy.run_path`), because imports no longer call the public R declaration function.
+The lifecycle interruption fixture now blocks a public NumPy hook during common setup, then verifies retry preserves the exact Python object.
+Common module defaults execute after private evaluator installation, through the existing setup-exception boundary; R does not suspend interrupts around those Python calls.
 
-Acceptance in `test_peer_runtime.py`: run one managed exercise with and without R covering idle additions, reached imports, unchanged Python objects and library identity, pre-activation errors, errors after mutation, successful activation followed by failed import, interruption, restart, and crash replacement.
-Run the existing representation, transition, automatic-import lifecycle, and SSH ownership suites unchanged.
-Assert accepted launch identity after both live activation and preparation while Python is uninitialized.
-Resolution, activation, and acceptance must remain separate commits.
+Missing acceptance for the next control increment: one shared idle-tool exercise including lazy materialization, provisional R declarations, resolver interruption, unsafe activation, combined Python/R/DuckDB changes, and stale-generation publication.
+Keep successful import followed by failed cell, pre-mutation rejection, and R condition/representation checks separate from infrastructure failure.
+Run SSH execution-host ownership and prepared-target suites after the control migration.
 
 ## Late R initialization
 
 Moving `initialize_r()` into the first R cell is not sufficient.
+Demand must also include Python-side R access and an R-owned SQL provider.
+Once R is initialized, the coordinator must keep pumping its scheduled callbacks while idle even if no R cell is ever submitted again.
 Four current dependencies would break an already-running Python interpreter:
 
 - `worker/coordinator.rs::reexec_with_r_library_path` re-executes the worker on Linux.
@@ -73,6 +85,11 @@ Keep direct and native-sandbox executions, plus SSH and prepared-target coverage
 SQL retains its current providers.
 Default provider selection must use runtime capabilities; attachment must not discard a selected DBI/DB-API connection or eagerly initialize SQL.
 SQL-only startup and separate runtime threads are outside this work.
+
+Prepared discovery in `target_launch/runtime.rs` still requires Python even when R is present.
+Permit genuine optional-Python absence while preserving failures for invalid explicit selections; probe only inside the execution target, keep prepared targets non-managed, and extend both Docker and SBX capability tests.
+This gap is unchanged by the shared-import increment.
+Real SBX acceptance needs an initialized provider policy and a prepared digest-qualified template.
 
 ## Execution-thread constraints
 

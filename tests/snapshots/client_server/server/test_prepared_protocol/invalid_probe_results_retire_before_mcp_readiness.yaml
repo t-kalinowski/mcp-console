@@ -1,13 +1,13 @@
 ---
 mode: probe-version
 diagnostic: >
-  incompatible Docker Sandbox bootstrap: expected protocol 5, Console
+  incompatible Docker Sandbox bootstrap: expected protocol 6, Console
   0.0.4; received protocol 3, Console 0.0.4
 ---
 mode: probe-build
 diagnostic: >
-  incompatible Docker Sandbox bootstrap: expected protocol 5, Console
-  0.0.4; received protocol 5, Console unsupported
+  incompatible Docker Sandbox bootstrap: expected protocol 6, Console
+  0.0.4; received protocol 6, Console unsupported
 ---
 mode: missing-runtime
 diagnostic: |
@@ -39,8 +39,8 @@ diagnostic: |
 ---
 mode: probe-closed-output
 diagnostic: >
-  Docker Sandbox launch stream ended before confirmed retirement: failed to fill
-  whole buffer
+  Docker Sandbox launch stream ended before confirmed retirement: failed
+  to fill whole buffer
 ---
 mode: probe-managed
 diagnostic: |

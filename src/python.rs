@@ -1,13 +1,12 @@
 mod inspection;
-mod native;
 mod requirements;
 mod reticulate;
 mod startup;
 
 pub(crate) use inspection::{NativePython, explicit_executable, inspect_native};
-pub(crate) use requirements::{
-    ActivationFailure, ActivationInput, activate_managed_environment, ensure_libpython_compatible,
-};
+pub(crate) use requirements::{ActivationFailure, ensure_libpython_compatible};
+#[cfg(test)]
+pub(crate) use requirements::{ActivationInput, activate_managed_environment};
 pub(crate) use startup::{finish_initialization, initialize_selected, setup_runtime};
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
@@ -96,20 +95,22 @@ impl Runtime {
         &mut self,
         candidate: &crate::worker_protocol::NativePythonActivation,
     ) -> Result<PreparationOutcome, String> {
-        Ok(match native::activate(candidate)? {
-            native::ActivationOutcome::Prepared => PreparationOutcome::Prepared,
-            native::ActivationOutcome::Rejected(message) => {
+        Ok(match requirements::activate(candidate)? {
+            requirements::ActivationOutcome::Prepared => PreparationOutcome::Prepared,
+            requirements::ActivationOutcome::Rejected(message) => {
                 PreparationOutcome::Rejected { message }
             }
-            native::ActivationOutcome::Failed(message) => PreparationOutcome::Failed { message },
+            requirements::ActivationOutcome::Failed(message) => {
+                PreparationOutcome::Failed { message }
+            }
         })
     }
 }
 
-pub(crate) fn resolve_native_import(
+pub(crate) fn resolve_managed_import(
     resolution: crate::worker_protocol::PythonImportResolution,
 ) -> Result<String, String> {
-    native::resolve_import(resolution)
+    requirements::resolve_import(resolution)
 }
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {

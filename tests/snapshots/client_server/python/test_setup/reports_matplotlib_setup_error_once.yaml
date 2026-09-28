@@ -3,17 +3,23 @@
 ---
 send:
   r: |
-    reticulate::py_run_string(
-      r"---(
+    options(reticulate.python.afterInitialized = function() {
+      reticulate::py_run_string(
+        r"---(
     import sys
 
     class FailingPyplot:
+        def show(self, *args):
+            pass
+
         def __setattr__(self, name: str, value: object) -> None:
             raise ValueError("matplotlib setup failed")
 
+    FailingPyplot.show.__module__ = "matplotlib.pyplot"
     sys.modules["matplotlib.pyplot"] = FailingPyplot()
     )---"
-    )
+      )
+    })
 result:
   content:
     - type: text

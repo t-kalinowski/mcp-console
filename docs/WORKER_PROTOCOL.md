@@ -380,7 +380,8 @@ Activation is reported before the enclosing operation result.
 The built-in worker requires the inspected `native` candidate in every managed `python_resolved` response, including R-mediated resolution, using the same shape as `prepare_python`.
 The R compatibility adapter retains its inspected identity for selection; this does not report activation or accept the candidate on the server.
 The worker activates that candidate through the native operation and sends `python_activated` before the original import resumes.
-A post-mutation activation failure sends `python_activation_failed` for the matching candidate and requires restart before further requirement changes.
+A post-mutation activation failure sends `python_activation_failed` for the matching provisional candidate and requires restart before further requirement changes.
+This receipt is valid during evaluation, explicit preparation, or an idle runtime declaration; it does not by itself stop the worker.
 A later missing-module or language error does not undo that accepted environment.
 
 An explicit pre-initialization preparation may instead materialize the last resolved candidate and finish with `python_prepared` without activation.
@@ -511,3 +512,11 @@ A conforming custom worker:
 The executable fixture under `tests/fixtures/zod` exercises successful evaluation, exact text and image frames, stdin, R preparation, interruption, protocol violations, standard streams, and bounded shutdown.
 Its individual commands are fixture behavior, not additions to this protocol.
 See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the corresponding public process-boundary suites.
+
+## Managed Python control implementation
+
+The common worker import callback and optional R declaration projection use the existing `ResolvePython`, `PythonActivated`, and `PythonActivationFailed` exchanges.
+A candidate remains provisional until the current generation accepts its activation; a later import or cell error does not retract acceptance.
+The shared-import refactor leaves wire fields unchanged.
+Launch protocol version 6 permits activation-failure receipts in preparation and idle contexts; preparation protocol version 5 is unchanged.
+R `.Call` registration changes are internal to the worker and its compiled-in bridge, not a remote protocol surface.
