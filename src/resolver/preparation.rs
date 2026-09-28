@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -27,10 +27,15 @@ const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 pub(crate) struct Selections {
     pub r_home: Option<String>,
     pub python: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_python: Option<String>,
 }
 
 impl Selections {
-    pub fn from_policy(policy: &crate::settings::SandboxSettings) -> Self {
+    pub fn from_policy(
+        policy: &crate::settings::SandboxSettings,
+        native_python: Option<&std::path::Path>,
+    ) -> Result<Self, String> {
         // Extract usable selectors without validating native policy on the
         // controller. Other shapes remain in the captured policy for the host.
         let selection = |name| {
@@ -40,10 +45,17 @@ impl Selections {
                 .as_str()
                 .map(str::to_owned)
         };
-        Self {
+        Ok(Self {
             r_home: selection("R_HOME"),
             python: selection("RETICULATE_PYTHON"),
-        }
+            native_python: native_python
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or("remote python selection is not UTF-8".to_string())
+                })
+                .transpose()?,
+        })
     }
 }
 
@@ -56,6 +68,15 @@ pub(crate) struct Discovery {
     pub local_r_home_bytes: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_has_uv: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativeDiscovery>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeDiscovery {
+    pub selection: crate::local_runtime::Selection,
+    pub python: Option<ManagedPython>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -71,17 +92,16 @@ pub(crate) enum Operation {
     Python {
         requirements: PythonRequirementManifest,
         r: Option<ManagedR>,
-        // Only local live additions supply this; retain the v3 SSH frame.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         selected_python: Option<std::path::PathBuf>,
     },
     PythonVersion {
         constraints: Vec<String>,
-        r: ManagedR,
-    },
-    LocalPythonVersion {
-        constraints: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         r: Option<ManagedR>,
+    },
+    InspectPython {
+        executable: std::path::PathBuf,
     },
     Uv {
         r: ManagedR,
@@ -103,6 +123,7 @@ pub(crate) enum Mode {
     R,
     PythonOnly,
     Custom,
+    Auto,
 }
 
 impl Mode {
@@ -277,11 +298,51 @@ pub(crate) struct WorkerEnvironment {
     pub discovery: Discovery,
     pub r: Option<ManagedR>,
     pub python: Option<ManagedPython>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<crate::local_runtime::Selection>,
 }
 
 impl WorkerEnvironment {
     #[cfg(unix)]
     pub fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
+        if let Some(native) = &self.native {
+            let crate::local_runtime::Selection::Python {
+                selected, managed, ..
+            } = native
+            else {
+                return Err("SSH native selection must contain Python".into());
+            };
+            if self.r.is_some() || self.discovery.selections.r_home.is_some() {
+                return Err("SSH native Python cannot be combined with R".into());
+            }
+            if *managed != self.python.is_some() {
+                return Err(
+                    "SSH native Python managed environment does not match its selection".into(),
+                );
+            }
+            if let Some(python) = &self.python {
+                if std::path::Path::new(&selected.embedding.python) != python.python() {
+                    return Err("SSH native Python does not match its managed environment".into());
+                }
+                if !python.python().is_file() {
+                    return Err("resolved remote Python interpreter no longer exists".into());
+                }
+                python.configure_worker(command);
+            }
+            native.configure(command)?;
+            command
+                .env(
+                    "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+                    if *managed { "1" } else { "0" },
+                )
+                .env_remove("RETICULATE_USE_MANAGED_VENV")
+                .env_remove("MCP_CONSOLE_PREINSTALLED");
+            return Ok(());
+        }
+        command.env_remove(crate::local_runtime::ENVIRONMENT);
+        if self.discovery.selections.r_home.is_none() {
+            return Err("SSH worker bootstrap has no selected runtime".into());
+        }
         if let Some(home) = &self.discovery.selections.r_home {
             command.env("R_HOME", home);
         }

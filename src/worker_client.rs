@@ -585,9 +585,15 @@ impl Client {
         roots: Vec<PathBuf>,
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
+        python: Option<PathBuf>,
     ) -> Result<Self, String> {
         if matches!(target.compute, crate::settings::Compute::Host {}) {
-            return Self::ssh(crate::ssh::Session::new(target, roots), no_sandbox, policy);
+            return Self::ssh(
+                crate::ssh::Session::new(target, roots),
+                no_sandbox,
+                policy,
+                python,
+            );
         }
         let session = startup::with_input_owner(|started| {
             crate::target_session::Session::setup_compute(
@@ -631,32 +637,45 @@ impl Client {
         mut session: crate::ssh::Session,
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
+        configured_python: Option<PathBuf>,
     ) -> Result<Self, String> {
         #[cfg(unix)]
-        let discovery = startup::with_input_owner(|started| session.discover(&policy, started))?;
+        let discovery = startup::with_input_owner(|started| {
+            session.discover(&policy, configured_python.as_deref(), started)
+        })?;
         #[cfg(not(unix))]
-        let discovery = session.discover(&policy, &|_| Ok(()))?;
+        let discovery = session.discover(&policy, configured_python.as_deref(), &|_| Ok(()))?;
         let preparation = session
             .preparation
             .as_ref()
             .expect("remote discovery opened preparation")
             .clone();
-        let configured_python = discovery.selections.python.map(OsString::from);
-        let (r_resolver, python) = if discovery.managed {
+        let selected_python = discovery.selections.python.map(OsString::from);
+        let (r_resolver, python, local_runtime) = if let Some(native) = discovery.native {
+            let resolver =
+                crate::resolver::execution::PythonConfiguration::Ssh(preparation.clone());
+            let python = match native.python {
+                Some(selected) => PythonEnvironment::Managed { selected, resolver },
+                None => PythonEnvironment::bare(selected_python),
+            };
+            (RResolver::Disabled, Some(python), Some(native.selection))
+        } else if discovery.managed {
             (
                 RResolver::Pending(BuiltinSetup {
                     bootstrap: crate::resolver::execution::Bootstrap::Ssh(preparation.clone()),
                     python_resolver: crate::resolver::execution::PythonConfiguration::Ssh(
                         preparation,
                     ),
-                    configured_python,
+                    configured_python: selected_python,
                 }),
+                None,
                 None,
             )
         } else {
             (
                 RResolver::Disabled,
-                Some(PythonEnvironment::bare(configured_python)),
+                Some(PythonEnvironment::bare(selected_python)),
+                None,
             )
         };
         let mut client = Self::with_arguments(
@@ -666,7 +685,7 @@ impl Client {
             no_sandbox,
             policy,
             Some(Environment {
-                local_runtime: None,
+                local_runtime,
                 custom_worker: false,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),

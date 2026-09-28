@@ -1,0 +1,252 @@
+---
+send:
+  sql: CREATE TABLE retained AS SELECT 42 AS value
+result:
+  content:
+    - type: text
+      text: |
+        Count
+        -----
+        1
+  isError: false
+---
+send:
+  python: |
+    import os, subprocess, sys
+
+    identity = object()
+    identity_id = id(identity)
+    steps = []
+    first_tmp = os.environ["TMPDIR"]
+    print(sys.executable)
+    os.environ["HOME"] = "/worker-home-must-not-control-preparation"
+    os.environ["UV_CACHE_DIR"] = "/worker-cache-must-not-control-preparation"
+result:
+  content:
+    - type: text
+      text: |
+        <execution-host Python>
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+      - matplotlib
+    duckdb:
+      - fts
+  python: import yaml12; assert id(identity) == identity_id; print('combined')
+result:
+  content:
+    - type: text
+      text: |
+        combined
+  isError: false
+---
+send:
+  python: |
+    import errno, socket
+
+    if os.environ["CONSOLE_TEST_SANDBOX"] == "1":
+        try:
+            with socket.socket() as probe:
+                probe.connect(("203.0.113.1", 443))
+        except OSError as error:
+            assert error.errno in (errno.EACCES, errno.EPERM), error
+        else:
+            raise AssertionError("worker network connection succeeded")
+    print("worker policy verified")
+result:
+  content:
+    - type: text
+      text: |
+        worker policy verified
+  isError: false
+---
+send:
+  sql: SET autoinstall_known_extensions = false; LOAD fts
+result:
+  content:
+    - type: text
+      text: |
+        Success
+        -------
+        [0 rows]
+  isError: false
+---
+send:
+  python: >-
+    import matplotlib.pyplot as plt; _ = plt.plot([1, 2], [3, 4]);
+    plt.gcf().savefig('expected.png')
+result:
+  content:
+    - type: image
+      data: <PNG byte-identical to remote native savefig 1>
+      mimeType: image/png
+  isError: false
+---
+send:
+  python: |
+    steps.append("before")
+    import humanize
+
+    assert steps == ["before"] and id(identity) == identity_id
+    subprocess.run([sys.executable, "-c", "import yaml12, humanize"], check=True)
+    print("same cell, worker, and child selection")
+result:
+  content:
+    - type: text
+      text: |
+        same cell, worker, and child selection
+  isError: false
+---
+send:
+  sql: SELECT value FROM retained
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        42
+  isError: false
+---
+send:
+  python: print(os.environ['TMPDIR'])
+result:
+  content:
+    - type: text
+      text: |
+        <execution-host temporary directory>
+  isError: false
+---
+send:
+  control: restart
+  python: import yaml12, humanize; print('accepted restart')
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        accepted restart
+        [done]
+  isError: false
+---
+send:
+  python: import os; os._exit(47)
+result:
+  content:
+    - type: text
+      text: |-
+        [worker sideband read failed: worker sideband closed]
+        [worker exited with status 47]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: true
+---
+send:
+  python: import yaml12, humanize; print('accepted replacement')
+result:
+  content:
+    - type: text
+      text: |
+        accepted replacement
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "defusedxml",
+              "duckdb",
+              "humanize",
+              "matplotlib",
+              "py-yaml12"
+            ],
+            "duckdb": [
+              "fts"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - defusedxml
+        - duckdb
+        - humanize
+        - matplotlib
+        - py-yaml12
+      duckdb:
+        - fts
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  python: >-
+    import subprocess, sys; _ = subprocess.run([sys.executable, '-m', 'venv',
+    '--without-pip', '.selected'], check=True)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: >-
+    import sqlite3; connection = sqlite3.connect(':memory:');
+    console_sql_connection(connection); print('explicit remote environment')
+result:
+  content:
+    - type: text
+      text: |
+        explicit remote environment
+  isError: false
+---
+send:
+  sql: SELECT 42 AS value
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        42
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - humanize
+result:
+  content:
+    - type: text
+      text: >-
+        Python requirements are unavailable in this non-managed Python session;
+        install packages before starting the session
+  isError: true

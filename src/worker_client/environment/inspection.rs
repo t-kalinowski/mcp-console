@@ -62,9 +62,9 @@ impl Environment {
     }
 
     pub(super) fn startup_declaration(&self) -> Declaration {
-        let managed = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
+        let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
         Declaration {
-            r: if managed {
+            r: if managed_r {
                 super::super::DEFAULT_R_REQUIREMENTS
                     .iter()
                     .map(|s| (*s).into())
@@ -85,7 +85,7 @@ impl Environment {
             } else {
                 vec![]
             },
-            duckdb: if managed {
+            duckdb: if managed_r {
                 super::super::DEFAULT_DUCKDB_EXTENSIONS
                     .iter()
                     .map(|s| (*s).into())

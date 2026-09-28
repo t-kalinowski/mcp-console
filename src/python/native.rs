@@ -1,4 +1,4 @@
-//! Worker copy of the accepted local managed Python selection.
+//! Worker copy of the accepted native managed Python selection.
 //! The server remains the authority for preparation and retained requirements.
 
 use std::sync::{Mutex, OnceLock};

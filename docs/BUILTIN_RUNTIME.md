@@ -11,9 +11,11 @@ The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_
 ## Session model
 
 MCP Console provides one implicit session.
-That session can use a configured [SSH target](SSH.md) with an existing R installation and a resolver bootstrap such as `uv`.
-Console prepares managed R, Python, and DuckDB dependencies on that host as needed.
-Without a resolver bootstrap, the remote session uses available preinstalled packages and adapters with managed preparation disabled.
+That session can use a configured [SSH target](SSH.md).
+Runtime discovery and dependency preparation run on the execution host.
+With R installed there, Console prepares managed R, Python, and DuckDB dependencies as needed.
+Without R, it uses the native Python and SQL runtime described below.
+An R-present remote session without a resolver bootstrap uses available preinstalled packages and adapters with managed preparation disabled.
 Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
 The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
 Remote source-only Quarto projections omit the controller execution root and execute captured cells when rendered.
@@ -47,7 +49,7 @@ On macOS, the native sandbox allows the semaphore-limit query (`kern.sysv.semmns
 
 ## Python sessions without R
 
-Local sessions discover R through `R_HOME` or `R` on `PATH`.
+Local and SSH sessions discover R through `R_HOME` or `R` on the execution host's `PATH`.
 If neither exists, ordinary `mcp-console serve` starts a Python session without requiring an interpreter-selection variable or another launch flag.
 An invalid explicit `R_HOME` or a broken discovered R installation reports an R error; it does not select Python instead.
 
@@ -57,17 +59,18 @@ There are two environment modes:
   It retains the environment for subsequent workers.
   Resolution failure is reported without trying another interpreter.
 - Set `python: .venv/bin/python` in `.agents/console/config.yaml`, or pass `-c python=.venv/bin/python`, to use an existing environment.
-  Relative paths are relative to the launch directory.
+  Local relative paths use the launch directory; SSH relative paths use `target.workspace` on the execution host.
   Console does not invoke uv in this mode, and package preparation is disabled.
   The selected CPython must provide a usable shared embedding library.
 
 The `python` setting takes precedence over inherited `RETICULATE_PYTHON`, which remains supported for compatibility.
 Selection is captured at server startup, including when sandbox environment controls provide different values.
 Without an explicit selection, uv is required; there is no automatic PATH-Python fallback.
-The local `python` setting is unavailable with custom workers or execution targets.
+The `python` setting is unavailable with custom workers, Docker, and Docker Sandbox targets.
 
-Managed sessions use the ordinary host resolver and the user's uv configuration, cache, and Python installations.
-The hidden `mcp-console resolve` subcommand runs outside the worker sandbox with full host permissions.
+Managed sessions use the execution host's uv configuration, cache, and Python installations.
+Local preparation uses the hidden `mcp-console resolve` subcommand; SSH uses its remote preparation owner.
+Both run outside the worker sandbox with trusted host permissions.
 It captures the startup uv executable and `UV_*` settings, excluding `UV_OFFLINE`, and retains the launch working directory.
 Worker environment changes do not configure later preparation; uv interprets configuration files and relative paths itself.
 Sans-R selection ignores `RETICULATE_UV` and uses uv from the startup `PATH`.
@@ -128,7 +131,7 @@ R requirements and R cells are unavailable.
 An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
-This mode is local only; SSH and prepared Docker/SBX targets retain their existing R runtime requirements.
+Docker and Docker Sandbox targets retain their existing R runtime requirements.
 
 SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection that opens on the first SQL cell or `sql_connection()` call.
 Python-only cells do not open it.
@@ -398,7 +401,7 @@ Python source is not scanned, so imports in unreachable branches or uncalled fun
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
 In R-present sessions, the finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest.
-In local managed sans-R sessions, it calls a native callback using the worker's accepted manifest.
+In managed sans-R sessions, it calls a native callback using the worker's accepted manifest.
 Both send the request through the existing host resolver exchange; the sans-R server inspects the candidate and prepares retained DuckDB extensions before activation.
 After Console activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
@@ -481,7 +484,7 @@ Results that report columns use the bounded preview path below, while results wi
 Each selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
 Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
 The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
-DuckDB extension requirements prepare the managed R-backed provider or the local sans-R managed Python provider before worker startup or restart; idle sans-R managed sessions also support additive extension preparation.
+DuckDB extension requirements prepare the managed R-backed provider or the sans-R managed Python provider before worker startup or restart; idle sans-R managed sessions also support additive extension preparation.
 They do not alter a selected DB-API connection; prepare Python drivers and their dependencies through `requirements.python`.
 The R-specific managed conveniences below apply only to the R-backed provider.
 

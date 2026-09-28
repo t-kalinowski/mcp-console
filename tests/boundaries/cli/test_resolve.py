@@ -57,7 +57,7 @@ esac
             send(
                 {
                     "Open": {
-                        "version": 3,
+                        "version": 4,
                         "build": build,
                         "workspace": "",
                         "selections": {"r_home": None, "python": None},
@@ -67,16 +67,14 @@ esac
             )
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"version": 3, "build": build}}, hello
+            assert hello == {"Hello": {"version": 4, "build": build}}, hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
                 {
                     "Run": {
                         "id": 1,
-                        "operation": {
-                            "LocalPythonVersion": {"constraints": [">=3.12"], "r": None}
-                        },
+                        "operation": {"PythonVersion": {"constraints": [">=3.12"]}},
                     }
                 }
             )

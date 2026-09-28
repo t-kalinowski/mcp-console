@@ -144,7 +144,7 @@ impl Preparation {
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: session.target.workspace.clone(),
             selections,
-            mode: Mode::R,
+            mode: Mode::Auto,
         };
         Self::open_with(command, session.blocked.clone(), open, false, on_started)
     }
@@ -376,13 +376,14 @@ fn run(
     let mut closing = Vec::new();
     let mut close_requested = false;
     let mut hello = false;
-    let mut deadline = (!local).then(|| Instant::now() + super::SETUP_TIMEOUT);
+    let mut setup_deadline = (!local).then(|| Instant::now() + super::SETUP_TIMEOUT);
+    let mut retirement_deadline = None;
     let result = (|| {
         outgoing
             .send(open)
             .map_err(|_| format!("{owner} writer stopped"))?;
         loop {
-            let event = match deadline {
+            let event = match retirement_deadline.or(setup_deadline) {
                 Some(deadline) => received
                     .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                     .map_err(|_| format!("{owner} setup or retirement deadline exceeded"))?,
@@ -413,7 +414,7 @@ fn run(
                             .send(Input::Control { id, control })
                             .map_err(|_| format!("{owner} writer stopped"))?;
                         if !local && control == ResolverControlOutcome::Cancelled {
-                            deadline = Some(Instant::now() + Duration::from_secs(7));
+                            retirement_deadline = Some(Instant::now() + Duration::from_secs(7));
                         }
                         controls.push_back((id, control, reply));
                     } else if let Some(reply) = reply {
@@ -425,6 +426,7 @@ fn run(
                         return Err(format!("incompatible {owner} protocol or Console build"));
                     }
                     hello = true;
+                    setup_deadline = None;
                 }
                 Event::Received(Ok(Output::Controlled { id, result })) if hello => {
                     let Some((expected, control, reply)) = controls.pop_front() else {
@@ -512,7 +514,7 @@ fn run(
                         .reply
                         .send(result);
                     if !close_requested {
-                        deadline = None;
+                        retirement_deadline = None;
                     }
                 }
                 Event::Close(reply) => {
@@ -524,7 +526,7 @@ fn run(
                             .send(Input::Close)
                             .map_err(|_| format!("{owner} writer stopped"))?;
                         close_requested = true;
-                        deadline = Some(Instant::now() + Duration::from_secs(7));
+                        retirement_deadline = Some(Instant::now() + Duration::from_secs(7));
                     }
                 }
                 Event::Received(Ok(Output::Closed)) if close_requested && active.is_none() => {
@@ -534,7 +536,7 @@ fn run(
                 // Output and exit are independent transports. A queued terminal
                 // frame remains authoritative; the reader reports truncation.
                 Event::Exited => {
-                    deadline = Some(Instant::now() + Duration::from_secs(1));
+                    retirement_deadline = Some(Instant::now() + Duration::from_secs(1));
                 }
                 _ => return Err(format!("unexpected {owner} event")),
             }

@@ -17,7 +17,7 @@ These checks reject incompatible `get` fields, payloads with `reset`, replacemen
 [SSH targets](SSH.md) discover capability on the execution host before advertising the schema.
 Managed targets use the same preparation ordering below; bare targets expose only `requirements.action="get"` and reject supplied preparation before control, stdin, or evaluation side effects.
 
-Local sans-R sessions managed through uv expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
+Local and SSH sans-R sessions managed through uv on the execution host expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
 They support standalone preparation and preparation with a Python or SQL cell before first worker startup, and explicit restart preparation with or without a cell.
 An idle running worker also accepts effective new Python-distribution and DuckDB-extension additions with `action: "add"`, including both in one call; already-retained declarations remain no-ops.
 Automatic missing-import resolution starts only when a managed Python cell reaches that import and uses the running evaluation's resolver exchange.
