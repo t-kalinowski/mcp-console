@@ -284,6 +284,10 @@ The worker's existing interrupt wakeup cancels inspection without committing an 
 Console supplies the inspected embedding fields to both native initialization and reticulate's subsequent attachment; cached or already initialized selections are not inspected again.
 Reticulate continues to supply its other interoperability metadata and environment adjustments.
 The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
+The worker-facing `python::Runtime` retains an optional reticulate adapter directly.
+That adapter owns lazy selection, attachment, and their completion state; `python::startup` provides bootstrap and shared setup operations without depending on the R adapter.
+The retained CPython library owns interpreter lifetime and shared setup completion, so interrupted setup can resume without replacing the interpreter.
+Native sessions complete bootstrap before constructing the runtime and have no reticulate adapter.
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.

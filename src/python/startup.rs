@@ -1,4 +1,7 @@
-use super::{ImportResolution, PreparationOutcome, reticulate};
+//! CPython bootstrap operations, independent of the R/reticulate adapter.
+//! Interpreter lifetime and setup completion are retained by `library`.
+
+use super::ImportResolution;
 use std::path::Path;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
@@ -71,110 +74,56 @@ pub(crate) fn finish_initialization() -> Result<(), String> {
     super::library::finish_initialization()
 }
 
-/// Native owner for both Python-first and R-first interpreter startup.
-pub(super) struct Runtime {
-    adapter: Option<reticulate::Adapter>,
-    completed: bool,
-}
-
-impl Runtime {
-    pub(super) fn initialize() -> Result<Self, String> {
-        Ok(Self {
-            adapter: Some(reticulate::Adapter::initialize()?),
-            completed: false,
-        })
-    }
-
-    pub(super) fn native(
-        configuration: &super::NativePython,
-        managed: bool,
-    ) -> Result<Self, String> {
-        let selected = &configuration.embedding;
-        // Let CPython's program-name/pyvenv.cfg path initialization select the
-        // virtualenv. Setting PythonHome to its base overrides that selection.
-        super::library::initialize(Path::new(&selected.libpython), &selected.python, "", false)?;
-        let result = setup_runtime_with_sql(
-            Path::new(&selected.libpython),
-            ImportResolution {
-                callback: None,
-                disabled_reason: Some(if managed {
-                    crate::local_runtime::MANAGED_IMPORT_DISABLED
-                } else {
-                    match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
-                        Ok("docker") => "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session",
-                        Ok("docker_sandbox") => "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session",
-                        _ => crate::local_runtime::IMPORT_DISABLED,
-                    }
-                }),
-            },
-            true,
-        )
-        .and_then(|configured| {
-            if !configured {
-                return Err("native Python setup did not complete".into());
-            }
-            super::library::configure_native_environment(configuration)?;
-            super::library::configure_native_sql()?;
-            if !super::library::disable_matplotlib_show()? {
-                return Err("Python plotting setup did not complete".into());
-            }
-            Ok(())
-        });
-        if result.is_err() {
-            super::library::display_setup_exception()?;
+/// Initialize a host-selected interpreter without constructing an R adapter.
+/// Successful return includes environment, SQL, and import-resolution setup.
+pub(super) fn initialize_native(
+    configuration: &super::NativePython,
+    managed: bool,
+) -> Result<(), String> {
+    let selected = &configuration.embedding;
+    // Let CPython's program-name/pyvenv.cfg path initialization select the
+    // virtualenv. Setting PythonHome to its base overrides that selection.
+    super::library::initialize(Path::new(&selected.libpython), &selected.python, "", false)?;
+    let result = setup_runtime_with_sql(
+        Path::new(&selected.libpython),
+        ImportResolution {
+            callback: None,
+            disabled_reason: Some(if managed {
+                crate::local_runtime::MANAGED_IMPORT_DISABLED
+            } else {
+                match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
+                    Ok("docker") => "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session",
+                    Ok("docker_sandbox") => "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session",
+                    _ => crate::local_runtime::IMPORT_DISABLED,
+                }
+            }),
+        },
+        true,
+    )
+    .and_then(|configured| {
+        if !configured {
+            return Err("native Python setup did not complete".into());
         }
-        let finished = finish_initialization();
-        result?;
-        finished?;
-        if managed {
-            let manifest = std::env::var("MCP_CONSOLE_MANAGED_PYTHON").map_err(|error| {
-                format!("managed Python launch omitted its declaration: {error}")
-            })?;
-            let manifest = serde_json::from_str(&manifest)
-                .map_err(|error| format!("invalid managed Python declaration: {error}"))?;
-            super::native::initialize(configuration, manifest)?;
-            super::library::configure_native_import_resolution()?;
+        super::library::configure_native_environment(configuration)?;
+        super::library::configure_native_sql()?;
+        if !super::library::disable_matplotlib_show()? {
+            return Err("Python plotting setup did not complete".into());
         }
-        Ok(Self {
-            adapter: None,
-            completed: true,
-        })
+        Ok(())
+    });
+    if result.is_err() {
+        super::library::display_setup_exception()?;
     }
-
-    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
-        if !self.completed {
-            let adapter = self
-                .adapter
-                .as_mut()
-                .expect("incomplete reticulate startup");
-            let Some(selected) = adapter.select()? else {
-                return Ok(false);
-            };
-            if let Err(error) = initialize_selected(&selected) {
-                adapter.cancel_selection()?;
-                return Err(error);
-            }
-            // Reticulate attaches conversion and event integration first.
-            // Its initialization hook enters the shared native setup above;
-            // the explicit setup call also covers an already-live interpreter.
-            let result =
-                adapter.attach().and_then(
-                    |attached| {
-                        if attached { adapter.setup() } else { Ok(false) }
-                    },
-                );
-            let finished = finish_initialization();
-            let completed = result?;
-            finished?;
-            self.completed = completed;
-        }
-        Ok(self.completed)
+    let finished = finish_initialization();
+    result?;
+    finished?;
+    if managed {
+        let manifest = std::env::var("MCP_CONSOLE_MANAGED_PYTHON")
+            .map_err(|error| format!("managed Python launch omitted its declaration: {error}"))?;
+        let manifest = serde_json::from_str(&manifest)
+            .map_err(|error| format!("invalid managed Python declaration: {error}"))?;
+        super::native::initialize(configuration, manifest)?;
+        super::library::configure_native_import_resolution()?;
     }
-
-    pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.adapter
-            .as_ref()
-            .expect("live preparation requires R")
-            .prepare(packages)
-    }
+    Ok(())
 }
