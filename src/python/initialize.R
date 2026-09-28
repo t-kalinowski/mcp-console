@@ -3,8 +3,7 @@ base::local(
     namespace <- NULL
     globals <- NULL
     selected <- NULL
-    selection_environment <- NULL
-    python_embedded <- FALSE
+    inspected <- NULL
 
     replace_binding <- function(name, value) {
       was_locked <- bindingIsLocked(name, namespace)
@@ -27,7 +26,26 @@ base::local(
         return(selected)
       }
       if (get("is_python_initialized", envir = namespace)()) {
-        selected <<- globals$py_config
+        # A startup package may have initialized Python before this adapter
+        # existed. Its running identity takes precedence over selection hints;
+        # do not rediscover an executable or rerun environment activation.
+        config <- globals$py_config
+        sys <- reticulate::import("sys", convert = TRUE)
+        inspected <<- jsonlite::toJSON(
+          list(
+            embedding = list(
+              python = sys$executable,
+              libpython = config$libpython,
+              python_home = config$pythonhome
+            ),
+            prefix = sys$prefix,
+            exec_prefix = sys$exec_prefix,
+            base_prefix = sys$base_prefix,
+            base_exec_prefix = sys$base_exec_prefix
+          ),
+          auto_unbox = TRUE
+        )
+        selected <<- config
         return(selected)
       }
       if (run_before_initialized) {
@@ -73,74 +91,25 @@ base::local(
       # Discovery retains reticulate's selection precedence and metadata.
       # Console owns the embedding fields consumed by both native startup
       # and reticulate's later attachment to that same interpreter.
-      embedding <- jsonlite::fromJSON(tryCatch(
+      inspected <<- tryCatch(
         .Call("mcp_console_inspect_python", config$python),
         error = function(error) {
           class(error) <- c("console_python_inspection_error", class(error))
           stop(error)
         }
-      ))
+      )
+      embedding <- jsonlite::fromJSON(inspected)$embedding
+      config$python <- embedding$python
+      config$executable <- embedding$python
       config$libpython <- embedding$libpython
       config$pythonhome <- embedding$python_home
-      python_embedded <<- !is.null(get("main_process_python_info", namespace)())
-
-      # These are reticulate's environment inputs to CPython. Set them before
-      # the native owner initializes the selected interpreter.
-      selection_environment <<- Sys.getenv(
-        c(
-          "VIRTUAL_ENV",
-          "R_SESSION_INITIALIZED",
-          "PYTHONIOENCODING",
-          "PATH",
-          "LD_LIBRARY_PATH",
-          "PYTHONPATH"
-        ),
-        unset = NA_character_
-      )
-      on.exit(if (is.null(selected)) cancel_selection(), add = TRUE)
-      if (nzchar(config$virtualenv)) {
-        Sys.setenv(VIRTUAL_ENV = config$virtualenv)
-      }
-      Sys.setenv(
-        R_SESSION_INITIALIZED = sprintf(
-          'PID=%s:NAME="reticulate"',
-          Sys.getpid()
-        )
-      )
-      if (get("is_rstudio", namespace)()) {
-        if (is.na(Sys.getenv("PYTHONIOENCODING", unset = NA))) {
-          Sys.setenv(PYTHONIOENCODING = "utf-8")
-        }
-      }
-      get("python_munge_path", namespace)(config$python)
-      get("prefix_python_lib_to_ld_library_path", namespace)(config$python)
-      if (get("is_osx", namespace)()) {
-        symlink <- Sys.getenv("RSTUDIO_FALLBACK_LIBRARY_PATH", unset = NA)
-        if (!is.na(symlink)) {
-          unlink(symlink)
-          file.symlink(dirname(config$libpython), symlink)
-        }
-      }
-      python_path <- Sys.getenv(
-        "RETICULATE_PYTHONPATH",
-        unset = paste(
-          config$pythonpath,
-          system.file("python", package = "reticulate"),
-          sep = .Platform$path.sep
-        )
-      )
-      Sys.setenv(PYTHONPATH = python_path)
       selected <<- config
       config
     }
 
     cancel_selection <- function() {
-      # Only called before CPython starts. Reticulate's loader filesystem
-      # adjustments retain their existing behavior.
-      present <- !is.na(selection_environment)
-      do.call(Sys.setenv, as.list(selection_environment[present]))
-      Sys.unsetenv(names(selection_environment)[!present])
-      selection_environment <<- NULL
+      # Only called before CPython starts. Selection has no process mutations.
+      inspected <<- NULL
       selected <<- NULL
       invisible()
     }
@@ -163,14 +132,7 @@ base::local(
       if (is.null(config)) {
         return("")
       }
-      result <- jsonlite::toJSON(
-        list(
-          python = config$python,
-          libpython = config$libpython,
-          python_home = config$pythonhome
-        ),
-        auto_unbox = TRUE
-      )
+      result <- inspected
       pending <- FALSE
       result
     }
@@ -201,32 +163,19 @@ base::local(
         },
         error = function(error) "<unknown>"
       )
-      # CPython is already running with the selected environment. Attachment
-      # errors propagate without rolling it back; only PYTHONPATH is temporary.
-      local({
-        on.exit(
-          {
-            python_path <- selection_environment[["PYTHONPATH"]]
-            if (is.na(python_path)) {
-              Sys.unsetenv("PYTHONPATH")
-            } else {
-              Sys.setenv(PYTHONPATH = python_path)
-            }
-            finish_python_initialization()
-          },
-          add = TRUE
-        )
-        get("py_initialize", namespace)(
-          config$python,
-          config$libpython,
-          config$pythonhome,
-          config$virtualenv_activate,
-          config$version$major,
-          config$version$minor,
-          interactive(),
-          numpy_load_error
-        )
-      })
+      # Console owns CPython's environment. Reticulate attaches conversion
+      # and callbacks without activating or changing the running interpreter.
+      on.exit(finish_python_initialization(), add = TRUE)
+      get("py_initialize", namespace)(
+        config$python,
+        config$libpython,
+        config$pythonhome,
+        "",
+        config$version$major,
+        config$version$minor,
+        interactive(),
+        numpy_load_error
+      )
 
       # Reticulate owns conversion, cross-language calls, and event integration.
       reg.finalizer(
@@ -243,36 +192,8 @@ base::local(
         onexit = TRUE
       )
       config$available <- TRUE
-      if (python_embedded) {
-        path <- system.file("python", package = "reticulate")
-        command <- sprintf("import sys; sys.path.append(%s)", shQuote(path))
-        get("py_run_string_impl", namespace)(command)
-      }
-      command <- sprintf(
-        "import sys; sys.executable  = r'''%s'''",
-        config$executable
-      )
-      get("py_run_string_impl", namespace)(command, local = TRUE)
-      if (nzchar(config$base_executable)) {
-        command <- sprintf(
-          "import sys; sys._base_executable = r'''%s'''",
-          config$base_executable
-        )
-        get("py_run_string_impl", namespace)(command, local = TRUE)
-      }
-      get("py_run_string_impl", namespace)(
-        "import sys; sys.path.insert(0, '')",
-        local = TRUE
-      )
-      get("py_set_qt_qpa_platform_plugin_path", namespace)(config)
-      if (get("was_python_initialized_by_reticulate", namespace)()) {
-        allow_threads <- tolower(Sys.getenv(
-          "RETICULATE_ALLOW_THREADS",
-          "true"
-        )) %in%
-          c("true", "1", "yes")
-        if (allow_threads) get("py_allow_threads_impl", namespace)(TRUE)
-      }
+      # Declaration diagnostics are reticulate compatibility, not selection
+      # or activation. Preserve its opt-out and warning behavior.
       if (nzchar(config$virtualenv)) {
         check_packages <- tolower(Sys.getenv(
           "RETICULATE_CHECK_REQUIRED_PACKAGES",
@@ -296,9 +217,8 @@ base::local(
       config <- select_python(required_module, use_environment)
       invisible(.Call(
         "mcp_console_initialize_python",
-        config$python,
-        config$libpython,
-        config$pythonhome
+        inspected,
+        system.file("python", package = "reticulate")
       ))
       # Reticulate publishes .globals$py_config only after this returns, so
       # unfinished attachment remains eligible for its existing retry path.
@@ -320,15 +240,18 @@ base::local(
       replace_binding("install_interrupt_handlers", install_console_services)
 
       if (get("is_python_initialized", envir = namespace)()) {
-        rust_owned <- isTRUE(.Call(
-          "mcp_console_load_python_library",
-          reticulate::py_config()$libpython
+        select_python()
+        invisible(.Call(
+          "mcp_console_initialize_python",
+          inspected,
+          system.file("python", package = "reticulate")
         ))
-        if (rust_owned) {
-          finish_python_initialization()
-        }
+        finish_python_initialization()
         install_console_services()
       }
+      # Already-live interpreters need their retained identity registered
+      # before the bridge's eager initialization hook enters common setup.
+      state$install_python_hooks()
       invisible()
     }
 

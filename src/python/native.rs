@@ -102,7 +102,7 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
         retained_requirements: requirements.clone(),
         import_resolution: Some(resolution),
     };
-    let candidate = match crate::worker::resolve_native_python(request) {
+    let candidate = match crate::worker::resolve_python(request) {
         Ok(candidate) => candidate,
         Err(error) => return Ok(failed(error)),
     };

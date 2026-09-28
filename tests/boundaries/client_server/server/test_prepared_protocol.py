@@ -88,7 +88,7 @@ def test_native_probe_projects_capabilities_without_controller_paths(
 def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 4"),
+        ("probe-version", "expected protocol 5"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),
@@ -99,8 +99,8 @@ def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list
         ("probe-failed", "probe validation failed"),
         ("probe-closed-output", "launch stream ended before confirmed retirement"),
         ("probe-managed", "cannot contain managed"),
-        ("native-managed", "cannot contain R"),
-        ("native-r-conflict", "cannot contain R"),
+        ("native-managed", "cannot contain another selection or a managed cache"),
+        ("native-r-conflict", "R capability differs from its captured selection"),
         ("native-relative", "absolute target path"),
         ("native-prefix", "inconsistent executable or base prefixes"),
         ("native-unknown", "unknown field"),

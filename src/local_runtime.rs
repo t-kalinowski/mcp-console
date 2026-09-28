@@ -13,21 +13,30 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
 pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; add a new distribution with requirements.python in an idle session, or use control: restart to replace a declaration";
 
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Selection {
+    pub(crate) r_home: Option<PathBuf>,
+    // None is an as-yet-unselected Python, not an unavailable language. R
+    // declarations and selection hints may still supply this lazy selection.
+    pub(crate) python: Option<Python>,
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Selection {
-    R {
-        home: PathBuf,
-    },
-    Python {
-        selected: Box<crate::python::NativePython>,
-        explicit: Option<OsString>,
-        // Capability only. The session environment owns the retained manifest.
-        managed: bool,
-        // DuckDB's host cache is shared across worker generations. Its path
-        // must not follow the runner's disposable TMPDIR or mutable worker HOME.
-        duckdb_extension_directory: Option<PathBuf>,
-    },
+#[serde(deny_unknown_fields)]
+pub(crate) struct Python {
+    pub(crate) selected: Box<crate::python::NativePython>,
+    pub(crate) explicit: Option<OsString>,
+    // The server owns requirements; this is a captured runtime capability.
+    pub(crate) managed: bool,
+    pub(crate) duckdb_extension_directory: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerSelection {
+    pub(crate) r: bool,
+    pub(crate) python: Option<Python>,
 }
 
 impl Selection {
@@ -81,9 +90,9 @@ impl Selection {
             |executable, started| crate::python::inspect_native(executable, started),
             on_started,
         )?;
-        if let Self::Python {
+        if let Some(Python {
             selected, explicit, ..
-        } = &mut selection
+        }) = &mut selection.python
             && explicit.is_some()
         {
             *explicit = Some(OsString::from(&selected.embedding.python));
@@ -105,17 +114,7 @@ impl Selection {
     ) -> Result<(Self, Option<ManagedPython>), String> {
         let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
         let (executable, managed) = if let Some(explicit) = &explicit {
-            let executable = PathBuf::from(explicit);
-            let executable = if executable.components().count() == 1 {
-                crate::resolver::find_path_entry(
-                    executable
-                        .to_str()
-                        .ok_or("explicit Python executable is not UTF-8")?,
-                )
-                .ok_or("explicit Python executable is not on PATH")?
-            } else {
-                executable
-            };
+            let executable = crate::python::explicit_executable(explicit)?;
             (executable, None)
         } else {
             if !has_uv {
@@ -137,73 +136,68 @@ impl Selection {
                 .filter(|home| home.is_absolute())
                 .map(|home| home.join(".duckdb/extensions"))
         });
-        let selection = Self::Python {
-            selected: Box::new(selected),
-            explicit,
-            managed: managed.is_some(),
-            duckdb_extension_directory,
+        let selection = Self {
+            r_home: None,
+            python: Some(Python {
+                selected: Box::new(selected),
+                explicit,
+                managed: managed.is_some(),
+                duckdb_extension_directory,
+            }),
         };
         Ok((selection, managed))
     }
 
     pub(crate) fn python_only(&self) -> bool {
-        matches!(self, Self::Python { .. })
+        self.r_home.is_none()
     }
 
     pub(crate) fn duckdb_extension_directory(&self) -> Option<&Path> {
-        match self {
-            Self::Python {
-                duckdb_extension_directory,
-                ..
-            } => duckdb_extension_directory.as_deref(),
-            Self::R { .. } => None,
-        }
+        self.python
+            .as_ref()
+            .and_then(|python| python.duckdb_extension_directory.as_deref())
     }
 
     pub(crate) fn configure(&self, command: &mut Command) -> Result<(), String> {
-        match self {
-            Self::R { home } => {
-                // R_HOME already carries the retained selection as a native
-                // path; do not require Unix filename bytes to be UTF-8 JSON.
-                command.env_remove(ENVIRONMENT);
-                command.env("R_HOME", home);
+        if let Some(home) = &self.r_home {
+            // Preserve native filename bytes through R_HOME. The structured
+            // Python handoff does not need to encode the R path as UTF-8.
+            command.env("R_HOME", home);
+        }
+        command.env(
+            ENVIRONMENT,
+            serde_json::to_string(&WorkerSelection {
+                r: self.r_home.is_some(),
+                python: self.python.clone(),
+            })
+            .map_err(|error| format!("cannot encode runtime selections: {error}"))?,
+        );
+        if let Some(python) = &self.python {
+            command
+                .env_remove("PYTHONHOME")
+                .env_remove("PYTHONPLATLIBDIR");
+            if let Some(explicit) = &python.explicit {
+                command.env("RETICULATE_PYTHON", explicit);
+            } else if !python.managed {
+                command.env("RETICULATE_PYTHON", &python.selected.embedding.python);
+            } else if self.r_home.is_some() {
+                command.env("RETICULATE_PYTHON", "managed");
+            } else {
+                command.env_remove("RETICULATE_PYTHON");
             }
-            Self::Python {
-                explicit,
-                managed,
-                duckdb_extension_directory,
-                ..
-            } => {
-                command.env(
-                    ENVIRONMENT,
-                    serde_json::to_string(self).map_err(|error| {
-                        format!("cannot encode local runtime selection: {error}")
-                    })?,
-                );
-                // Inspection ignores Python layout overrides. Keep embedding
-                // and children on that selection after sandbox projection too.
-                command
-                    .env_remove("PYTHONHOME")
-                    .env_remove("PYTHONPLATLIBDIR");
-                if let Some(python) = explicit {
-                    command.env("RETICULATE_PYTHON", python);
-                } else {
-                    command.env_remove("RETICULATE_PYTHON");
-                }
-                if let Some(directory) = duckdb_extension_directory {
-                    command.env(DUCKDB_EXTENSION_DIRECTORY, directory);
-                } else {
-                    command.env_remove(DUCKDB_EXTENSION_DIRECTORY);
-                }
-                if !*managed {
-                    command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
-                }
+            if let Some(directory) = &python.duckdb_extension_directory {
+                command.env(DUCKDB_EXTENSION_DIRECTORY, directory);
+            } else {
+                command.env_remove(DUCKDB_EXTENSION_DIRECTORY);
+            }
+            if !python.managed {
+                command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
             }
         }
         Ok(())
     }
 
-    pub(crate) fn from_environment() -> Result<Option<Self>, String> {
+    pub(crate) fn from_environment() -> Result<Option<WorkerSelection>, String> {
         std::env::var(ENVIRONMENT)
             .ok()
             .map(|value| {

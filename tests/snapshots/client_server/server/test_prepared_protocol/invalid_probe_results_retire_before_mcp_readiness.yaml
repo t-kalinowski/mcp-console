@@ -1,13 +1,13 @@
 ---
 mode: probe-version
 diagnostic: >
-  incompatible Docker Sandbox bootstrap: expected protocol 4, Console 0.0.4;
-  received protocol 3, Console 0.0.4
+  incompatible Docker Sandbox bootstrap: expected protocol 5, Console
+  0.0.4; received protocol 3, Console 0.0.4
 ---
 mode: probe-build
 diagnostic: >
-  incompatible Docker Sandbox bootstrap: expected protocol 4, Console 0.0.4;
-  received protocol 4, Console unsupported
+  incompatible Docker Sandbox bootstrap: expected protocol 5, Console
+  0.0.4; received protocol 5, Console unsupported
 ---
 mode: missing-runtime
 diagnostic: |
@@ -47,14 +47,12 @@ diagnostic: |
   prepared runtime cannot contain managed or preparation state
 ---
 mode: native-managed
-diagnostic: >
-  prepared native Python cannot contain R, another Python selection, or a
-  managed cache
+diagnostic: |
+  prepared Python cannot contain another selection or a managed cache
 ---
 mode: native-r-conflict
-diagnostic: >
-  prepared native Python cannot contain R, another Python selection, or a
-  managed cache
+diagnostic: |
+  prepared runtime R capability differs from its captured selection
 ---
 mode: native-relative
 diagnostic: |
@@ -62,14 +60,13 @@ diagnostic: |
 ---
 mode: native-prefix
 diagnostic: |
-  prepared native Python has inconsistent executable or base prefixes
+  prepared Python has inconsistent executable or base prefixes
 ---
 mode: native-unknown
-diagnostic: >
-  unknown field `unused`, expected one of `selected`, `explicit`, `managed`,
-  `duckdb_extension_directory` at line 1 column 503
+diagnostic: |
+  unknown field `unused`, expected `r_home` or `python` at line 1 column 496
 ---
 mode: native-embedding-unknown
 diagnostic: >
-  unknown field `unused`, expected one of `python`, `libpython`, `python_home`
-  at line 1 column 503
+  unknown field `unused`, expected one of `python`, `libpython`,
+  `python_home` at line 1 column 297

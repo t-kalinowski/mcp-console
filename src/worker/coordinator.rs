@@ -25,35 +25,41 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
 
 fn run_session() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let selection = crate::local_runtime::Selection::from_environment()?;
+    let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
+        crate::local_runtime::WorkerSelection {
+            r: true,
+            python: None,
+        },
+    );
     interrupt::normalize_signal()?;
-    let (r, python, sql) =
-        if let Some(crate::local_runtime::Selection::Python {
+    let (r, python, sql) = if !selection.r {
+        let crate::local_runtime::Python {
             selected, managed, ..
-        }) = selection
-        {
-            // Native sandbox launches supply runner-owned private storage. Direct
-            // launches supply a directory retained by the server's relay lifetime.
-            let temporary = std::env::var_os("TMPDIR")
-                .ok_or("Python worker launch did not supply temporary storage")?;
-            crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
-            core::initialize(reader, writer.clone())?;
-            let r = Integration::new(None)?;
-            let python = crate::python::Runtime::native(&selected, managed)?;
-            let sql = crate::sql::Bridge::native();
-            (r, python, sql)
-        } else {
-            let r_home = crate::local_runtime::r_home()?;
-            #[cfg(target_os = "linux")]
-            reexec_with_r_library_path(&r_home, &reader, &writer)?;
-            let temporary_directory = embedded_r::initialize_r(&r_home)?;
-            crate::python::configure_worker_environment(&temporary_directory)?;
-            core::initialize(reader, writer.clone())?;
-            let r = Integration::new(Some(embedded_r::Runtime::initialize()?))?;
-            let python = crate::python::Runtime::initialize()?;
-            let sql = crate::sql::Bridge::initialize()?;
-            (r, python, sql)
-        };
+        } = selection
+            .python
+            .ok_or("Python worker launch has no inspected selection")?;
+        // Native sandbox launches supply runner-owned private storage. Direct
+        // launches supply a directory retained by the server's relay lifetime.
+        let temporary = std::env::var_os("TMPDIR")
+            .ok_or("Python worker launch did not supply temporary storage")?;
+        crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
+        core::initialize(reader, writer.clone())?;
+        let r = Integration::new(None)?;
+        let python = crate::python::Runtime::native(&selected, managed)?;
+        let sql = crate::sql::Bridge::native();
+        (r, python, sql)
+    } else {
+        let r_home = crate::local_runtime::r_home()?;
+        #[cfg(target_os = "linux")]
+        reexec_with_r_library_path(&r_home, &reader, &writer)?;
+        let temporary_directory = embedded_r::initialize_r(&r_home)?;
+        crate::python::configure_worker_environment(&temporary_directory)?;
+        core::initialize(reader, writer.clone())?;
+        let r = Integration::new(Some(embedded_r::Runtime::initialize()?))?;
+        let python = crate::python::Runtime::initialize()?;
+        let sql = crate::sql::Bridge::initialize()?;
+        (r, python, sql)
+    };
     writer.send(&WorkerMessage::Ready)?;
     let mut coordinator = Coordinator {
         writer,

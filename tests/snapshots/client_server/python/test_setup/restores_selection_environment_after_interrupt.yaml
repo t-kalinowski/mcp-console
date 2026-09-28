@@ -17,9 +17,9 @@ send:
     )
     selection_env_interrupted <- FALSE
     invisible(suppressMessages(base::trace(
-      "Sys.setenv",
+      "py_discover_config",
       exit = quote({
-        if ("PYTHONPATH" %in% names(list(...)) && !selection_env_interrupted) {
+        if (!selection_env_interrupted) {
           selection_env_interrupted <<- TRUE
           stop(base::structure(
             base::list(
@@ -31,7 +31,7 @@ send:
         }
       }),
       print = FALSE,
-      where = baseenv()
+      where = asNamespace("reticulate")
     )))
 result:
   content:

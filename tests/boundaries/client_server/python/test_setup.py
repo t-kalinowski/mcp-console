@@ -561,15 +561,13 @@ def test_retries_attachment_without_reinitializing_python(
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
                 invisible(suppressMessages(base::trace(
-                  "py_run_string_impl",
-                  tracer = quote({{
-                    if (grepl("sys.executable  =", code, fixed = TRUE)) {{
+                  "py_initialize",
+                  exit = quote({{
                       startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
                       stop(structure(
                         list(message = "synthetic reticulate attach failure", call = NULL),
                         class = c(attachment_failure, "condition")
                       ))
-                    }}
                   }}),
                   print = FALSE,
                   where = asNamespace("reticulate")
@@ -597,7 +595,7 @@ def test_retries_attachment_without_reinitializing_python(
                   ))
                 }}
                 invisible(suppressMessages(base::untrace(
-                  "py_run_string_impl", where = asNamespace("reticulate")
+                  "py_initialize", where = asNamespace("reticulate")
                 )))
                 config <- reticulate::py_config()
                 sys <- reticulate::import("sys", convert = FALSE)
@@ -683,9 +681,9 @@ def test_restores_selection_environment_after_interrupt(
             )
             selection_env_interrupted <- FALSE
             invisible(suppressMessages(base::trace(
-              "Sys.setenv",
+              "py_discover_config",
               exit = quote({
-                if ("PYTHONPATH" %in% names(list(...)) && !selection_env_interrupted) {
+                if (!selection_env_interrupted) {
                   selection_env_interrupted <<- TRUE
                   stop(base::structure(
                     base::list(
@@ -697,7 +695,7 @@ def test_restores_selection_environment_after_interrupt(
                 }
               }),
               print = FALSE,
-              where = baseenv()
+              where = asNamespace("reticulate")
             )))
             """)
         client.send(r=r)
@@ -748,9 +746,9 @@ def test_restores_virtualenv_after_selection_interrupt(
         r = code("""
             interrupted <- TRUE
             invisible(suppressMessages(base::trace(
-              "Sys.setenv",
+              "py_discover_config",
               exit = quote({
-                if ("VIRTUAL_ENV" %in% names(list(...)) && !interrupted) {
+                if (!interrupted) {
                   interrupted <<- TRUE
                   stop(structure(
                     list(message = "selection interrupted", call = NULL),
@@ -759,7 +757,7 @@ def test_restores_virtualenv_after_selection_interrupt(
                 }
               }),
               print = FALSE,
-              where = baseenv()
+              where = asNamespace("reticulate")
             )))
             for (previous in c(NA_character_, "before-selection")) {
               if (is.na(previous)) {
@@ -775,7 +773,10 @@ def test_restores_virtualenv_after_selection_interrupt(
                 !reticulate::py_available(initialize = FALSE)
               )
             }
-            invisible(suppressMessages(base::untrace("Sys.setenv", where = baseenv())))
+            invisible(suppressMessages(base::untrace(
+              "py_discover_config",
+              where = asNamespace("reticulate")
+            )))
             42L
             """)
         client.send(r=r)
@@ -837,14 +838,10 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
             )
             selection_serializations <- 0L
             invisible(suppressMessages(base::trace(
-              "toJSON",
+              "fromJSON",
               tracer = quote({
                 if (
-                  is.list(x) &&
-                    identical(
-                      names(x),
-                      c("python", "libpython", "python_home")
-                    )
+                  is.character(txt) && length(txt) == 1L && startsWith(txt, '{"embedding":')
                 ) {
                   selection_serializations <<- selection_serializations + 1L
                   if (selection_serializations == 1L) {

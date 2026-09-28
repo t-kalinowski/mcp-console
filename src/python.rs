@@ -4,13 +4,11 @@ mod requirements;
 mod reticulate;
 mod startup;
 
-pub(crate) use inspection::{NativePython, inspect_native, inspect_selected};
+pub(crate) use inspection::{NativePython, explicit_executable, inspect_native};
 pub(crate) use requirements::{
     ActivationFailure, ActivationInput, activate_managed_environment, ensure_libpython_compatible,
 };
-pub(crate) use startup::{
-    SelectedPython, finish_initialization, initialize_selected, setup_runtime,
-};
+pub(crate) use startup::{finish_initialization, initialize_selected, setup_runtime};
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 

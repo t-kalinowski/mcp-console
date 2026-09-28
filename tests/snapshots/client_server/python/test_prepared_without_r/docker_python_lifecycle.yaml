@@ -111,7 +111,7 @@ result:
   isError: false
 ---
 send:
-  python: "print(input(\"prepared prompt: \"))"
+  python: 'print(input("prepared prompt: "))'
 result:
   content:
     - type: text
@@ -243,7 +243,7 @@ result:
   isError: false
 ---
 send:
-  python: "print(input(\"after rejected mutation: \"))"
+  python: 'print(input("after rejected mutation: "))'
 result:
   content:
     - type: text
