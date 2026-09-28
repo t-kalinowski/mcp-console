@@ -152,7 +152,7 @@ def test_python_contract_with_and_without_r(
                         peer_from_r <- 44L
                         """)
                     client.send(r=r)
-                    assert last_result_text(client) == "[done]"
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
                     client.send(python="(int(r.peer_from_r), peer_value)")
                     assert last_result_text(client) == "(44, 43)\n"
                 transcript = client.finish()[3:]
