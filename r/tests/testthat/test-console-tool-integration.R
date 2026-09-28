@@ -65,7 +65,9 @@ with_temp_working_directory <- function(code) {
       setwd(old)
       missing <- is.na(old_environment)
       Sys.unsetenv(names(old_environment)[missing])
-      do.call(Sys.setenv, as.list(old_environment[!missing]))
+      if (any(!missing)) {
+        do.call(Sys.setenv, as.list(old_environment[!missing]))
+      }
       unlink(directory, recursive = TRUE)
     },
     add = TRUE
