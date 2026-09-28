@@ -164,6 +164,9 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .map_err(|error| format!("{name}: {error}"))?;
     }
     let target = project.target.filter(|target| !target.is_local_host());
+    let remote_python = target
+        .as_ref()
+        .is_some_and(|target| matches!(target.compute, Compute::Host {}));
     Ok(Captured {
         python: project
             .python
@@ -171,8 +174,12 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
                 if path.as_os_str().is_empty() {
                     return Err("python must name an executable; omit it to use uv".to_string());
                 }
-                std::path::absolute(path)
-                    .map_err(|error| format!("cannot locate configured Python: {error}"))
+                if remote_python {
+                    Ok(path)
+                } else {
+                    std::path::absolute(path)
+                        .map_err(|error| format!("cannot locate configured Python: {error}"))
+                }
             })
             .transpose()?,
         source: Some(name),

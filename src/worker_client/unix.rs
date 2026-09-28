@@ -159,6 +159,7 @@ impl WorkerRuntime {
                 no_sandbox,
                 managed_r,
                 python.and_then(super::PythonEnvironment::managed),
+                local_runtime,
                 false,
             )?;
             (command, Some((session.protocol(), bytes)), Some(generation))

@@ -22,16 +22,17 @@ mcp-console sandbox -c 'sandbox.environment={LABEL: analysis, MODE: "batch"}' --
 
 ## Python environment selection
 
-For a local built-in session, select an existing Python environment with:
+For a local or SSH built-in session, select an existing Python environment with:
 
 ```yaml
 python: .venv/bin/python
 ```
 
-Paths are relative to the launch directory.
+Local paths are relative to the launch directory.
+SSH paths are interpreted on the execution host, relative to `target.workspace`.
 The equivalent CLI override is `mcp-console serve -c python=.venv/bin/python`.
 This setting takes precedence over inherited `RETICULATE_PYTHON` and is retained across worker restarts.
-It is unavailable with custom workers and execution targets.
+It is unavailable with custom workers, Docker, and Docker Sandbox targets.
 
 In a [session without R](BUILTIN_RUNTIME.md#python-sessions-without-r), omitting both selections uses Python resolved through uv and enables explicit startup/restart Python package and DuckDB extension preparation.
 An explicit Python selection bypasses uv entirely and disables package preparation.

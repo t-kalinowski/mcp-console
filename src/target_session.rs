@@ -64,7 +64,8 @@ impl Session {
             ),
             Compute::Host {} => unreachable!(),
         };
-        let (command, bytes, generation) = session.launch(policy, no_sandbox, None, None, true)?;
+        let (command, bytes, generation) =
+            session.launch(policy, no_sandbox, None, None, None, true)?;
         let bytes = process::run(
             command,
             &cancel,
@@ -141,12 +142,13 @@ impl Session {
         no_sandbox: bool,
         managed_r: Option<&crate::resolver::ManagedR>,
         python: Option<&crate::resolver::ManagedPython>,
+        native: Option<&crate::local_runtime::Selection>,
         probe: bool,
     ) -> Result<(Command, Vec<u8>, Generation), String> {
         let (command, bytes, owner) = match self {
             Self::Ssh(session) => (
                 session.command()?,
-                session.bootstrap(policy, no_sandbox, managed_r, python)?,
+                session.bootstrap(policy, no_sandbox, managed_r, python, native)?,
                 GenerationOwner::Ssh(Box::new(session.clone())),
             ),
             Self::Docker(captured, state) => state.launch(

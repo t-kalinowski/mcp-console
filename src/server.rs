@@ -306,7 +306,13 @@ impl ConsoleServer {
         let languages = Languages::from_environment()?;
         let policy = sandbox_settings.clone();
         let worker = if let Some((target, roots)) = target {
-            crate::worker_client::Client::target(target, roots, no_sandbox, sandbox_settings)?
+            crate::worker_client::Client::target(
+                target,
+                roots,
+                no_sandbox,
+                sandbox_settings,
+                python,
+            )?
         } else {
             match (worker, relay) {
                 (Some(program), relay) => {
@@ -345,6 +351,11 @@ impl ConsoleServer {
             &security,
             python_only,
             worker.python_preparation(),
+            target
+                .as_ref()
+                .and_then(|target| target.pointer("/transport/kind"))
+                .and_then(serde_json::Value::as_str)
+                == Some("ssh"),
         );
         Ok(Self {
             worker,
@@ -361,6 +372,7 @@ impl ConsoleServer {
         security: &str,
         python_only: bool,
         python_preparation: bool,
+        remote: bool,
     ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
@@ -419,7 +431,13 @@ impl ConsoleServer {
             }
         }
         if python_only {
-            python_only::configure(description, properties, python_preparation, languages.sql);
+            python_only::configure(
+                description,
+                properties,
+                python_preparation,
+                languages.sql,
+                remote,
+            );
         }
         if !dynamic_resolution && !python_preparation {
             let requirements = properties

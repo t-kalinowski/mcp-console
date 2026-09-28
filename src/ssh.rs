@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub(crate) use crate::resolver::preparation;
-use crate::target_launch::{self, Bootstrap, Protocol, Retirement, VERSION};
+use crate::target_launch::{self, Bootstrap, Protocol, Retirement, SSH_VERSION};
 
 pub(crate) const PROTOCOL: Protocol = Protocol("SSH");
 pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
@@ -75,9 +75,10 @@ impl Session {
         no_sandbox: bool,
         managed_r: Option<&crate::resolver::ManagedR>,
         python: Option<&crate::resolver::ManagedPython>,
+        native: Option<&crate::local_runtime::Selection>,
     ) -> Result<Vec<u8>, String> {
         target_launch::encode(&Bootstrap {
-            version: VERSION,
+            version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: self.target.workspace.clone(),
             policy: policy.clone(),
@@ -91,6 +92,7 @@ impl Session {
                     discovery,
                     r: managed_r.cloned(),
                     python: python.cloned(),
+                    native: native.cloned(),
                 }),
         })
         .map_err(|error| format!("cannot encode SSH bootstrap: {error}"))
@@ -99,13 +101,18 @@ impl Session {
     pub fn discover(
         &mut self,
         policy: &crate::settings::SandboxSettings,
+        python: Option<&std::path::Path>,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<preparation::Discovery, String> {
-        let selections = preparation::Selections::from_policy(policy);
+        let selections = preparation::Selections::from_policy(policy, python)?;
         let (preparation, discovery) =
             preparation::Preparation::open(self, selections, on_started)?;
         self.preparation = Some(preparation);
-        self.discovery = Some(discovery.clone());
+        // The session environment owns the current native selection after discovery.
+        self.discovery = Some(preparation::Discovery {
+            native: None,
+            ..discovery.clone()
+        });
         Ok(discovery)
     }
 

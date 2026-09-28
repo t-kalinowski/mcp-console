@@ -15,6 +15,14 @@ from support.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIGURED = json.loads(os.environ.get("MCP_CONSOLE_TEST_SSH_EXTERNAL") or "null")
+SANS_R_CONFIGURED = json.loads(
+    os.environ.get("MCP_CONSOLE_TEST_SSH_NO_R_EXTERNAL") or "null"
+)
+SANS_R_EXTERNAL_SSH = Requirement(
+    "R-free external SSH target",
+    SANS_R_CONFIGURED is not None,
+    "set MCP_CONSOLE_TEST_SSH_NO_R_EXTERNAL to an installed R-free SSH target",
+)
 HOST = (
     CONFIGURED["target"]["transport"]["host"]
     if CONFIGURED is not None

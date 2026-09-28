@@ -1,4 +1,7 @@
 //! Select the execution host without moving session transactions into the resolver.
+//!
+//! Callers trust the preparation command for explicit and automatic resolution.
+//! Enforcement of that boundary belongs there; see docs/REQUIREMENTS.md.
 
 use super::preparation::{Operation, Preparation};
 use super::{ManagedPython, ManagedR, ResolverStopHandle};
@@ -53,8 +56,8 @@ impl PythonConfiguration {
             Self::Local { has_uv, .. } => *has_uv,
             #[cfg(not(unix))]
             Self::Direct(configuration) => configuration.has_uv(),
-            // The trusted remote configuration resolves uv in the operation
-            // that first needs it, using the selected managed R environment.
+            // Discovery requires remote uv for sans-R managed sessions.
+            // R-present sessions can prepare it when their first operation needs it.
             Self::Ssh(_) => true,
         }
     }
@@ -114,22 +117,16 @@ pub(crate) fn resolve_python_manifest(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     match configuration {
-        PythonConfiguration::Local { preparation, .. } => preparation.call(
-            Operation::Python {
-                requirements,
-                r: managed_r.cloned(),
-                selected_python: selected_python.map(std::path::Path::to_path_buf),
-            },
-            on_started,
-        ),
-        PythonConfiguration::Ssh(remote) => remote.call(
-            Operation::Python {
-                requirements,
-                r: managed_r.cloned(),
-                selected_python: selected_python.map(std::path::Path::to_path_buf),
-            },
-            on_started,
-        ),
+        PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
+            preparation.call(
+                Operation::Python {
+                    requirements,
+                    r: managed_r.cloned(),
+                    selected_python: selected_python.map(std::path::Path::to_path_buf),
+                },
+                on_started,
+            )
+        }
         #[cfg(not(unix))]
         PythonConfiguration::Direct(configuration) => {
             if selected_python.is_some() {
@@ -149,28 +146,38 @@ pub(crate) fn resolve_python_version(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     match configuration {
-        PythonConfiguration::Local { preparation, .. } => preparation.call(
-            Operation::LocalPythonVersion {
-                constraints,
-                r: managed_r.cloned(),
-            },
-            on_started,
-        ),
-        PythonConfiguration::Ssh(remote) => remote.call(
-            Operation::PythonVersion {
-                constraints,
-                r: managed_r
-                    .ok_or_else(|| {
-                        "remote Python version resolution requires managed R".to_string()
-                    })?
-                    .clone(),
-            },
-            on_started,
-        ),
+        PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
+            preparation.call(
+                Operation::PythonVersion {
+                    constraints,
+                    r: managed_r.cloned(),
+                },
+                on_started,
+            )
+        }
         #[cfg(not(unix))]
         PythonConfiguration::Direct(configuration) => {
             super::resolve_python_version(constraints, configuration, on_started)
         }
+    }
+}
+
+pub(crate) fn inspect_native(
+    configuration: &PythonConfiguration,
+    executable: &std::path::Path,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<crate::python::NativePython, String> {
+    match configuration {
+        PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
+            preparation.call(
+                Operation::InspectPython {
+                    executable: executable.to_path_buf(),
+                },
+                on_started,
+            )
+        }
+        #[cfg(not(unix))]
+        PythonConfiguration::Direct(_) => crate::python::inspect_native(executable, on_started),
     }
 }
 
@@ -197,8 +204,14 @@ pub(crate) fn resolve_python_duckdb_extensions(
     extension_directory: &std::path::Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(), String> {
-    let PythonConfiguration::Local { preparation, .. } = configuration else {
-        return Err("Python-backed DuckDB preparation requires a local resolver".into());
+    let preparation = match configuration {
+        PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
+            preparation
+        }
+        #[cfg(not(unix))]
+        PythonConfiguration::Direct(_) => {
+            return Err("Python-backed DuckDB preparation requires a Unix resolver".into());
+        }
     };
     preparation.call(
         Operation::DuckdbPython {
