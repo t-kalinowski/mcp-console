@@ -107,6 +107,40 @@ def test_managed_python_requires_home_for_default_extensions(
 
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
+def test_default_extension_failure_preserves_close_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        marker = root / "closing"
+        env = dict(
+            environment(root),
+            UV_CACHE_DIR=str(root / "uv-cache"),
+            MCP_CONSOLE_TEST_CLOSE_MARKER=str(marker),
+        )
+        env[LOADER_VARIABLE] = str(build_interposer(root, "preparation_close_failure"))
+        # Python selection succeeds, but default extension preparation needs HOME.
+        env.pop("HOME", None)
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            env,
+            record_in_project=False,
+        ) as client:
+            assert client.process.wait(timeout=60) != 0
+            assert not client.stdout.read()
+            diagnostic = client.stderr.read()
+            assert marker.exists(), ("resolver did not receive Close", diagnostic)
+            assert diagnostic.strip() == (
+                "DuckDB extension preparation requires an absolute HOME at server startup; "
+                "resolver input closed"
+            ), diagnostic
+            return [{"stderr": diagnostic}]
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_prepares_extension_before_first_worker_and_loads_from_cache(
     binary: Path, execution: Execution
 ) -> Transcript:

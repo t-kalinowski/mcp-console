@@ -437,7 +437,9 @@ impl Client {
                 let (selection, managed, extensions) = match selected {
                     Ok(selection) => selection,
                     Err(error) => {
-                        let _ = preparation.close();
+                        preparation
+                            .close()
+                            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
                         return Err(error);
                     }
                 };
