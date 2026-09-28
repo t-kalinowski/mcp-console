@@ -92,7 +92,7 @@ With R present, managed preparation retains the existing reticulate and SQL adap
 An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available.
 
 When R is absent, Console starts the native Python and SQL runtime.
-With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB before the first worker starts; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
+With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB, and the remote host prepares the default SQLite extension before MCP readiness; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
 The native worker uses its Python and DB-API adapters without starting R, reticulate, or R DBI.
 An explicit `python` path bypasses uv and uses packages, DuckDB, and custom DB-API connections already available in that environment.
 R cells and R requirements are unavailable.

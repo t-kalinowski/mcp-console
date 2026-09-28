@@ -347,10 +347,8 @@ impl ConsoleServer {
         let security = execution::description(&policy, no_sandbox, target.as_ref());
         let tool_router = Self::configured_tool_router(
             languages,
-            dynamic_resolution,
+            &worker,
             &security,
-            python_only,
-            worker.python_preparation(),
             target
                 .as_ref()
                 .and_then(|target| target.pointer("/transport/kind"))
@@ -372,13 +370,14 @@ impl ConsoleServer {
 
     fn configured_tool_router(
         languages: Languages,
-        dynamic_resolution: bool,
+        worker: &crate::worker_client::Client,
         security: &str,
-        python_only: bool,
-        python_preparation: bool,
         remote: bool,
         prepared: Option<&str>,
     ) -> ToolRouter<Self> {
+        let dynamic_resolution = worker.dynamic_resolution();
+        let python_only = worker.python_only();
+        let python_preparation = worker.python_preparation();
         let mut router = Self::tool_router();
         let send = router
             .map
@@ -444,6 +443,48 @@ impl ConsoleServer {
                 remote,
             );
         }
+        let mut guidance = String::new();
+        if languages.sql {
+            guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");
+        }
+        if languages.r {
+            guidance.push_str(
+                "Use R for vectorized data and string operations, statistics, and plots. ",
+            );
+        }
+        if languages.python {
+            guidance.push_str(
+                "Use Python when its libraries or format-specific parsing simplify the task. ",
+            );
+        }
+        if [languages.r, languages.python, languages.sql]
+            .into_iter()
+            .filter(|enabled| *enabled)
+            .count()
+            > 1
+        {
+            guidance.push_str("Switch languages when useful, reusing persistent state.");
+        }
+        guidance.truncate(guidance.trim_end().len());
+        if languages.sql {
+            guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
+            if dynamic_resolution || python_preparation {
+                if worker.has_default_duckdb_extension("sqlite") {
+                    guidance.push_str("Managed defaults include SQLite; ");
+                } else {
+                    guidance.push_str(r#"Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}` before use; "#);
+                }
+                guidance.push_str(r#"attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
+            } else {
+                guidance.push_str("For SQLite, use a preinstalled sqlite extension and attach the database read-only. ");
+            }
+            guidance.push_str("SQL results include bounded table previews that abbreviate long text cells; return focused queries and summaries for inspection.");
+        }
+        *description = description.replacen(
+            "State persists across calls. ",
+            &format!("State persists across calls.\n\n{guidance}\n\n"),
+            1,
+        );
         if let Some(kind @ ("docker" | "docker_sandbox")) = prepared {
             execution::configure_prepared(description, properties, kind, python_only);
         }
@@ -466,7 +507,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Choose the language best suited to each cell and reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
+        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 

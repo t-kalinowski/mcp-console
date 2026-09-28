@@ -8,6 +8,7 @@ use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
+pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
@@ -128,8 +129,7 @@ impl Selection {
         let executable = std::path::absolute(executable)
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
         let selected = inspect(&executable, on_started)?;
-        // Ordinary managed Python sessions also work without HOME. A shared
-        // extension cache is required only when extensions are requested.
+        // Default and requested extensions share the host cache across generations.
         let duckdb_extension_directory = managed.as_ref().and_then(|_| {
             std::env::var_os("HOME")
                 .map(PathBuf::from)
@@ -150,6 +150,32 @@ impl Selection {
 
     pub(crate) fn python_only(&self) -> bool {
         self.r_home.is_none()
+    }
+
+    pub(crate) fn prepare_default_duckdb_extensions(
+        &self,
+        managed: Option<&ManagedPython>,
+        resolver: &crate::resolver::execution::PythonConfiguration,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<std::collections::BTreeSet<String>, String> {
+        let Some(managed) = managed else {
+            return Ok(Default::default());
+        };
+        let directory = self
+            .duckdb_extension_directory()
+            .ok_or("DuckDB extension preparation requires an absolute HOME at server startup")?;
+        let extensions = DEFAULT_DUCKDB_EXTENSIONS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        crate::resolver::execution::resolve_python_duckdb_extensions(
+            resolver,
+            managed,
+            &extensions,
+            directory,
+            on_started,
+        )?;
+        Ok(extensions.into_iter().collect())
     }
 
     pub(crate) fn duckdb_extension_directory(&self) -> Option<&Path> {

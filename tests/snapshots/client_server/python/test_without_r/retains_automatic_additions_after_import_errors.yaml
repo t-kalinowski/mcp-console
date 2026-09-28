@@ -54,7 +54,9 @@ result:
               "mcp_console_test_empty_pkg",
               "mcp_console_test_raises_pkg"
             ],
-            "duckdb": [],
+            "duckdb": [
+              "sqlite"
+            ],
             "python_version": [],
             "exclude_newer": null
           },
@@ -73,7 +75,8 @@ result:
         - duckdb
         - mcp_console_test_empty_pkg
         - mcp_console_test_raises_pkg
-      duckdb: []
+      duckdb:
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

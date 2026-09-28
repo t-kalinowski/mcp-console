@@ -336,8 +336,12 @@ def test_combined_additions_extensions_and_requirement_actions(
         initial = client.send(requirements={"action": "get"})["structuredContent"][
             "requirements"
         ]
-        assert initial["r"] == [] and initial["duckdb"] == []
+        assert initial["r"] == [] and initial["duckdb"] == ["sqlite"]
         assert set(initial["python"]) == {"duckdb", "numpy", "pandas"}
+        client.send(sql="SET autoinstall_known_extensions = false; LOAD sqlite")
+        assert last_result_text(client) == "Success\n-------\n[0 rows]\n", (
+            last_result_text(client)
+        )
         client.send(python="import os; identity = object(); identity_id = id(identity)")
         client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
         client.send(
@@ -353,7 +357,9 @@ def test_combined_additions_extensions_and_requirement_actions(
         current = client.send(requirements={"action": "get"})["structuredContent"][
             "requirements"
         ]
-        assert current["duckdb"] == ["fts"] and "py-yaml12" in current["python"]
+        assert (
+            current["duckdb"] == ["fts", "sqlite"] and "py-yaml12" in current["python"]
+        )
         client.send(requirements={"duckdb": ["tpch"]})
         assert last_result_text(client) == "[prepared]"
         client.send(sql="SET autoinstall_known_extensions = false; LOAD tpch")
@@ -637,6 +643,10 @@ def test_external_r_free_execution_host(
             assert "Persistent remote Python and SQL workbench" in tool["description"]
             assert "r" not in tool["inputSchema"]["properties"]
             client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
+            assert not client.transcript[-1]["result"]["isError"], (
+                last_result_text(client),
+                client.stderr.buffer.decode(),
+            )
             client.send(
                 # fmt: python
                 python=code("""
@@ -660,7 +670,7 @@ def test_external_r_free_execution_host(
                 requirements={"python": ["py-yaml12", "matplotlib"], "duckdb": ["fts"]},
                 python="import yaml12; assert id(identity) == identity_id; print('combined')",
             )
-            assert last_result_text(client) == "combined\n"
+            assert last_result_text(client) == "combined\n", last_result_text(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -731,7 +741,7 @@ def test_external_r_free_execution_host(
                 "structuredContent"
             ]["requirements"]
             assert {"py-yaml12", "humanize"}.issubset(declaration["python"])
-            assert declaration["duckdb"] == ["fts"]
+            assert declaration["duckdb"] == ["fts", "sqlite"]
             client.send(
                 python="import subprocess, sys; _ = subprocess.run([sys.executable, '-m', 'venv', '--without-pip', '.selected'], check=True)"
             )

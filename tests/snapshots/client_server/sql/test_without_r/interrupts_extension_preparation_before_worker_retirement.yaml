@@ -47,7 +47,9 @@ result:
               "pandas",
               "duckdb"
             ],
-            "duckdb": [],
+            "duckdb": [
+              "sqlite"
+            ],
             "python_version": [],
             "exclude_newer": null
           },
@@ -64,7 +66,8 @@ result:
         - numpy
         - pandas
         - duckdb
-      duckdb: []
+      duckdb:
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true
@@ -98,7 +101,9 @@ result:
               "pandas",
               "duckdb"
             ],
-            "duckdb": [],
+            "duckdb": [
+              "sqlite"
+            ],
             "python_version": [],
             "exclude_newer": null
           },
@@ -115,7 +120,8 @@ result:
         - numpy
         - pandas
         - duckdb
-      duckdb: []
+      duckdb:
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

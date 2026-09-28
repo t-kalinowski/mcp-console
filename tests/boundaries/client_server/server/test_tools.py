@@ -108,6 +108,7 @@ def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     companions = {
+        "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
         "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
@@ -140,6 +141,7 @@ def _initializes_and_lists_tools(
     binary: Path,
     execution: Execution,
     *,
+    custom: bool = False,
     bare: bool = False,
     python_only: bool = False,
     python_managed: bool = False,
@@ -197,7 +199,11 @@ def _initializes_and_lists_tools(
             )
         with McpClient(
             binary,
-            execution.serve(),
+            execution.serve(
+                *("--worker", str(Path(__file__).resolve().parents[3] / "fixtures/zod"))
+                if custom
+                else ()
+            ),
             environment,
             workspace,
             record_in_project=False,
@@ -206,6 +212,29 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            description = send["description"]
+            assert description.index("consider DuckDB SQL first") < description.index(
+                "Send one complete"
+            )
+            assert "CSV, Parquet, JSON, and JSONL directly" in description
+            assert "JSON support is built in" in description
+            assert (
+                "bounded table previews that abbreviate long text cells" in description
+            )
+            assert "attach the database read-only" in description
+            assert ("Managed defaults include SQLite" in description) == (
+                not custom and (python_managed or not (bare or python_only))
+            )
+            if custom:
+                assert (
+                    'requirements={"action":"add","duckdb":["sqlite"]}' in description
+                )
+            assert (
+                "Use R for vectorized data and string operations" in description
+            ) == (not python_only)
+            assert (
+                'requirements={"action":"add","duckdb":["fts"]}' in description
+            ) == (python_managed or not (bare or python_only))
             if proxy:
                 assert (
                     "network subject to the launcher's proxy settings"
@@ -391,6 +420,37 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                 assert listed["result"]["tools"][0]["description"] == description
                 client.finish()
                 transcript.append({"configuration": name, "description": description})
+    return transcript
+
+
+def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Transcript:
+    transcript = []
+    for enabled in (
+        "r",
+        "python",
+        "sql",
+        "r,python",
+        "r,sql",
+        "python,sql",
+        "r,python,sql",
+    ):
+        environment = dict(os.environ, MCP_CONSOLE_LANGUAGES=enabled)
+        with McpClient(
+            binary, DIRECT.serve("--worker", "unused-worker"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            tool = client.transcript[-1]["result"]["tools"][0]
+            fields = set(tool["inputSchema"]["properties"]) & {"r", "python", "sql"}
+            assert fields == set(enabled.split(",")), fields
+            description = tool["description"]
+            assert ("Switch languages when useful" in description) == (
+                len(fields) > 1
+            ), (
+                enabled,
+                description,
+            )
+            transcript.append({"languages": enabled, "description": description})
+            client.finish()
     return transcript
 
 

@@ -93,7 +93,7 @@ Requirements already retained are a no-op, including on a running worker.
 Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
 Python and DuckDB additions in one call prepare the complete candidate before native activation.
 
-Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with no default extensions.
+Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with the SQLite extension.
 `python_version` and `exclude_newer` use the ordinary requirements contract.
 Restart preparation resolves the complete Python candidate, inspects its executable, and installs retained extensions with that candidate's DuckDB before retiring the current worker.
 The same extension preparation occurs before first startup; if DuckDB is absent, include `duckdb` in `requirements.python`.
@@ -120,7 +120,7 @@ Workspace modules and packages are importable without `PYTHONPATH`; the working-
 The executable directory is not added to the import path.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
 With an absolute `HOME` at server startup, the managed DuckDB connection reads the captured shared version-and-platform extension cache; it keeps spill and stored-secret files in private worker storage.
-Without an absolute `HOME`, managed Python still starts, but explicit extension preparation reports that a shared cache root is required.
+Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
 If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
 Retirement does not delete resolver caches or the retained environment.
 
@@ -467,6 +467,8 @@ Objects and proxies tied to a worker generation become invalid when that generat
 With R present, the managed in-memory DuckDB connection is the default SQL backend and is created lazily.
 Later managed SQL cells, DBI calls, and dplyr relations reuse its catalog.
 DuckDB CLI dot commands are not supported.
+Managed defaults include the SQLite extension, so existing databases can be queried with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)` without an explicit preparation call.
+CSV, Parquet, JSON, and JSONL can also be queried directly; DuckDB JSON support is built in.
 
 R can redirect later SQL cells to another DBI backend:
 

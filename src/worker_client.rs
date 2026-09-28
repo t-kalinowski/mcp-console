@@ -43,7 +43,7 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "nanoarrow",
 ];
 
-const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json"];
+const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json", "sqlite"];
 
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
 pub(crate) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
@@ -425,11 +425,21 @@ impl Client {
                     configured_python.clone(),
                     &resolver,
                     on_started,
-                );
-                let (selection, managed) = match selected {
+                )
+                .and_then(|(selection, managed)| {
+                    let extensions = selection.prepare_default_duckdb_extensions(
+                        managed.as_ref(),
+                        &resolver,
+                        on_started,
+                    )?;
+                    Ok((selection, managed, extensions))
+                });
+                let (selection, managed, extensions) = match selected {
                     Ok(selection) => selection,
                     Err(error) => {
-                        let _ = preparation.close();
+                        preparation
+                            .close()
+                            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
                         return Err(error);
                     }
                 };
@@ -439,7 +449,7 @@ impl Client {
                     Some(selected) => PythonEnvironment::Managed { selected, resolver },
                     None => PythonEnvironment::bare(configured_python),
                 });
-                (None, Default::default(), python, RResolver::Disabled)
+                (None, extensions, python, RResolver::Disabled)
             } else {
                 let (preparation, discovery) =
                     crate::resolver::preparation::Preparation::open_local(
@@ -650,11 +660,38 @@ impl Client {
         configured_python: Option<PathBuf>,
     ) -> Result<Self, String> {
         #[cfg(unix)]
-        let discovery = startup::with_input_owner(|started| {
-            session.discover(&policy, configured_python.as_deref(), started)
+        let (discovery, duckdb_extensions) = startup::with_input_owner(|started| {
+            let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
+            let extensions = if let Some(native) = &discovery.native {
+                native.selection.prepare_default_duckdb_extensions(
+                    native.python.as_ref(),
+                    &crate::resolver::execution::PythonConfiguration::Ssh(
+                        session
+                            .preparation
+                            .as_ref()
+                            .expect("remote preparation")
+                            .clone(),
+                    ),
+                    started,
+                )?
+            } else {
+                Default::default()
+            };
+            Ok((discovery, extensions))
+        })
+        .map_err(|error| {
+            // No Client owns shutdown if startup fails after discovery.
+            if let Some(preparation) = &session.preparation
+                && let Err(cleanup) = preparation.close()
+            {
+                return format!("{error}; {cleanup}");
+            }
+            error
         })?;
         #[cfg(not(unix))]
         let discovery = session.discover(&policy, configured_python.as_deref(), &|_| Ok(()))?;
+        #[cfg(not(unix))]
+        let duckdb_extensions = Default::default();
         let preparation = session
             .preparation
             .as_ref()
@@ -706,7 +743,7 @@ impl Client {
             Some(Environment {
                 local_runtime,
                 custom_worker: false,
-                duckdb_extensions: Default::default(),
+                duckdb_extensions,
                 duckdb_r_targets: Vec::new(),
                 python,
                 r: None,
@@ -729,6 +766,18 @@ impl Client {
 
     pub(crate) fn dynamic_resolution(&self) -> bool {
         self.0.dynamic_resolution
+    }
+
+    pub(crate) fn has_default_duckdb_extension(&self, extension: &str) -> bool {
+        self.0.environment.as_ref().is_some_and(|environment| {
+            environment
+                .lock()
+                .expect("environment lock")
+                .startup_declaration()
+                .duckdb
+                .iter()
+                .any(|name| name == extension)
+        })
     }
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.

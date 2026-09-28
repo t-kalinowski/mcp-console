@@ -61,7 +61,7 @@ impl Environment {
         }
     }
 
-    pub(super) fn startup_declaration(&self) -> Declaration {
+    pub(in crate::worker_client) fn startup_declaration(&self) -> Declaration {
         let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
         Declaration {
             r: if managed_r {
@@ -87,6 +87,16 @@ impl Environment {
             },
             duckdb: if managed_r {
                 super::super::DEFAULT_DUCKDB_EXTENSIONS
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect()
+            } else if self.manages_python()
+                && self
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only)
+            {
+                crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
                     .iter()
                     .map(|s| (*s).into())
                     .collect()

@@ -243,7 +243,8 @@ result:
               "six"
             ],
             "duckdb": [
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -265,6 +266,7 @@ result:
         - six
       duckdb:
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

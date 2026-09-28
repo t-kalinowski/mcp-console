@@ -30,7 +30,7 @@ The default sans-R managed Python declaration includes NumPy, pandas, and DuckDB
 DuckDB is resolved with the rest of the Python manifest through the hidden host resolve process before the environment is accepted; the worker never installs it through Console preparation.
 If it is absent after an explicit replacement, Python and a selected DB-API connection remain usable, while managed SQL reports how to obtain DuckDB.
 An extension requirement with no importable DuckDB package in the candidate fails and explains how to include `duckdb` in `requirements.python`.
-The managed sans-R declaration has no default extensions.
+The managed sans-R declaration includes the SQLite extension, prepared on the execution host before MCP readiness.
 The R-backed live preparation path below applies only to sessions with R.
 
 Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
@@ -88,7 +88,7 @@ The built-in server uses these defaults; R-present preparation begins when an op
 | ----------- | ----------------------------------------------------------------------------------- |
 | R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow`                |
 | Python      | NumPy and pandas when Python is server-managed; sans-R sessions also include DuckDB |
-| DuckDB      | ICU and JSON extensions with R; none in sans-R managed Python                       |
+| DuckDB      | ICU, JSON, and SQLite extensions with R; SQLite in sans-R managed Python            |
 
 R-present managed defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
@@ -111,7 +111,7 @@ Host resolution for changed requirements submitted through `send` also has no de
 The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active resolver, and closing MCP input cancels it during server shutdown.
 
 Packages supplied by these environments are available but are not attached or imported automatically.
-The default R-backed DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the worker.
+The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the worker.
 
 A custom worker skips all three default preparations.
 Its more limited requirements contract is described under [Custom workers](#custom-workers).
@@ -447,7 +447,7 @@ It calls DuckDB's extension installation API with names as data, without R or a 
 On a Python environment change, the server inspects the candidate first and prepares the complete retained extension set against its DuckDB version, even if the extension names did not change.
 For an idle live addition, it uses the accepted managed Python environment without resolving packages, reinspecting the interpreter, or requesting worker activation.
 With an absolute `HOME` at server startup, the managed worker reads the same `HOME/.duckdb/extensions` version-and-platform cache captured for the resolver.
-Without an absolute `HOME`, ordinary managed Python sessions still start, but explicit extension preparation fails before worker retirement.
+Managed sans-R startup requires an absolute `HOME` for preparing the default SQLite extension.
 Its spill and stored-secret paths remain in private worker storage, which retirement removes without deleting shared extensions.
 Preparation never loads extensions, executes submitted code, opens a worker database, or changes a selected DB-API connection.
 The worker's interpreter, Python objects, managed DuckDB catalog, and selected SQL connection survive a successful live addition.

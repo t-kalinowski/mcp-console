@@ -91,7 +91,8 @@ result:
               "py-yaml12"
             ],
             "duckdb": [
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -112,6 +113,7 @@ result:
         - py-yaml12
       duckdb:
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

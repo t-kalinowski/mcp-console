@@ -124,7 +124,9 @@ result:
               "py-yaml12",
               "six"
             ],
-            "duckdb": [],
+            "duckdb": [
+              "sqlite"
+            ],
             "python_version": [],
             "exclude_newer": null
           },
@@ -144,7 +146,8 @@ result:
         - more-itertools
         - py-yaml12
         - six
-      duckdb: []
+      duckdb:
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

@@ -2,6 +2,7 @@
 
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -39,6 +40,19 @@ def test_uses_default_duckdb_extensions(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
+        inspected = client.send(requirements={"action": "get"})
+        assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+            "icu",
+            "json",
+            "sqlite",
+        ]
+        with sqlite3.connect(workspace / "audit.sqlite") as database:
+            database.execute("CREATE TABLE events (payload TEXT)")
+            database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
+        client.send(sql="SET autoinstall_known_extensions = false")
+        client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
+        client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
+        assert '"42"' in normalize_trailing_spaces(client), last_tool_text(client)
 
         sql = code(r"""
             SELECT

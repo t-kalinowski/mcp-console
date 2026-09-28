@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -46,7 +47,42 @@ def installed_binary(binary: Path, root: Path) -> Path:
 
 
 @executions(DIRECT, SANDBOXED)
-def test_managed_python_starts_without_home_until_extension_requested(
+def test_sqlite_is_available_by_default(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        home = root / "home"
+        home.mkdir()
+        (root / "uv").symlink_to(shutil.which("uv"))
+        with sqlite3.connect(root / "audit.sqlite") as database:
+            database.execute("CREATE TABLE events (payload TEXT)")
+            database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            dict(environment(root), HOME=str(home)),
+            current_directory=root,
+        ) as client:
+            client.initialize_and_list_tools()
+            inspected = client.send(requirements={"action": "get"})
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                "sqlite"
+            ]
+            assert list(
+                (home / ".duckdb/extensions").glob(
+                    "v*/**/sqlite_scanner.duckdb_extension"
+                )
+            )
+            client.send(sql="SET autoinstall_known_extensions = false")
+            client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
+            client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
+            assert "42" in last_tool_text(client), last_tool_text(client)
+            return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_managed_python_requires_home_for_default_extensions(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
@@ -60,29 +96,47 @@ def test_managed_python_starts_without_home_until_extension_requested(
             env,
             record_in_project=False,
         ) as client:
-            client.initialize_and_list_tools()
-            client.send(
-                python="identity = object(); original = id(identity); print('ready')"
+            client.process.wait(timeout=60)
+            diagnostic = client.stderr.read()
+            assert client.process.returncode != 0
+            assert (
+                "DuckDB extension preparation requires an absolute HOME" in diagnostic
             )
-            assert last_tool_text(client) == "ready\n"
-            live = client.send(
-                requirements={"duckdb": ["fts"]},
-                python="identity = None",
-            )
-            assert live.get("isError"), live
-            assert "HOME" in last_result_text(client)
-            denied = client.send(
-                control="restart",
-                requirements={"duckdb": ["fts"]},
-                python="identity = None",
-            )
-            assert denied.get("isError"), denied
-            assert "HOME" in last_result_text(client)
-            client.send(python="assert id(identity) == original; print('retained')")
-            assert last_tool_text(client) == "retained\n"
-            inspected = client.send(requirements={"action": "get"})
-            assert inspected["structuredContent"]["requirements"]["duckdb"] == []
-            return client.finish()[3:]
+            return [{"stderr": diagnostic}]
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_default_extension_failure_preserves_close_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        marker = root / "closing"
+        env = dict(
+            environment(root),
+            UV_CACHE_DIR=str(root / "uv-cache"),
+            MCP_CONSOLE_TEST_CLOSE_MARKER=str(marker),
+        )
+        env[LOADER_VARIABLE] = str(build_interposer(root, "preparation_close_failure"))
+        # Python selection succeeds, but default extension preparation needs HOME.
+        env.pop("HOME", None)
+        with McpClient(
+            installed_binary(binary, root),
+            execution.serve(),
+            env,
+            record_in_project=False,
+        ) as client:
+            assert client.process.wait(timeout=60) != 0
+            assert not client.stdout.read()
+            diagnostic = client.stderr.read()
+            assert marker.exists(), ("resolver did not receive Close", diagnostic)
+            assert diagnostic.strip() == (
+                "DuckDB extension preparation requires an absolute HOME at server startup; "
+                "resolver input closed"
+            ), diagnostic
+            return [{"stderr": diagnostic}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -161,7 +215,10 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
                 "crash replacement removed the shared extension cache"
             )
             inspected = client.send(requirements={"action": "get"})
-            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["fts"]
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                "fts",
+                "sqlite",
+            ]
             return _replace_paths(
                 client.finish()[3:], [first_temporary, second_temporary]
             )
@@ -250,6 +307,7 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
                 "excel",
                 "fts",
                 "json",
+                "sqlite",
             ]
             client.send(
                 control="restart",
@@ -373,11 +431,11 @@ def test_extension_actions_replace_and_reset_declarations(
                 assert not inspected.get("isError"), inspected
                 return inspected["structuredContent"]["requirements"]
 
-            assert declaration()["duckdb"] == []
+            assert declaration()["duckdb"] == ["sqlite"]
             client.send(requirements={"duckdb": ["fts"]})
-            assert declaration()["duckdb"] == ["fts"]
+            assert declaration()["duckdb"] == ["fts", "sqlite"]
             client.send(requirements={"duckdb": ["json"]})
-            assert declaration()["duckdb"] == ["fts", "json"]
+            assert declaration()["duckdb"] == ["fts", "json", "sqlite"]
             client.send(
                 requirements={
                     "action": "set",
@@ -401,7 +459,7 @@ def test_extension_actions_replace_and_reset_declarations(
             assert "Error:" not in last_tool_text(client)
             client.send(control="restart", requirements={"action": "reset"})
             assert declaration()["python"] == ["numpy", "pandas", "duckdb"]
-            assert declaration()["duckdb"] == []
+            assert declaration()["duckdb"] == ["sqlite"]
             return client.finish()[3:]
 
 
@@ -595,7 +653,10 @@ def test_live_extension_additions_require_an_idle_worker(
             )
             assert last_tool_text(client) == "still live\n"
             inspected = client.send(requirements={"action": "get"})
-            assert inspected["structuredContent"]["requirements"]["duckdb"] == ["json"]
+            assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                "json",
+                "sqlite",
+            ]
             return client.finish()[3:]
 
 
@@ -650,9 +711,9 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                     )
                     started.wait("Python DuckDB resolver entered")
                     inspected = client.send(requirements={"action": "get"})
-                    assert (
-                        inspected["structuredContent"]["requirements"]["duckdb"] == []
-                    )
+                    assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                        "sqlite"
+                    ]
                     interrupt = client.start_send(control="interrupt")
                     client.receive_many([pending, interrupt])
                     assert pending["result"].get("isError"), pending
@@ -662,7 +723,9 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                     release.release()
                     hook.unlink()
                 inspected = client.send(requirements={"action": "get"})
-                assert inspected["structuredContent"]["requirements"]["duckdb"] == []
+                assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                    "sqlite"
+                ]
                 client.send(sql="SELECT value FROM retained")
                 assert "42" in last_tool_text(client)
                 client.send(

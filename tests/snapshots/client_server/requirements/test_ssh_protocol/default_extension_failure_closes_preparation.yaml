@@ -1,0 +1,8 @@
+---
+peer: default-extension-failure
+stderr: |
+  SQLite preparation failed
+---
+peer: default-extension-close-failure
+stderr: |
+  SQLite preparation failed; unexpected SSH preparation event
