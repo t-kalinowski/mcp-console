@@ -1,0 +1,82 @@
+---
+send:
+  python: |
+    import sys, os, subprocess
+    assert sys.executable == '/workspace/../opt/console-python/bin/python'
+    assert 'PYTHONHOME' not in os.environ and 'PYTHONPLATLIBDIR' not in os.environ
+    assert subprocess.check_output([sys.executable, '-c', 'import sys; print(sys.prefix)'], text=True).strip() == sys.prefix
+    print('selected interpreter retained')
+result:
+  content:
+    - type: text
+      text: |
+        selected interpreter retained
+  isError: false
+---
+send:
+  python: |
+    import sys, os, subprocess
+    assert sys.executable == '/workspace/../opt/console-minimal/bin/python'
+    assert 'PYTHONHOME' not in os.environ and 'PYTHONPLATLIBDIR' not in os.environ
+    assert subprocess.check_output([sys.executable, '-c', 'import sys; print(sys.prefix)'], text=True).strip() == sys.prefix
+    print('selected interpreter retained')
+result:
+  content:
+    - type: text
+      text: |
+        selected interpreter retained
+  isError: false
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: >
+        Error: DuckDB is unavailable in this prepared image; preinstall duckdb
+        there and start a new server session, or select a DB-API connection with
+        console_sql_connection(connection)
+  isError: false
+---
+send:
+  python: >-
+    import sqlite3; selected_connection = sqlite3.connect(':memory:');
+    console_sql_connection(selected_connection)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        answer
+        ------
+        42
+  isError: false
+---
+send:
+  python: import pandas
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<mcp-console:python:e3>", line 1, in <module>
+        ModuleNotFoundError: No module named 'pandas'.
+
+        automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session
+  isError: false
+---
+send:
+  python: print(41 + 1)
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

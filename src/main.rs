@@ -106,10 +106,12 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::ImageRuntimeProbe => match target_launch::runtime::runtime_probe() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
+        cli::Command::ImageRuntimeProbe { python } => {
+            match target_launch::runtime::runtime_probe(python.as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::SshLaunch => match ssh::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -163,14 +165,8 @@ fn run_server(
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
     }
-    if python.is_some()
-        && (target
-            .as_ref()
-            .is_some_and(|target| !matches!(target.compute, settings::Compute::Host {}))
-            || worker.is_some()
-            || relay.is_some())
-    {
-        return Err("python selection requires a local or SSH built-in session".into());
+    if python.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("python selection requires the built-in worker and relay".into());
     }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {

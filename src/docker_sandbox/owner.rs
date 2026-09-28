@@ -41,6 +41,7 @@ pub(super) fn run() -> Result<(), String> {
             target_launch::owner::attach(
                 command,
                 &request.bootstrap,
+                request.probe,
                 Hello {
                     version: target_launch::VERSION,
                     build: env!("CARGO_PKG_VERSION").into(),

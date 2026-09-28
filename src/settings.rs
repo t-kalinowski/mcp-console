@@ -164,9 +164,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .map_err(|error| format!("{name}: {error}"))?;
     }
     let target = project.target.filter(|target| !target.is_local_host());
-    let remote_python = target
-        .as_ref()
-        .is_some_and(|target| matches!(target.compute, Compute::Host {}));
+    let remote_python = target.is_some();
     Ok(Captured {
         python: project
             .python

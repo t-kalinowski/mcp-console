@@ -72,15 +72,23 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `3`), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
-Docker and SBX send no managed environment; the image or template supplies its bare runtime.
+Its fields are `version` (currently `4` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Prepared-target version 4 adds optional `python` only for runtime probes and requires `environment` for worker launch.
+That handoff uses the existing worker-environment and native runtime descriptor, with managed flags false and no managed R/Python payloads.
+The image/template supplies its dependencies.
+The compute version change is independent of SSH's existing version 4 negotiation; SSH omits `python`, rejects it when supplied, and carries no prepared runtime-result frames.
+Older prepared version 3 peers are rejected, including when the package version matches.
 The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
 It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
 Incompatible changes to the launch envelope or relay wire contract must increment the target bootstrap protocol version, including between development builds with the same package version.
 
 Helper stdout uses a one-byte tag, a four-byte unsigned big-endian payload length, and the payload.
 Payloads are limited to 64 KiB.
-Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner or `sandbox` object with `name` and `id` supplied by the SBX owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
+Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner or `sandbox` object with `name` and `id` supplied by the SBX owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`; tag `4` contains a prepared-runtime worker-environment result.
+Tag `4` is accepted exactly once, after compatible tag `1`, only during a Docker/SBX probe.
+Probes reject tag `2`; worker launches and SSH reject tag `4`.
+The strict typed result rejects managed state, contradictory R/native selections, unknown fields, and relative native paths.
+Paths remain opaque target metadata on the controller.
 A setup rejection may emit tag `3` without tag `1`.
 The terminal frame must be followed by EOF.
 Unexpected stdout, incompatible versions, oversized or truncated frames, and missing retirement acknowledgment are transport errors.
@@ -93,6 +101,11 @@ The helper sends only the bootstrap into the resource, consumes the inner launch
 Its terminal confirmation describes outer-resource removal, including when an inner launcher could not confirm cleanup.
 The adapter validates that receipt before replacement; CLI exit and an inner launcher receipt cannot substitute for it.
 The initial probe verifies compatibility, applicable policy, workspace, and runtime without starting an analysis worker.
+It discovers R and inspects CPython inside the owned resource under workload policy, using the existing inspector's descriptor-owned result file instead of Python startup stdout.
+The owner forwards the validated runtime frame separately from diagnostics and relay bytes.
+The controller commits it only after the probe succeeds and the outer resource is confirmed retired.
+One immutable retained descriptor is used with the captured image/template for every worker generation.
+Required executable/library/prefix checks occur again inside the target at launch, without rediscovery or fallback.
 
 Only the transport adapter removes this envelope; the existing JSONL parser receives unmodified relay bytes.
 Copy tasks use fixed buffers and preserve stream backpressure.

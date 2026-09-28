@@ -58,6 +58,12 @@ Capability probes never select `uv` or `ir`; requirement changes, automatic reso
 `requirements.action="get"` can inspect the retained declaration.
 Reticulate cannot silently create a managed environment.
 Rebuild the image and start a new server session to add packages.
+For R-free prepared targets, the shared probe selects and inspects preinstalled CPython inside the image/template under workload policy.
+It never opens a preparation session, runs uv or ir, installs an interpreter, or opens a SQL catalog.
+Requirement mutations are rejected before restart, code dispatch, or input delivery.
+Inspection returns the retained empty declaration, not an inventory of image packages.
+Worker restart keeps the selected interpreter; changing dependencies requires a rebuilt image/template and a new server session.
+Preinstalled DuckDB extensions load from the target cache, while automatic extension installation is disabled for its Console-owned connection.
 
 On Linux, preparing a managed environment can compile R packages, including the resolver's own `pak` tooling.
 On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.

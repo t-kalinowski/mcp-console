@@ -25,6 +25,8 @@ pub(crate) struct ComputeState {
     profile: &'static ComputeProfile,
     roots: Vec<PathBuf>,
     blocked: Arc<Mutex<Option<String>>>,
+    // One immutable handoff retained beside the captured image/template.
+    runtime: Option<Arc<crate::resolver::preparation::WorkerEnvironment>>,
 }
 
 #[derive(Clone)]
@@ -40,6 +42,7 @@ impl Session {
         roots: Vec<PathBuf>,
         policy: &SandboxSettings,
         no_sandbox: bool,
+        python: Option<&std::path::Path>,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let profile = match target.compute {
@@ -53,8 +56,9 @@ impl Session {
             profile,
             roots,
             blocked: Arc::default(),
+            runtime: None,
         };
-        let session = match target.compute {
+        let mut session = match target.compute {
             Compute::Docker(_) => {
                 Self::Docker(crate::docker::Captured::capture(target, &cancel)?, state)
             }
@@ -64,8 +68,38 @@ impl Session {
             ),
             Compute::Host {} => unreachable!(),
         };
-        let (command, bytes, generation) =
-            session.launch(policy, no_sandbox, None, None, None, true)?;
+        let configured = python
+            .map(|path| {
+                path.to_str()
+                    .map(str::to_owned)
+                    .ok_or("target python selection is not UTF-8")
+            })
+            .transpose()?;
+        let (command, bytes, generation) = match &session {
+            Self::Docker(captured, state) => state.launch(
+                captured,
+                &captured.target,
+                policy,
+                no_sandbox,
+                session.provider(),
+                true,
+                configured,
+            )?,
+            Self::DockerSandbox(captured, state) => state.launch(
+                captured,
+                &captured.target,
+                policy,
+                no_sandbox,
+                session.provider(),
+                true,
+                configured,
+            )?,
+            Self::Ssh(_) => unreachable!(),
+        };
+        let generation = Generation {
+            retirement: Retirement::default(),
+            owner: generation,
+        };
         let bytes = process::run(
             command,
             &cancel,
@@ -76,7 +110,9 @@ impl Session {
                 retirement_grace: profile.probe_retirement_grace,
             }),
         )?;
-        let mut output = generation.output(std::io::Cursor::new(bytes), None);
+        let mut output = generation
+            .output(std::io::Cursor::new(bytes), None)
+            .for_probe();
         let mut unexpected = Vec::new();
         output
             .read_to_end(&mut unexpected)
@@ -87,6 +123,13 @@ impl Session {
                 "unexpected {} runtime probe output",
                 profile.protocol.0
             ));
+        }
+        let runtime = output.take_runtime()?;
+        match &mut session {
+            Self::Docker(_, state) | Self::DockerSandbox(_, state) => {
+                state.runtime = Some(Arc::new(runtime))
+            }
+            Self::Ssh(_) => unreachable!(),
         }
         Ok(session)
     }
@@ -100,6 +143,13 @@ impl Session {
 
     pub fn is_ssh(&self) -> bool {
         matches!(self, Self::Ssh(_))
+    }
+
+    pub fn python_only(&self) -> bool {
+        self.compute()
+            .and_then(|state| state.runtime.as_ref())
+            .and_then(|runtime| runtime.native.as_ref())
+            .is_some_and(crate::local_runtime::Selection::python_only)
     }
 
     pub fn ssh_preparation(&self) -> Option<&crate::ssh::preparation::Preparation> {
@@ -129,11 +179,37 @@ impl Session {
     }
 
     pub fn metadata(&self) -> serde_json::Value {
-        match self {
+        let mut metadata = match self {
             Self::Ssh(session) => session.metadata(),
             Self::Docker(captured, _) => captured.metadata(),
             Self::DockerSandbox(captured, _) => captured.metadata(),
+        };
+        if let Some(runtime) = self.compute().and_then(|state| state.runtime.as_ref()) {
+            metadata["runtime"] = serde_json::json!({
+                "kind": if self.python_only() { "python" } else { "r" },
+                "managed": false,
+                "r_home": runtime.discovery.selections.r_home,
+                "python": runtime.native.as_ref().and_then(|selection| match selection {
+                    crate::local_runtime::Selection::Python { selected, .. } => Some(&selected.embedding.python),
+                    _ => None,
+                }).or(runtime.discovery.selections.python.as_ref()),
+            });
+            if let Some(crate::local_runtime::Selection::Python { selected, .. }) = &runtime.native
+            {
+                // Recorded installation paths are target metadata only. Keep
+                // the retained descriptor as the authoritative launch choice.
+                for (name, path) in [
+                    ("libpython", &selected.embedding.libpython),
+                    ("prefix", &selected.prefix),
+                    ("exec_prefix", &selected.exec_prefix),
+                    ("base_prefix", &selected.base_prefix),
+                    ("base_exec_prefix", &selected.base_exec_prefix),
+                ] {
+                    metadata["runtime"][name] = serde_json::Value::String(path.clone());
+                }
+            }
         }
+        metadata
     }
 
     pub fn launch(
@@ -158,6 +234,7 @@ impl Session {
                 no_sandbox,
                 self.provider(),
                 probe,
+                None,
             )?,
             Self::DockerSandbox(captured, state) => state.launch(
                 captured,
@@ -166,6 +243,7 @@ impl Session {
                 no_sandbox,
                 self.provider(),
                 probe,
+                None,
             )?,
         };
         Ok((
@@ -188,6 +266,7 @@ impl ComputeState {
         no_sandbox: bool,
         provider: Provider,
         probe: bool,
+        python: Option<String>,
     ) -> Result<(Command, Vec<u8>, GenerationOwner), String> {
         let label = self.profile.protocol.0;
         if let Some(error) = &*self
@@ -210,7 +289,8 @@ impl ComputeState {
                 writable_roots: self.roots.clone(),
                 no_sandbox,
                 provider,
-                environment: None,
+                environment: self.runtime.as_deref().cloned(),
+                python,
             },
         };
         let mut command = Command::new(std::env::current_exe().map_err(|error| error.to_string())?);

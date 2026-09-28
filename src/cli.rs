@@ -74,7 +74,10 @@ pub enum Command {
     #[command(hide = true)]
     DockerProbe,
     #[command(hide = true)]
-    ImageRuntimeProbe,
+    ImageRuntimeProbe {
+        #[arg(long)]
+        python: Option<PathBuf>,
+    },
     #[command(hide = true)]
     DockerSandboxOwner,
     #[command(hide = true)]

@@ -78,6 +78,7 @@ impl Session {
         native: Option<&crate::local_runtime::Selection>,
     ) -> Result<Vec<u8>, String> {
         target_launch::encode(&Bootstrap {
+            python: None,
             version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: self.target.workspace.clone(),

@@ -112,6 +112,15 @@ Tool and transcript metadata distinguish the provider, template, VM identity, ta
 Shared paths can expose controller-owned records and metadata to the worker.
 See [Docker Sandbox execution](DOCKER_SANDBOX.md).
 
+Both prepared providers use `target_launch/runtime.rs` for runtime discovery and launch configuration.
+The disposable probe runs under target workload environment and policy and returns a bounded typed worker-environment frame after CPython inspection or R validation.
+It starts no analysis worker or SQL connection and invokes no preparation session or dependency resolver.
+The controller accepts that frame after compatible negotiation, successful validation, and provider-confirmed probe retirement, then retains one immutable descriptor beside the image/template identity.
+Runtime capabilities determine the MCP language schema and recordings; target paths never enter controller runtime validation or library loading.
+Sans-R generations use the existing native CPython evaluator and lazy Python DB-API SQL connection.
+Native Docker supplies runner-owned storage where enabled; direct Docker and SBX use private storage retained by the existing target launcher through relay retirement.
+Spill files and stored secrets live there; preinstalled extension caches and shared paths keep their provider ownership.
+
 ## Communication boundaries
 
 ### MCP client and server

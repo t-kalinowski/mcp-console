@@ -1,0 +1,3 @@
+---
+attachment_loss_retired_before_replacement: true
+input_eof_retired_detached_child: true

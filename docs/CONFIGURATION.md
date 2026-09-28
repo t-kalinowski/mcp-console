@@ -22,21 +22,29 @@ mcp-console sandbox -c 'sandbox.environment={LABEL: analysis, MODE: "batch"}' --
 
 ## Python environment selection
 
-For a local or SSH built-in session, select an existing Python environment with:
+For a built-in session, select an existing Python environment with:
 
 ```yaml
 python: .venv/bin/python
 ```
 
 Local paths are relative to the launch directory.
-SSH paths are interpreted on the execution host, relative to `target.workspace`.
+SSH, Docker, and Docker Sandbox paths are interpreted on the execution host, relative to `target.workspace`, including a bare filename.
 The equivalent CLI override is `mcp-console serve -c python=.venv/bin/python`.
 This setting takes precedence over inherited `RETICULATE_PYTHON` and is retained across worker restarts.
-It is unavailable with custom workers, Docker, and Docker Sandbox targets.
+It is unavailable with custom workers.
 
-In a [session without R](BUILTIN_RUNTIME.md#python-sessions-without-r), omitting both selections uses Python resolved through uv and enables explicit startup/restart Python package and DuckDB extension preparation.
+In a local or SSH [session without R](BUILTIN_RUNTIME.md#python-sessions-without-r), omitting both selections uses Python resolved through uv and enables explicit startup/restart Python package and DuckDB extension preparation.
 An explicit Python selection bypasses uv entirely and disables package preparation.
 Configure the existing environment's packages before starting Console.
+
+Prepared Docker images and SBX templates always use preinstalled packages.
+Their runtime probe runs inside the target under the effective workload environment and policy.
+The top-level `python` setting takes precedence over workload or image `RETICULATE_PYTHON`.
+Without either explicit selection, it selects `python3`, then `python`, from the target PATH.
+A selected interpreter that fails validation reports its own error without trying another interpreter.
+Controller interpreter and resolver installations do not participate.
+See [Docker](DOCKER.md#prepared-python-without-r) and [Docker Sandbox](DOCKER_SANDBOX.md#prepared-python-without-r) for complete examples.
 
 ## Keys and values
 

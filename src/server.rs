@@ -356,6 +356,10 @@ impl ConsoleServer {
                 .and_then(|target| target.pointer("/transport/kind"))
                 .and_then(serde_json::Value::as_str)
                 == Some("ssh"),
+            target
+                .as_ref()
+                .and_then(|target| target.pointer("/compute/kind"))
+                .and_then(serde_json::Value::as_str),
         );
         Ok(Self {
             worker,
@@ -373,6 +377,7 @@ impl ConsoleServer {
         python_only: bool,
         python_preparation: bool,
         remote: bool,
+        prepared: Option<&str>,
     ) -> ToolRouter<Self> {
         let mut router = Self::tool_router();
         let send = router
@@ -438,6 +443,9 @@ impl ConsoleServer {
                 languages.sql,
                 remote,
             );
+        }
+        if let Some(kind @ ("docker" | "docker_sandbox")) = prepared {
+            execution::configure_prepared(description, properties, kind, python_only);
         }
         if !dynamic_resolution && !python_preparation {
             let requirements = properties

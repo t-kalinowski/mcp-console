@@ -39,6 +39,7 @@ pub(super) fn run() -> Result<(), String> {
             target_launch::owner::attach(
                 command,
                 &request.bootstrap,
+                request.probe,
                 Hello {
                     container_id: container.id.clone(),
                     sandbox: None,

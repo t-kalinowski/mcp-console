@@ -65,6 +65,10 @@ Require explicit result and resolver cleanup confirmation before committing an e
 Docker resolves its image once before workload startup and uses that immutable ID for every probe and generation.
 Each generation owns a fresh Linux container containing relay and worker; a local owner observes server and attachment loss and requires confirmed container removal before replacement.
 Docker uses image packages with dynamic preparation disabled, even if resolvers are installed.
+Docker and SBX share prepared-runtime discovery and configuration in `src/target_launch/runtime.rs`.
+Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and project its R/native-Python capabilities into the MCP schema.
+Prepared targets select preinstalled CPython when R is genuinely absent, support target-relative `python`, never enter dependency preparation, and retain target paths as opaque controller metadata.
+Direct compute launches provide private Python storage through the existing target launcher; extension caches and shared paths retain their provider ownership.
 Docker Sandbox selects compute enforcement by default; explicit `sandbox.provider: compute` documents that selection.
 All other targets default to native enforcement.
 Keep this selector separate from native policy JSON and from whether direct launch needs an inner native runner.

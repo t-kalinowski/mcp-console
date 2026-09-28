@@ -32,6 +32,12 @@ Changing a declared distribution or replacing the declaration still requires res
 With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
 See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
 
+[Prepared Docker images](docs/DOCKER.md) and [Docker Sandbox templates](docs/DOCKER_SANDBOX.md) also support Python and SQL without R.
+They use a preinstalled target interpreter and dependencies; Console never prepares packages for these targets.
+Set `python` to an interpreter inside the target, relative to `target.workspace`.
+Without an explicit `python` or legacy `RETICULATE_PYTHON` selection, discovery uses `python3`, then `python`, from the workload's PATH.
+The R-free examples include NumPy, pandas, Matplotlib, and DuckDB.
+
 ## Quickstart
 
 Use an MCP client of your choice, such as [Codex](https://developers.openai.com/codex/mcp), [Claude Code](https://code.claude.com/docs/en/mcp), or [OpenCode](https://opencode.ai/docs/mcp-servers/).
