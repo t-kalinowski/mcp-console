@@ -9,6 +9,14 @@ import subprocess
 import sys
 
 
+def retain_system_bwrap(directory: Path, search_path: str | None = None) -> None:
+    # Runtime-discovery fixtures may isolate PATH while the native launcher
+    # still needs the host's AppArmor-approved system bubblewrap executable.
+    link = directory / "bwrap"
+    if (bwrap := shutil.which("bwrap", path=search_path)) and not link.exists():
+        link.symlink_to(bwrap)
+
+
 def inherited_procfs_command(command: list[str]) -> list[str]:
     helper = shutil.which("bwrap")
     assert helper is not None, "the outer namespace fixture requires bwrap on PATH"

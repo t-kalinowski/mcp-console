@@ -25,6 +25,7 @@ from support.assertions import (
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import UNPRIVILEGED, requires
 from support.normalization import code, normalize_python_resolution_error
@@ -34,6 +35,7 @@ from support.python import write_test_wheel
 
 
 def environment(path: Path) -> dict[str, str]:
+    retain_system_bwrap(path)
     env = dict(os.environ, PATH=str(path))
     for name in (
         "R_HOME",

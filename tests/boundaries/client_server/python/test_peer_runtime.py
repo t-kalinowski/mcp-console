@@ -14,6 +14,7 @@ from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
 from support.records import Transcript
@@ -82,10 +83,7 @@ CLI_CHECK = code("""
 def without_r(environment: dict[str, str], root: Path) -> None:
     path = root / "empty-path"
     path.mkdir()
-    # R discovery is absent; native sandbox prerequisites remain available.
-    # Some Linux hosts permit their system bwrap through an AppArmor profile.
-    if bwrap := shutil.which("bwrap", path=environment.get("PATH")):
-        (path / "bwrap").symlink_to(bwrap)
+    retain_system_bwrap(path, environment.get("PATH"))
     environment["PATH"] = str(path)
     for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
         environment.pop(name, None)
