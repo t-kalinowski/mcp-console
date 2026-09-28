@@ -246,7 +246,8 @@ Keep these invariants intact:
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — retained reticulate selection and attachment adapter, Console embedding-configuration handoff, candidate lookup, declaration checks, and automatic-resolution forwarding.
   The Python facade retains this optional adapter directly; it owns lazy attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
   R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator.
-  Sans-R defaults require uv on the startup PATH; top-level `python` selects an existing environment without invoking uv.
+  Sans-R defaults require uv on the startup PATH and an absolute HOME for the shared DuckDB extension cache; top-level `python` selects an existing environment without invoking uv.
+  Managed R-backed and sans-R sessions prepare SQLite as a default DuckDB extension on the execution host; exact declaration replacements can remove it, and reset restores it.
   Managed environments support explicit prestart/restart preparation, idle Python and DuckDB additions, and resolution at reached missing Python imports through shared native activation, with the accepted manifest and launch configuration committed together.
   Declaration replacements, changed requirements for declared distributions, interpreter constraints, and publication cutoffs require explicit restart; explicitly selected Python environments remain non-managed.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.

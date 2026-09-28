@@ -175,7 +175,8 @@ result:
               "py-yaml12"
             ],
             "duckdb": [
-              "fts"
+              "fts",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -199,6 +200,7 @@ result:
         - py-yaml12
       duckdb:
         - fts
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true
@@ -209,8 +211,8 @@ result:
 ---
 send:
   python: >-
-    import subprocess, sys; _ = subprocess.run([sys.executable, '-m', 'venv',
-    '--without-pip', '.selected'], check=True)
+    import subprocess, sys; _ = subprocess.run([sys.executable, '-m',
+    'venv', '--without-pip', '.selected'], check=True)
 result:
   content:
     - type: text

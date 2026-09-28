@@ -2,6 +2,112 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  sql: SET autoinstall_known_extensions = false
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT payload->>'$.answer' AS answer FROM audit.events
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+          answer
+          <string>
+        1 "42"
+  isError: false
+---
+send:
   sql: |
     SELECT
       CASE

@@ -1,0 +1,3 @@
+---
+stderr: |
+  DuckDB extension preparation requires an absolute HOME at server startup

@@ -25,8 +25,26 @@ result:
     - name: send
       description: >-
         Persistent local Python and SQL workbench without R. State persists
-        across calls. Managed SQL uses a lazy in-memory DuckDB connection. In
-        Python, sql_connection() returns the active SQL connection;
+        across calls.
+
+
+        For databases and structured files, consider DuckDB SQL first for schema
+        inspection, filtering, joins, aggregation, and nested JSON extraction.
+        Use Python when its libraries or format-specific parsing simplify the
+        task. Switch languages when useful, reusing persistent state.
+
+
+        DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is
+        built in. Managed defaults include SQLite; attach the database read-only
+        with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare
+        additional extensions with
+        `requirements={"action":"add","duckdb":["fts"]}`. SQL results include
+        bounded table previews that abbreviate long text cells; return focused
+        queries and summaries for inspection.
+
+
+        Managed SQL uses a lazy in-memory DuckDB connection. In Python,
+        sql_connection() returns the active SQL connection;
         console_sql_connection(connection) selects a user-owned DB-API
         connection and console_sql_connection(None) restores managed DuckDB.
         Register Python data frames explicitly with
@@ -138,7 +156,7 @@ result:
               idle worker accepts new Python distributions and DuckDB extensions
               together without replacement. Already-retained declarations are no-ops.
               Additions accumulate from the initial NumPy, pandas, and DuckDB
-              declaration with no extensions. Changes to an already-declared
+              declaration with the sqlite extension. Changes to an already-declared
               distribution, interpreter constraints, exclusion dates, and set/reset
               declarations require restart. A live Python candidate is resolved
               against the running interpreter, inspected, and prepared with all

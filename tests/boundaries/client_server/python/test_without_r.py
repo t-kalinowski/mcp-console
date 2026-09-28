@@ -189,16 +189,16 @@ def test_inspects_and_replaces_managed_requirements(
         with McpClient(binary, execution.serve(), environment(root)) as client:
             client.initialize_and_list_tools()
 
-            def declaration():
+            def declaration(extensions: tuple[str, ...] = ()) -> list[str]:
                 result = client.send(requirements={"action": "get"})
                 assert not result.get("isError"), result
                 snapshot = result["structuredContent"]
                 assert snapshot["requirements"]["r"] == []
-                assert snapshot["requirements"]["duckdb"] == []
+                assert snapshot["requirements"]["duckdb"] == list(extensions)
                 assert snapshot["runtime_requirements"] == {"r": [], "python": []}
                 return snapshot["requirements"]["python"]
 
-            assert declaration() == ["numpy", "pandas", "duckdb"]
+            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
             client.send(requirements={"action": "set", "python": ["six"]})
             assert declaration() == ["six"]
             client.send(python="import six; retained = 42; retained")
@@ -217,7 +217,7 @@ def test_inspects_and_replaces_managed_requirements(
             ]
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration() == ["numpy", "pandas", "duckdb"]
+            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
             client.send(python="import numpy, pandas; 42")
             assert last_result_text(client) == "42\n"
             return client.finish()[3:]
@@ -898,7 +898,7 @@ def test_combines_live_python_and_duckdb_additions(
                 "structuredContent"
             ]["requirements"]
             assert "py-yaml12" in declaration["python"]
-            assert declaration["duckdb"] == ["json"]
+            assert declaration["duckdb"] == ["json", "sqlite"]
             return client.finish()[3:]
 
 
@@ -1226,7 +1226,7 @@ def test_limits_live_python_additions_to_new_idle_distributions(
             declaration = client.send(requirements={"action": "get"})[
                 "structuredContent"
             ]["requirements"]
-            assert declaration["duckdb"] == ["json"]
+            assert declaration["duckdb"] == ["json", "sqlite"]
             assert "NumPy==0" not in declaration["python"]
             return preparation_records(client.finish(), root)
 

@@ -128,7 +128,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
-              "fts"
+              "fts",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -148,6 +149,7 @@ result:
         - duckdb
       duckdb:
         - fts
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

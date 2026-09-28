@@ -24,7 +24,8 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -60,6 +61,7 @@ result:
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: false
@@ -660,7 +662,8 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -696,6 +699,7 @@ result:
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

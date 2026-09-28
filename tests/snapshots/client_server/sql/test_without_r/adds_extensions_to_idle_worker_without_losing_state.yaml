@@ -122,7 +122,8 @@ result:
             "duckdb": [
               "excel",
               "fts",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -144,6 +145,7 @@ result:
         - excel
         - fts
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

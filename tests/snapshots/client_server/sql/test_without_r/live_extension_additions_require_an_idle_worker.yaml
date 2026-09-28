@@ -137,7 +137,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -157,6 +158,7 @@ result:
         - duckdb
       duckdb:
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

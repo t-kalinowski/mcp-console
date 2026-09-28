@@ -10,6 +10,10 @@ Tool descriptions occupy recurring agent context.
 Keep them concise and action-oriented, and include facts that affect whether or how an agent calls the tool or interprets its result.
 
 - Use the tool-level description for scope, language selection, persistence, sequential evaluation, polling, interoperability, and the security boundary.
+- Give concrete language-selection criteria before execution and polling instructions: DuckDB SQL for structured-file and database inspection, filtering, joins, aggregation, and nested JSON extraction; R for vectorized data and string operations, statistics, and plots; Python when its libraries or format-specific parsing simplify the task.
+  Mention direct CSV, Parquet, JSON, and JSONL access, built-in JSON support, read-only SQLite attachment, and bounded SQL previews that abbreviate long text cells.
+  Describe SQLite as a managed default and show an additional-extension preparation call only when preparation is available; other sessions require a preinstalled SQLite extension.
+  Keep selection guidance consistent with the available languages and encourage switching languages while reusing persistent state.
 - Put field-specific rules on their properties: accepted inputs, preparation, stdin and control ordering, timeout behavior, result display, and plotting.
   Avoid repeating those rules in the tool-level description.
 - Preserve warnings about state changes that survive errors and controls that discard state.

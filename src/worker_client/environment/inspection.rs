@@ -90,6 +90,16 @@ impl Environment {
                     .iter()
                     .map(|s| (*s).into())
                     .collect()
+            } else if self.manages_python()
+                && self
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only)
+            {
+                crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect()
             } else {
                 vec![]
             },

@@ -206,6 +206,22 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            description = send["description"]
+            assert description.index("consider DuckDB SQL first") < description.index(
+                "Send one complete"
+            )
+            assert "CSV, Parquet, JSON, and JSONL directly" in description
+            assert "JSON support is built in" in description
+            assert (
+                "bounded table previews that abbreviate long text cells" in description
+            )
+            assert "attach the database read-only" in description
+            assert (
+                "Use R for vectorized data and string operations" in description
+            ) == (not python_only)
+            assert (
+                'requirements={"action":"add","duckdb":["fts"]}' in description
+            ) == (python_managed or not (bare or python_only))
             if proxy:
                 assert (
                     "network subject to the launcher's proxy settings"
