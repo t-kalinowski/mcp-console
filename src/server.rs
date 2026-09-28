@@ -457,7 +457,15 @@ impl ConsoleServer {
                 "Use Python when its libraries or format-specific parsing simplify the task. ",
             );
         }
-        guidance.push_str("Switch languages when useful, reusing persistent state.");
+        if [languages.r, languages.python, languages.sql]
+            .into_iter()
+            .filter(|enabled| *enabled)
+            .count()
+            > 1
+        {
+            guidance.push_str("Switch languages when useful, reusing persistent state.");
+        }
+        guidance.truncate(guidance.trim_end().len());
         if languages.sql {
             guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
             if dynamic_resolution || python_preparation {

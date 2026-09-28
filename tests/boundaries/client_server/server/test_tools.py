@@ -423,6 +423,37 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
     return transcript
 
 
+def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Transcript:
+    transcript = []
+    for enabled in (
+        "r",
+        "python",
+        "sql",
+        "r,python",
+        "r,sql",
+        "python,sql",
+        "r,python,sql",
+    ):
+        environment = dict(os.environ, MCP_CONSOLE_LANGUAGES=enabled)
+        with McpClient(
+            binary, DIRECT.serve("--worker", "unused-worker"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            tool = client.transcript[-1]["result"]["tools"][0]
+            fields = set(tool["inputSchema"]["properties"]) & {"r", "python", "sql"}
+            assert fields == set(enabled.split(",")), fields
+            description = tool["description"]
+            assert ("Switch languages when useful" in description) == (
+                len(fields) > 1
+            ), (
+                enabled,
+                description,
+            )
+            transcript.append({"languages": enabled, "description": description})
+            client.finish()
+    return transcript
+
+
 def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()

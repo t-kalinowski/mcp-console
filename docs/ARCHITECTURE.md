@@ -295,7 +295,7 @@ Runtime availability is captured on the execution host at session startup and pa
 Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.
 When R is absent, the preparation owner resolves the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
 When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
-Without an absolute `HOME`, managed Python still starts; an explicit extension request fails before worker retirement.
+Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
 The Python DB-API adapter uses that directory when captured and otherwise leaves DuckDB's default, while keeping spill and stored secrets in the worker's private temporary directory.
 Without either selection or uv, startup reports an error rather than searching PATH for Python.
 The execution-host preparation owner inspects the selected executable before MCP readiness and each candidate before retirement or live activation.

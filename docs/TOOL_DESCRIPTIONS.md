@@ -14,7 +14,7 @@ Keep them concise and action-oriented, and include facts that affect whether or 
   Mention direct CSV, Parquet, JSON, and JSONL access, built-in JSON support, read-only SQLite attachment, and bounded SQL previews that abbreviate long text cells.
   Describe SQLite as a default only when it is in the startup declaration: managed built-in sessions include it, while custom workers require explicit preparation.
   Show extension preparation calls only when preparation is available; other sessions require a preinstalled SQLite extension.
-  Keep selection guidance consistent with the available languages and encourage switching languages while reusing persistent state.
+  Keep selection guidance consistent with the available languages; encourage switching languages while reusing persistent state only when multiple languages are enabled.
 - Put field-specific rules on their properties: accepted inputs, preparation, stdin and control ordering, timeout behavior, result display, and plotting.
   Avoid repeating those rules in the tool-level description.
 - Preserve warnings about state changes that survive errors and controls that discard state.

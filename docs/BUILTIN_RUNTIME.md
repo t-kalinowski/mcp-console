@@ -120,7 +120,7 @@ Workspace modules and packages are importable without `PYTHONPATH`; the working-
 The executable directory is not added to the import path.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
 With an absolute `HOME` at server startup, the managed DuckDB connection reads the captured shared version-and-platform extension cache; it keeps spill and stored-secret files in private worker storage.
-Without an absolute `HOME`, managed Python still starts, but explicit extension preparation reports that a shared cache root is required.
+Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
 If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
 Retirement does not delete resolver caches or the retained environment.
 
