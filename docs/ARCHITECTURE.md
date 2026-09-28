@@ -394,16 +394,16 @@ Inner-launcher failure and outer-resource removal remain separate outcomes.
 
 The waits retain distinct owners and allowances:
 
-| Wait                                                          | Owner                             | Allowance                                                       |
-| ------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------- |
-| Target bootstrap/preflight and controller worker readiness    | `target_launch::SETUP_TIMEOUT`    | 30 seconds per setup wait                                       |
-| SSH preparation discovery                                     | `ssh::preparation::SETUP_TIMEOUT` | 30 seconds; dependency operations have no installation deadline |
-| Disposable compute runtime probe                              | `target_session::PROBE_TIMEOUT`   | 40 seconds                                                      |
-| Docker owner after probe cancellation / generation retirement | Docker profile                    | 8 / 6 seconds                                                   |
-| SBX owner after probe cancellation / generation retirement    | SBX profile                       | 20 / 20 seconds                                                 |
-| SSH transport during generation retirement                    | SSH adapter                       | 6 seconds                                                       |
-| Local launcher after retirement request                       | Worker orchestration              | 6 seconds                                                       |
-| Target-side inner launcher retirement                         | Target launcher                   | 6 seconds, then a 1-second forced-exit wait                     |
+| Wait                                                          | Owner                             | Allowance                                                                     |
+| ------------------------------------------------------------- | --------------------------------- | ----------------------------------------------------------------------------- |
+| Target bootstrap/preflight and controller worker readiness    | `target_launch::SETUP_TIMEOUT`    | 30 seconds per setup wait                                                     |
+| SSH preparation connection handshake                          | `ssh::preparation::SETUP_TIMEOUT` | 30 seconds; discovery and dependency operations have no installation deadline |
+| Disposable compute runtime probe                              | `target_session::PROBE_TIMEOUT`   | 40 seconds                                                                    |
+| Docker owner after probe cancellation / generation retirement | Docker profile                    | 8 / 6 seconds                                                                 |
+| SBX owner after probe cancellation / generation retirement    | SBX profile                       | 20 / 20 seconds                                                               |
+| SSH transport during generation retirement                    | SSH adapter                       | 6 seconds                                                                     |
+| Local launcher after retirement request                       | Worker orchestration              | 6 seconds                                                                     |
+| Target-side inner launcher retirement                         | Target launcher                   | 6 seconds, then a 1-second forced-exit wait                                   |
 
 Provider CLI deadlines belong to their adapters: Docker setup commands and owner-request reads allow 10 seconds; cleanup listing, stop, removal, and confirmation each allow 2 seconds.
 SBX version and owner-request reads allow 10 seconds, creation 25 seconds, listing 2 seconds, and forced removal 10 seconds.

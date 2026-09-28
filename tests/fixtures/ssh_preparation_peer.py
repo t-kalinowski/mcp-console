@@ -49,6 +49,11 @@ write(
 )
 if mode == "incompatible":
     raise SystemExit(0)
+if mode == "delayed-discovery":
+    with Path(record).with_suffix(".started").open("wb", buffering=0) as started:
+        assert started.write(b"1") == 1
+    with Path(record).with_suffix(".release").open("rb", buffering=0) as release:
+        assert release.read(1) == b"1"
 complete(
     0, {"managed": True, "selections": {"r_home": "/remote-only/R", "python": None}}
 )
