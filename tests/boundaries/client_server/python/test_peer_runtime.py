@@ -164,7 +164,7 @@ def test_python_contract_with_and_without_r(
     return records
 
 
-@requires(R)
+@requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
@@ -174,6 +174,13 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
             [sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True
         )
         executable = venv / "bin/python"
+        # Reticulate declares NumPy by default, including for explicit Python
+        # selections. Satisfy that declaration before exercising the bridge.
+        subprocess.run(
+            ["uv", "pip", "install", "--python", executable, "numpy"],
+            check=True,
+            capture_output=True,
+        )
         modules = root / "modules"
         modules.mkdir()
         # Inspection runs isolated; this hook observes the embedded interpreter
