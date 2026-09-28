@@ -286,9 +286,11 @@ The worker's existing interrupt wakeup cancels inspection without committing an 
 Console supplies the inspected embedding fields to both native initialization and reticulate's subsequent attachment; cached or already initialized selections are not inspected again.
 Reticulate supplies conversion metadata and selection hints, but no longer configures the generic Python environment.
 `python::startup` applies `PATH`, `VIRTUAL_ENV`, and the effective `PYTHONPATH` before CPython executes startup hooks; Linux child library paths are derived from the inspected prefixes.
-The selected program name lets CPython read `pyvenv.cfg` itself, without overriding PythonHome or replaying a virtualenv activation script during bridge attachment.
-Shared setup validates the observed prefixes, retains the executable spelling, and installs the working-directory import entry.
-Only the bridge's own module directory is added for reticulate attachment; it does not rewrite `sys.executable`, prefixes, or base executable.
+Console sets CPython's program name to the selected executable so its normal path initialization can find the installation and `pyvenv.cfg`.
+It leaves PythonHome unset because that override can bypass virtualenv discovery; it does not replay an activation script during bridge attachment.
+Shared setup validates the observed prefixes, explicitly sets `sys.executable` to the selected spelling, updates an already-imported multiprocessing module's executable, and installs the working-directory import entry.
+The process PATH also lets R's `system()` and `system2()` find package entry points installed in the selected Python environment.
+Reticulate adds its bridge module directory without applying a second generic environment configuration or changing CPython's prefixes and base executable.
 The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
 The worker-facing `python::Runtime` retains an optional reticulate adapter directly.
 That adapter owns lazy selection, attachment, and their completion state; `python::startup` provides bootstrap and shared setup operations without depending on the R adapter.

@@ -10,7 +10,6 @@ import shutil
 import sys
 import tempfile
 import threading
-import zipfile
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,6 +28,7 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import UNPRIVILEGED, requires
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
+from support.python import write_test_wheel
 
 
 def environment(path: Path) -> dict[str, str]:
@@ -61,32 +61,6 @@ def installed_binary(binary: Path, root: Path) -> Path:
     for relative in ("libexec", "share/licenses/mcp-console"):
         shutil.copytree(source_prefix / relative, prefix / relative)
     return installed
-
-
-def write_test_wheel(root: Path, name: str, module_source: str | None) -> Path:
-    wheels = root / "wheels"
-    wheels.mkdir(exist_ok=True)
-    wheel = wheels / f"{name}-1.0.0-py3-none-any.whl"
-    dist_info = f"{name}-1.0.0.dist-info"
-    entries = {
-        f"{dist_info}/METADATA": (
-            f"Metadata-Version: 2.3\nName: {name.replace('_', '-')}\nVersion: 1.0.0\n"
-        ),
-        f"{dist_info}/WHEEL": (
-            "Wheel-Version: 1.0\nGenerator: mcp-console test\n"
-            "Root-Is-Purelib: true\nTag: py3-none-any\n"
-        ),
-    }
-    if module_source is not None:
-        entries[f"{name}/__init__.py"] = module_source
-    entries[f"{dist_info}/RECORD"] = "\n".join(f"{entry},," for entry in entries) + "\n"
-    with zipfile.ZipFile(wheel, "w") as archive:
-        for path, content in entries.items():
-            archive.writestr(path, content)
-    index = root / "index" / name.replace("_", "-")
-    index.mkdir(parents=True)
-    (index / "index.html").write_text(f'<a href="{wheel.as_uri()}">{wheel.name}</a>\n')
-    return index.parent
 
 
 @contextmanager

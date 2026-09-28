@@ -25,7 +25,7 @@ base::local(
       if (!is.null(selected)) {
         return(selected)
       }
-      if (get("is_python_initialized", envir = namespace)()) {
+      if (reticulate:::is_python_initialized()) {
         # A startup package may have initialized Python before this adapter
         # existed. Its running identity takes precedence over selection hints;
         # do not rediscover an executable or rerun environment activation.
@@ -61,7 +61,8 @@ base::local(
           1L
         ]]
       }
-      py_discover_config <- get("py_discover_config", namespace)
+      # Preserve the call name in R's discovery error diagnostics.
+      py_discover_config <- reticulate:::py_discover_config
       config <- local({
         previous_options <- options(reticulate.python.initializing = TRUE)
         on.exit(options(previous_options), add = TRUE)
@@ -78,11 +79,11 @@ base::local(
         python_not_found(
           "Installation of Python not found, Python bindings not loaded."
         )
-      } else if (get("is_incompatible_arch", namespace)(config)) {
+      } else if (reticulate:::is_incompatible_arch(config)) {
         fmt <- "Your current architecture is %s; however, this version of Python was compiled for %s."
         message <- sprintf(
           fmt,
-          get("current_python_arch", namespace)(),
+          reticulate:::current_python_arch(),
           config$architecture
         )
         python_not_found(message)
@@ -166,7 +167,7 @@ base::local(
       # Console owns CPython's environment. Reticulate attaches conversion
       # and callbacks without activating or changing the running interpreter.
       on.exit(finish_python_initialization(), add = TRUE)
-      get("py_initialize", namespace)(
+      reticulate:::py_initialize(
         config$python,
         config$libpython,
         config$pythonhome,
@@ -181,12 +182,12 @@ base::local(
       reg.finalizer(
         globals,
         function(environment) {
-          try(get("py_allow_threads_impl", namespace)(FALSE))
+          try(reticulate:::py_allow_threads_impl(FALSE))
           if (
             tolower(Sys.getenv("RETICULATE_ENABLE_PYTHON_FINALIZER")) %in%
               c("true", "1", "yes")
           ) {
-            get("py_finalize", namespace)()
+            reticulate:::py_finalize()
           }
         },
         onexit = TRUE
@@ -202,7 +203,7 @@ base::local(
           c("true", "1", "yes")
         if (check_packages) {
           tryCatch(
-            get("check_virtualenv_required_packages", namespace)(config),
+            reticulate:::check_virtualenv_required_packages(config),
             error = function(error) invisible()
           )
         }
@@ -239,7 +240,7 @@ base::local(
       # Reticulate reinstalls its interrupt handler after injecting hooks.
       replace_binding("install_interrupt_handlers", install_console_services)
 
-      if (get("is_python_initialized", envir = namespace)()) {
+      if (reticulate:::is_python_initialized()) {
         select_python()
         invisible(.Call(
           "mcp_console_initialize_python",

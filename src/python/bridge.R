@@ -94,11 +94,11 @@ base::local(
     install_managed_python <- function(...) {
       namespace <- asNamespace("reticulate")
       current_requirements <- function() {
-        get("py_reqs_get", envir = namespace)()
+        reticulate:::py_reqs_get()
       }
       resolve <- function(
         packages = current_requirements()$packages,
-        python_version = get("py_reqs_python_version", envir = namespace)(),
+        python_version = reticulate:::py_reqs_python_version(),
         exclude_newer = current_requirements()$exclude_newer
       ) {
         current <- current_requirements()
@@ -132,7 +132,7 @@ base::local(
         python_version <- NULL
       }
       globals <- get(".globals", envir = namespace)
-      requirements <- get("py_reqs_get", envir = namespace)()
+      requirements <- reticulate:::py_reqs_get()
       changed <- !identical(
         manifest(
           requirements$packages,
@@ -198,11 +198,11 @@ base::local(
       # Keep reticulate's declaration checks and candidate configuration
       # lookup. The native owner activates the selected environment.
       live_python_version <- function() {
-        as.character(get("py_version", namespace)(patch = TRUE))
+        as.character(reticulate::py_version(patch = TRUE))
       }
       check_version <- function(request) {
-        current_version <- get("py_version", namespace)(patch = TRUE)
-        for (check in get("as_version_constraint_checkers", namespace)(
+        current_version <- reticulate::py_version(patch = TRUE)
+        for (check in reticulate:::as_version_constraint_checkers(
           request$python_version
         )) {
           if (!isTRUE(check(current_version))) {
@@ -224,9 +224,8 @@ base::local(
         invisible()
       }
       check_packages <- function(added, current) {
-        requirement_name <- get("py_requirement_name", namespace)
-        added_names <- requirement_name(added)
-        current_names <- requirement_name(current)
+        added_names <- reticulate:::py_requirement_name(added)
+        current_names <- reticulate:::py_requirement_name(current)
         conflicts <- added_names %in% current_names
         if (any(conflicts)) {
           new <- paste0("`", sort(added[conflicts]), "`", collapse = ", ")
@@ -244,7 +243,7 @@ base::local(
         invisible()
       }
       candidate_config <- function(python) {
-        config <- get("python_config", namespace)(python)
+        config <- reticulate:::python_config(python)
         config$ephemeral <- TRUE
         config
       }
@@ -280,7 +279,7 @@ base::local(
       }
       declared_requirements <- function() reticulate::py_require()
       python_initialized <- function() {
-        get("is_python_initialized", namespace)()
+        reticulate:::is_python_initialized()
       }
       restore_requirements <- function(snapshot) {
         globals$python_requirements <- snapshot
@@ -431,7 +430,6 @@ base::local(
 
     console_width <- getOption("width")
     install_python_hooks <- function(...) {
-      namespace <- asNamespace("reticulate")
       configure_numpy <- function() {
         numpy <- reticulate::import("numpy", convert = FALSE)
         numpy$set_printoptions(linewidth = console_width)
@@ -451,7 +449,7 @@ base::local(
         on_python_init,
         action = "append"
       )
-      if (get("is_python_initialized", envir = namespace)()) {
+      if (reticulate:::is_python_initialized()) {
         on_python_init()
       }
       invisible()
