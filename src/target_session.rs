@@ -29,6 +29,11 @@ pub(crate) struct ComputeState {
     runtime: Option<Arc<crate::resolver::preparation::WorkerEnvironment>>,
 }
 
+enum ComputeLaunch {
+    Probe(Option<String>),
+    Worker,
+}
+
 #[derive(Clone)]
 pub(crate) enum Session {
     Ssh(crate::ssh::Session),
@@ -82,8 +87,7 @@ impl Session {
                 policy,
                 no_sandbox,
                 session.provider(),
-                true,
-                configured,
+                ComputeLaunch::Probe(configured),
             )?,
             Self::DockerSandbox(captured, state) => state.launch(
                 captured,
@@ -91,8 +95,7 @@ impl Session {
                 policy,
                 no_sandbox,
                 session.provider(),
-                true,
-                configured,
+                ComputeLaunch::Probe(configured),
             )?,
             Self::Ssh(_) => unreachable!(),
         };
@@ -219,7 +222,6 @@ impl Session {
         managed_r: Option<&crate::resolver::ManagedR>,
         python: Option<&crate::resolver::ManagedPython>,
         native: Option<&crate::local_runtime::Selection>,
-        probe: bool,
     ) -> Result<(Command, Vec<u8>, Generation), String> {
         let (command, bytes, owner) = match self {
             Self::Ssh(session) => (
@@ -233,8 +235,7 @@ impl Session {
                 policy,
                 no_sandbox,
                 self.provider(),
-                probe,
-                None,
+                ComputeLaunch::Worker,
             )?,
             Self::DockerSandbox(captured, state) => state.launch(
                 captured,
@@ -242,8 +243,7 @@ impl Session {
                 policy,
                 no_sandbox,
                 self.provider(),
-                probe,
-                None,
+                ComputeLaunch::Worker,
             )?,
         };
         Ok((
@@ -265,8 +265,7 @@ impl ComputeState {
         policy: &SandboxSettings,
         no_sandbox: bool,
         provider: Provider,
-        probe: bool,
-        python: Option<String>,
+        operation: ComputeLaunch,
     ) -> Result<(Command, Vec<u8>, GenerationOwner), String> {
         let label = self.profile.protocol.0;
         if let Some(error) = &*self
@@ -276,6 +275,10 @@ impl ComputeState {
         {
             return Err(error.clone());
         }
+        let (probe, python) = match operation {
+            ComputeLaunch::Probe(python) => (true, python),
+            ComputeLaunch::Worker => (false, None),
+        };
         let name = format!("mcp-console-{}", target_launch::owner::token()?);
         let request = target_launch::owner::Request {
             session: captured,
