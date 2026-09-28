@@ -20,6 +20,7 @@ static long (*native_syscall)(long, ...);
 #endif
 
 static pid_t server_pid;
+static pthread_t server_main_thread;
 static atomic_uintptr_t waiting_mutex = 0;
 static atomic_uintptr_t contended_mutex = 0;
 static atomic_bool completion_claimed = false;
@@ -31,6 +32,7 @@ static void await_release(const char *name);
 static void select_worker_mutex(uintptr_t mutex);
 
 __attribute__((constructor)) static void initialize(void) {
+    server_main_thread = pthread_self();
     const char *owner = getenv("MCP_CONSOLE_TEST_COMPLETION_SERVER");
     if (owner == NULL) {
         server_pid = getpid();
@@ -88,7 +90,9 @@ static void select_worker_mutex(uintptr_t mutex) {
 }
 
 static void observe_contention(uintptr_t mutex) {
-    if (getpid() != server_pid ||
+    // The MCP driver's untimed condition-variable counter can also equal 2.
+    // Worker-lock acquisition in this case belongs to blocking-pool threads.
+    if (getpid() != server_pid || pthread_equal(pthread_self(), server_main_thread) ||
         access(getenv("MCP_CONSOLE_TEST_COMPLETION_ARMED"), F_OK) != 0) return;
     // Discard completed waits: restart can briefly contend on lifecycle
     // admission before sending cancellation and waiting for the worker.
