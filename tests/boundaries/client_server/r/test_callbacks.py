@@ -142,7 +142,21 @@ def services_later_callbacks_while_idle(
             environment,
         ) as client:
             client.initialize_and_list_tools()
-            client.send(requirements={"r": ["later"]})
+            packages = ["later"]
+            if language == "sql":
+                # A custom worker does not receive the built-in runtime's
+                # infrastructure packages. Declare the SQL adapter's imports.
+                packages += [
+                    "DBI",
+                    "duckdb",
+                    "arrow",
+                    "nanoarrow",
+                    "pillar",
+                    "tibble",
+                    "utf8",
+                ]
+            client.send(requirements={"r": packages})
+            assert last_tool_text(client) == "[prepared]", client.transcript[-1]
 
             # fmt: r
             r = code(r"""
