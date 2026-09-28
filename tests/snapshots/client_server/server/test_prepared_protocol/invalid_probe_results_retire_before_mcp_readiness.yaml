@@ -37,6 +37,11 @@ mode: probe-failed
 diagnostic: |
   probe validation failed
 ---
+mode: probe-closed-output
+diagnostic: >
+  Docker Sandbox launch stream ended before confirmed retirement: failed to fill
+  whole buffer
+---
 mode: probe-managed
 diagnostic: |
   prepared runtime cannot contain managed or preparation state

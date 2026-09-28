@@ -97,6 +97,7 @@ def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list
         ("probe-oversized", "frame exceeds 65536 bytes"),
         ("probe-unconfirmed", "retirement is unconfirmed"),
         ("probe-failed", "probe validation failed"),
+        ("probe-closed-output", "launch stream ended before confirmed retirement"),
         ("probe-managed", "cannot contain managed"),
         ("native-managed", "cannot contain R"),
         ("native-r-conflict", "cannot contain R"),
@@ -113,6 +114,7 @@ def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list
                 assert client.stdout.read(timeout=30) == ""
                 diagnostics = client.stderr.read(timeout=30)
                 assert expected in diagnostics, diagnostics
+                assert "BrokenPipeError" not in diagnostics, diagnostics
                 assert client.process.wait(timeout=5) != 0
             assert not (root / "peer/vms").exists()
             operations = calls(root)

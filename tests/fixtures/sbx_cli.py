@@ -48,6 +48,11 @@ if real:
     os.execv(real, [real, *args])
 
 
+# A rejected frame can close the attachment before this peer's next write.
+# Match ordinary CLI pipe termination without adding a Python traceback.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+
 if args == ["version"]:
     print(
         "sbx version: v0.42.0 fixture"
@@ -122,6 +127,14 @@ elif args[0] == "exec":
             "build": "unsupported" if mode == "probe-build" else bootstrap["build"],
         },
     )
+    if probe and mode == "probe-closed-output":
+        # Keep the attachment pipe open until this peer exits, so the owner
+        # cannot cancel the peer before its next write hits the closed reader.
+        attachment = os.dup(1)
+        reader, writer = os.pipe()
+        os.close(reader)
+        os.dup2(writer, 1)
+        os.close(writer)
     if probe:
         if mode.startswith("native-"):
             runtime = {
