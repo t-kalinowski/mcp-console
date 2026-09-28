@@ -217,6 +217,14 @@ pub(super) struct ProcessStopHandles {
 
 impl ProcessStopHandles {
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+        let (allowance, errors) = self.request_shutdown(deadline);
+        self.finish_shutdown(deadline, allowance, errors)
+    }
+
+    fn request_shutdown(
+        &self,
+        deadline: Instant,
+    ) -> (Option<platform::RelayRetirementAllowance>, Vec<String>) {
         let mut errors = Vec::new();
         let mut worker_allowance = None;
         // Queue worker shutdown before resolver cancellation can release a
@@ -233,6 +241,15 @@ impl ProcessStopHandles {
         {
             errors.push(error);
         }
+        (worker_allowance, errors)
+    }
+
+    fn finish_shutdown(
+        &self,
+        deadline: Instant,
+        worker_allowance: Option<platform::RelayRetirementAllowance>,
+        mut errors: Vec<String>,
+    ) -> Result<(), String> {
         // The barrier lets the ordered consumer apply failures and finish a
         // cancelled resolver callback before relay retirement is enforced.
         if let (Some(worker), Some(allowance)) = (self.worker.as_ref(), worker_allowance)
@@ -1242,12 +1259,15 @@ impl Client {
                     .and_then(crate::target_session::Session::ssh_preparation)
                     .cloned()
             });
+            // Queue relay shutdown and resolver cancellation before Close can
+            // retire the preparation host and its control-input pipe.
+            let (allowance, errors) = stop_handles.request_shutdown(deadline);
             let preparation = preparation.map(|preparation| {
                 // Resolver and worker retirement run together. A lost
                 // preparation connection must not extend worker shutdown.
                 std::thread::spawn(move || preparation.close())
             });
-            let stopped = stop_handles.shutdown(deadline);
+            let stopped = stop_handles.finish_shutdown(deadline, allowance, errors);
             let retired = client.finish_worker_retirement().map(|_| ());
             let preparation = preparation.map_or(Ok(()), |task| {
                 task.join()
