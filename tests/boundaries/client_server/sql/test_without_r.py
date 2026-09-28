@@ -414,10 +414,11 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
         home = root / "home"
         home.mkdir()
         (root / "uv").symlink_to(shutil.which("uv"))
+        uv_cache = root / "uv-cache"
         with McpClient(
             installed_binary(binary, root),
             execution.serve(),
-            dict(environment(root), HOME=str(home)),
+            dict(environment(root), HOME=str(home), UV_CACHE_DIR=str(uv_cache)),
         ) as client:
             client.initialize_and_list_tools()
             client.send(
@@ -499,12 +500,12 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             assert live.get("isError"), live
             assert "absent-fixture-distribution" in last_result_text(client)
             live["content"][0]["text"], paths = re.subn(
-                r'"python": "[^"]+/home/\.cache/uv/archive-v0/[^"]+/bin/python"',
+                rf'"python": "{re.escape(str(uv_cache))}/archive-v0/[^"]+/bin/python"',
                 '"python": "<selected Python>"',
                 last_result_text(client),
                 count=1,
             )
-            assert paths == 1
+            assert paths == 1, last_result_text(client)
             for requirements in (
                 {"duckdb": ["json"], "python_version": [">=3.11"]},
                 {"duckdb": ["json"], "exclude_newer": "2026-01-01"},
