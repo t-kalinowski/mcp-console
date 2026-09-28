@@ -37,10 +37,11 @@ pub(crate) enum PreparationOutcome {
 
 /// Rust-owned Python runtime boundary.
 ///
-/// Reticulate selects and configures Python; cells enter the private evaluator
-/// directly through the retained CPython library.
+/// Every cell enters the same private evaluator through the retained CPython
+/// library. The optional reticulate adapter retains R-side discovery and
+/// attachment policy; it is absent from native sessions.
 pub(crate) struct Runtime {
-    startup: startup::Runtime,
+    reticulate: Option<reticulate::Adapter>,
     next_evaluation_id: u64,
 }
 
@@ -62,14 +63,15 @@ pub(crate) fn configure_worker_environment(
 impl Runtime {
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
-            startup: startup::Runtime::initialize()?,
+            reticulate: Some(reticulate::Adapter::initialize()?),
             next_evaluation_id: 1,
         })
     }
 
     pub(crate) fn native(selected: &NativePython, managed: bool) -> Result<Self, String> {
+        startup::initialize_native(selected, managed)?;
         Ok(Self {
-            startup: startup::Runtime::native(selected, managed)?,
+            reticulate: None,
             next_evaluation_id: 1,
         })
     }
@@ -77,14 +79,19 @@ impl Runtime {
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
         self.next_evaluation_id += 1;
-        if !self.startup.ensure_initialized()? {
+        if let Some(reticulate) = &mut self.reticulate
+            && !reticulate.ensure_initialized()?
+        {
             return Ok(());
         }
         evaluate_embedded(source, &filename)
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.startup.prepare(packages)
+        self.reticulate
+            .as_ref()
+            .expect("live preparation requires R")
+            .prepare(packages)
     }
 
     pub(crate) fn activate_native(

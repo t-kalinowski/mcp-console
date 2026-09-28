@@ -5,9 +5,13 @@ use super::{PreparationOutcome, SelectedPython};
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
-/// Reticulate selects Python, retains Console's embedding configuration, and attaches.
+/// Optional R-side selection and attachment compatibility adapter.
+///
+/// This still preserves reticulate discovery and initialization hooks. CPython
+/// loading, lifetime, and cell evaluation remain owned by Console.
 pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
+    completed: bool,
 }
 
 pub(super) fn configure_worker_environment() -> std::io::Result<()> {
@@ -28,10 +32,34 @@ impl Adapter {
         );
         Ok(Self {
             bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
+            completed: false,
         })
     }
 
-    pub(super) fn select(&mut self) -> Result<Option<SelectedPython>, String> {
+    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
+        if !self.completed {
+            let Some(selected) = self.select()? else {
+                return Ok(false);
+            };
+            if let Err(error) = super::initialize_selected(&selected) {
+                self.cancel_selection()?;
+                return Err(error);
+            }
+            // Reticulate attaches conversion and event integration first.
+            // Its initialization hook enters the shared native setup;
+            // the explicit setup call also covers an already-live interpreter.
+            let result =
+                self.attach()
+                    .and_then(|attached| if attached { self.setup() } else { Ok(false) });
+            let finished = super::finish_initialization();
+            let completed = result?;
+            finished?;
+            self.completed = completed;
+        }
+        Ok(self.completed)
+    }
+
+    fn select(&mut self) -> Result<Option<SelectedPython>, String> {
         // Discovery and serialization share the existing R interrupt boundary.
         self.bridge
             .evaluate_completed_string("select")?
@@ -43,16 +71,16 @@ impl Adapter {
             .transpose()
     }
 
-    pub(super) fn cancel_selection(&self) -> Result<(), String> {
+    fn cancel_selection(&self) -> Result<(), String> {
         self.bridge.call0_integer(c"cancel_python_selection")?;
         Ok(())
     }
 
-    pub(super) fn attach(&mut self) -> Result<bool, String> {
+    fn attach(&mut self) -> Result<bool, String> {
         self.bridge.evaluate_completed("attach")
     }
 
-    pub(super) fn setup(&mut self) -> Result<bool, String> {
+    fn setup(&mut self) -> Result<bool, String> {
         self.bridge.evaluate_completed("setup")
     }
 
