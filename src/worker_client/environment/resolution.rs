@@ -229,12 +229,12 @@ impl Client {
             .as_ref()
             .and_then(|runtime| runtime.python.as_ref())
         {
-            Some(crate::local_runtime::Python { selected, .. }) => selected,
-            _ => {
-                return Err(EnvironmentResolutionFailure::Operation(
-                    "native Python launch configuration is unavailable".into(),
-                ));
-            }
+            Some(crate::local_runtime::Python { selected, .. }) => selected.as_ref().clone(),
+            // R startup can initialize Python before Console's resolver hook
+            // supplies a launch identity. Inspect the accepted executable on
+            // its execution host; the worker also checks its actual live
+            // library before mutating an adopted interpreter.
+            None => self.inspect_managed_python(generation, current, resolver)?,
         };
         let candidate = self.resolve_managed_python_host(
             generation,

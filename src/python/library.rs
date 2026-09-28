@@ -368,7 +368,14 @@ pub(super) fn configure_import_resolution(
         if none.is_null() {
             return api.finish_setup(std::ptr::null_mut());
         }
-        let reason = resolution.disabled_reason.map(|reason| {
+        let (callback, disabled_reason) = match resolution {
+            super::ImportResolution::Managed => (
+                api.function(c"_mcp_console_services", c"resolve_import")?,
+                None,
+            ),
+            super::ImportResolution::Disabled(reason) => (none, Some(reason)),
+        };
+        let reason = disabled_reason.map(|reason| {
             (api.unicode_from_string_and_size)(reason.as_ptr().cast(), reason.len() as isize)
         });
         if reason.is_some_and(|reason| reason.is_null()) {
@@ -376,9 +383,7 @@ pub(super) fn configure_import_resolution(
         }
         let result = (api.call_function_obj_args)(
             function,
-            resolution
-                .callback
-                .map_or(none, |callback| callback.as_ptr()),
+            callback,
             reason.unwrap_or(none),
             std::ptr::null_mut::<PyObject>(),
         );
@@ -387,22 +392,6 @@ pub(super) fn configure_import_resolution(
         }
         api.finish_setup(result)
     })
-}
-
-pub(super) fn configure_managed_import_resolution() -> Result<(), String> {
-    let callback = api()?.with_gil(|api| unsafe {
-        std::ptr::NonNull::new(api.function(c"_mcp_console_services", c"resolve_import")?)
-            .ok_or_else(|| "native Python import callback is unavailable".to_string())
-    })?;
-    if configure_import_resolution(super::ImportResolution {
-        callback: Some(callback),
-        disabled_reason: None,
-    })? {
-        Ok(())
-    } else {
-        display_setup_exception()?;
-        Err("native Python import resolution setup failed".into())
-    }
 }
 
 pub(super) fn runtime_configured() -> Result<bool, String> {

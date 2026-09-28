@@ -43,6 +43,10 @@ Existing lifecycle suites retain generation rejection, failed-import publication
 The two import reentry/finder fixtures now intercept ordinary Python activation (`runpy.run_path`), because imports no longer call the public R declaration function.
 The lifecycle interruption fixture now blocks a public NumPy hook during common setup, then verifies retry preserves the exact Python object.
 Common module defaults execute after private evaluator installation, through the existing setup-exception boundary; R does not suspend interrupts around those Python calls.
+Managed import callback installation also belongs to that completion boundary, so interruption leaves setup retryable.
+The startup-adoption case now verifies reached-import resolution and retained publication for an interpreter initialized before Console's R hooks.
+An external startup package can choose its original environment again on restart, before Console applies retained declarations.
+Those declarations remain accepted, but adoption does not replay activation into the running interpreter; reconciling already-declared missing packages with that external selection remains part of the unfinished control boundary.
 
 Missing acceptance for the next control increment: one shared idle-tool exercise including lazy materialization, provisional R declarations, resolver interruption, unsafe activation, combined Python/R/DuckDB changes, and stale-generation publication.
 Keep successful import followed by failed cell, pre-mutation rejection, and R condition/representation checks separate from infrastructure failure.

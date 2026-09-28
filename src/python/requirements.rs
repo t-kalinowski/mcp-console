@@ -30,6 +30,7 @@ struct Manifest {
 
 #[derive(Default)]
 struct Requirements {
+    ready: bool,
     // The live projection is worker state, not server acceptance. The exact R
     // representation below also retains provisional (unmaterialized) values.
     live: Option<crate::worker_protocol::NativePythonActivation>,
@@ -213,17 +214,36 @@ pub(crate) fn initialize(
     selected: &NativePython,
     requirements: PythonRequirementManifest,
 ) -> Result<(), String> {
-    STATE.with(|slot| {
+    let requirements = requirements.normalized();
+    let ready = STATE.with(|slot| {
         let mut state = slot.borrow_mut();
         if state.live.is_some() {
-            return Err("managed Python state is already initialized".into());
+            return Err("managed Python state is already initialized".to_string());
         }
         state.live = Some(NativePythonActivation {
             selected: selected.clone(),
-            requirements: requirements.normalized(),
+            requirements: requirements.clone(),
         });
-        Ok(())
-    })
+        Ok(state.ready)
+    })?;
+    if ready {
+        crate::worker::publish_python_activation(requirements)?;
+    }
+    Ok(())
+}
+
+pub(super) fn publish_initial_requirements() -> Result<(), String> {
+    // Adoption and native startup can initialize Python before Ready. Publish
+    // only after the coordinator's readiness receipt, outside the state borrow.
+    let requirements = STATE.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.ready = true;
+        state.live.as_ref().map(|live| live.requirements.clone())
+    });
+    if let Some(requirements) = requirements {
+        crate::worker::publish_python_activation(requirements)?;
+    }
+    Ok(())
 }
 
 fn snapshot() -> Result<NativePythonActivation, String> {

@@ -1,4 +1,8 @@
 .onLoad <- function(libname, pkgname) {
+  python <- Sys.getenv("MCP_CONSOLE_TEST_EARLY_PYTHON", unset = "")
+  if (nzchar(python)) {
+    Sys.setenv(RETICULATE_PYTHON = python)
+  }
   reticulate::py_run_string(paste(
     "import json, os, subprocess, sys",
     "early_object = object()",

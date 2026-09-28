@@ -338,14 +338,15 @@ base::local(
       requirements_adapter <<- environment()
       .Call("mcp_console_python_requirements_attach", requirements_adapter)
       replace_binding("py_reqs_transition", transition)
+      initialize_requirements <- function() {
+        invisible(.Call(
+          "mcp_console_python_initialized",
+          activation_manifest(current_requirements())
+        ))
+      }
       setHook(
         "reticulate.onPyInit",
-        function() {
-          invisible(.Call(
-            "mcp_console_python_initialized",
-            activation_manifest(current_requirements())
-          ))
-        },
+        initialize_requirements,
         action = "append"
       )
       invisible()
@@ -454,6 +455,11 @@ base::local(
         action = "append"
       )
       if (reticulate:::is_python_initialized()) {
+        # The initializer has registered the already-running identity before
+        # installing these hooks. Its original onPyInit event has already run.
+        if (!is.na(managed)) {
+          requirements_adapter$initialize_requirements()
+        }
         on_python_init()
       }
       invisible()

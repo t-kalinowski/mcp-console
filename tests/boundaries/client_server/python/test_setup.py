@@ -1018,6 +1018,59 @@ def test_preserves_setup_after_r_initialization(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_retries_managed_import_setup_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # The import finder captures its configuring thread after module
+        # defaults. Interrupt that public threading call once, then retry.
+        # fmt: r
+        r = code(r"""
+            options(reticulate.python.afterInitialized = function() {
+              reticulate::py_run_string(paste(
+                "import numpy as np, threading",
+                "original_get_printoptions = np.get_printoptions",
+                "original_get_ident = threading.get_ident",
+                "runtime_identity = object()",
+                "runtime_identity_id = id(runtime_identity)",
+                "def configuring_thread():",
+                "    threading.get_ident = original_get_ident",
+                "    input('Managed import setup> ')",
+                "    return original_get_ident()",
+                "def configure_thread_checkpoint():",
+                "    np.get_printoptions = original_get_printoptions",
+                "    threading.get_ident = configuring_thread",
+                "    return original_get_printoptions()",
+                "np.get_printoptions = configure_thread_checkpoint",
+                sep = "\n"
+              ))
+            })
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        client.send(python="raise AssertionError('interrupted setup ran the cell')")
+        assert last_result_text(client) == (
+            '[input requested: "Managed import setup> "]\n[waiting for stdin]'
+        ), client.transcript[-1]
+        wait_for_evaluation_output(
+            client, "\n", "managed import setup interruption", control="interrupt"
+        )
+        client.send(
+            python="import yaml12; assert id(runtime_identity) == runtime_identity_id; print('managed import setup retried')"
+        )
+        assert last_result_text(client) == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "managed import setup retried\n"
+        ), client.transcript[-1]
+        accepted = client.send(requirements={"action": "get"})["structuredContent"][
+            "requirements"
+        ]
+        assert "py-yaml12" in accepted["python"], accepted
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_retries_matplotlib_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:

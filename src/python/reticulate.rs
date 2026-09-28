@@ -204,16 +204,15 @@ extern "C-unwind" fn setup_python_runtime(
             })??;
         let completed = super::setup_runtime(
             std::path::Path::new(&libpython),
-            super::ImportResolution {
-                callback: None,
-                disabled_reason: disabled_reason.as_deref(),
+            if managed {
+                super::ImportResolution::Managed
+            } else {
+                super::ImportResolution::Disabled(disabled_reason.as_deref().ok_or_else(|| {
+                    harp::anyhow!("unmanaged Python setup omitted its import policy")
+                })?)
             },
         )
         .map_err(|error| harp::anyhow!("{error}"))?;
-        if completed && managed {
-            super::library::configure_managed_import_resolution()
-                .map_err(|error| harp::anyhow!("{error}"))?;
-        }
         harp::exec::r_sandbox(|| harp::object::RObject::from(completed).sexp)
     })
 }

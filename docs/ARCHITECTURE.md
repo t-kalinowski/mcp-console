@@ -332,7 +332,7 @@ Native CPython path initialization follows the selected executable's virtualenv 
 Startup failures retain Python tracebacks on the startup diagnostic stream, and every coordinator return restores the Python thread before extension-library exit destructors.
 The native runner owns sandbox temporary storage; direct relay lifetimes own a private directory and retire it after the worker, including failed startup.
 Neither lifetime owns resolver cache removal.
-The retained library state records each completed installation step and marks setup configured only after the CPython configuration call succeeds, so an incomplete setup can retry without initializing the interpreter again.
+The retained library state records each completed installation step and marks setup configured only after environment, module defaults, and managed or disabled import policy succeed, so an incomplete setup can retry without initializing the interpreter again.
 The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
 The shared Python module loader applies NumPy, pandas, and Matplotlib defaults once, preserving existing nondefault widths and subsequent user overrides.
 Applying defaults to modules loaded by startup hooks is a retryable setup step after the evaluator is installed; an interrupt preserves the running interpreter and its objects.
@@ -373,6 +373,10 @@ Successful pre-initialization preparation materializes the declaration and commi
 The live interpreter pin is resolver input, separate from retained user version constraints.
 R activation retains a transient matching key until reticulate accepts its configuration and writes the declaration; initial interpreter setup publishes through its own hook without that key.
 The initial hook records the running inspected identity directly, including R-side selections that did not require a managed resolver candidate.
+If a startup package already initialized reticulate, adapter installation records its managed state after registering that running identity and before common setup, without waiting for another initialization event.
+When Python initializes before worker readiness, the coordinator publishes its initial requirements immediately after `Ready`; subsequent initialization publishes directly through the same owner.
+If adoption bypassed the resolver hook, the first reached import inspects the accepted executable on its execution host before preparing a candidate; the worker still checks that candidate against its actual retained library before mutation.
+An external startup package can select its original environment again on restart; accepted declarations survive, but adoption does not replay activation into that already-running interpreter.
 Native console callbacks release the GIL while blocking on worker services and are confined to the configuring worker thread.
 Background threads and fork children use their underlying streams and cannot enter R through these services.
 Bare sessions leave managed resolution disabled.

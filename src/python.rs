@@ -11,12 +11,10 @@ pub(crate) use startup::{finish_initialization, initialize_selected, setup_runti
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
-/// Values supplied by an interpreter adapter when the private evaluator is
-/// configured. A caller without managed resolution supplies no callback.
-pub(crate) struct ImportResolution<'a> {
-    // The adapter keeps a converted callback alive for this setup call.
-    pub(crate) callback: Option<std::ptr::NonNull<libc::c_void>>,
-    pub(crate) disabled_reason: Option<&'a str>,
+/// Import policy installed before shared runtime setup is complete.
+pub(crate) enum ImportResolution<'a> {
+    Managed,
+    Disabled(&'a str),
 }
 
 #[derive(serde::Deserialize)]
@@ -58,6 +56,10 @@ pub(crate) fn configure_worker_environment(
 }
 
 impl Runtime {
+    pub(crate) fn publish_initial_requirements(&self) -> Result<(), String> {
+        requirements::publish_initial_requirements()
+    }
+
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
             reticulate: Some(reticulate::Adapter::initialize()?),
