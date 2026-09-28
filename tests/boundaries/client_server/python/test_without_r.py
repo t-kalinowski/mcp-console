@@ -2150,6 +2150,13 @@ def test_cleans_temporary_storage_after_startup_failure(
             temporary = Path((root / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "startup failure deleted the environment"
+            # Python now starts on cell demand after worker readiness. The
+            # replacement is idle and has not entered the failing hook again.
+            (site / "sitecustomize.py").unlink()
+            client.send(python="print('replacement initializes on demand')")
+            assert last_result_text(client) == "replacement initializes on demand\n", (
+                client.transcript[-1]
+            )
             return client.finish()
 
 
