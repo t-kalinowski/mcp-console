@@ -30,6 +30,16 @@ pub(super) fn configure_prepared(
             "SQL through the Console-owned DuckDB catalog",
         )
         .replace("managed DuckDB", "the Console-owned DuckDB catalog");
+    if !python_available {
+        *description = description
+            .replace("R, Python, and SQL", "R and SQL")
+            .replace(
+                "Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and ",
+                "Reuse live state when switching: ",
+            )
+            .replace("R or Python can select", "R can select")
+            .replace("`r`, `python`, or `sql` cell", "`r` or `sql` cell");
+    }
     description.push_str(&format!(
         "\n\nRuntimes were inspected inside the captured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
     ));

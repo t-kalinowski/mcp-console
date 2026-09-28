@@ -54,6 +54,7 @@ base::local(
       connection <- textConnection(reticulate:::python_config_impl(python))
       on.exit(close(connection), add = TRUE)
       metadata <- read.dcf(connection, all = TRUE)
+      root <- dirname(dirname(python))
       structure(
         list(
           python = python,
@@ -73,9 +74,9 @@ base::local(
             metadata$Version,
             ignore.case = TRUE
           ),
-          conda = metadata$IsConda,
-          virtualenv = if (selection$prefix != selection$base_prefix) {
-            selection$prefix
+          conda = as.logical(metadata$IsConda),
+          virtualenv = if (reticulate:::is_virtualenv(root)) {
+            root
           } else {
             ""
           },

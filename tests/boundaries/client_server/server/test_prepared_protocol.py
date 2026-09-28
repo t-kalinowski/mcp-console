@@ -92,11 +92,16 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
         (root / "peer/mode").write_text("r-only-probe")
         with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
-            properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
-                "properties"
-            ]
+            tool = client.transcript[-1]["result"]["tools"][0]
+            properties = tool["inputSchema"]["properties"]
             assert "r" in properties and "sql" in properties
             assert "python" not in properties
+            assert "Persistent R and SQL workbench" in tool["description"]
+            assert "Send one complete `r` or `sql` cell" in tool["description"]
+            assert "Python" not in tool["description"]
+            assert "`python`" not in tool["description"]
+            assert "`r.name`" not in tool["description"]
+            assert "`py$name`" not in tool["description"]
             assert "Python" not in properties["r"]["description"]
             assert "Python" not in properties["sql"]["description"]
             client.finish()

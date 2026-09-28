@@ -249,6 +249,69 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_late_attachment_preserves_environment_metadata(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        executable = Path(sys._base_executable)
+        prefix = root / "virtualenv"
+        for kind in ("base", "virtualenv", "conda-marker"):
+            if kind == "virtualenv":
+                subprocess.run(
+                    [sys.executable, "-m", "venv", "--without-pip", str(prefix)],
+                    check=True,
+                )
+                executable = prefix / "bin/python"
+            elif kind == "conda-marker":
+                # Exercise both values of reticulate's Conda metadata marker in
+                # a test-owned environment, without installing a Conda manager.
+                (prefix / "conda-meta").mkdir()
+            environment = dict(
+                os.environ,
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_TEST_PYTHON=str(executable),
+                MCP_CONSOLE_TEST_ENVIRONMENT_KIND=kind,
+                MCP_CONSOLE_TEST_VIRTUALENV="" if kind == "base" else str(prefix),
+            )
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    python="peer_object = object(); peer_identity = id(peer_object)"
+                )
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+                # fmt: r
+                client.send(
+                    r=code("""
+                    config <- reticulate::py_config()
+                    stopifnot(
+                      identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+                      identical(
+                        config$conda,
+                        Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
+                      ),
+                      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"))
+                    )
+                    cat("environment metadata retained\\n")
+                    """)
+                )
+                assert last_result_text(client) == "environment metadata retained\n", (
+                    kind,
+                    client.transcript[-1],
+                )
+                client.send(
+                    python="assert id(peer_object) == peer_identity; print('same interpreter')"
+                )
+                assert last_result_text(client) == "same interpreter\n", (
+                    client.transcript[-1]
+                )
+                records.extend([{"environment": kind}, *client.finish()[3:]])
+    return records
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_interrupt_wakes_input_before_and_after_attachment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -342,10 +405,12 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             binary, ("serve", "--no-sandbox"), current_directory=root
         ) as client:
             client.initialize_and_list_tools()
-            fields = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
-                "properties"
-            ]
+            tool = client.transcript[-1]["result"]["tools"][0]
+            fields = tool["inputSchema"]["properties"]
             assert "r" in fields and "sql" in fields and "python" not in fields, fields
+            assert "Persistent R and SQL workbench" in tool["description"]
+            assert "Python" not in tool["description"]
+            assert "`python`" not in tool["description"]
             client.send(
                 r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer"
             )

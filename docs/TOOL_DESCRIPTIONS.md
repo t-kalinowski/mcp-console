@@ -33,6 +33,7 @@ Describe controller recording paths separately from VM files; shared paths can e
 
 For prepared Docker and SBX targets, derive available languages from target runtime discovery.
 Sans-R descriptions expose Python and enabled SQL, omit R, and describe the Console-owned SQL catalog without calling the environment managed.
+R-only descriptions expose R and SQL and omit Python cell instructions, cross-language access, and Python package guidance from both tool and field prose.
 Dependencies and extensions must come from the captured image/template; missing imports do not install packages.
 `requirements.action="get"` reports the retained declaration, not an inventory of preinstalled distributions.
 Describe rebuilding the image/template and starting a new server session separately from a plain worker restart that retains the interpreter and resets state.
