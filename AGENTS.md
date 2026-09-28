@@ -264,6 +264,7 @@ Keep these invariants intact:
 ### Tests and development scripts
 
 - `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/support/python.py` — local wheel and package-index fixtures, including installed console entry points for runtime and preparation tests.
 - `tests/support/ssh_external.py`, `tests/fixtures/ssh_install.py` — optional real-host availability, test-owned source installation and build cache, and temporary remote workspace setup.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior, including real Python SDK integrations under `integrations/`.

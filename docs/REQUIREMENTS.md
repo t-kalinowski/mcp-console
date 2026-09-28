@@ -90,6 +90,9 @@ The built-in server uses these defaults; R-present preparation begins when an op
 | Python      | NumPy and pandas when Python is server-managed; sans-R sessions also include DuckDB |
 | DuckDB      | ICU, JSON, and SQLite extensions with R; SQLite in sans-R managed Python            |
 
+NumPy is a default Python dependency with and without R, independently of which language initializes Python first.
+An explicitly selected interpreter remains a non-managed environment: its owner installs these packages before starting Console.
+
 R-present managed defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
 Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
 If no R-present resolver bootstrap is available, the built-in server retains no managed environment, exposes only `requirements.action="get"`, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.

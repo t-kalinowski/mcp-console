@@ -1,6 +1,50 @@
 ---
 send:
   requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb:
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  requirements:
     python:
       - py-yaml12
 result:
@@ -16,6 +60,9 @@ send:
     import subprocess
     import sys
     import yaml12
+    import numpy as np
+
+    assert np.arange(3).tolist() == [0, 1, 2]
 
     peer_object = object()
     peer_id = id(peer_object)

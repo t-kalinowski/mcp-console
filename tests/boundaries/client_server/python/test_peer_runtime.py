@@ -18,7 +18,56 @@ from support.native import build_interposer
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, R, command, requires
 from support.r import r_test_environment
+from support.python import write_test_wheel
 from support.ssh import SSH, configure, localhost, poison_controller, remote_command
+
+
+# fmt: python
+CLI_SOURCE = code("""
+    import json
+    import os
+    import sys
+    import numpy as np
+
+
+    def main() -> None:
+        print(
+            json.dumps(
+                {
+                    "module": __name__,
+                    "executable": sys.executable,
+                    "prefix": sys.prefix,
+                    "virtualenv": os.environ.get("VIRTUAL_ENV"),
+                    "values": np.arange(3).tolist(),
+                }
+            )
+        )
+    """)
+
+# fmt: r
+CLI_CHECK = code("""
+    check_cli <- function(command, module) {
+      selected <- reticulate::py_config()$python
+      prefix <- reticulate::import("sys")$prefix
+      stopifnot(identical(
+        unname(Sys.which(command)),
+        file.path(dirname(selected), command)
+      ))
+      output <- system2(command, stdout = TRUE)
+      stopifnot(is.null(attr(output, "status")))
+      child <- jsonlite::fromJSON(output)
+      # Installers may use bin/python or bin/python3 in their shebang.
+      # Check executable identity and the virtualenv independently.
+      stopifnot(
+        identical(child$module, module),
+        identical(normalizePath(child$executable), normalizePath(selected)),
+        identical(normalizePath(child$prefix), normalizePath(prefix)),
+        identical(child$virtualenv, Sys.getenv("VIRTUAL_ENV")),
+        identical(child$values, 0:2)
+      )
+      cat("installed CLI uses the selected Python environment\\n")
+    }
+    """)
 
 
 def without_r(environment: dict[str, str], root: Path) -> None:
@@ -47,12 +96,14 @@ def test_standalone_python_contract(binary: Path, execution: Execution) -> Trans
 
 
 def exercise_python(client: McpClient) -> tuple[str, ...]:
-    # This exact sequence is used by every configuration. It deliberately uses
-    # only the standard library and does not refer to the R/Python bridge.
+    # Every configuration exercises the same evaluator and NumPy availability
+    # without referring to the R/Python bridge.
     # fmt: python
     first = code("""
         import os
         import sys
+        import numpy as np
+        assert np.arange(3).tolist() == [0, 1, 2]
         assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
         assert os.path.realpath(sys.prefix) == os.path.realpath(
             os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
@@ -176,8 +227,21 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
         executable = venv / "bin/python"
         # Reticulate declares NumPy by default, including for explicit Python
         # selections. Satisfy that declaration before exercising the bridge.
+        index = write_test_wheel(
+            root, "mcp_console_test_cli", CLI_SOURCE, command="peer-cli"
+        )
         subprocess.run(
-            ["uv", "pip", "install", "--python", executable, "numpy"],
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(executable),
+                "--index",
+                index.as_uri(),
+                "numpy",
+                "mcp-console-test-cli",
+            ],
             check=True,
             capture_output=True,
         )
@@ -266,6 +330,13 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                     records = client.finish()[3:]
                 else:
                     assert actual == reference
+                    client.send(r=CLI_CHECK)
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
+                    client.send(r='check_cli("peer-cli", "mcp_console_test_cli")')
+                    assert (
+                        last_result_text(client)
+                        == "installed CLI uses the selected Python environment\n"
+                    ), client.transcript[-1]
                     client.finish()
         assert records is not None
         return records
@@ -397,6 +468,10 @@ def test_shared_managed_bootstrap_and_replacement(
                 (Path(environment["PATH"]) / "uv").symlink_to(uv)
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
+                defaults = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]["python"]
+                assert "numpy" in defaults, defaults
                 if with_r:
                     client.send(
                         r="stopifnot(!reticulate::py_available(initialize = FALSE))"
@@ -413,6 +488,9 @@ def test_shared_managed_bootstrap_and_replacement(
                     import subprocess
                     import sys
                     import yaml12
+                    import numpy as np
+
+                    assert np.arange(3).tolist() == [0, 1, 2]
 
                     peer_object = object()
                     peer_id = id(peer_object)
@@ -466,6 +544,66 @@ def test_shared_managed_bootstrap_and_replacement(
                     records = current
     assert records is not None
     return records
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_r_commands_follow_managed_python_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        index = write_test_wheel(
+            root, "mcp_console_test_cli", CLI_SOURCE, command="peer-cli"
+        )
+        write_test_wheel(
+            root, "mcp_console_test_cli_added", CLI_SOURCE, command="peer-cli-added"
+        )
+        environment = dict(
+            os.environ, UV_INDEX=index.as_uri(), UV_INDEX_STRATEGY="first-index"
+        )
+        environment.pop("RETICULATE_PYTHON", None)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"python": ["mcp-console-test-cli"]})
+            assert last_result_text(client) == "[prepared]", client.transcript[-1]
+            client.send(
+                python="import numpy as np; peer_object = object(); peer_id = id(peer_object)"
+            )
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            client.send(r=CLI_CHECK)
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            client.send(
+                r='check_cli("peer-cli", "mcp_console_test_cli"); stopifnot(Sys.which("peer-cli-added") == "")'
+            )
+            assert (
+                last_result_text(client)
+                == "installed CLI uses the selected Python environment\n"
+            ), client.transcript[-1]
+            client.send(requirements={"python": ["mcp-console-test-cli-added"]})
+            assert last_result_text(client) == "[prepared]", client.transcript[-1]
+            client.send(
+                python="assert id(peer_object) == peer_id; assert np.arange(3).tolist() == [0, 1, 2]"
+            )
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            for command, module in (
+                ("peer-cli", "mcp_console_test_cli"),
+                ("peer-cli-added", "mcp_console_test_cli_added"),
+            ):
+                client.send(r=f'check_cli("{command}", "{module}")')
+                assert (
+                    last_result_text(client)
+                    == "installed CLI uses the selected Python environment\n"
+                ), client.transcript[-1]
+            client.send(control="restart")
+            client.send(r=CLI_CHECK)
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            client.send(r='check_cli("peer-cli-added", "mcp_console_test_cli_added")')
+            assert (
+                last_result_text(client)
+                == "installed CLI uses the selected Python environment\n"
+            ), client.transcript[-1]
+            return client.finish()[3:]
 
 
 @requires(R)

@@ -769,8 +769,14 @@ def main() -> None:
         if source == "preview invalid oversized image":
             send_output(writer, "before invalid image\n")
             send(writer, {"kind": "image", "data": "A" * (8 * 1024 * 1024) + "AA?=", "mime_type": "image/png"})
-            wait_for_server_to_process_sideband(reader, writer)
-            raise AssertionError("invalid image was accepted")
+            # If validation is skipped, completion returns a successful result
+            # that the public test rejects. Fatal validation instead requests
+            # shutdown; remain alive for the test's forced-retirement assertion.
+            send(writer, {"kind": "completed"})
+            response = json.loads(reader.readline())
+            assert response == {"kind": "shutdown"}, response
+            while True:
+                signal.pause()
 
         if source == "preview recovery intervals":
             directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
