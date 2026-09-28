@@ -2894,14 +2894,10 @@ def test_reports_direct_storage_retirement_failure(
                     client.stdin.close()
                     client.process.wait(timeout=15)
                     stderr = client.stderr.read()
-                    if stage == "startup failure":
-                        # Startup already delivered its retirement error over MCP.
-                        assert client.process.returncode == 0 and stderr == "", stderr
-                    else:
-                        assert client.process.returncode != 0, (stage, stderr)
-                        assert "cannot remove worker temporary directory" in stderr, (
-                            stderr
-                        )
+                    # Even startup hooks now execute after worker readiness.
+                    # Unconfirmed retirement remains a server shutdown failure.
+                    assert client.process.returncode != 0, (stage, stderr)
+                    assert "cannot remove worker temporary directory" in stderr, stderr
                     temporary = Path((workspace / "worker-temporary").read_text())
                     assert temporary.exists()
                     assert (venv / "bin/python3").exists()
