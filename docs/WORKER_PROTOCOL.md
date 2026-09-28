@@ -377,7 +377,8 @@ Every successful `python_resolved` reply is provisional.
 When the live runtime accepts that environment, the worker sends `python_activated` with the complete normalized logical manifest.
 The manifest must match a resolved candidate or the unchanged current managed environment.
 Activation is reported before the enclosing operation result.
-For automatic import resolution, `python_resolved` may carry the optional inspected `native` candidate in a managed sans-R session, using the same shape as `prepare_python`.
+The built-in worker requires the inspected `native` candidate in every managed `python_resolved` response, including R-mediated resolution, using the same shape as `prepare_python`.
+The R compatibility adapter retains its inspected identity for selection; this does not report activation or accept the candidate on the server.
 The worker activates that candidate through the native operation and sends `python_activated` before the original import resumes.
 A post-mutation activation failure sends `python_activation_failed` for the matching candidate and requires restart before further requirement changes.
 A later missing-module or language error does not undo that accepted environment.

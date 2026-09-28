@@ -192,12 +192,12 @@ impl Session {
                 "kind": if self.python_only() { "python" } else { "r" },
                 "managed": false,
                 "r_home": runtime.discovery.selections.r_home,
-                "python": runtime.native.as_ref().and_then(|selection| match selection {
-                    crate::local_runtime::Selection::Python { selected, .. } => Some(&selected.embedding.python),
-                    _ => None,
-                }).or(runtime.discovery.selections.python.as_ref()),
+                "python": runtime.native.as_ref().and_then(|selection| selection.python.as_ref()).map(|python| &python.selected.embedding.python).or(runtime.discovery.selections.python.as_ref()),
             });
-            if let Some(crate::local_runtime::Selection::Python { selected, .. }) = &runtime.native
+            if let Some(crate::local_runtime::Python { selected, .. }) = runtime
+                .native
+                .as_ref()
+                .and_then(|runtime| runtime.python.as_ref())
             {
                 // Recorded installation paths are target metadata only. Keep
                 // the retained descriptor as the authoritative launch choice.

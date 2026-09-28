@@ -4,7 +4,7 @@
 use super::ImportResolution;
 use std::path::Path;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SelectedPython {
     pub(crate) python: String,
@@ -12,13 +12,54 @@ pub(crate) struct SelectedPython {
     pub(crate) python_home: String,
 }
 
-pub(crate) fn initialize_selected(selected: &SelectedPython) -> Result<bool, String> {
-    super::library::initialize(
-        Path::new(&selected.libpython),
-        &selected.python,
-        &selected.python_home,
-        true,
-    )
+pub(crate) fn initialize_selected(configuration: &super::NativePython) -> Result<bool, String> {
+    super::library::initialize(configuration)
+}
+
+// Invoked once, after selection validation and before CPython runs any hooks.
+// These process-wide changes share the serialized interpreter thread. They
+// remain committed with the interpreter even when bridge attachment fails.
+pub(super) fn configure_process_environment(selected: &super::NativePython) -> Result<(), String> {
+    let executable = Path::new(&selected.embedding.python);
+    let directory = executable
+        .parent()
+        .ok_or("selected Python has no parent directory")?;
+    let mut path = vec![directory.to_path_buf()];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        path.extend(std::env::split_paths(&inherited));
+    }
+    let path = std::env::join_paths(path).map_err(|error| error.to_string())?;
+    // The current process loads the inspected library by absolute path. Linux
+    // children also need the selected installation's dependent library paths.
+    #[cfg(target_os = "linux")]
+    let libraries = {
+        let mut libraries = vec![Path::new(&selected.prefix).join("lib")];
+        if selected.base_prefix != selected.prefix {
+            libraries.push(Path::new(&selected.base_prefix).join("lib"));
+        }
+        if let Some(inherited) = std::env::var_os("LD_LIBRARY_PATH") {
+            libraries.extend(std::env::split_paths(&inherited));
+        }
+        std::env::join_paths(libraries).map_err(|error| error.to_string())?
+    };
+    // CPython reads pyvenv.cfg from the preserved program name. Setting the
+    // base PythonHome overrides the virtualenv and would require reactivation.
+    unsafe {
+        std::env::remove_var("PYTHONHOME");
+        std::env::remove_var("PYTHONPLATLIBDIR");
+        std::env::set_var("PATH", path);
+        #[cfg(target_os = "linux")]
+        std::env::set_var("LD_LIBRARY_PATH", libraries);
+        if selected.prefix != selected.base_prefix {
+            std::env::set_var("VIRTUAL_ENV", &selected.prefix);
+        } else {
+            std::env::remove_var("VIRTUAL_ENV");
+        }
+        if let Some(path) = std::env::var_os("RETICULATE_PYTHONPATH") {
+            std::env::set_var("PYTHONPATH", path);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn install_services(libpython: &Path) -> Result<(), String> {
@@ -37,14 +78,6 @@ pub(crate) fn setup_runtime(
     libpython: &Path,
     resolution: ImportResolution<'_>,
 ) -> Result<bool, String> {
-    setup_runtime_with_sql(libpython, resolution, true)
-}
-
-fn setup_runtime_with_sql(
-    libpython: &Path,
-    resolution: ImportResolution<'_>,
-    sql: bool,
-) -> Result<bool, String> {
     super::library::load(libpython)?;
     if super::library::runtime_configured()? {
         return Ok(true);
@@ -55,8 +88,9 @@ fn setup_runtime_with_sql(
         install_services(libpython)?;
     }
     super::library::install_runtime(super::RUNTIME_SOURCE)?;
-    if sql {
-        crate::sql::install_python_runtime()?;
+    crate::sql::install_python_runtime()?;
+    if !super::library::configure_environment()? {
+        return Ok(false);
     }
     // The finder starts with automatic resolution disabled. A native caller
     // with neither input keeps that default rather than replacing its reason
@@ -66,7 +100,7 @@ fn setup_runtime_with_sql(
     {
         return Ok(false);
     }
-    super::library::mark_runtime_configured(sql)?;
+    super::library::mark_runtime_configured()?;
     Ok(true)
 }
 
@@ -81,10 +115,8 @@ pub(super) fn initialize_native(
     managed: bool,
 ) -> Result<(), String> {
     let selected = &configuration.embedding;
-    // Let CPython's program-name/pyvenv.cfg path initialization select the
-    // virtualenv. Setting PythonHome to its base overrides that selection.
-    super::library::initialize(Path::new(&selected.libpython), &selected.python, "", false)?;
-    let result = setup_runtime_with_sql(
+    initialize_selected(configuration)?;
+    let result = setup_runtime(
         Path::new(&selected.libpython),
         ImportResolution {
             callback: None,
@@ -98,13 +130,11 @@ pub(super) fn initialize_native(
                 }
             }),
         },
-        true,
     )
     .and_then(|configured| {
         if !configured {
             return Err("native Python setup did not complete".into());
         }
-        super::library::configure_native_environment(configuration)?;
         super::library::configure_native_sql()?;
         if !super::library::disable_matplotlib_show()? {
             return Err("Python plotting setup did not complete".into());

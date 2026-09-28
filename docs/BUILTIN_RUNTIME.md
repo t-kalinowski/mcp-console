@@ -27,7 +27,7 @@ They do not reproduce the remote filesystem when rendered locally.
 With R available, each worker generation contains:
 
 - one persistent R global environment;
-- one persistent Python `__main__` namespace embedded through reticulate; and
+- one persistent Python `__main__` namespace embedded by Console, with reticulate supplying the R bridge; and
 - one persistent in-memory DuckDB connection and catalog, used as the default SQL backend.
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
@@ -366,7 +366,12 @@ Source syntax errors print the Python diagnostic and any available source locati
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
 When R is available, it is initialized eagerly and reticulate supplies Python interpreter selection, candidate configuration, and cross-language access.
-Console initializes the selected interpreter before reticulate attaches for conversion, cross-language calls, and event integration.
+Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
+Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
+Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
+`RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
+Ordinary R evaluation does not initialize Python.
+R itself still starts eagerly when available; submitting Python first does not mean R starts later.
 Console activates live managed environments through its retained CPython library.
 The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
 

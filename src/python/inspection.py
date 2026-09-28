@@ -52,9 +52,8 @@ def describe() -> dict[str, str]:
     for symbol in (
         "Py_IsInitialized",
         "Py_SetProgramName",
-        "Py_SetPythonHome",
         "Py_InitializeEx",
-        "PySys_SetArgv",
+        "PySys_SetArgvEx",
         "PyOS_setsig",
         "PyEval_SaveThread",
         "PyEval_RestoreThread",

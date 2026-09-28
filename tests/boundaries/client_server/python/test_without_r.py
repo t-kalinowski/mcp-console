@@ -9,7 +9,10 @@ import subprocess
 import shutil
 import sys
 import tempfile
+import threading
 import zipfile
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -80,7 +83,38 @@ def write_test_wheel(root: Path, name: str, module_source: str | None) -> Path:
     with zipfile.ZipFile(wheel, "w") as archive:
         for path, content in entries.items():
             archive.writestr(path, content)
-    return wheels
+    index = root / "index" / name.replace("_", "-")
+    index.mkdir(parents=True)
+    (index / "index.html").write_text(f'<a href="{wheel.as_uri()}">{wheel.name}</a>\n')
+    return index.parent
+
+
+@contextmanager
+def unavailable_fixture_index():
+    requests: list[str] = []
+
+    class Index(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "/mcp-console-test-" in self.path:
+                requests.append(self.path)
+                self.send_error(503, "fixture packages must resolve locally")
+            else:
+                self.send_response(302)
+                self.send_header("Location", "https://pypi.org" + self.path)
+                self.end_headers()
+
+        def log_message(self, *_):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Index) as index:
+        thread = threading.Thread(target=index.serve_forever)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{index.server_port}/simple", requests
+        finally:
+            index.shutdown()
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "fixture index did not stop"
 
 
 def preparation_environment(root: Path) -> dict[str, str]:
@@ -906,16 +940,29 @@ def test_combines_live_python_and_duckdb_additions(
 def test_retains_automatic_additions_after_import_errors(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with preparation_directory() as directory:
+    with (
+        preparation_directory() as directory,
+        unavailable_fixture_index() as (index, requests),
+    ):
         root = Path(directory)
         (root / "uv").symlink_to(shutil.which("uv"))
-        wheels = write_test_wheel(root, "mcp_console_test_empty_pkg", None)
+        wheel_index = write_test_wheel(root, "mcp_console_test_empty_pkg", None)
         write_test_wheel(
             root,
             "mcp_console_test_raises_pkg",
             'raise RuntimeError("synthetic module initialization failure")\n',
         )
-        env = dict(environment(root), UV_FIND_LINKS=str(wheels))
+        env = dict(
+            environment(root),
+            # find-links still queries the default registry. A first-priority
+            # index makes each generated distribution local to this test.
+            UV_INDEX=wheel_index.as_uri(),
+            UV_INDEX_STRATEGY="first-index",
+            UV_DEFAULT_INDEX=index,
+            UV_HTTP_RETRIES="0",
+        )
+        for name in ("UV_FIND_LINKS", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL"):
+            env.pop(name, None)
         with McpClient(
             installed_binary(binary, root), execution.serve(), env
         ) as client:
@@ -953,6 +1000,7 @@ def test_retains_automatic_additions_after_import_errors(
                 python="assert steps == ['empty', 'raises']; assert os.getpid() == worker_pid; print('failed imports did not replay cells')"
             )
             assert last_result_text(client) == "failed imports did not replay cells\n"
+            assert not requests, requests
             return client.finish()[3:]
 
 

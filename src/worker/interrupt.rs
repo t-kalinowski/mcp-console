@@ -245,17 +245,25 @@ pub(crate) fn install_python_interrupt(
     Ok(())
 }
 
+pub(crate) fn check_python_selection_interrupt() -> Result<(), String> {
+    if (STATE.get().expect("interrupt state initialized").requested)() {
+        Err("Python inspection interrupted".into())
+    } else {
+        Ok(())
+    }
+}
+
 /// Connect inspection cancellation to the worker's existing SIGINT wakeup.
 /// ResolverProcess continues to own termination, output collection and reaping.
 pub(crate) fn inspect_python(
     executable: &std::path::Path,
-) -> Result<crate::python::SelectedPython, String> {
+) -> Result<crate::python::NativePython, String> {
     let requested = STATE.get().expect("interrupt state initialized").requested;
     super::input::drain_interrupt_wakeup().map_err(|error| error.to_string())?;
     let (finished, completion) = io::pipe().map_err(|error| error.to_string())?;
     std::thread::scope(|scope| {
         let mut watcher = None;
-        let result = crate::python::inspect_selected(executable, |handle| {
+        let result = crate::python::inspect_native(executable, |handle| {
             // Draining stale wakeups must not hide a queued request just
             // because the calling R callback currently defers interrupts.
             if requested() {

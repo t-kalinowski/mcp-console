@@ -54,12 +54,10 @@ sudo apt-get update
 sudo apt-get install -y build-essential git pkg-config libcap-dev libcurl4-openssl-dev binutils
 ```
 
-Install the current checkout, including its private sandbox runner:
+Install the current source directly from GitHub, including its private sandbox runner:
 
 ```sh
-git clone --depth 1 https://github.com/t-kalinowski/mcp-console.git
-cd mcp-console
-uv tool install --python 3.12 --reinstall .
+uv tool install git+https://github.com/t-kalinowski/mcp-console
 ```
 
 Configure your client to launch `uvx mcp-console serve` as a stdio server.
@@ -77,7 +75,7 @@ claude mcp add --transport stdio console -- uvx mcp-console serve
 claude
 ```
 
-uv supplies Python 3.12, the first installation builds the pinned runner with its own Rust toolchain, and the first analysis prepares R and Python packages and DuckDB extensions.
+The first installation builds the pinned runner with its own Rust toolchain, and the first analysis prepares R and Python packages and DuckDB extensions.
 These steps can download interpreters, packages, and build dependencies and take several minutes.
 See [source installation](RELEASE.md#private-sandbox-executable) and [managed dependencies](docs/REQUIREMENTS.md#retained-environments) for details.
 

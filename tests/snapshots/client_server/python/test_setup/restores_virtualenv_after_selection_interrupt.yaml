@@ -5,9 +5,9 @@ send:
   r: |
     interrupted <- TRUE
     invisible(suppressMessages(base::trace(
-      "Sys.setenv",
+      "py_discover_config",
       exit = quote({
-        if ("VIRTUAL_ENV" %in% names(list(...)) && !interrupted) {
+        if (!interrupted) {
           interrupted <<- TRUE
           stop(structure(
             list(message = "selection interrupted", call = NULL),
@@ -16,7 +16,7 @@ send:
         }
       }),
       print = FALSE,
-      where = baseenv()
+      where = asNamespace("reticulate")
     )))
     for (previous in c(NA_character_, "before-selection")) {
       if (is.na(previous)) {
@@ -32,7 +32,10 @@ send:
         !reticulate::py_available(initialize = FALSE)
       )
     }
-    invisible(suppressMessages(base::untrace("Sys.setenv", where = baseenv())))
+    invisible(suppressMessages(base::untrace(
+      "py_discover_config",
+      where = asNamespace("reticulate")
+    )))
     42L
 result:
   content:

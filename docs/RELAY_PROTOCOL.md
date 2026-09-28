@@ -72,12 +72,13 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `4` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
-Prepared-target version 4 adds optional `python` only for runtime probes and requires `environment` for worker launch.
-That handoff uses the existing worker-environment and native runtime descriptor, with managed flags false and no managed R/Python payloads.
+Its fields are `version` (currently `5` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Prepared targets accept optional `python` only for runtime probes and require `environment` for worker launch.
+Version 5 retains independent R and inspected Python selections in that handoff, including the complete Python identity when R is present.
+Prepared runtime descriptors have managed flags false and no managed R/Python payloads.
 The image/template supplies its dependencies.
-The compute version change is independent of SSH's existing version 4 negotiation; SSH omits `python`, rejects it when supplied, and carries no prepared runtime-result frames.
-Older prepared version 3 peers are rejected, including when the package version matches.
+SSH omits the probe-only `python` field, rejects it when supplied, and carries no prepared runtime-result frames.
+Older peers are rejected, including when the package version matches.
 The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
 It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
 Incompatible changes to the launch envelope or relay wire contract must increment the target bootstrap protocol version, including between development builds with the same package version.

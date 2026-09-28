@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -305,63 +305,49 @@ pub(crate) struct WorkerEnvironment {
 impl WorkerEnvironment {
     #[cfg(unix)]
     pub fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
-        if let Some(native) = &self.native {
-            let crate::local_runtime::Selection::Python {
-                selected, managed, ..
-            } = native
-            else {
-                return Err("SSH native selection must contain Python".into());
-            };
-            if self.r.is_some() || self.discovery.selections.r_home.is_some() {
-                return Err("SSH native Python cannot be combined with R".into());
-            }
-            if *managed != self.python.is_some() {
-                return Err(
-                    "SSH native Python managed environment does not match its selection".into(),
-                );
-            }
-            if let Some(python) = &self.python {
-                if std::path::Path::new(&selected.embedding.python) != python.python() {
-                    return Err("SSH native Python does not match its managed environment".into());
-                }
-                if !python.python().is_file() {
-                    return Err("resolved remote Python interpreter no longer exists".into());
-                }
-                python.configure_worker(command);
-            }
-            native.configure(command)?;
-            command
-                .env(
-                    "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-                    if *managed { "1" } else { "0" },
-                )
-                .env_remove("RETICULATE_USE_MANAGED_VENV")
-                .env_remove("MCP_CONSOLE_PREINSTALLED");
-            return Ok(());
-        }
-        command.env_remove(crate::local_runtime::ENVIRONMENT);
-        if self.discovery.selections.r_home.is_none() {
+        let selected = self
+            .native
+            .as_ref()
+            .and_then(|runtime| runtime.python.as_ref());
+        let home = self
+            .native
+            .as_ref()
+            .and_then(|runtime| runtime.r_home.as_deref())
+            .or_else(|| {
+                self.discovery
+                    .selections
+                    .r_home
+                    .as_deref()
+                    .map(std::path::Path::new)
+            });
+        if home.is_none() && selected.is_none() {
             return Err("SSH worker bootstrap has no selected runtime".into());
         }
-        if let Some(home) = &self.discovery.selections.r_home {
+        if let Some(home) = home {
             command.env("R_HOME", home);
         }
         if let Some(r) = &self.r {
             r.configure_worker(command)?;
         }
-        command.env(
-            "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-            if self.discovery.managed { "1" } else { "0" },
-        );
-        command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
-        command.env_remove("MCP_CONSOLE_PREINSTALLED");
+        command
+            .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
+            .env_remove("MCP_CONSOLE_PREINSTALLED");
         if let Some(python) = &self.python {
+            if let Some(selected) = selected
+                && (!selected.managed
+                    || std::path::Path::new(&selected.selected.embedding.python) != python.python())
+            {
+                return Err("SSH Python does not match its managed environment".into());
+            }
             if !python.python().is_file() {
                 return Err("resolved remote Python interpreter no longer exists".into());
             }
             python.configure_worker(command);
             command.env_remove("RETICULATE_USE_MANAGED_VENV");
         } else {
+            if selected.is_some_and(|selected| selected.managed) {
+                return Err("SSH managed Python selection has no environment".into());
+            }
             command.env("RETICULATE_USE_MANAGED_VENV", "no");
             match &self.discovery.selections.python {
                 Some(python) if !python.is_empty() && python != "managed" => {
@@ -372,6 +358,24 @@ impl WorkerEnvironment {
                 }
             }
         }
+        if let Some(runtime) = &self.native {
+            runtime.configure(command)?;
+        } else {
+            // Compatibility with a lazily selected R-capable launch.
+            crate::local_runtime::Selection {
+                r_home: home.map(std::path::Path::to_path_buf),
+                python: None,
+            }
+            .configure(command)?;
+        }
+        command.env(
+            "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+            if self.discovery.managed || selected.is_some_and(|selected| selected.managed) {
+                "1"
+            } else {
+                "0"
+            },
+        );
         Ok(())
     }
 }

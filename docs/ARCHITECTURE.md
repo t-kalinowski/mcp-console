@@ -276,22 +276,35 @@ The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython
 The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains user-selected DB-API connections and, without R, a lazy worker-owned DuckDB connection without converting objects or result rows through Rust or R.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
 The reticulate adapter retains discovery, selection precedence, and R-side hints.
-For each fresh selection, Console inspects that executable in an owned child and derives the embedding library and Python home from its runtime and `sysconfig`.
+Console captures a complete `NativePython` identity: executable spelling, embedding library, Python home, and all four prefixes.
+Managed selections and prepared targets are inspected by the execution-host preparation owner; a fresh reticulate compatibility selection is inspected in an owned worker child.
+Both paths use the same inspection program and bootstrap contract.
 Inspection requires CPython 3.10 or later and checks the library's runtime build and ABI; the selected executable's spelling is preserved, including virtualenv paths.
 The selected installation must remain stable through inspection and initialization; concurrent replacement is unsupported.
 A private result file separates configuration from startup output, and the existing resolver lifecycle owns child output, cancellation, and reaping.
 The worker's existing interrupt wakeup cancels inspection without committing an interpreter or changing retained requirements, and a failed inspection permits retry in the same worker.
 Console supplies the inspected embedding fields to both native initialization and reticulate's subsequent attachment; cached or already initialized selections are not inspected again.
-Reticulate continues to supply its other interoperability metadata and environment adjustments.
+Reticulate supplies conversion metadata and selection hints, but no longer configures the generic Python environment.
+`python::startup` applies `PATH`, `VIRTUAL_ENV`, and the effective `PYTHONPATH` before CPython executes startup hooks; Linux child library paths are derived from the inspected prefixes.
+The selected program name lets CPython read `pyvenv.cfg` itself, without overriding PythonHome or replaying a virtualenv activation script during bridge attachment.
+Shared setup validates the observed prefixes, retains the executable spelling, and installs the working-directory import entry.
+Only the bridge's own module directory is added for reticulate attachment; it does not rewrite `sys.executable`, prefixes, or base executable.
 The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
 The worker-facing `python::Runtime` retains an optional reticulate adapter directly.
 That adapter owns lazy selection, attachment, and their completion state; `python::startup` provides bootstrap and shared setup operations without depending on the R adapter.
 The retained CPython library owns interpreter lifetime and shared setup completion, so interrupted setup can resume without replacing the interpreter.
+If an R startup package initializes reticulate before the adapter is installed, Console captures that interpreter's live executable and prefixes together with reticulate's loaded-library configuration.
+It registers this identity before installing bridge hooks, preserves external interpreter ownership, and enters common setup without rerunning environment activation.
 Native sessions complete bootstrap before constructing the runtime and have no reticulate adapter.
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
-Native startup installs Console's stream, input, interrupt, and plot services after reticulate's competing hooks, then installs the private evaluator and SQL adapter and configures automatic import resolution through the retained CPython interface.
+Common setup installs Console's stream, input, interrupt, and plot services, private evaluator, and SQL adapter, then configures automatic import resolution through the retained CPython interface.
+Reticulate attachment reasserts the same services after reticulate installs its hooks.
 The same setup accepts an absent resolver callback and a disabled reason from an R-independent caller; R-present sessions initialize R eagerly and use reticulate for selection and attachment.
 Runtime availability is captured on the execution host at session startup and passed through internal launch configuration to each worker.
+`local_runtime::Selection` retains an optional R home and an independently optional inspected Python selection, including managed local and SSH environments and prepared Docker/SBX targets with both runtimes.
+An absent Python selection in an R-capable worker means selection is still lazy; it does not disable Python cells.
+Availability, captured identity, library initialization, shared setup completion, and bridge attachment are separate state.
+The coordinator still initializes R eagerly when available, and managed requirement adaptation still has R-specific and R-free paths; compositional capture alone does not remove those remaining boundaries.
 Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.
 When R is absent, the preparation owner resolves the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
 When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
@@ -319,8 +332,11 @@ Reticulate's event polling remains active.
 In R-present sessions, reticulate remains required for interpreter discovery and selection, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
 Console owns initialization of the selected interpreter and tracks completion of its private runtime setup in the retained library state.
 Both a first Python cell and Python use from R reach that native owner before reticulate attaches.
-If applying or serializing a fresh selection fails or is interrupted, the adapter restores the captured environment inputs.
-Once CPython is running, attachment errors propagate with its selected environment retained; only reticulate's temporary `PYTHONPATH` is restored, without rolling back and rebuilding the environment.
+A failed or interrupted selection has not applied generic process-environment changes.
+Once CPython is running, attachment errors retain the selected environment and completed setup steps; retry attaches to the existing interpreter rather than rolling back its initialization.
+`RETICULATE_PYTHONPATH`, when supplied, selects the common startup `PYTHONPATH` for both the interpreter and its children.
+R's already-initialized interoperability marker remains a bridge input.
+RStudio-only loader symlink manipulation and Windows Qt plugin setup are not part of Console's embedding path.
 Console's native requirement store owns declaration transitions and preparation orchestration for explicit Python requirements, automatic imports, and managed `reticulate::py_require()` calls.
 It holds the operative character values behind the existing R active binding; `src/python/requirements/r.rs` preserves field presence and ordering, attributes, encodings, history, and copy isolation.
 Call-local candidates use that representation without introducing another retained manifest.
@@ -332,9 +348,18 @@ The R adapter supplies the existing normalized R projection when the native owne
 The successful initial reticulate initialization hook reports through the same native owner at its separate lifecycle point, without a pending-activation transaction.
 The store remains R-dependent for candidate lookup, reticulate configuration, and the existing host-resolver callback.
 Lazy declarations and snapshot restoration do not report activation; explicit preparation can materialize a lazy manifest without initializing Python.
+Every managed resolver candidate carries the execution-host inspection through the existing transaction, including R-mediated resolution.
+The server commits that identity together with the accepted environment at activation or successful lazy preparation; discarded candidates cannot change a later launch.
+The R adapter caches only the provisional inspected identity for selection, without another retained requirement manifest.
 Requirement objects and their protection stay on the R thread, and native state borrows end before R allocation, comparison, protection release, resolver callbacks, interpreter execution, or notification publication.
 Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
 Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
+R API calls and R object protection are confined to the thread that initialized R; the GIL alone cannot authorize an R call from a Python thread.
+CPython API access acquires the GIL, and Console saves and restores its initial thread state on that same worker thread.
+Serializing all cells on this thread is Console's current scheduling choice; R affinity, synchronous R-to-Python-to-R callbacks, and process-global signals constrain any later separation.
+Reticulate's Positron helper (`R/thread.R`, `inst/python/rpytools/thread.py`) runs Python services on background threads and schedules R callbacks back onto the main thread; it does not move R evaluation to an arbitrary Python thread.
+A separate Python execution thread would require callback routing, interrupt ownership, and shutdown coordination before synchronous cross-language calls could preserve their behavior.
+The remaining initialization and managed-control work is tracked separately in [the peer-runtime completion proposal](../design-sketches/peer-runtime-completion.md).
 The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.
 Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
 Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge connects reticulate to that store and supplies the callback into the existing managed-Python resolver.

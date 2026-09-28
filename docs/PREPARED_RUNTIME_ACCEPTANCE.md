@@ -1,5 +1,7 @@
 # Prepared runtime acceptance audit
 
+This records the version 4 audit below; the current version 5 handoff is documented in [the target launch envelope](RELAY_PROTOCOL.md#target-launch-envelope).
+
 This audit covers the shared prepared-runtime change for Docker and Docker Sandbox (SBX), with local and SSH regressions through the public Console interfaces.
 The provider fixtures contain installed compatible Linux builds, not controller executables or mocked workers.
 R-free fixtures come from `examples/docker/Dockerfile.python` and `examples/docker-sandbox/Dockerfile.python`; their selected `/opt/console-python` interpreters and embedding libraries do not exist on the controller.

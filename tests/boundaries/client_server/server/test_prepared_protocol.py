@@ -88,7 +88,7 @@ def test_native_probe_projects_capabilities_without_controller_paths(
 def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 4"),
+        ("probe-version", "expected protocol 5"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),
@@ -97,9 +97,10 @@ def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list
         ("probe-oversized", "frame exceeds 65536 bytes"),
         ("probe-unconfirmed", "retirement is unconfirmed"),
         ("probe-failed", "probe validation failed"),
+        ("probe-closed-output", "launch stream ended before confirmed retirement"),
         ("probe-managed", "cannot contain managed"),
-        ("native-managed", "cannot contain R"),
-        ("native-r-conflict", "cannot contain R"),
+        ("native-managed", "cannot contain another selection or a managed cache"),
+        ("native-r-conflict", "R capability differs from its captured selection"),
         ("native-relative", "absolute target path"),
         ("native-prefix", "inconsistent executable or base prefixes"),
         ("native-unknown", "unknown field"),
@@ -113,6 +114,7 @@ def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list
                 assert client.stdout.read(timeout=30) == ""
                 diagnostics = client.stderr.read(timeout=30)
                 assert expected in diagnostics, diagnostics
+                assert "BrokenPipeError" not in diagnostics, diagnostics
                 assert client.process.wait(timeout=5) != 0
             assert not (root / "peer/vms").exists()
             operations = calls(root)

@@ -48,6 +48,11 @@ if real:
     os.execv(real, [real, *args])
 
 
+# A rejected frame can close the attachment before this peer's next write.
+# Match ordinary CLI pipe termination without adding a Python traceback.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+
 if args == ["version"]:
     print(
         "sbx version: v0.42.0 fixture"
@@ -122,57 +127,64 @@ elif args[0] == "exec":
             "build": "unsupported" if mode == "probe-build" else bootstrap["build"],
         },
     )
+    if probe and mode == "probe-closed-output":
+        # Keep the attachment pipe open until this peer exits, so the owner
+        # cannot cancel the peer before its next write hits the closed reader.
+        attachment = os.dup(1)
+        reader, writer = os.pipe()
+        os.close(reader)
+        os.dup2(writer, 1)
+        os.close(writer)
     if probe:
-        if mode.startswith("native-"):
-            runtime = {
-                "discovery": {
-                    "managed": False,
-                    "selections": {"r_home": None, "python": None},
-                },
-                "r": None,
-                "python": None,
-                "native": {
-                    "kind": "python",
+        native_only = mode.startswith("native-")
+        home = None if native_only else "/usr/lib/R"
+        prefix = "/target-only" if native_only else "/opt/analysis"
+        executable = prefix + ("/bin/python3" if native_only else "/bin/python")
+        runtime = {
+            "discovery": {
+                "managed": False,
+                "selections": {"r_home": home, "python": None},
+            },
+            "r": None,
+            "python": None,
+            "native": {
+                "r_home": home,
+                "python": {
                     "selected": {
                         "embedding": {
-                            "python": "/target-only/bin/python3",
-                            "libpython": "/target-only/lib/libpython.so",
-                            "python_home": "/target-only",
+                            "python": executable,
+                            "libpython": prefix + "/lib/libpython.so",
+                            "python_home": prefix,
                         },
-                        "prefix": "/target-only",
-                        "exec_prefix": "/target-only",
-                        "base_prefix": "/target-only",
-                        "base_exec_prefix": "/target-only",
+                        "prefix": prefix,
+                        "exec_prefix": prefix,
+                        "base_prefix": prefix,
+                        "base_exec_prefix": prefix,
                     },
                     "explicit": None,
                     "managed": False,
                     "duckdb_extension_directory": None,
                 },
-            }
-        else:
-            runtime = {
-                "discovery": {
-                    "managed": False,
-                    "selections": {
-                        "r_home": "/usr/lib/R",
-                        "python": "/opt/analysis/bin/python",
-                    },
-                },
-                "r": None,
-                "python": None,
-            }
+            },
+        }
         if mode == "native-managed":
-            runtime["native"]["managed"] = True
+            runtime["native"]["python"]["managed"] = True
         if mode == "native-r-conflict":
             runtime["discovery"]["selections"]["r_home"] = "/usr/lib/R"
         if mode == "native-relative":
-            runtime["native"]["selected"]["embedding"]["python"] = "relative/python"
+            runtime["native"]["python"]["selected"]["embedding"]["python"] = (
+                "relative/python"
+            )
         if mode == "native-prefix":
-            runtime["native"]["selected"]["embedding"]["python_home"] = "/other"
+            runtime["native"]["python"]["selected"]["embedding"]["python_home"] = (
+                "/other"
+            )
         if mode == "native-unknown":
             runtime["native"]["unused"] = "unsupported"
         if mode == "native-embedding-unknown":
-            runtime["native"]["selected"]["embedding"]["unused"] = "unsupported"
+            runtime["native"]["python"]["selected"]["embedding"]["unused"] = (
+                "unsupported"
+            )
         if mode == "probe-managed":
             runtime["discovery"]["managed"] = True
         if mode == "probe-oversized":

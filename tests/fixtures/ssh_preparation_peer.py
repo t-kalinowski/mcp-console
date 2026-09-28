@@ -37,12 +37,12 @@ def complete(id, value, confirmed=True):
 
 
 opened = read()["Open"]
-assert opened["version"] == 4
+assert opened["version"] == 5
 assert opened["mode"] == "Auto"
 write(
     {
         "Hello": {
-            "version": 3 if mode == "incompatible" else 4,
+            "version": 3 if mode == "incompatible" else 5,
             "build": opened["build"],
         }
     }
@@ -62,21 +62,23 @@ if mode.startswith("default-extension-"):
     discovery["selections"]["r_home"] = None
     discovery["native"] = {
         "selection": {
-            "kind": "python",
-            "selected": {
-                "embedding": {
-                    "python": "/remote-only/python",
-                    "libpython": "/remote-only/libpython",
-                    "python_home": "/remote-only",
+            "r_home": None,
+            "python": {
+                "selected": {
+                    "embedding": {
+                        "python": "/remote-only/python",
+                        "libpython": "/remote-only/libpython",
+                        "python_home": "/remote-only",
+                    },
+                    "prefix": "/remote-only",
+                    "exec_prefix": "/remote-only",
+                    "base_prefix": "/remote-only",
+                    "base_exec_prefix": "/remote-only",
                 },
-                "prefix": "/remote-only",
-                "exec_prefix": "/remote-only",
-                "base_prefix": "/remote-only",
-                "base_exec_prefix": "/remote-only",
+                "explicit": None,
+                "managed": True,
+                "duckdb_extension_directory": "/remote-only/extensions",
             },
-            "explicit": None,
-            "managed": True,
-            "duckdb_extension_directory": "/remote-only/extensions",
         },
         "python": {
             "python": "/remote-only/python",

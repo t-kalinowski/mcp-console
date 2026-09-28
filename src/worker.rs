@@ -19,14 +19,15 @@ pub(crate) use coordinator::run;
 #[cfg(unix)]
 pub(crate) use core::{
     emit_output, publish_plot, publish_python_activation, publish_python_activation_failure,
-    publish_r_activation, publish_r_activation_failure, resolve_native_python, resolve_python,
-    resolve_python_version, resolve_r,
+    publish_r_activation, publish_r_activation_failure, resolve_python, resolve_python_version,
+    resolve_r,
 };
 #[cfg(unix)]
 pub(crate) use input::{PythonInput, read_python_input};
 #[cfg(unix)]
 pub(crate) use interrupt::{
-    acknowledge_python_interrupt, inspect_python, install_python_interrupt,
+    acknowledge_python_interrupt, check_python_selection_interrupt, inspect_python,
+    install_python_interrupt,
 };
 
 #[cfg(not(unix))]
