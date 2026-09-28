@@ -650,9 +650,8 @@ impl Client {
             .as_ref()
             .expect("remote discovery opened preparation")
             .clone();
-        let selected_python = discovery.selections.python.clone().map(OsString::from);
-        let native = discovery.native.clone();
-        let (r_resolver, python, local_runtime) = if let Some(native) = native {
+        let selected_python = discovery.selections.python.map(OsString::from);
+        let (r_resolver, python, local_runtime) = if let Some(native) = discovery.native {
             let resolver =
                 crate::resolver::execution::PythonConfiguration::Ssh(preparation.clone());
             let python = match native.python {

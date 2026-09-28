@@ -77,10 +77,6 @@ impl Session {
         python: Option<&crate::resolver::ManagedPython>,
         native: Option<&crate::local_runtime::Selection>,
     ) -> Result<Vec<u8>, String> {
-        let mut discovery = self.discovery.clone();
-        if let Some(discovery) = &mut discovery {
-            discovery.native = None;
-        }
         target_launch::encode(&Bootstrap {
             version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
@@ -89,12 +85,15 @@ impl Session {
             writable_roots: self.roots.clone(),
             no_sandbox,
             provider: crate::settings::Provider::Native,
-            environment: discovery.map(|discovery| preparation::WorkerEnvironment {
-                discovery,
-                r: managed_r.cloned(),
-                python: python.cloned(),
-                native: native.cloned(),
-            }),
+            environment: self
+                .discovery
+                .clone()
+                .map(|discovery| preparation::WorkerEnvironment {
+                    discovery,
+                    r: managed_r.cloned(),
+                    python: python.cloned(),
+                    native: native.cloned(),
+                }),
         })
         .map_err(|error| format!("cannot encode SSH bootstrap: {error}"))
     }
@@ -109,7 +108,11 @@ impl Session {
         let (preparation, discovery) =
             preparation::Preparation::open(self, selections, on_started)?;
         self.preparation = Some(preparation);
-        self.discovery = Some(discovery.clone());
+        // The session environment owns the current native selection after discovery.
+        self.discovery = Some(preparation::Discovery {
+            native: None,
+            ..discovery.clone()
+        });
         Ok(discovery)
     }
 

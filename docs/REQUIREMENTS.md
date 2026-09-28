@@ -605,6 +605,11 @@ It must also apply its first managed R library before loading DuckDB; a DuckDB n
 
 ## Host resolution and trust
 
+`mcp-console resolve` is the intended trust boundary for dependency preparation.
+Its callers treat it as a trusted command for explicit requirements and automatic imports, accepting structured results only after confirmed subprocess cleanup.
+SSH's private `ssh-prepare` command uses the same preparation implementation on the execution host.
+Responsibility for making resolution safe belongs to this boundary; callers retain ownership of declarations, admission, generations, and commits.
+
 For local execution, the resolver permissions and startup environment described below belong to the `resolve` subprocess, which runs with the server account's permissions and inherited startup environment.
 For [SSH execution](SSH.md#trusted-preparation), they belong to the trusted preparation owner on the execution host.
 
@@ -619,14 +624,16 @@ Managed Python environment startup and Matplotlib font-cache warming can also im
 Use only trusted requirements and trusted resolver configuration.
 `IR_NO_LOCAL_SOURCES` and the Python and DuckDB validation rules reduce the accepted input surface; they do not make arbitrary remote packages safe.
 
-The resolver is a trusted component, not a sandbox boundary.
+That trust is currently an assumption: the resolver does not yet enforce a secure boundary against malicious package code or worker-modifiable resolver inputs.
 Console does not check whether the worker can modify its executable, configuration files, caches, Python installations, or configured local package sources.
 Capturing environment values and executable paths does not freeze the files they name.
 For example, if the startup `PATH` selects a uv wrapper in a writable workspace, a client can use a Python cell to replace that wrapper, then request a new named package with `control: "restart"`.
 The resolver invokes the retained path outside the worker sandbox, so the replacement runs with full host permissions before the old worker is retired.
 A writable wheel directory selected by startup `UV_FIND_LINKS` or uv configuration provides another route: a client-created wheel can supply startup code executed during preparation.
 These crafted paths can execute client-controlled code outside the worker sandbox even though the submitted requirement contains no path or URL.
-This implementation does not close those paths; isolation of the resolver is a separate concern.
+This implementation does not close those paths.
+Follow-up work will enforce the boundary within the preparation command, including running resolvers in a sandbox.
+SSH sans-R support does not add that enforcement or change the caller's trust assumption.
 
 Resolver inputs do not contain submitted cells or `send` stdin:
 

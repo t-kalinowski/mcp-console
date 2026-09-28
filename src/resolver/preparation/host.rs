@@ -23,7 +23,6 @@ impl Context {
     fn discover(
         mode: Mode,
         local: bool,
-        configured_native: Option<String>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         let mode = if matches!(mode, Mode::Auto) {
@@ -35,9 +34,7 @@ impl Context {
         } else {
             mode
         };
-        let configured_python = configured_native
-            .map(OsString::from)
-            .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
+        let configured_python = std::env::var_os("RETICULATE_PYTHON");
         let managed_python = !configured_python
             .as_deref()
             .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
@@ -319,14 +316,13 @@ pub(super) fn run(local: bool) -> Result<(), String> {
                 .to_str()
                 .ok_or("remote Python selection is not UTF-8")?
                 .to_string();
-            selections.native_python = Some(selection.clone());
             selections.python = Some(selection);
         }
         // Only these runtime selections cross the workload boundary. This is the
         // single-threaded entry point; later worker environment changes cannot reach it.
         for (name, value) in [
-            ("R_HOME", selections.r_home.clone()),
-            ("RETICULATE_PYTHON", selections.python.clone()),
+            ("R_HOME", selections.r_home),
+            ("RETICULATE_PYTHON", selections.python),
         ] {
             if let Some(value) = value {
                 if value.contains('\0') {
@@ -385,7 +381,7 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         let mut context = perform(
             0,
             &job_events,
-            |started| Context::discover(mode, local, selections.native_python, started),
+            |started| Context::discover(mode, local, started),
             |(_, discovery)| serde_json::to_value(discovery).expect("discovery serializes"),
         )?
         .0;

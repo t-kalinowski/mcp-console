@@ -1,4 +1,7 @@
 //! Select the execution host without moving session transactions into the resolver.
+//!
+//! Callers trust the preparation command for explicit and automatic resolution.
+//! Enforcement of that boundary belongs there; see docs/REQUIREMENTS.md.
 
 use super::preparation::{Operation, Preparation};
 use super::{ManagedPython, ManagedR, ResolverStopHandle};
@@ -114,22 +117,16 @@ pub(crate) fn resolve_python_manifest(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
     match configuration {
-        PythonConfiguration::Local { preparation, .. } => preparation.call(
-            Operation::Python {
-                requirements,
-                r: managed_r.cloned(),
-                selected_python: selected_python.map(std::path::Path::to_path_buf),
-            },
-            on_started,
-        ),
-        PythonConfiguration::Ssh(remote) => remote.call(
-            Operation::Python {
-                requirements,
-                r: managed_r.cloned(),
-                selected_python: selected_python.map(std::path::Path::to_path_buf),
-            },
-            on_started,
-        ),
+        PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
+            preparation.call(
+                Operation::Python {
+                    requirements,
+                    r: managed_r.cloned(),
+                    selected_python: selected_python.map(std::path::Path::to_path_buf),
+                },
+                on_started,
+            )
+        }
         #[cfg(not(unix))]
         PythonConfiguration::Direct(configuration) => {
             if selected_python.is_some() {
@@ -149,20 +146,15 @@ pub(crate) fn resolve_python_version(
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
     match configuration {
-        PythonConfiguration::Local { preparation, .. } => preparation.call(
-            Operation::PythonVersion {
-                constraints,
-                r: managed_r.cloned(),
-            },
-            on_started,
-        ),
-        PythonConfiguration::Ssh(remote) => remote.call(
-            Operation::PythonVersion {
-                constraints,
-                r: managed_r.cloned(),
-            },
-            on_started,
-        ),
+        PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
+            preparation.call(
+                Operation::PythonVersion {
+                    constraints,
+                    r: managed_r.cloned(),
+                },
+                on_started,
+            )
+        }
         #[cfg(not(unix))]
         PythonConfiguration::Direct(configuration) => {
             super::resolve_python_version(constraints, configuration, on_started)

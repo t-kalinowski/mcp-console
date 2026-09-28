@@ -142,7 +142,9 @@ Preparation is never automatically replayed after uncertain completion.
 An accepted live activation remains committed after a later cell or import error.
 Activation failures retain their diagnostics and can require restart; Console does not replay the cell or replace the worker to recover from preparation.
 
-Accepted requirements retain the [existing trust boundary](REQUIREMENTS.md#host-resolution-and-trust): installation and build code may execute with the remote account's trusted setup permissions.
+The server trusts the preparation command under the [intended resolver boundary and its current limitations](REQUIREMENTS.md#host-resolution-and-trust).
+That boundary does not yet provide security isolation: installation, build, and environment startup code may execute with the remote account's full permissions.
+Enforcing the boundary, including resolver sandboxing, is deferred to follow-up work.
 Preparation has the remote account's network access, independently of workload restrictions.
 Automatic R requests still accept only plain package names, explicit R references remain subject to `IR_NO_LOCAL_SOURCES`, and Python requirements, version constraints, and DuckDB extension names retain their validators.
 
@@ -156,8 +158,9 @@ Host-key verification remains under the user's OpenSSH configuration.
 Console can use an existing shared connection but never manages or terminates its master.
 Authentication, executable lookup, bootstrap, and native setup diagnostics remain visible on stderr.
 The connection timeout is 10 seconds.
-Discovery and each worker launch have a separate 30-second setup deadline, including command-prefix bootstrap and, for worker launch, preflight and readiness.
-Dependency installation has no 30-second deadline.
+Preparation connection setup and each worker launch have a separate 30-second deadline, including command-prefix bootstrap and, for worker launch, preflight and readiness.
+The preparation setup deadline ends at the compatible protocol handshake, before runtime discovery and managed environment preparation complete.
+Dependency installation, including during discovery, has no 30-second deadline; cancellation and retirement retain their separate bounds.
 An ordinary cell may return running while defaults or automatic dependencies resolve; explicit preparation retains its ordering and wait semantics.
 `send.timeout_ms` never cancels a resolver.
 Interrupt and cancellation messages identify the preparation operation and reach its remote resolver process group, independently of the worker connection.

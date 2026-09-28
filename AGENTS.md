@@ -186,6 +186,7 @@ Keep these invariants intact:
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
   Sans-R Python and DuckDB extension preparation use the trusted execution-host preparation owner with full host permissions, without a resolver sandbox or worker-policy/storage checks.
+  Callers assume `resolve` and its shared SSH preparation implementation are trustworthy; enforcing that boundary is deferred to follow-up work within the preparation command.
   Resolver isolation is outside this feature's scope; document client-controlled executable and local-source escape paths in `docs/REQUIREMENTS.md`.
   Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   Accepted installation or build code may execute with server permissions.
