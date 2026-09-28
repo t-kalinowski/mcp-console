@@ -171,6 +171,9 @@ target:
     kind: docker
     image: my-console:python
     pull: never
+sandbox:
+  filesystem: {kind: external-sandbox}
+  network: enabled
 ```
 
 Relative `python` paths, including a bare filename, resolve inside `target.workspace`.
