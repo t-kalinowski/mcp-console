@@ -55,8 +55,8 @@ def test_discovery_outlives_connection_setup_timeout(binary):
 
 @requires(SSH)
 def test_python_preparation_preserves_v3_peer_compatibility(binary):
-    # Retain the R-present v3 payload shape; the peer negotiates v4 below.
-    # The incompatible-peer case rejects v3 before MCP readiness.
+    # Retain the original R-present request shape without selected_python.
+    # The peer negotiates the current preparation protocol independently.
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         record = root / "requests"
@@ -78,6 +78,12 @@ def test_python_preparation_preserves_v3_peer_compatibility(binary):
                     if "Python" in r["operation"]
                 ]
                 assert set(python) == {"requirements", "r"}, python
+                (inspection,) = [
+                    r["operation"]["InspectPython"]
+                    for r in requests
+                    if "InspectPython" in r["operation"]
+                ]
+                assert inspection == {"executable": "/remote-only/python"}
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]
                 declaration = client.send(requirements={"action": "get"})[
                     "structuredContent"
