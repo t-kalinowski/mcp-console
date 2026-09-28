@@ -150,6 +150,10 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                 arguments,
                 {
                     **os.environ,
+                    # Keep the caller's CLI context when poisoning HOME for
+                    # workload projection; do not reconstruct its endpoint.
+                    "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG")
+                    or str(Path.home() / ".docker"),
                     "HOME": "/controller-home",
                     "TMPDIR": "/controller-temp",
                 },

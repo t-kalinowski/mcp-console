@@ -225,14 +225,12 @@ send:
   python: retained = -1
   requirements:
     action: reset
-    python:
-      - six
 result:
   content:
     - type: text
       text: >-
-        requirements.action=get/reset takes no package lists or constraint
-        fields
+        dynamic environment resolution is disabled for Docker targets; install
+        packages in the image and start a new server session
   isError: true
 ---
 send:

@@ -299,14 +299,21 @@ def behavior(binary: Path, provider: str, *, sandbox=False) -> list:
         )
         client.send(python="print(retained)")
         assert last_result_text(client) == "41\n"
-        for action in ("add", "set", "reset"):
+        for mutation in (
+            {"action": "add", "python": ["six"]},
+            {"action": "set", "python": ["six"]},
+            {"action": "reset"},
+        ):
             client.send(
                 control="restart",
                 stdin="must not queue\n",
                 python="retained = -1",
-                requirements={"action": action, "python": ["six"]},
+                requirements=mutation,
             )
             assert client.transcript[-1]["result"].get("isError")
+            assert "dynamic environment resolution is disabled" in last_result_text(
+                client
+            )
         client.send(python="print(retained)")
         assert last_result_text(client) == "41\n"
         client.send(python='print(input("after rejected mutation: "))')
