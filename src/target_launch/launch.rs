@@ -328,9 +328,12 @@ fn supervise(
             // The trusted probe emits exactly one bounded frame. Interpreter
             // stdout is captured separately by the existing native inspector.
             let mut tag = [0];
-            source
-                .read_exact(&mut tag)
-                .map_err(|error| format!("prepared runtime probe returned no result: {error}"))?;
+            if source.read(&mut tag).map_err(|error| error.to_string())? == 0 {
+                // Validation failures emit diagnostics and a failed exit. Let
+                // that exit carry the error independently of EOF timing. A
+                // successful probe without a runtime is rejected by its owner.
+                return Ok(());
+            }
             if tag[0] != super::RUNTIME {
                 return Err("unexpected stdout during prepared runtime probe".into());
             }

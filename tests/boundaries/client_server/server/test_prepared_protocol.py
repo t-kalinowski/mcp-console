@@ -1,5 +1,6 @@
 """Prepared-runtime framing through the public MCP boundary; no provider acceptance claims."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -11,6 +12,51 @@ from support.requirements import POSIX, requires
 from support.suites import run_this_suite
 
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
+
+
+@requires(POSIX)
+def test_empty_python_selection_describes_target_defaults(binary: Path) -> list:
+    records = []
+    for kind, target in (
+        ("local", None),
+        ("ssh", {"transport": {"kind": "ssh", "host": "unused"}}),
+        ("docker", {"compute": {"kind": "docker", "image": "unused"}}),
+        (
+            "docker_sandbox",
+            {"compute": {"kind": "docker_sandbox", "template": TEMPLATE}},
+        ),
+    ):
+        with workspace() as root:
+            environment = cli_peer(root / "peer")
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "python": "",
+                        **(
+                            {"target": {"workspace": "/workspace", **target}}
+                            if target
+                            else {}
+                        ),
+                    }
+                )
+            )
+            with McpClient(binary, ("serve",), environment, root) as client:
+                assert client.stdout.read(timeout=10) == ""
+                error = client.stderr.read(timeout=10)
+                expected = (
+                    "preinstalled target Python"
+                    if kind in ("docker", "docker_sandbox")
+                    else "use uv"
+                )
+                assert expected in error, error
+                assert client.process.wait(timeout=5) != 0
+            assert not (root / "peer/calls").exists(), (
+                "invalid selection reached provider setup"
+            )
+            records.append({"target": kind, "error": error})
+    return records
 
 
 @requires(POSIX)

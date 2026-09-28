@@ -16,15 +16,15 @@ rejected_before_readiness: runtime
 container_absent: true
 stderr: |
   prepared target RETICULATE_PYTHON validation failed: selected Python executable is not an absolute file: /missing-python
-  prepared runtime probe returned no result: failed to fill whole buffer
-  prepared runtime probe returned no result: failed to fill whole buffer
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
 ---
 rejected_before_readiness: python_executable
 container_absent: true
 stderr: |
   prepared target RETICULATE_PYTHON validation failed: failed to inspect selected Python executable `/etc/hostname`: Permission denied (os error 13)
-  prepared runtime probe returned no result: failed to fill whole buffer
-  prepared runtime probe returned no result: failed to fill whole buffer
+  remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
 ---
 rejected_before_readiness: python_version
 container_absent: true
@@ -42,8 +42,8 @@ stderr: |
 rejected_before_readiness: compatibility
 container_absent: true
 stderr: >
-  incompatible Docker bootstrap: expected protocol 4, Console 0.0.4;
-  received protocol 999, Console incompatible
+  incompatible Docker bootstrap: expected protocol 4, Console 0.0.4; received
+  protocol 999, Console incompatible
 ---
 rejected_before_readiness: native_environment
 container_absent: true
