@@ -536,9 +536,14 @@ def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
         events.watch_process(client.process.pid)
         events.watch_file(root)
         while True:
-            for directory in (*root.glob("sandbox-*"), *root.glob("sandbox-*/data")):
+            for directory in root.glob("sandbox-*"):
                 if directory.is_dir():
                     events.watch_file(directory)
+                    # Subscribe to each parent before discovering its child:
+                    # data can appear between discovery and watch registration.
+                    data = directory / "data"
+                    if data.is_dir():
+                        events.watch_file(data)
             marker = find_marker(root, name)
             if marker is not None:
                 return marker

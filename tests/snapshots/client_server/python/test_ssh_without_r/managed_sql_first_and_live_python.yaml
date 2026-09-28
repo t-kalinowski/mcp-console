@@ -69,6 +69,15 @@ send:
 result:
   content:
     - type: text
+      text: |-
+
+        [waiting for stdin]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
       text: |
         'ready'
   isError: false
