@@ -48,9 +48,9 @@ impl Adapter {
             // Reticulate attaches conversion and event integration first.
             // Its initialization hook enters the shared native setup;
             // the explicit setup call also covers an already-live interpreter.
-            let result =
-                self.attach()
-                    .and_then(|attached| if attached { self.setup() } else { Ok(false) });
+            let result = self
+                .attach()
+                .and_then(|attached| if attached { self.setup() } else { Ok(false) });
             let finished = super::finish_initialization();
             let completed = result?;
             finished?;
