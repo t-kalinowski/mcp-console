@@ -16,10 +16,10 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// Prepared targets gain their own runtime-result handoff in v4. SSH's existing
-// v4 bootstrap remains unchanged and omits the prepared probe selector.
-pub(crate) const VERSION: u32 = 4;
-pub(crate) const SSH_VERSION: u32 = 4;
+// v5 carries compositional R/Python selections in both launch handoffs.
+// SSH omits the prepared-target probe selector.
+pub(crate) const VERSION: u32 = 5;
+pub(crate) const SSH_VERSION: u32 = 5;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;

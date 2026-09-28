@@ -90,7 +90,7 @@ enum Route {
 
 struct PendingPythonCandidate {
     managed: crate::resolver::ManagedPython,
-    configuration: Option<crate::python::NativePython>,
+    configuration: crate::python::NativePython,
     import_resolution: Option<crate::worker_protocol::PythonImportResolution>,
 }
 
@@ -549,7 +549,9 @@ impl WorkerOperationState {
                 let candidate = if native.is_some() {
                     None
                 } else {
-                    python_candidates.pop().map(|candidate| candidate.managed)
+                    python_candidates
+                        .pop()
+                        .map(|candidate| (candidate.managed, candidate.configuration))
                 };
                 r_candidates.clear();
                 python_candidates.clear();
@@ -1128,12 +1130,10 @@ fn handle_semantic_event(
             let response = match callbacks.resolve_python(request) {
                 Ok((managed, configuration)) => {
                     let python = managed.python().to_string_lossy().into_owned();
-                    let native = configuration.as_ref().map(|selected| {
-                        Box::new(crate::worker_protocol::NativePythonActivation {
-                            selected: selected.clone(),
-                            requirements: managed.requirements().clone(),
-                        })
-                    });
+                    let native = Some(Box::new(crate::worker_protocol::NativePythonActivation {
+                        selected: configuration.clone(),
+                        requirements: managed.requirements().clone(),
+                    }));
                     candidates.python.push(PendingPythonCandidate {
                         managed,
                         configuration,
@@ -1168,7 +1168,7 @@ fn handle_semantic_event(
                     match candidate {
                         Some(candidate) => (
                             Some(candidate.managed),
-                            candidate.configuration,
+                            Some(candidate.configuration),
                             None,
                             candidate.import_resolution,
                         ),
@@ -1208,9 +1208,11 @@ fn handle_semantic_event(
                 }
             })?;
             let expected = requirements.normalized();
-            if !candidates.python.iter().any(|candidate| {
-                candidate.configuration.is_some() && candidate.managed.requirements() == &expected
-            }) {
+            if !candidates
+                .python
+                .iter()
+                .any(|candidate| candidate.managed.requirements() == &expected)
+            {
                 return Err("worker failed an unexpected native Python candidate".into());
             }
             candidates.python.clear();

@@ -16,14 +16,10 @@ send:
     )
     selection_serializations <- 0L
     invisible(suppressMessages(base::trace(
-      "toJSON",
+      "fromJSON",
       tracer = quote({
         if (
-          is.list(x) &&
-            identical(
-              names(x),
-              c("python", "libpython", "python_home")
-            )
+          is.character(txt) && length(txt) == 1L && startsWith(txt, '{"embedding":')
         ) {
           selection_serializations <<- selection_serializations + 1L
           if (selection_serializations == 1L) {

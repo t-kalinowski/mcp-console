@@ -99,7 +99,7 @@ R cells and R requirements are unavailable.
 
 The trusted preparation owner captures the execution host's environment once, including the applicable `ir` or `uv` selection, Python preference, package-source settings, and cache locations.
 Later worker mutations cannot change these choices.
-The worker receives the discovered R home or inspected native Python selection, resolved managed environments, extension-cache path, and capability flags with precedence over conflicting workload overrides, including with `inherit_environment: false`.
+The worker receives the discovered R home and any captured inspected Python selection, resolved managed environments, extension-cache path, and capability flags with precedence over conflicting workload overrides, including with `inherit_environment: false`.
 R libraries and Python executables are validated on the remote host; their paths are only metadata on the controller.
 Other workload settings retain their existing meaning.
 In particular, configuring a workload cache does not relocate trusted preparation caches.
@@ -108,7 +108,7 @@ When R is present but discovery finds no resolver bootstrap, Console retains the
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
 Bare and user-selected Python modes disable reticulate's implicit managed-venv installation when R is present.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
-For native Python, the accepted manifest, managed environment, and inspected launch configuration commit together after preparation and activation.
+For both R-mediated and R-free Python preparation, the accepted manifest, managed environment, and inspected launch configuration commit together at the existing preparation or activation acceptance point.
 Plain restart and crash replacement use that accepted selection.
 
 ## Trusted preparation
@@ -122,10 +122,10 @@ They carry the configured interpreter selection, and live native preparation car
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-SSH launch and preparation protocol version 4 carry the optional native selection and inspection operations.
-R-present payloads omit native fields when unused.
-Docker and Docker Sandbox retain their existing launch version.
-Both require a matching Console package version.
+SSH launch and preparation protocol version 5 carry independent R and Python selections and inspection operations.
+An R-present payload can carry a complete inspected Python identity or leave Python selection lazy.
+Docker and Docker Sandbox use launch version 5 for the same compositional selection.
+Launch and preparation also require a matching Console package version.
 The optional `selected_python` field constrains live managed Python preparation to the running executable, locally or over SSH.
 Older peers fail compatibility checks before MCP readiness or worker startup.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.

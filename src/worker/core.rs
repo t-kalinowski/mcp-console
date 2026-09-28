@@ -161,18 +161,6 @@ pub(crate) fn publish_plot(image: Result<String, String>) {
 
 pub(crate) fn resolve_python(
     request: crate::worker_protocol::PythonResolveRequest,
-) -> Result<String, String> {
-    let (python, native) = resolve_python_candidate(request)?;
-    if native.is_some() {
-        return Err(infrastructure_failure(
-            "R received a native Python resolver candidate".to_string(),
-        ));
-    }
-    Ok(python)
-}
-
-pub(crate) fn resolve_native_python(
-    request: crate::worker_protocol::PythonResolveRequest,
 ) -> Result<crate::worker_protocol::NativePythonActivation, String> {
     let (python, native) = resolve_python_candidate(request)?;
     let native = native.ok_or_else(|| {

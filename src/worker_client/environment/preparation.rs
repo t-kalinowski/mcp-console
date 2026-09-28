@@ -417,9 +417,12 @@ impl Client {
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
-                if let Some(managed) = managed
-                    && client.commit_runtime_python(commit_generation.clone(), managed)?
-                        == OldGenerationCommitDisposition::DiscardForReplacement
+                if let Some((managed, configuration)) = managed
+                    && client.commit_runtime_python(
+                        commit_generation.clone(),
+                        managed,
+                        configuration,
+                    )? == OldGenerationCommitDisposition::DiscardForReplacement
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }

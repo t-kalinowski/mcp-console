@@ -175,10 +175,10 @@ struct IdleResponseSnapshot {
 type RPreparationCommit =
     Box<dyn FnOnce(Result<(), String>) -> Result<PreparationOutcome, String> + Send + 'static>;
 
+type PythonCandidate = (crate::resolver::ManagedPython, crate::python::NativePython);
+
 type PythonPreparationCommit = Box<
-    dyn FnOnce(
-            Result<Option<crate::resolver::ManagedPython>, String>,
-        ) -> Result<PreparationOutcome, String>
+    dyn FnOnce(Result<Option<PythonCandidate>, String>) -> Result<PreparationOutcome, String>
         + Send
         + 'static,
 >;
@@ -452,7 +452,10 @@ impl Client {
                         .local_r_home_bytes
                         .ok_or("local R discovery has no R home")?,
                 ));
-                local_runtime = Some(crate::local_runtime::Selection::R { home });
+                local_runtime = Some(crate::local_runtime::Selection {
+                    r_home: Some(home),
+                    python: None,
+                });
                 local_preparation = Some(preparation.clone());
                 if discovery.managed {
                     (
@@ -657,6 +660,15 @@ impl Client {
             .as_ref()
             .expect("remote discovery opened preparation")
             .clone();
+        let r_selection =
+            discovery
+                .selections
+                .r_home
+                .as_ref()
+                .map(|home| crate::local_runtime::Selection {
+                    r_home: Some(PathBuf::from(home)),
+                    python: None,
+                });
         let selected_python = discovery.selections.python.map(OsString::from);
         let (r_resolver, python, local_runtime) = if let Some(native) = discovery.native {
             let resolver =
@@ -676,13 +688,13 @@ impl Client {
                     configured_python: selected_python,
                 }),
                 None,
-                None,
+                r_selection,
             )
         } else {
             (
                 RResolver::Disabled,
                 Some(PythonEnvironment::bare(selected_python)),
-                None,
+                r_selection,
             )
         };
         let mut client = Self::with_arguments(
@@ -1852,13 +1864,7 @@ impl WorkerCallbacks {
     fn resolve_python(
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
-    ) -> Result<
-        (
-            crate::resolver::ManagedPython,
-            Option<crate::python::NativePython>,
-        ),
-        String,
-    > {
+    ) -> Result<PythonCandidate, String> {
         self.client
             .resolve_runtime_python(self.generation.clone(), request)
     }

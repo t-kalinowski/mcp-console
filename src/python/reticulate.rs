@@ -1,6 +1,12 @@
 use libr::SEXP;
 
-use super::{PreparationOutcome, SelectedPython};
+use super::{NativePython, PreparationOutcome};
+
+// A provisional host-inspected candidate, consumed by R selection compatibility.
+// It carries no declarations and does not imply server acceptance or activation.
+thread_local! {
+    static RESOLVED_SELECTION: std::cell::RefCell<Option<NativePython>> = const { std::cell::RefCell::new(None) };
+}
 
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
@@ -15,7 +21,11 @@ pub(super) struct Adapter {
 }
 
 pub(super) fn configure_worker_environment() -> std::io::Result<()> {
-    super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)
+    super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)?;
+    // R is already embedded. Keep the interoperability marker independently
+    // of Python selection, including Python startup hooks that import rpy2.
+    let marker = std::ffi::CString::new(format!("PID={}:NAME=\"reticulate\"", std::process::id()))?;
+    super::platform::set_environment(c"R_SESSION_INITIALIZED", &marker, true)
 }
 
 impl Adapter {
@@ -59,7 +69,7 @@ impl Adapter {
         Ok(self.completed)
     }
 
-    fn select(&mut self) -> Result<Option<SelectedPython>, String> {
+    fn select(&mut self) -> Result<Option<NativePython>, String> {
         // Discovery and serialization share the existing R interrupt boundary.
         self.bridge
             .evaluate_completed_string("select")?
@@ -102,8 +112,30 @@ impl Adapter {
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_inspect_python(python: SEXP) -> harp::Result<SEXP> {
     let python = String::try_from(harp::object::RObject::view(python))?;
-    let selected = crate::worker::inspect_python(std::path::Path::new(&python))
-        .map_err(|error| harp::anyhow!("{error}"))?;
+    let executable = match std::env::var_os("RETICULATE_PYTHON")
+        .filter(|value| !value.is_empty() && value != "managed")
+    {
+        Some(explicit) => {
+            super::explicit_executable(&explicit).map_err(|error| harp::anyhow!("{error}"))?
+        }
+        None => python.into(),
+    };
+    crate::worker::check_python_selection_interrupt().map_err(|error| harp::anyhow!("{error}"))?;
+    let captured = crate::local_runtime::Selection::from_environment()
+        .map_err(|error| harp::anyhow!("{error}"))?
+        .and_then(|runtime| runtime.python);
+    let resolved = RESOLVED_SELECTION.with(|slot| slot.borrow().clone());
+    let selected = if let Some(resolved) = resolved
+        && std::path::Path::new(&resolved.embedding.python) == executable
+    {
+        resolved
+    } else if let Some(captured) = captured
+        && std::path::Path::new(&captured.selected.embedding.python) == executable
+    {
+        *captured.selected
+    } else {
+        crate::worker::inspect_python(&executable).map_err(|error| harp::anyhow!("{error}"))?
+    };
     let result = serde_json::to_string(&selected).map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(result).sexp)
 }
@@ -113,21 +145,16 @@ pub extern "C-unwind" fn mcp_console_inspect_python(python: SEXP) -> harp::Resul
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_initialize_python(
-    python: SEXP,
-    libpython: SEXP,
-    python_home: SEXP,
+    selection: SEXP,
+    bridge_path: SEXP,
 ) -> harp::Result<SEXP> {
-    let python = String::try_from(harp::object::RObject::view(python))?;
-    let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
-        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    let python_home = String::try_from(harp::object::RObject::view(python_home))?;
-    let selected = SelectedPython {
-        python,
-        libpython,
-        python_home,
-    };
+    let selection = String::try_from(harp::object::RObject::view(selection))?;
+    let selected: NativePython =
+        serde_json::from_str(&selection).map_err(|error| harp::anyhow!("{error}"))?;
+    let bridge_path = String::try_from(harp::object::RObject::view(bridge_path))?;
     let rust_owned =
         super::initialize_selected(&selected).map_err(|error| harp::anyhow!("{error}"))?;
+    super::library::add_bridge_path(&bridge_path).map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
@@ -257,8 +284,10 @@ extern "C-unwind" fn mcp_console_disable_matplotlib_show() -> SEXP {
 pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Result<SEXP> {
     let request = String::try_from(harp::object::RObject::view(request))?;
     let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
-    let python =
+    let candidate =
         crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
+    let python = candidate.selected.embedding.python.clone();
+    RESOLVED_SELECTION.with(|slot| *slot.borrow_mut() = Some(candidate.selected));
     Ok(harp::object::RObject::from(python).sexp)
 }
 

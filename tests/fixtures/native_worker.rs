@@ -320,32 +320,36 @@ fn native_python_inspection_preserves_virtualenv_executable_and_startup_output()
     let fixture = PythonFixture::new();
     let site_packages = fixture.create_venv();
     fixture.sitecustomize(&site_packages, "output");
-    let selected = crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+    let selected = crate::python::inspect_native(&fixture.executable(), |_| Ok(()))
         .expect("inspect virtual environment");
-    assert_eq!(selected.python, fixture.executable().to_str().unwrap());
+    assert_eq!(
+        selected.embedding.python,
+        fixture.executable().to_str().unwrap()
+    );
     assert_ne!(
-        selected.python_home,
+        selected.embedding.python_home,
         fixture.0.join("venv").to_str().unwrap()
     );
     assert!(
         selected
+            .embedding
             .python_home
             .split(':')
             .all(|root| Path::new(root).is_dir())
     );
-    assert!(Path::new(&selected.libpython).is_file());
+    assert!(Path::new(&selected.embedding.libpython).is_file());
 }
 
 #[test]
 fn native_python_inspection_rejects_invalid_executable_and_missing_library() {
     let fixture = PythonFixture::new();
     let missing = fixture.0.join("missing-python");
-    let error = crate::python::inspect_selected(&missing, |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&missing, |_| Ok(())).unwrap_err();
     assert!(error.contains("selected Python executable"), "{error}");
 
     let site_packages = fixture.create_venv();
     fixture.sitecustomize(&site_packages, "missing");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(error.contains("embedding library is missing"), "{error}");
 
     std::fs::write(
@@ -354,7 +358,7 @@ fn native_python_inspection_rejects_invalid_executable_and_missing_library() {
     )
     .unwrap();
     fixture.sitecustomize(&site_packages, "unusable");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(error.contains("embedding library is unusable"), "{error}");
 }
 
@@ -363,7 +367,7 @@ fn native_python_inspection_rejects_old_version_and_other_runtime() {
     let fixture = PythonFixture::new();
     let site_packages = fixture.create_venv();
     fixture.sitecustomize(&site_packages, "old-version");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(error.contains("requires Python 3.10 or later"), "{error}");
 
     let output = Command::new("cc")
@@ -382,7 +386,7 @@ fn native_python_inspection_rejects_old_version_and_other_runtime() {
         String::from_utf8_lossy(&output.stderr)
     );
     fixture.sitecustomize(&site_packages, "other-library");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(
         error.contains("embedding library does not match the running interpreter"),
         "{error}"
@@ -404,7 +408,7 @@ fn native_python_inspection_cancellation_cleans_up_and_allows_retry() {
     )
     .unwrap();
     let mut stop_handle = None;
-    let error = crate::python::inspect_selected(&fixture.executable(), |handle| {
+    let error = crate::python::inspect_native(&fixture.executable(), |handle| {
         let (_connection, _) = listener.accept().expect("observe Python startup");
         handle.stop()?;
         stop_handle = Some(handle);
@@ -415,9 +419,12 @@ fn native_python_inspection_cancellation_cleans_up_and_allows_retry() {
     assert!(stop_handle.unwrap().cleanup_confirmed());
 
     std::fs::remove_file(site_packages.join("sitecustomize.py")).unwrap();
-    let selected = crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+    let selected = crate::python::inspect_native(&fixture.executable(), |_| Ok(()))
         .expect("retry selected Python inspection");
-    assert_eq!(selected.python, fixture.executable().to_str().unwrap());
+    assert_eq!(
+        selected.embedding.python,
+        fixture.executable().to_str().unwrap()
+    );
 }
 
 #[test]
@@ -425,14 +432,14 @@ fn native_python_inspection_callback_rejection_confirms_cleanup() {
     let fixture = PythonFixture::new();
     fixture.create_venv();
     let mut stop_handle = None;
-    let error = crate::python::inspect_selected(&fixture.executable(), |handle| {
+    let error = crate::python::inspect_native(&fixture.executable(), |handle| {
         stop_handle = Some(handle);
         Err("inspection admission rejected".to_string())
     })
     .unwrap_err();
     assert_eq!(error, "inspection admission rejected");
     assert!(stop_handle.unwrap().cleanup_confirmed());
-    crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+    crate::python::inspect_native(&fixture.executable(), |_| Ok(()))
         .expect("retry after rejected inspection");
 }
 
@@ -623,12 +630,12 @@ fn native_probe() {
         let executable =
             std::env::var("MCP_CONSOLE_NATIVE_PYTHON_CONFIG").expect("selected Python executable");
         let configuration =
-            crate::python::inspect_selected(std::path::Path::new(&executable), |_| Ok(()))
+            crate::python::inspect_native(std::path::Path::new(&executable), |_| Ok(()))
                 .expect("inspect selected Python executable");
         crate::python::initialize_selected(&configuration).expect("initialize known Python");
         assert!(
             crate::python::setup_runtime(
-                std::path::Path::new(&configuration.libpython),
+                std::path::Path::new(&configuration.embedding.libpython),
                 crate::python::ImportResolution {
                     callback: None,
                     disabled_reason: Some("Automatic resolution disabled in native fixture"),
@@ -661,7 +668,7 @@ _mcp_console.configure_import_resolution = fail_reconfiguration"#,
             if index == 4 {
                 assert!(
                     crate::python::setup_runtime(
-                        std::path::Path::new(&configuration.libpython),
+                        std::path::Path::new(&configuration.embedding.libpython),
                         crate::python::ImportResolution {
                             callback: None,
                             disabled_reason: Some(

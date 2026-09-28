@@ -9,8 +9,25 @@ use super::startup::SelectedPython;
 
 const INSPECTION_SOURCE: &str = include_str!("inspection.py");
 
+pub(crate) fn explicit_executable(value: &std::ffi::OsStr) -> Result<PathBuf, String> {
+    let executable = PathBuf::from(value);
+    let executable = if executable.components().count() == 1 {
+        crate::resolver::find_path_entry(
+            executable
+                .to_str()
+                .ok_or("explicit Python executable is not UTF-8")?,
+        )
+        .ok_or("explicit Python executable is not on PATH")?
+    } else {
+        executable
+    };
+    // Preserve executable and virtualenv spelling, including symlinks.
+    std::path::absolute(executable)
+        .map_err(|error| format!("cannot locate selected Python: {error}"))
+}
+
 /// Executable and environment identity observed together on the host.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativePython {
     pub(crate) embedding: SelectedPython,
@@ -23,13 +40,6 @@ pub(crate) struct NativePython {
 /// Describe a selected executable without changing the calling process or
 /// selecting a replacement. The selected installation is trusted and must
 /// remain stable through initialization; concurrent replacement is unsupported.
-pub(crate) fn inspect_selected(
-    executable: &Path,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<SelectedPython, String> {
-    inspect_native(executable, on_started).map(|selected| selected.embedding)
-}
-
 pub(crate) fn inspect_native(
     executable: &Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,

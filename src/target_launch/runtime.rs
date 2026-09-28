@@ -1,6 +1,6 @@
 //! Prepared-runtime discovery inside the execution image under workload policy.
 
-use crate::local_runtime::Selection;
+use crate::local_runtime::{Python, Selection};
 use crate::resolver::preparation::{Discovery, Selections, WorkerEnvironment};
 use crate::settings::SandboxSettings;
 use serde_json::Value;
@@ -51,7 +51,11 @@ pub(crate) fn configure_launch(
     compute: &str,
 ) -> Result<(), String> {
     validate_result(environment)?;
-    if let Some(Selection::Python { selected, .. }) = &environment.native {
+    if let Some(Python { selected, .. }) = environment
+        .native
+        .as_ref()
+        .and_then(|runtime| runtime.python.as_ref())
+    {
         for (kind, path) in [
             ("executable", &selected.embedding.python),
             ("embedding library", &selected.embedding.libpython),
@@ -103,64 +107,50 @@ pub(crate) fn validate_result(environment: &WorkerEnvironment) -> Result<(), Str
         }
         Ok(())
     };
-    match &environment.native {
-        Some(Selection::Python {
-            selected,
-            explicit,
-            managed,
-            duckdb_extension_directory,
-        }) => {
-            if *managed
-                || duckdb_extension_directory.is_some()
-                || discovery.selections.r_home.is_some()
-                || discovery.selections.python.is_some()
-            {
-                return Err("prepared native Python cannot contain R, another Python selection, or a managed cache".into());
-            }
-            for path in [
-                &selected.embedding.python,
-                &selected.embedding.libpython,
-                &selected.prefix,
-                &selected.exec_prefix,
-                &selected.base_prefix,
-                &selected.base_exec_prefix,
-            ] {
-                absolute(path)?;
-            }
-            let home = if selected.base_prefix == selected.base_exec_prefix {
-                selected.base_prefix.clone()
-            } else {
-                format!("{}:{}", selected.base_prefix, selected.base_exec_prefix)
-            };
-            if selected.embedding.python_home != home
-                || explicit
-                    .as_ref()
-                    .is_some_and(|value| value.to_str() != Some(&selected.embedding.python))
-            {
-                return Err(
-                    "prepared native Python has inconsistent executable or base prefixes".into(),
-                );
-            }
-        }
-        Some(Selection::R { .. }) => {
-            return Err("prepared native payload must contain Python".into());
-        }
-        None => {
-            absolute(
-                discovery
-                    .selections
-                    .r_home
-                    .as_deref()
-                    .ok_or("prepared runtime has no R or native Python selection")?,
-            )?;
-            absolute(
-                discovery
-                    .selections
-                    .python
-                    .as_deref()
-                    .ok_or("prepared R runtime has no Python selection")?,
-            )?;
-        }
+    let runtime = environment
+        .native
+        .as_ref()
+        .ok_or("prepared runtime has no captured selections")?;
+    let python = runtime
+        .python
+        .as_ref()
+        .ok_or("prepared runtime has no Python selection")?;
+    let Python {
+        selected,
+        explicit,
+        managed,
+        duckdb_extension_directory,
+    } = python;
+    if *managed || duckdb_extension_directory.is_some() || discovery.selections.python.is_some() {
+        return Err("prepared Python cannot contain another selection or a managed cache".into());
+    }
+    if runtime.r_home.as_deref() != discovery.selections.r_home.as_deref().map(Path::new) {
+        return Err("prepared runtime R capability differs from its captured selection".into());
+    }
+    if let Some(home) = &discovery.selections.r_home {
+        absolute(home)?;
+    }
+    for path in [
+        &selected.embedding.python,
+        &selected.embedding.libpython,
+        &selected.prefix,
+        &selected.exec_prefix,
+        &selected.base_prefix,
+        &selected.base_exec_prefix,
+    ] {
+        absolute(path)?;
+    }
+    let home = if selected.base_prefix == selected.base_exec_prefix {
+        selected.base_prefix.clone()
+    } else {
+        format!("{}:{}", selected.base_prefix, selected.base_exec_prefix)
+    };
+    if selected.embedding.python_home != home
+        || explicit
+            .as_ref()
+            .is_some_and(|value| value.to_str() != Some(&selected.embedding.python))
+    {
+        return Err("prepared Python has inconsistent executable or base prefixes".into());
     }
     Ok(())
 }
@@ -219,28 +209,22 @@ fn discover(configured: Option<&Path>) -> Result<WorkerEnvironment, String> {
     let (python, explicit, source) = select_python(configured)?;
     let selected = crate::python::inspect_native(&python, |_| Ok(()))
         .map_err(|error| format!("prepared target {source} validation failed: {error}"))?;
-    let (python, native) = if r_home.is_some() {
-        (Some(selected.embedding.python), None)
-    } else {
-        let explicit = explicit.then(|| OsString::from(&selected.embedding.python));
-        (
-            None,
-            Some(Selection::Python {
-                selected: Box::new(selected),
-                explicit,
-                managed: false,
-                // Preserve DuckDB's image/template cache rather than a probe path
-                // or the controller's cache. Spill and secrets use worker TMPDIR.
-                duckdb_extension_directory: None,
-            }),
-        )
-    };
+    let explicit = explicit.then(|| OsString::from(&selected.embedding.python));
+    let native = Some(Selection {
+        r_home: r_home.as_ref().map(PathBuf::from),
+        python: Some(Python {
+            selected: Box::new(selected),
+            explicit,
+            managed: false,
+            duckdb_extension_directory: None,
+        }),
+    });
     let environment = WorkerEnvironment {
         discovery: Discovery {
             managed: false,
             selections: Selections {
                 r_home,
-                python,
+                python: None,
                 native_python: None,
             },
             local_r_home_bytes: None,
@@ -261,30 +245,19 @@ fn discover(configured: Option<&Path>) -> Result<WorkerEnvironment, String> {
 fn reject_probe_storage(environment: &WorkerEnvironment) -> Result<(), String> {
     let storage = std::fs::canonicalize(std::env::temp_dir())
         .map_err(|error| format!("cannot locate prepared probe storage: {error}"))?;
-    let paths: Vec<&str> = match &environment.native {
-        Some(Selection::Python { selected, .. }) => vec![
-            &selected.embedding.python,
-            &selected.embedding.libpython,
-            &selected.prefix,
-            &selected.exec_prefix,
-            &selected.base_prefix,
-            &selected.base_exec_prefix,
-        ],
-        _ => vec![
-            environment
-                .discovery
-                .selections
-                .r_home
-                .as_deref()
-                .expect("validated R home"),
-            environment
-                .discovery
-                .selections
-                .python
-                .as_deref()
-                .expect("validated Python"),
-        ],
-    };
+    let runtime = environment.native.as_ref().expect("validated selections");
+    let selected = &runtime.python.as_ref().expect("validated Python").selected;
+    let mut paths = vec![
+        &selected.embedding.python,
+        &selected.embedding.libpython,
+        &selected.prefix,
+        &selected.exec_prefix,
+        &selected.base_prefix,
+        &selected.base_exec_prefix,
+    ];
+    if let Some(home) = &environment.discovery.selections.r_home {
+        paths.push(home);
+    }
     for path in paths {
         let resolved = std::fs::canonicalize(path)
             .map_err(|error| format!("prepared runtime path is unusable: {path}: {error}"))?;

@@ -115,7 +115,7 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             while b'"completed"' not in data:
                 tag, body = read_frame(process.stdout)
                 if tag == 1:
-                    assert json.loads(body)["version"] == 4
+                    assert json.loads(body)["version"] == 5
                 else:
                     assert tag == 2, (tag, body)
                     data.extend(body)
@@ -163,10 +163,10 @@ def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
                         },
                         "r": None,
                         "python": None,
-                        "native": {"kind": "r", "home": "/remote-only/R"},
+                        "native": {"r_home": None, "python": None},
                     }
                 },
-                "SSH native selection must contain Python",
+                "SSH worker bootstrap has no selected runtime",
             ),
         )
         for workspace, values, expected in cases:

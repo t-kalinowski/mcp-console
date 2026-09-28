@@ -176,14 +176,15 @@ impl Client {
                     None,
                 )?
             };
-            if let Some(crate::local_runtime::Selection::Python {
-                selected: inspected,
-                ..
-            }) = &mut environment.local_runtime
+            if let Some(python) = environment
+                .local_runtime
+                .as_mut()
+                .and_then(|runtime| runtime.python.as_mut())
             {
-                // Inspect the resolved candidate before retirement. Both launch
-                // configuration and manifest stay provisional in this clone.
-                **inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
+                // Once Python has a captured identity, keep it paired with the
+                // candidate environment. R-only preparation leaves selection
+                // lazy; its first Python resolver exchange supplies inspection.
+                *python.selected = self.inspect_managed_python(generation, &selected, &resolver)?;
             }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }
@@ -223,8 +224,12 @@ impl Client {
             })?
             .managed_parts()
             .map_err(EnvironmentResolutionFailure::Operation)?;
-        let running = match environment.local_runtime.as_ref() {
-            Some(crate::local_runtime::Selection::Python { selected, .. }) => selected,
+        let running = match environment
+            .local_runtime
+            .as_ref()
+            .and_then(|runtime| runtime.python.as_ref())
+        {
+            Some(crate::local_runtime::Python { selected, .. }) => selected,
             _ => {
                 return Err(EnvironmentResolutionFailure::Operation(
                     "native Python launch configuration is unavailable".into(),
@@ -257,7 +262,7 @@ impl Client {
         Ok((candidate, inspected))
     }
 
-    fn inspect_managed_python(
+    pub(super) fn inspect_managed_python(
         &self,
         generation: &WorkerGeneration,
         candidate: &crate::resolver::ManagedPython,

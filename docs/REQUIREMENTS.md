@@ -401,7 +401,9 @@ The R adapter still translates a retained exception through reticulate's conditi
 Only after activation and process setup succeed does the adapter record pending activation.
 Reticulate then accepts the returned configuration and writes the requirement binding that publishes `PythonActivated`.
 
-In R-present sessions, the server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
+In R-present sessions, the server retains a Python environment and its host-inspected launch identity when the worker reports that reticulate accepted its complete normalized manifest.
+Successful preparation of a still-lazy interpreter also retains both at its existing preparation commit point.
+Failed or discarded candidates change neither retained value.
 A runtime import reports that activation before the original import continues.
 A successful activation commits independently of later steps in the same mixed request.
 If Python succeeds and a following live R update fails, the Python addition remains retained and is available after restart.

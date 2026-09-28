@@ -123,56 +123,55 @@ elif args[0] == "exec":
         },
     )
     if probe:
-        if mode.startswith("native-"):
-            runtime = {
-                "discovery": {
-                    "managed": False,
-                    "selections": {"r_home": None, "python": None},
-                },
-                "r": None,
-                "python": None,
-                "native": {
-                    "kind": "python",
+        native_only = mode.startswith("native-")
+        home = None if native_only else "/usr/lib/R"
+        prefix = "/target-only" if native_only else "/opt/analysis"
+        executable = prefix + ("/bin/python3" if native_only else "/bin/python")
+        runtime = {
+            "discovery": {
+                "managed": False,
+                "selections": {"r_home": home, "python": None},
+            },
+            "r": None,
+            "python": None,
+            "native": {
+                "r_home": home,
+                "python": {
                     "selected": {
                         "embedding": {
-                            "python": "/target-only/bin/python3",
-                            "libpython": "/target-only/lib/libpython.so",
-                            "python_home": "/target-only",
+                            "python": executable,
+                            "libpython": prefix + "/lib/libpython.so",
+                            "python_home": prefix,
                         },
-                        "prefix": "/target-only",
-                        "exec_prefix": "/target-only",
-                        "base_prefix": "/target-only",
-                        "base_exec_prefix": "/target-only",
+                        "prefix": prefix,
+                        "exec_prefix": prefix,
+                        "base_prefix": prefix,
+                        "base_exec_prefix": prefix,
                     },
                     "explicit": None,
                     "managed": False,
                     "duckdb_extension_directory": None,
                 },
-            }
-        else:
-            runtime = {
-                "discovery": {
-                    "managed": False,
-                    "selections": {
-                        "r_home": "/usr/lib/R",
-                        "python": "/opt/analysis/bin/python",
-                    },
-                },
-                "r": None,
-                "python": None,
-            }
+            },
+        }
         if mode == "native-managed":
-            runtime["native"]["managed"] = True
+            runtime["native"]["python"]["managed"] = True
         if mode == "native-r-conflict":
             runtime["discovery"]["selections"]["r_home"] = "/usr/lib/R"
         if mode == "native-relative":
-            runtime["native"]["selected"]["embedding"]["python"] = "relative/python"
+            runtime["native"]["python"]["selected"]["embedding"]["python"] = (
+                "relative/python"
+            )
         if mode == "native-prefix":
-            runtime["native"]["selected"]["embedding"]["python_home"] = "/other"
+            runtime["native"]["python"]["selected"]["embedding"]["python_home"] = (
+                "/other"
+            )
         if mode == "native-unknown":
             runtime["native"]["unused"] = "unsupported"
         if mode == "native-embedding-unknown":
-            runtime["native"]["selected"]["embedding"]["unused"] = "unsupported"
+            runtime["native"]["python"]["selected"]["embedding"]["unused"] = (
+                "unsupported"
+            )
         if mode == "probe-managed":
             runtime["discovery"]["managed"] = True
         if mode == "probe-oversized":

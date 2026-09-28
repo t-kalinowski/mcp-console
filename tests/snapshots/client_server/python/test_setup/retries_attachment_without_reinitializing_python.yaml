@@ -5,15 +5,13 @@ send:
   r: |
     startup_probe <- dyn.load("<test python probe>")
     invisible(suppressMessages(base::trace(
-      "py_run_string_impl",
-      tracer = quote({
-        if (grepl("sys.executable  =", code, fixed = TRUE)) {
+      "py_initialize",
+      exit = quote({
           startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
           stop(structure(
             list(message = "synthetic reticulate attach failure", call = NULL),
             class = c(attachment_failure, "condition")
           ))
-        }
       }),
       print = FALSE,
       where = asNamespace("reticulate")
@@ -41,7 +39,7 @@ send:
       ))
     }
     invisible(suppressMessages(base::untrace(
-      "py_run_string_impl", where = asNamespace("reticulate")
+      "py_initialize", where = asNamespace("reticulate")
     )))
     config <- reticulate::py_config()
     sys <- reticulate::import("sys", convert = FALSE)

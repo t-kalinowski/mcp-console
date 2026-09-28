@@ -32,7 +32,7 @@ stderr: |
   prepared target RETICULATE_PYTHON validation failed: selected Python inspection failed (exit status: 1): Traceback (most recent call last):
     File "/python-version", line 7, in <module>
       exec(sys.argv[sys.argv.index("-c") + 1])
-    File "<string>", line 99, in <module>
+    File "<string>", line 98, in <module>
     File "<string>", line 15, in describe
   RuntimeError: MCP Console requires Python 3.10 or later
 
@@ -42,8 +42,8 @@ stderr: |
 rejected_before_readiness: compatibility
 container_absent: true
 stderr: >
-  incompatible Docker bootstrap: expected protocol 4, Console 0.0.4; received
-  protocol 999, Console incompatible
+  incompatible Docker bootstrap: expected protocol 5, Console 0.0.4;
+  received protocol 999, Console incompatible
 ---
 rejected_before_readiness: native_environment
 container_absent: true

@@ -209,8 +209,8 @@ result:
 ---
 send:
   python: >-
-    import subprocess, sys; _ = subprocess.run([sys.executable, '-m', 'venv',
-    '--without-pip', '.selected'], check=True)
+    import subprocess, sys; _ = subprocess.run([sys.executable, '-m',
+    'venv', '--without-pip', '.selected'], check=True)
 result:
   content:
     - type: text

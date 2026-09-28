@@ -11,10 +11,8 @@ static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
-type PySetPythonHome = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
 type PySysSetArgvEx = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t, libc::c_int);
-type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
 type PyEvalRestoreThread = unsafe extern "C" fn(*mut libc::c_void);
@@ -69,11 +67,12 @@ struct SetupCompletion {
     evaluator: bool,
     sql: bool,
     configured: bool,
+    environment: bool,
 }
 
 impl SetupCompletion {
-    fn mark_configured(&mut self, sql: bool) -> Result<(), String> {
-        if !self.services || !self.evaluator || (sql && !self.sql) {
+    fn mark_configured(&mut self) -> Result<(), String> {
+        if !self.services || !self.evaluator || !self.sql || !self.environment {
             return Err("Python runtime configuration preceded installation".to_string());
         }
         self.configured = true;
@@ -85,9 +84,7 @@ impl SetupCompletion {
 struct PythonApi {
     is_initialized: PyIsInitialized,
     set_program_name: PySetProgramName,
-    set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
-    set_argv: PySysSetArgv,
     set_argv_ex: PySysSetArgvEx,
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
@@ -123,10 +120,8 @@ enum Interpreter {
 }
 
 struct Configuration {
-    program_name: String,
-    python_home: String,
+    selected: super::NativePython,
     program_name_wide: Vec<libc::wchar_t>,
-    python_home_wide: Vec<libc::wchar_t>,
 }
 
 pub(super) fn prepare_process_exit() -> Result<(), String> {
@@ -162,12 +157,8 @@ pub(super) fn load(path: &Path) -> Result<bool, String> {
     with_library(path, LoadedLibrary::attach)
 }
 
-pub(super) fn initialize(
-    path: &Path,
-    program_name: &str,
-    python_home: &str,
-    update_path: bool,
-) -> Result<bool, String> {
+pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String> {
+    let path = Path::new(&selected.embedding.libpython);
     let path = path.canonicalize().map_err(|error| {
         format!(
             "failed to resolve Python shared library `{}`: {error}",
@@ -175,7 +166,7 @@ pub(super) fn initialize(
         )
     })?;
     ensure_loaded(&path)?;
-    let (api, program_name_wide, python_home_wide) = {
+    let (api, program_name_wide) = {
         let mut slot = PYTHON_LIBRARY
             .lock()
             .map_err(|_| "Python shared library state is unavailable".to_string())?;
@@ -189,7 +180,7 @@ pub(super) fn initialize(
             if library.interpreter == Interpreter::Uninitialized {
                 library.interpreter = Interpreter::External;
             }
-            library.ensure_configuration(program_name, python_home)?;
+            library.ensure_configuration(selected)?;
             return Ok(matches!(library.interpreter, Interpreter::RustOwned { .. }));
         }
         match library.interpreter {
@@ -202,21 +193,18 @@ pub(super) fn initialize(
             }
             Interpreter::Initializing => unreachable!(),
         }
-        let configuration = Configuration::new(program_name, python_home)?;
+        let configuration = Configuration::new(selected)?;
         let program_name_wide = configuration.program_name_wide.as_ptr();
-        let python_home_wide = configuration.python_home_wide.as_ptr();
+        super::startup::configure_process_environment(selected)?;
         library.configuration = Some(configuration);
         library.interpreter = Interpreter::Initializing;
-        (library.api, program_name_wide, python_home_wide)
+        (library.api, program_name_wide)
     };
 
     // The selected configuration remains owned by the process-lifetime library
     // state. Release its lock before CPython runs site hooks or callbacks.
     unsafe {
         (api.set_program_name)(program_name_wide);
-        if !python_home.is_empty() {
-            (api.set_python_home)(python_home_wide);
-        }
         (api.initialize_ex)(0);
     }
     // SAFETY: The resolved function has no preconditions.
@@ -225,13 +213,8 @@ pub(super) fn initialize(
     }
     let mut argv = [program_name_wide.cast_mut()];
     unsafe {
-        if update_path {
-            (api.set_argv)(1, argv.as_mut_ptr());
-        } else {
-            // Native sessions add the workspace after installing the runtime.
-            // Never search the executable directory, even during setup imports.
-            (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
-        }
+        // Workspace lookup is installed by common setup, never the bin directory.
+        (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
         (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut slot = PYTHON_LIBRARY
@@ -239,6 +222,44 @@ pub(super) fn initialize(
         .map_err(|_| "Python shared library state is unavailable".to_string())?;
     slot.as_mut().unwrap().interpreter = Interpreter::RustOwned { saved_thread: None };
     Ok(true)
+}
+
+pub(super) fn configure_environment() -> Result<bool, String> {
+    let selected = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.setup.environment {
+            return Ok(true);
+        }
+        library
+            .configuration
+            .as_ref()
+            .ok_or("Python has no inspected selection")?
+            .selected
+            .clone()
+    };
+    if !configure_inspected_environment(&selected)? {
+        return Ok(false);
+    }
+    PYTHON_LIBRARY
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .setup
+        .environment = true;
+    Ok(true)
+}
+
+pub(super) fn add_bridge_path(path: &str) -> Result<(), String> {
+    let path = serde_json::to_string(path).map_err(|error| error.to_string())?;
+    let source = CString::new(format!(
+        "import sys\nif {path} not in sys.path: sys.path.append({path})"
+    ))
+    .map_err(|error| error.to_string())?;
+    api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_bridge", &source) })
 }
 
 pub(super) fn install_runtime(source: &str) -> Result<(), String> {
@@ -385,21 +406,19 @@ pub(super) fn runtime_configured() -> Result<bool, String> {
         .configured)
 }
 
-pub(super) fn mark_runtime_configured(sql: bool) -> Result<(), String> {
+pub(super) fn mark_runtime_configured() -> Result<(), String> {
     let mut slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable")?;
     let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
-    library.setup.mark_configured(sql)
+    library.setup.mark_configured()
 }
 
-pub(super) fn configure_native_environment(
-    configuration: &super::NativePython,
-) -> Result<(), String> {
+fn configure_inspected_environment(configuration: &super::NativePython) -> Result<bool, String> {
     let executable = serde_json::to_string(configuration)
         .map_err(|error| format!("cannot encode native Python environment: {error}"))?;
     api()?.with_gil(|api| unsafe {
-        let function = api.function(c"_mcp_console", c"configure_native_environment")?;
+        let function = api.function(c"_mcp_console", c"configure_environment")?;
         let executable = (api.unicode_from_string_and_size)(
             executable.as_ptr().cast(),
             executable.len() as isize,
@@ -410,11 +429,7 @@ pub(super) fn configure_native_environment(
         let result =
             (api.call_function_obj_args)(function, executable, std::ptr::null_mut::<PyObject>());
         (api.dec_ref)(executable);
-        if api.finish_setup(result)? {
-            Ok(())
-        } else {
-            Err("selected Python process setup failed".into())
-        }
+        api.finish_setup(result)
     })
 }
 
@@ -696,11 +711,11 @@ impl LoadedLibrary {
         Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }))
     }
 
-    fn ensure_configuration(&self, program_name: &str, python_home: &str) -> Result<(), String> {
+    fn ensure_configuration(&self, selected: &super::NativePython) -> Result<(), String> {
         let Some(configuration) = self.configuration.as_ref() else {
             return Ok(());
         };
-        if configuration.program_name == program_name && configuration.python_home == python_home {
+        if &configuration.selected == selected {
             return Ok(());
         }
         Err("Python interpreter is already initialized with different configuration".to_string())
@@ -983,9 +998,7 @@ impl PythonApi {
             // SAFETY: Symbol types match the documented CPython C API.
             is_initialized: unsafe { load_symbol(library, path, b"Py_IsInitialized\0")? },
             set_program_name: unsafe { load_symbol(library, path, b"Py_SetProgramName\0")? },
-            set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
-            set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
             set_argv_ex: unsafe { load_symbol(library, path, b"PySys_SetArgvEx\0")? },
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
@@ -1049,12 +1062,10 @@ unsafe fn load_symbol<T: Copy>(
 }
 
 impl Configuration {
-    fn new(program_name: &str, python_home: &str) -> Result<Self, String> {
+    fn new(selected: &super::NativePython) -> Result<Self, String> {
         Ok(Self {
-            program_name: program_name.to_string(),
-            python_home: python_home.to_string(),
-            program_name_wide: wide_string(program_name, "program name")?,
-            python_home_wide: wide_string(python_home, "home")?,
+            selected: selected.clone(),
+            program_name_wide: wide_string(&selected.embedding.python, "program name")?,
         })
     }
 }
