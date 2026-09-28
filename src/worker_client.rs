@@ -673,6 +673,15 @@ impl Client {
                 Default::default()
             };
             Ok((discovery, extensions))
+        })
+        .map_err(|error| {
+            // No Client owns shutdown if startup fails after discovery.
+            if let Some(preparation) = &session.preparation
+                && let Err(cleanup) = preparation.close()
+            {
+                return format!("{error}; {cleanup}");
+            }
+            error
         })?;
         #[cfg(not(unix))]
         let discovery = session.discover(&policy, configured_python.as_deref(), &|_| Ok(()))?;
@@ -743,6 +752,18 @@ impl Client {
 
     pub(crate) fn dynamic_resolution(&self) -> bool {
         self.0.dynamic_resolution
+    }
+
+    pub(crate) fn has_default_duckdb_extension(&self, extension: &str) -> bool {
+        self.0.environment.as_ref().is_some_and(|environment| {
+            environment
+                .lock()
+                .expect("environment lock")
+                .startup_declaration()
+                .duckdb
+                .iter()
+                .any(|name| name == extension)
+        })
     }
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.

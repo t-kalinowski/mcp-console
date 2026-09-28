@@ -14,11 +14,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -68,11 +69,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -122,11 +124,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -176,11 +179,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -230,11 +234,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -286,11 +291,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -342,11 +348,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -398,11 +405,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -454,11 +462,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -509,11 +518,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -564,11 +574,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -619,11 +630,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -674,11 +686,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -730,11 +743,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -786,11 +800,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -842,11 +857,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -898,11 +914,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -954,11 +971,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -1010,11 +1028,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R
@@ -1065,11 +1084,12 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Managed defaults include SQLite; attach the database read-only with
-  `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional
-  extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL results
-  include bounded table previews that abbreviate long text cells; return focused
-  queries and summaries for inspection.
+  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
+  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
+  sqlite, READ_ONLY)`. Prepare additional extensions with
+  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
+  table previews that abbreviate long text cells; return focused queries and
+  summaries for inspection.
 
 
   Reuse live state when switching: Python reads R globals through `r.name`, R

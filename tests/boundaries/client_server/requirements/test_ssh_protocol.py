@@ -137,6 +137,38 @@ def test_invalid_preparation_results_never_commit_or_launch(binary):
 
 
 @requires(SSH)
+def test_default_extension_failure_closes_preparation(
+    binary: Path,
+) -> list[dict[str, str]]:
+    transcript = []
+    for mode in ("default-extension-failure", "default-extension-close-failure"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            record = root / "requests"
+            peer = (
+                Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
+            )
+            configure(root, root, [sys.executable, str(peer), mode, str(record)])
+            with localhost(root / "sshd") as environment:
+                trap = poison_controller(root / "sshd", environment)
+                with McpClient(
+                    binary, ("serve", "--no-sandbox"), environment, root
+                ) as client:
+                    assert client.process.wait(timeout=15) != 0
+                    assert not client.stdout.read()
+                    errors = client.stderr.read()
+                    expected = "SQLite preparation failed"
+                    if mode == "default-extension-close-failure":
+                        # The close error proves startup waited for the peer's reply.
+                        expected += "; unexpected SSH preparation event"
+                    assert errors.strip() == expected, errors
+                    assert record.with_suffix(".closed").exists()
+                    assert not trap.exists()
+                    transcript.append({"peer": mode, "stderr": errors})
+    return transcript
+
+
+@requires(SSH)
 def test_incompatible_preparation_peer_fails_before_mcp_ready(binary):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()

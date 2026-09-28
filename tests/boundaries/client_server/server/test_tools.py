@@ -108,6 +108,7 @@ def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     companions = {
+        "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
         "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
@@ -140,6 +141,7 @@ def _initializes_and_lists_tools(
     binary: Path,
     execution: Execution,
     *,
+    custom: bool = False,
     bare: bool = False,
     python_only: bool = False,
     python_managed: bool = False,
@@ -197,7 +199,11 @@ def _initializes_and_lists_tools(
             )
         with McpClient(
             binary,
-            execution.serve(),
+            execution.serve(
+                *("--worker", str(Path(__file__).resolve().parents[3] / "fixtures/zod"))
+                if custom
+                else ()
+            ),
             environment,
             workspace,
             record_in_project=False,
@@ -216,6 +222,13 @@ def _initializes_and_lists_tools(
                 "bounded table previews that abbreviate long text cells" in description
             )
             assert "attach the database read-only" in description
+            assert ("Managed defaults include SQLite" in description) == (
+                not custom and (python_managed or not (bare or python_only))
+            )
+            if custom:
+                assert (
+                    'requirements={"action":"add","duckdb":["sqlite"]}' in description
+                )
             assert (
                 "Use R for vectorized data and string operations" in description
             ) == (not python_only)

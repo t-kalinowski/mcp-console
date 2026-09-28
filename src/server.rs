@@ -347,10 +347,8 @@ impl ConsoleServer {
         let security = execution::description(&policy, no_sandbox, target.as_ref());
         let tool_router = Self::configured_tool_router(
             languages,
-            dynamic_resolution,
+            &worker,
             &security,
-            python_only,
-            worker.python_preparation(),
             target
                 .as_ref()
                 .and_then(|target| target.pointer("/transport/kind"))
@@ -372,13 +370,14 @@ impl ConsoleServer {
 
     fn configured_tool_router(
         languages: Languages,
-        dynamic_resolution: bool,
+        worker: &crate::worker_client::Client,
         security: &str,
-        python_only: bool,
-        python_preparation: bool,
         remote: bool,
         prepared: Option<&str>,
     ) -> ToolRouter<Self> {
+        let dynamic_resolution = worker.dynamic_resolution();
+        let python_only = worker.python_only();
+        let python_preparation = worker.python_preparation();
         let mut router = Self::tool_router();
         let send = router
             .map
@@ -462,7 +461,12 @@ impl ConsoleServer {
         if languages.sql {
             guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
             if dynamic_resolution || python_preparation {
-                guidance.push_str(r#"Managed defaults include SQLite; attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
+                if worker.has_default_duckdb_extension("sqlite") {
+                    guidance.push_str("Managed defaults include SQLite; ");
+                } else {
+                    guidance.push_str(r#"Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}` before use; "#);
+                }
+                guidance.push_str(r#"attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
             } else {
                 guidance.push_str("For SQLite, use a preinstalled sqlite extension and attach the database read-only. ");
             }

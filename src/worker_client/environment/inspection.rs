@@ -61,7 +61,7 @@ impl Environment {
         }
     }
 
-    pub(super) fn startup_declaration(&self) -> Declaration {
+    pub(in crate::worker_client) fn startup_declaration(&self) -> Declaration {
         let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
         Declaration {
             r: if managed_r {
