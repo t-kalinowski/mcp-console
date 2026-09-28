@@ -223,11 +223,6 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
-    // Console owns SIGINT before either interpreter starts. R must not
-    // replace that owner while startup hooks run (or reset a queued request).
-    let library = libloading::os::unix::Library::this();
-    unsafe { **library.get::<*mut c_int>(b"R_SignalHandlers\0")? = 0 };
-
     let arguments = ["mcp-console", "--quiet", "--interactive", "--vanilla"]
         .into_iter()
         .map(CString::new)
@@ -265,6 +260,9 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
     harp::routines::r_register_routines();
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
+    // Preserve R's fatal-signal diagnostics. Its bootstrap SIGINT handler only
+    // records R's pending flag; attachment below retains that flag, transfers
+    // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
     Ok(())
 }
