@@ -242,8 +242,10 @@ Keep these invariants intact:
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
 - `src/local_runtime.rs` — independent captured R home and inspected Python identity, retained host-resolved environments, and direct-worker temporary storage.
 - `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — common interpreter bootstrap and process environment, complete inspected identity of an already-selected executable, shared setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
-- `src/python/requirements.rs`, `src/python/requirements/r.rs`, `src/python/native.rs` — native requirement values, declaration transitions, shared live activation through the CPython library, R binding conversion and history, and the sans-R worker's active managed selection.
-- `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — reticulate selection compatibility and attachment adapter, full Console identity handoff, module hooks, candidate lookup, declaration checks, and automatic-resolution forwarding.
+- `src/python/requirements.rs`, `src/python/requirements/r.rs` — shared live managed selection, resolved candidates and import control, R declaration values and transitions, shared CPython activation, and R binding conversion and history.
+- `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — reticulate selection compatibility and attachment adapter, full Console identity handoff, exact-candidate conversion metadata and declaration checks.
+  Common Python module hooks and reached-import resolution do not use an R callback.
+  Idle tool preparation still has separate R-backed and R-free entry points.
   The Python facade retains this optional adapter directly; it owns lazy attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
   R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator.
   Sans-R defaults require uv on the startup PATH and an absolute HOME for the shared DuckDB extension cache; top-level `python` selects an existing environment without invoking uv.

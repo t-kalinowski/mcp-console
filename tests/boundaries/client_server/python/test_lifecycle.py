@@ -471,19 +471,25 @@ def test_initializes_private_runtime_once_on_first_python_cell(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # The shared runtime owns module setup. Observe the public initialization
+    # hook instead of counting the removed R-side Matplotlib callback.
     # fmt: r
     r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
+        initialization_count <- 0L
+        setHook("reticulate.onPyInit", function() {
+          initialization_count <<- initialization_count + 1L
+        }, action = "append")
         """)
     client.send(r=r)
-    assert last_result_text(client) == "[1] 1\n"
-    client.send(python="42")
+    assert last_result_text(client) == "[done]"
+    client.send(
+        python="runtime_identity = object(); runtime_identity_id = id(runtime_identity); 42"
+    )
     assert last_result_text(client) == "42\n"
-    # fmt: r
-    r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load"))
-        """)
-    client.send(r=r)
+    client.send(python="assert id(runtime_identity) == runtime_identity_id; 43")
+    assert last_result_text(client) == "43\n"
+    client.send(r="initialization_count")
     assert last_result_text(client) == "[1] 1\n"
     return client.finish()
 
@@ -500,25 +506,30 @@ def test_retries_python_runtime_initialization_after_interrupt(
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Patch a public NumPy function reached during common runtime
+            # setup, after CPython and Console input services are installed.
+            # Restore the function before blocking so retry has no second gate.
             # fmt: r
             r = code(r"""
-                invisible(suppressMessages(base::trace(
-                  "r_to_py",
-                  tracer = quote({
-                    if (is.function(x) && identical(convert, FALSE)) {
-                      invisible(readline("python runtime configuring> "))
-                    }
-                  }),
-                  print = FALSE,
-                  where = asNamespace("reticulate")
-                )))
+                options(reticulate.python.afterInitialized = function() {
+                  reticulate::py_run_string(paste(
+                    "import numpy as np",
+                    "original_get_printoptions = np.get_printoptions",
+                    "runtime_identity = object()",
+                    "runtime_identity_id = id(runtime_identity)",
+                    "def configuration_checkpoint():",
+                    "    np.get_printoptions = original_get_printoptions",
+                    "    input('python runtime configuring> ')",
+                    "    return original_get_printoptions()",
+                    "np.get_printoptions = configuration_checkpoint",
+                    sep = "\n"
+                  ))
+                })
                 """)
             wait_for_evaluation_output(
                 client, "[done]", "Python configuration checkpoint", r=r
             )
 
-            # Callback conversion starts after reticulate attaches and Console
-            # installs its services, before native evaluator setup completes.
             client.send(python="42")
             assert last_result_text(client) == (
                 '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
@@ -531,18 +542,10 @@ def test_retries_python_runtime_initialization_after_interrupt(
             assert output in {"", "\n"}, repr(output)
             result["content"][0]["text"] = output.rstrip("\n")
 
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::untrace(
-                  "r_to_py",
-                  where = asNamespace("reticulate")
-                )))
-                length(getHook("reticulate::matplotlib.pyplot::load"))
-                """)
-            client.send(r=r)
-            assert last_result_text(client) == "[1] 1\n"
+            client.send(r="options(reticulate.python.afterInitialized = NULL)")
+            assert last_result_text(client) == "[done]"
 
-            client.send(python="42")
+            client.send(python="assert id(runtime_identity) == runtime_identity_id; 42")
             output = last_result_text(client)
             assert output == "42\n", repr(output)
             client.send(python="import yaml12; yaml12.__name__")

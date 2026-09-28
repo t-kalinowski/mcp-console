@@ -1,23 +1,20 @@
 mod inspection;
-mod native;
 mod requirements;
 mod reticulate;
 mod startup;
 
 pub(crate) use inspection::{NativePython, explicit_executable, inspect_native};
-pub(crate) use requirements::{
-    ActivationFailure, ActivationInput, activate_managed_environment, ensure_libpython_compatible,
-};
+pub(crate) use requirements::{ActivationFailure, ensure_libpython_compatible};
+#[cfg(test)]
+pub(crate) use requirements::{ActivationInput, activate_managed_environment};
 pub(crate) use startup::{finish_initialization, initialize_selected, setup_runtime};
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
-/// Values supplied by an interpreter adapter when the private evaluator is
-/// configured. A caller without managed resolution supplies no callback.
-pub(crate) struct ImportResolution<'a> {
-    // The adapter keeps a converted callback alive for this setup call.
-    pub(crate) callback: Option<std::ptr::NonNull<libc::c_void>>,
-    pub(crate) disabled_reason: Option<&'a str>,
+/// Import policy installed before shared runtime setup is complete.
+pub(crate) enum ImportResolution<'a> {
+    Managed,
+    Disabled(&'a str),
 }
 
 #[derive(serde::Deserialize)]
@@ -59,6 +56,10 @@ pub(crate) fn configure_worker_environment(
 }
 
 impl Runtime {
+    pub(crate) fn publish_initial_requirements(&self) -> Result<(), String> {
+        requirements::publish_initial_requirements()
+    }
+
     pub(crate) fn initialize() -> Result<Self, String> {
         Ok(Self {
             reticulate: Some(reticulate::Adapter::initialize()?),
@@ -96,20 +97,22 @@ impl Runtime {
         &mut self,
         candidate: &crate::worker_protocol::NativePythonActivation,
     ) -> Result<PreparationOutcome, String> {
-        Ok(match native::activate(candidate)? {
-            native::ActivationOutcome::Prepared => PreparationOutcome::Prepared,
-            native::ActivationOutcome::Rejected(message) => {
+        Ok(match requirements::activate(candidate)? {
+            requirements::ActivationOutcome::Prepared => PreparationOutcome::Prepared,
+            requirements::ActivationOutcome::Rejected(message) => {
                 PreparationOutcome::Rejected { message }
             }
-            native::ActivationOutcome::Failed(message) => PreparationOutcome::Failed { message },
+            requirements::ActivationOutcome::Failed(message) => {
+                PreparationOutcome::Failed { message }
+            }
         })
     }
 }
 
-pub(crate) fn resolve_native_import(
+pub(crate) fn resolve_managed_import(
     resolution: crate::worker_protocol::PythonImportResolution,
 ) -> Result<String, String> {
-    native::resolve_import(resolution)
+    requirements::resolve_import(resolution)
 }
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {

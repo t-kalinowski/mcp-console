@@ -54,14 +54,7 @@ impl Client {
         if let Some(resolution) = import_resolution.as_ref() {
             validate_python_import_resolution(resolution, &retained_requirements)?;
         }
-        if environment
-            .local_runtime
-            .as_ref()
-            .is_some_and(crate::local_runtime::Selection::python_only)
-        {
-            let resolution = import_resolution
-                .as_ref()
-                .ok_or_else(|| "native Python resolution requires a reached import".to_string())?;
+        if let Some(resolution) = import_resolution.as_ref() {
             let delta = RequirementDelta::calculate(
                 &environment,
                 Requirements {

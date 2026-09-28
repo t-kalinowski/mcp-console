@@ -12,7 +12,6 @@ pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
 pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
-pub(crate) const MANAGED_IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; add a new distribution with requirements.python in an idle session, or use control: restart to replace a declaration";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

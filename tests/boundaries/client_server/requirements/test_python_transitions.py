@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, release_worker_callback_gate
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -240,47 +240,42 @@ def test_preserves_preparation_restoration_and_live_noops(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_rejects_incompatible_live_libpython_before_activation(
+def test_uses_inspected_candidate_without_reticulate_rediscovery(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.send(python="import sys; initial_prefix = sys.prefix")
+        client.send(
+            python="import sys; identity = object(); identity_id = id(identity)"
+        )
         assert last_tool_text(client) == "[done]", last_tool_text(client)
+        # Poison generic discovery only after initialization. Live declaration
+        # and import activation must use the execution host's inspected identity.
         # fmt: r
         r = code(r"""
-            before <- reticulate::py_require()
+            before <- reticulate::py_config()
             namespace <- asNamespace("reticulate")
-            original <- get("python_config", namespace)
-            replacement <- function(...) {
-              config <- original(...)
-              config$libpython <- "incompatible-libpython"
-              config
-            }
-            unlockBinding("python_config", namespace)
-            assign("python_config", replacement, envir = namespace)
-            lockBinding("python_config", namespace)
-            outcome <- tryCatch(
-              reticulate::py_require("py-yaml12"),
-              error = conditionMessage
-            )
+            invisible(suppressMessages(base::trace(
+              "python_config",
+              tracer = quote(stop("candidate rediscovery is forbidden")),
+              print = FALSE,
+              where = namespace
+            )))
+            reticulate::py_require("py-yaml12")
+            after <- reticulate::py_config()
             stopifnot(
-              grepl(
-                "New environment does not use the same Python binary",
-                outcome,
-                fixed = TRUE
-              ),
-              grepl("new libpython: incompatible-libpython", outcome, fixed = TRUE),
-              identical(reticulate::py_require(), before)
+              identical(after$libpython, before$libpython),
+              identical(after$python, reticulate::py_eval("__import__('sys').executable"))
             )
-            unlockBinding("python_config", namespace)
-            assign("python_config", original, envir = namespace)
-            lockBinding("python_config", namespace)
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(python="sys.prefix == initial_prefix")
-        assert last_tool_text(client) == "True\n", last_tool_text(client)
+        client.send(
+            python="import yaml12, more_itertools; assert id(identity) == identity_id; print('inspected candidate retained')"
+        )
+        assert last_tool_text(client) == "inspected candidate retained\n", (
+            last_tool_text(client)
+        )
         return client.finish()
 
 
@@ -311,10 +306,14 @@ def test_reports_activation_python_failure_once_and_restores_requirements(
         assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(python="runpy.run_path = original_run_path")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(r='reticulate::py_require("py-yaml12")')
-        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(requirements={"python": ["py-yaml12"]})
+        assert last_tool_text(client) == "[restart required]", last_tool_text(client)
+        client.send(control="restart")
         client.send(python="import yaml12; yaml12.__name__")
-        assert last_tool_text(client) == "'yaml12'\n", last_tool_text(client)
+        assert last_tool_text(client) == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "'yaml12'\n"
+        ), last_tool_text(client)
         return client.finish()
 
 
@@ -333,7 +332,7 @@ def test_preserves_activation_interrupt_conditions(
             before <- reticulate::py_require()
             namespace <- asNamespace("reticulate")
             invisible(suppressMessages(base::trace(
-              "python_config",
+              "python_config_impl",
               tracer = quote(stop(structure(
                 list(message = "activation interrupted", call = NULL),
                 class = c("interrupt", "condition")
@@ -353,6 +352,87 @@ def test_preserves_activation_interrupt_conditions(
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]", last_tool_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_rejects_incompatible_live_libpython_before_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_without_r import (
+        live_python_rejects_incompatible_library_before_activation,
+    )
+
+    return live_python_rejects_incompatible_library_before_activation(
+        binary, execution, with_r=True
+    )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_idle_activation_failure_retains_worker_until_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(requirements={"r": ["later"]})
+        # fmt: python
+        python = code("""
+            import runpy
+
+            identity = object()
+            identity_id = id(identity)
+
+
+            def fail_activation(_path):
+                raise ValueError("idle activation failure")
+
+
+            runpy.run_path = fail_activation
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == "[done]"
+        before = client.send(requirements={"action": "get"})["structuredContent"][
+            "requirements"
+        ]
+        # fmt: r
+        r = code(r"""
+            callback_gate <- tempfile("python-activation-gate-")
+            callback_checkpoint <- tempfile("python-activation-checkpoint-")
+            run_callback <- function() {
+              if (!file.exists(callback_gate)) {
+                later::later(run_callback, delay = 0.01)
+                return(invisible(NULL))
+              }
+              condition <- tryCatch(
+                reticulate::py_require("py-yaml12"),
+                error = conditionMessage
+              )
+              stopifnot(grepl(
+                "ValueError: idle activation failure",
+                condition,
+                fixed = TRUE
+              ))
+              cat("idle activation rejected\n")
+              stopifnot(file.create(callback_checkpoint))
+            }
+            later::later(run_callback, delay = 0.01)
+            cat(callback_gate, callback_checkpoint, sep = "\n")
+            """)
+        client.send(r=r)
+        release_worker_callback_gate(client, "idle Python activation failure")
+        client.send(python="assert id(identity) == identity_id; print('same object')")
+        assert (
+            last_tool_text(client)
+            == "idle activation rejected\n[output produced while idle]\nsame object\n"
+        ), last_tool_text(client)
+        assert (
+            client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            == before
+        )
+        client.send(requirements={"python": ["six"]})
+        assert last_tool_text(client) == "[restart required]"
         return client.finish()
 
 

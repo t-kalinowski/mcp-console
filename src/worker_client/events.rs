@@ -1201,19 +1201,16 @@ fn handle_semantic_event(
             Ok(())
         }
         RelayEvent::PythonActivationFailed { requirements } => {
-            operation.with_route(|route| match route {
-                Route::Cell(_) => Ok(()),
-                Route::Preparation | Route::Idle => {
-                    Err("worker reported native Python activation failure outside a cell".into())
-                }
-            })?;
+            // R declarations can activate during a cell, explicit preparation,
+            // or an idle callback. In every context the failure must identify
+            // a provisional candidate belonging to this generation.
             let expected = requirements.normalized();
             if !candidates
                 .python
                 .iter()
                 .any(|candidate| candidate.managed.requirements() == &expected)
             {
-                return Err("worker failed an unexpected native Python candidate".into());
+                return Err("worker failed an unexpected Python candidate".into());
             }
             candidates.python.clear();
             callbacks.fail_python_activation()?;

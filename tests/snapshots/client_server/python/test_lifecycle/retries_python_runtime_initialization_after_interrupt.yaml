@@ -3,16 +3,20 @@
 ---
 send:
   r: |
-    invisible(suppressMessages(base::trace(
-      "r_to_py",
-      tracer = quote({
-        if (is.function(x) && identical(convert, FALSE)) {
-          invisible(readline("python runtime configuring> "))
-        }
-      }),
-      print = FALSE,
-      where = asNamespace("reticulate")
-    )))
+    options(reticulate.python.afterInitialized = function() {
+      reticulate::py_run_string(paste(
+        "import numpy as np",
+        "original_get_printoptions = np.get_printoptions",
+        "runtime_identity = object()",
+        "runtime_identity_id = id(runtime_identity)",
+        "def configuration_checkpoint():",
+        "    np.get_printoptions = original_get_printoptions",
+        "    input('python runtime configuring> ')",
+        "    return original_get_printoptions()",
+        "np.get_printoptions = configuration_checkpoint",
+        sep = "\n"
+      ))
+    })
 result:
   content:
     - type: text
@@ -39,21 +43,15 @@ result:
   isError: false
 ---
 send:
-  r: |
-    invisible(suppressMessages(base::untrace(
-      "r_to_py",
-      where = asNamespace("reticulate")
-    )))
-    length(getHook("reticulate::matplotlib.pyplot::load"))
+  r: options(reticulate.python.afterInitialized = NULL)
 result:
   content:
     - type: text
-      text: |
-        [1] 1
+      text: "[done]"
   isError: false
 ---
 send:
-  python: "42"
+  python: assert id(runtime_identity) == runtime_identity_id; 42
 result:
   content:
     - type: text

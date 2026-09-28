@@ -28,6 +28,7 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import UNPRIVILEGED, requires
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
+from support.r import r_test_environment
 from support.python import write_test_wheel
 
 
@@ -91,7 +92,7 @@ def unavailable_fixture_index():
             assert not thread.is_alive(), "fixture index did not stop"
 
 
-def preparation_environment(root: Path) -> dict[str, str]:
+def preparation_environment(root: Path, *, with_r: bool = False) -> dict[str, str]:
     fixture = Path(__file__).resolve().parents[3] / "fixtures/sans_r_uv.sh"
     for name in ("uv", "invalid-python"):
         program = root / name
@@ -111,7 +112,14 @@ def preparation_environment(root: Path) -> dict[str, str]:
         }
     )
     (root / "invalid-inspection.json").write_text(json.dumps(description))
-    return dict(environment(root), UV_CACHE_DIR=str(root))
+    env = dict(environment(root), UV_CACHE_DIR=str(root))
+    if with_r:
+        r_environment, _ = r_test_environment()
+        env.update(
+            {key: value for key, value in r_environment.items() if key.startswith("R_")}
+        )
+        env["PATH"] = os.pathsep.join((str(root), os.environ["PATH"]))
+    return env
 
 
 def preparation_records(records: Transcript, root: Path) -> Transcript:
@@ -982,9 +990,17 @@ def test_retains_automatic_additions_after_import_errors(
 def test_automatic_resolution_failure_and_cancel_keep_accepted_state(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return automatic_resolution_failure_and_cancel_keep_accepted_state(
+        binary, execution, with_r=False
+    )
+
+
+def automatic_resolution_failure_and_cancel_keep_accepted_state(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        env = preparation_environment(root)
+        env = preparation_environment(root, with_r=with_r)
         started = FifoCheckpoint.create(root / "started")
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
@@ -1046,9 +1062,17 @@ def test_automatic_resolution_failure_and_cancel_keep_accepted_state(
 def test_automatic_activation_failure_requires_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return automatic_activation_failure_requires_restart(
+        binary, execution, with_r=False
+    )
+
+
+def automatic_activation_failure_requires_restart(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        env = preparation_environment(root)
+        env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
         with McpClient(
             installed_binary(binary, root), execution.serve(), env
@@ -1329,9 +1353,17 @@ def test_live_python_failure_and_interrupt_preserve_accepted_state(
 def test_live_python_rejects_incompatible_library_before_activation(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return live_python_rejects_incompatible_library_before_activation(
+        binary, execution, with_r=False
+    )
+
+
+def live_python_rejects_incompatible_library_before_activation(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        env = preparation_environment(root)
+        env = preparation_environment(root, with_r=with_r)
         with McpClient(
             installed_binary(binary, root), execution.serve(), env
         ) as client:
@@ -1384,9 +1416,17 @@ def test_live_python_rejects_incompatible_library_before_activation(
 def test_live_python_activation_failure_requires_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return live_python_activation_failure_requires_restart(
+        binary, execution, with_r=False
+    )
+
+
+def live_python_activation_failure_requires_restart(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        env = preparation_environment(root)
+        env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
         with McpClient(
             installed_binary(binary, root), execution.serve(), env
@@ -1419,7 +1459,9 @@ def test_live_python_activation_failure_requires_restart(
                 diagnostic.count("RuntimeError: synthetic activation failure") == 1
             ), diagnostic
             assert "activation failure ran code" not in diagnostic
-            assert "restart required" in diagnostic
+            assert diagnostic.endswith(
+                "further requirement changes are unavailable until session restart"
+            ), diagnostic
             client.send(
                 # fmt: python
                 python=code("""

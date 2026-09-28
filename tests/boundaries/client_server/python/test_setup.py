@@ -1018,6 +1018,59 @@ def test_preserves_setup_after_r_initialization(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_retries_managed_import_setup_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # The import finder captures its configuring thread after module
+        # defaults. Interrupt that public threading call once, then retry.
+        # fmt: r
+        r = code(r"""
+            options(reticulate.python.afterInitialized = function() {
+              reticulate::py_run_string(paste(
+                "import numpy as np, threading",
+                "original_get_printoptions = np.get_printoptions",
+                "original_get_ident = threading.get_ident",
+                "runtime_identity = object()",
+                "runtime_identity_id = id(runtime_identity)",
+                "def configuring_thread():",
+                "    threading.get_ident = original_get_ident",
+                "    input('Managed import setup> ')",
+                "    return original_get_ident()",
+                "def configure_thread_checkpoint():",
+                "    np.get_printoptions = original_get_printoptions",
+                "    threading.get_ident = configuring_thread",
+                "    return original_get_printoptions()",
+                "np.get_printoptions = configure_thread_checkpoint",
+                sep = "\n"
+              ))
+            })
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        client.send(python="raise AssertionError('interrupted setup ran the cell')")
+        assert last_result_text(client) == (
+            '[input requested: "Managed import setup> "]\n[waiting for stdin]'
+        ), client.transcript[-1]
+        wait_for_evaluation_output(
+            client, "\n", "managed import setup interruption", control="interrupt"
+        )
+        client.send(
+            python="import yaml12; assert id(runtime_identity) == runtime_identity_id; print('managed import setup retried')"
+        )
+        assert last_result_text(client) == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "managed import setup retried\n"
+        ), client.transcript[-1]
+        accepted = client.send(requirements={"action": "get"})["structuredContent"][
+            "requirements"
+        ]
+        assert "py-yaml12" in accepted["python"], accepted
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_retries_matplotlib_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1027,12 +1080,16 @@ def test_retries_matplotlib_setup_after_interrupt(
         # Its public input request is the checkpoint for a real interrupt.
         # fmt: r
         r = code(r"""
+            options(reticulate.python.afterInitialized = function() {
             reticulate::py_run_string(r"---(
             import sys
             import types
 
             class InterruptingPyplot(types.ModuleType):
                 interrupted = False
+
+                def show(self, *args):
+                    raise AssertionError("default show was not replaced")
 
                 def __setattr__(self, name, value):
                     if name == "show" and not self.interrupted:
@@ -1046,15 +1103,12 @@ def test_retries_matplotlib_setup_after_interrupt(
                 def close(self, *args):
                     pass
 
+            InterruptingPyplot.show.__module__ = "matplotlib.pyplot"
             sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
-
-            import _mcp_console
-
-            def configure_again(*args):
-                raise AssertionError("Python runtime configured twice")
-
-            _mcp_console.configure_import_resolution = configure_again
+            runtime_identity = object()
+            runtime_identity_id = id(runtime_identity)
             )---")
+            })
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"
@@ -1076,6 +1130,7 @@ def test_retries_matplotlib_setup_after_interrupt(
         client.send(
             # fmt: python
             python=code("""
+                assert id(runtime_identity) == runtime_identity_id
                 sys.modules["matplotlib.pyplot"].show()
                 42
                 """)
@@ -1092,17 +1147,23 @@ def test_reports_matplotlib_setup_error_once(
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
-            reticulate::py_run_string(
-              r"---(
+            options(reticulate.python.afterInitialized = function() {
+              reticulate::py_run_string(
+                r"---(
             import sys
 
             class FailingPyplot:
+                def show(self, *args):
+                    pass
+
                 def __setattr__(self, name: str, value: object) -> None:
                     raise ValueError("matplotlib setup failed")
 
+            FailingPyplot.show.__module__ = "matplotlib.pyplot"
             sys.modules["matplotlib.pyplot"] = FailingPyplot()
             )---"
-            )
+              )
+            })
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]"

@@ -214,7 +214,8 @@ The relay can emit these flat frames:
   For an inferred mapping, `request` may additionally contain `"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}`.
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
-- `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching native candidate whose activation failed after mutation may have begun.
+- `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching provisional Python candidate whose activation failed after mutation may have begun, during evaluation, preparation, or an idle callback.
+  Launch protocol version 6 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
 - `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
 - `{"kind":"python_preparation_failed","message":"..."}` completes live Python preparation with an ordinary failure.
 - `{"kind":"python_preparation_rejected","message":"..."}` rejects an explicit native candidate before mutation.

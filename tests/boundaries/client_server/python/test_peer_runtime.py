@@ -95,6 +95,64 @@ def test_standalone_python_contract(binary: Path, execution: Execution) -> Trans
             return client.finish()[3:]
 
 
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_shared_module_configuration(binary: Path, execution: Execution) -> Transcript:
+    records = None
+    for with_r in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = dict(os.environ)
+            environment.pop("RETICULATE_PYTHON", None)
+            if not with_r:
+                uv = shutil.which("uv")
+                assert uv is not None
+                without_r(environment, root)
+                (Path(environment["PATH"]) / "uv").symlink_to(uv)
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                client.send(requirements={"python": ["matplotlib"]})
+                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+                # Defaults apply at the first import, not at a later cell or
+                # bridge attachment. Each module keeps subsequent user choices.
+                # fmt: python
+                source = code("""
+                    import numpy as np
+                    import pandas as pd
+                    import matplotlib.pyplot as plt
+
+                    assert np.get_printoptions()["linewidth"] == 200
+                    assert pd.get_option("display.width") == 200
+                    np.set_printoptions(linewidth=73)
+                    pd.set_option("display.width", 79)
+                    custom_show = lambda *args, **kwargs: "user show"
+                    plt.show = custom_show
+                    print("shared module defaults installed")
+                    """)
+                client.send(python=source)
+                assert (
+                    last_result_text(client) == "shared module defaults installed\n"
+                ), client.transcript[-1]
+                if with_r:
+                    client.send(
+                        r="reticulate::py_eval(\"id(custom_show) == id(__import__('matplotlib.pyplot', fromlist=['show']).show)\")"
+                    )
+                    assert last_result_text(client) == "[1] TRUE\n", client.transcript[
+                        -1
+                    ]
+                client.send(
+                    python='assert np.get_printoptions()["linewidth"] == 73; assert pd.get_option("display.width") == 79; assert plt.show is custom_show; print("user module options retained")'
+                )
+                assert last_result_text(client) == "user module options retained\n", (
+                    client.transcript[-1]
+                )
+                current = client.finish()[3:]
+                if records is None:
+                    records = current
+    assert records is not None
+    return records
+
+
 def exercise_python(client: McpClient) -> tuple[str, ...]:
     # Every configuration exercises the same evaluator and NumPy availability
     # without referring to the R/Python bridge.
@@ -611,6 +669,20 @@ def test_r_commands_follow_managed_python_activation(
 def test_attaches_to_python_initialized_during_r_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return attach_python_initialized_during_r_startup(binary, execution, managed=False)
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_managed_import_after_python_initialized_during_r_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return attach_python_initialized_during_r_startup(binary, execution, managed=True)
+
+
+def attach_python_initialized_during_r_startup(
+    binary: Path, execution: Execution, *, managed: bool
+) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         library = root / "library"
@@ -632,9 +704,31 @@ def test_attaches_to_python_initialized_during_r_startup(
             MCP_CONSOLE_TEST_PYTHON=sys.executable,
             MCP_CONSOLE_TEST_PYTHON_PREFIX=sys.prefix,
         )
+        if managed:
+            environment.pop("RETICULATE_PYTHON")
+            # The startup package selects a prepared environment without
+            # running reticulate's resolver inside the worker sandbox.
+            virtualenv = root / "early-python"
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", str(virtualenv)],
+                check=True,
+                capture_output=True,
+            )
+            early_python = virtualenv / "bin/python"
+            subprocess.run(
+                ["uv", "pip", "install", "--python", str(early_python), "numpy"],
+                check=True,
+                capture_output=True,
+            )
+            environment["MCP_CONSOLE_TEST_EARLY_PYTHON"] = str(early_python)
+            version = "==" + ".".join(map(str, sys.version_info[:3]))
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
-            exercise_python(client)
+            if managed:
+                client.send(requirements={"python_version": [version]})
+                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+            else:
+                exercise_python(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -662,4 +756,72 @@ def test_attaches_to_python_initialized_during_r_startup(
             ), client.transcript[-1]
             client.send(r='reticulate::py_eval("id(early_object) == early_identity")')
             assert last_result_text(client) == "[1] TRUE\n", client.transcript[-1]
-            return client.finish()[3:]
+            if managed:
+                client.send(
+                    python="import yaml12; assert id(early_object) == early_identity; print('adopted interpreter resolved import')"
+                )
+                assert last_result_text(client) == (
+                    "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+                    "adopted interpreter resolved import\n"
+                ), client.transcript[-1]
+                accepted = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]
+                assert "py-yaml12" in accepted["python"], accepted
+                assert accepted["python_version"] == [version], accepted
+                client.send(control="restart")
+                # The startup package chooses its environment again before
+                # Console attaches. Server-retained declarations survive that
+                # adoption; it does not replay activation into the live runtime.
+                retained = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]
+                assert retained == accepted, (retained, accepted)
+            records = client.finish()[3:]
+            if managed:
+                records = json.loads(
+                    json.dumps(records).replace(version, "<selected Python version>")
+                )
+            return records
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_shared_managed_import_failures(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_without_r import (
+        automatic_activation_failure_requires_restart,
+        automatic_resolution_failure_and_cancel_keep_accepted_state,
+    )
+
+    records = None
+    for with_r in (False, True):
+        failures = automatic_resolution_failure_and_cancel_keep_accepted_state(
+            binary, execution, with_r=with_r
+        )
+        activation = automatic_activation_failure_requires_restart(
+            binary, execution, with_r=with_r
+        )
+        if records is None:
+            records = failures + activation
+    return records
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_shared_managed_tool_activation_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_without_r import (
+        live_python_activation_failure_requires_restart,
+    )
+
+    records = None
+    for with_r in (False, True):
+        current = live_python_activation_failure_requires_restart(
+            binary, execution, with_r=with_r
+        )
+        if records is None:
+            records = current
+    return records

@@ -253,6 +253,16 @@ pub(super) fn configure_environment() -> Result<bool, String> {
     Ok(true)
 }
 
+pub(super) fn selected_configuration() -> Result<super::NativePython, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    slot.as_ref()
+        .and_then(|library| library.configuration.as_ref())
+        .map(|configuration| configuration.selected.clone())
+        .ok_or_else(|| "Python has no inspected selection".into())
+}
+
 pub(super) fn add_bridge_path(path: &str) -> Result<(), String> {
     let path = serde_json::to_string(path).map_err(|error| error.to_string())?;
     let source = CString::new(format!(
@@ -358,7 +368,14 @@ pub(super) fn configure_import_resolution(
         if none.is_null() {
             return api.finish_setup(std::ptr::null_mut());
         }
-        let reason = resolution.disabled_reason.map(|reason| {
+        let (callback, disabled_reason) = match resolution {
+            super::ImportResolution::Managed => (
+                api.function(c"_mcp_console_services", c"resolve_import")?,
+                None,
+            ),
+            super::ImportResolution::Disabled(reason) => (none, Some(reason)),
+        };
+        let reason = disabled_reason.map(|reason| {
             (api.unicode_from_string_and_size)(reason.as_ptr().cast(), reason.len() as isize)
         });
         if reason.is_some_and(|reason| reason.is_null()) {
@@ -366,9 +383,7 @@ pub(super) fn configure_import_resolution(
         }
         let result = (api.call_function_obj_args)(
             function,
-            resolution
-                .callback
-                .map_or(none, |callback| callback.as_ptr()),
+            callback,
             reason.unwrap_or(none),
             std::ptr::null_mut::<PyObject>(),
         );
@@ -377,22 +392,6 @@ pub(super) fn configure_import_resolution(
         }
         api.finish_setup(result)
     })
-}
-
-pub(super) fn configure_native_import_resolution() -> Result<(), String> {
-    let callback = api()?.with_gil(|api| unsafe {
-        std::ptr::NonNull::new(api.function(c"_mcp_console_services", c"resolve_import")?)
-            .ok_or_else(|| "native Python import callback is unavailable".to_string())
-    })?;
-    if configure_import_resolution(super::ImportResolution {
-        callback: Some(callback),
-        disabled_reason: None,
-    })? {
-        Ok(())
-    } else {
-        display_setup_exception()?;
-        Err("native Python import resolution setup failed".into())
-    }
 }
 
 pub(super) fn runtime_configured() -> Result<bool, String> {
@@ -500,9 +499,9 @@ pub(super) fn activate_environment(script: &str, executable: &str) -> Result<boo
     })
 }
 
-pub(super) fn disable_matplotlib_show() -> Result<bool, String> {
+pub(super) fn configure_module_defaults() -> Result<bool, String> {
     api()?.with_gil(|api| unsafe {
-        let function = api.function(c"_mcp_console", c"disable_matplotlib_show")?;
+        let function = api.function(c"_mcp_console", c"configure_module_defaults")?;
         api.finish_setup((api.call_no_args)(function))
     })
 }

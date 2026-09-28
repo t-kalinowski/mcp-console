@@ -15,10 +15,8 @@ pub extern "C-unwind" fn mcp_console_python_requirements_set(
 ) -> harp::Result<SEXP> {
     let pending = STATE.with(|state| {
         let state = state.borrow();
-        state
-            .requirements
-            .pending_activation
-            .clone()
+        super::super::STATE
+            .with(|state| state.borrow().pending_activation.clone())
             .zip(state.pending_metadata.clone())
     });
     if let Some((pending, metadata)) = pending
@@ -35,7 +33,10 @@ pub extern "C-unwind" fn mcp_console_python_requirements_set(
             state.current_metadata.replace(Rc::new(metadata)),
             state.pending_metadata.take(),
         );
-        (previous, state.requirements.commit(value))
+        (
+            previous,
+            super::super::STATE.with(|state| state.borrow_mut().commit(value)),
+        )
     });
     // Release protection and publish only after leaving the state borrow.
     drop(previous);
@@ -48,7 +49,7 @@ pub extern "C-unwind" fn mcp_console_python_requirements_set(
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_python_activation_pending() -> harp::Result<SEXP> {
-    let pending = STATE.with(|state| state.borrow().requirements.activation_pending());
+    let pending = super::super::STATE.with(|state| state.borrow().activation_pending());
     Ok(RObject::from(pending).sexp)
 }
 
@@ -63,7 +64,7 @@ pub extern "C-unwind" fn mcp_console_python_activation_record(
     let (activation, metadata) = Metadata::from_r(activation)?;
     let previous = STATE.with(|state| {
         let mut state = state.borrow_mut();
-        state.requirements.pending_activation = Some(activation);
+        super::super::STATE.with(|state| state.borrow_mut().pending_activation = Some(activation));
         state.pending_metadata.replace(Rc::new(metadata))
     });
     drop(previous);
@@ -74,27 +75,39 @@ pub extern "C-unwind" fn mcp_console_python_activation_record(
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_python_initialized(activation: SEXP) -> harp::Result<SEXP> {
     // Initial startup has its own successful reticulate hook, with no pending
-    // late activation or subsequent requirement write to commit it.
-    publish_activation(activation)?;
+    // late activation or subsequent requirement write. R selection hints can
+    // select an inspected interpreter without a managed resolver candidate.
+    let requirements = activation_requirements(activation)?;
+    let selected = crate::python::library::selected_configuration()
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    super::super::initialize(&selected, requirements).map_err(|error| harp::anyhow!("{error}"))?;
     unsafe { Ok(libr::R_NilValue) }
 }
 
 #[allow(clippy::result_large_err)]
 pub(in crate::python::requirements) fn check_activation() -> harp::Result<()> {
-    STATE
-        .with(|state| state.borrow().requirements.check_activation())
+    super::super::STATE
+        .with(|state| state.borrow().check_activation())
         .map_err(|error| harp::anyhow!("{error}"))
 }
 
 #[allow(clippy::result_large_err)]
-fn publish_activation(activation: SEXP) -> harp::Result<()> {
+fn activation_requirements(
+    activation: SEXP,
+) -> harp::Result<crate::worker_protocol::PythonRequirementManifest> {
     // The bridge still supplies its normalized projection in this order.
     let activation = RObject::view(activation);
-    let requirements = crate::worker_protocol::PythonRequirementManifest {
+    Ok(crate::worker_protocol::PythonRequirementManifest {
         packages: activation.vector_elt(0)?.try_into()?,
         python_version: activation.vector_elt(1)?.try_into()?,
         exclude_newer: r_null_or_try_into(activation.vector_elt(2)?)?,
-    };
+    })
+}
+
+#[allow(clippy::result_large_err)]
+fn publish_activation(activation: SEXP) -> harp::Result<()> {
+    let requirements = activation_requirements(activation)?;
+    super::super::accept(requirements.clone()).map_err(|error| harp::anyhow!("{error}"))?;
     crate::worker::publish_python_activation(requirements).map_err(|error| harp::anyhow!("{error}"))
 }
 
@@ -103,34 +116,43 @@ impl Adapter {
         &self,
         python: &Value,
         candidate: &Record,
-    ) -> super::super::Result<Value> {
-        let config = Record::config(self.call("candidate_config", &[python])?)?;
-        let candidate_python = python.text()?;
-        let candidate_libpython = config.get("libpython")?.text()?;
-        let candidate_executable = config.get("executable")?.text()?;
-        let running_libpython = self.call("live_libpython", &[])?.text()?;
-        let input = crate::python::ActivationInput {
-            candidate_python: &candidate_python,
-            candidate_libpython: &candidate_libpython,
-            candidate_executable: &candidate_executable,
-            running_libpython: &running_libpython,
-        };
-        match crate::python::activate_managed_environment(input) {
+    ) -> super::super::RResult<Value> {
+        let python = python.text()?;
+        let selected = super::super::resolved_selection()
+            .filter(|selected| python == selected.embedding.python)
+            .ok_or("Python activation has no matching inspected selection")?;
+        super::super::validate_selected(&selected).map_err(|error| error.to_string())?;
+        let encoded = serde_json::to_string(&selected).map_err(|error| error.to_string())?;
+        let encoded =
+            harp::exec::r_sandbox(|| Value(RObject::from(encoded))).map_err(super::from_r_error)?;
+        let config = Record::config(self.call("activation_config", &[&encoded])?)?;
+        match super::super::activate_selected(&selected) {
             Ok(()) => {}
             Err(crate::python::ActivationFailure::PythonException) => {
+                super::super::activation_failed()?;
                 // CPython retained the original exception and traceback. Let
                 // reticulate translate it through the existing condition and
                 // interrupt boundary; do not print it in the native operation.
                 self.call("raise_python_setup_error", &[])?;
                 return Err("Python activation failed without an exception".into());
             }
-            Err(error) => return Err(error.to_string().into()),
+            Err(error) => {
+                if matches!(error, crate::python::ActivationFailure::Infrastructure(_)) {
+                    super::super::activation_failed()?;
+                }
+                return Err(error.to_string().into());
+            }
         }
-
-        let config = self.call("available_config", &[config.value()])?;
-        // The active-binding write commits requirements and publishes the
-        // activation only after reticulate accepts this returned config.
-        self.call("record_activation", &[candidate.value()])?;
-        Ok(config)
+        let result = (|| {
+            let config = self.call("available_config", &[config.value()])?;
+            // The active-binding write publishes only after reticulate accepts
+            // this returned config. A failed projection cannot undo activation.
+            self.call("record_activation", &[candidate.value()])?;
+            Ok(config)
+        })();
+        if result.is_err() {
+            super::super::activation_failed()?;
+        }
+        result
     }
 }

@@ -636,10 +636,9 @@ fn native_probe() {
         assert!(
             crate::python::setup_runtime(
                 std::path::Path::new(&configuration.embedding.libpython),
-                crate::python::ImportResolution {
-                    callback: None,
-                    disabled_reason: Some("Automatic resolution disabled in native fixture"),
-                },
+                crate::python::ImportResolution::Disabled(
+                    "Automatic resolution disabled in native fixture",
+                ),
             )
             .expect("install native Python setup")
         );
@@ -669,12 +668,9 @@ _mcp_console.configure_import_resolution = fail_reconfiguration"#,
                 assert!(
                     crate::python::setup_runtime(
                         std::path::Path::new(&configuration.embedding.libpython),
-                        crate::python::ImportResolution {
-                            callback: None,
-                            disabled_reason: Some(
-                                "Automatic resolution disabled in native fixture"
-                            ),
-                        },
+                        crate::python::ImportResolution::Disabled(
+                            "Automatic resolution disabled in native fixture",
+                        ),
                     )
                     .expect("reuse completed Python setup")
                 );

@@ -391,18 +391,24 @@ An R transport, protocol, or bridge-infrastructure failure is different: the ser
 
 ### Live Python preparation
 
-Explicit Python preparation and automatic imports use the native requirement owner to orchestrate additive preparation.
-It snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`; managed declarations use the same native transition decisions.
-The R adapter preserves declaration conversion and history, live version and package checks, and candidate configuration lookup.
-Before Python initializes, the worker materializes the complete manifest.
-After initialization, the R adapter looks up reticulate's candidate configuration and converts its selected Python path, `libpython`, and executable to native strings, along with the running interpreter's `libpython`.
-The shared native activation operation compares the two `libpython` strings exactly before touching the interpreter.
-It does not select or inspect an interpreter or resolve requirements.
-For a compatible candidate, it uses the existing CPython activation hook to update the environment without replacing the interpreter or its objects, including Python's executable, any loaded multiprocessing module, and process setup.
-The operation distinguishes a compatibility rejection, an infrastructure error, and a Python exception retained with its traceback by CPython's setup-error mechanism.
-The R adapter still translates a retained exception through reticulate's condition and interrupt boundary.
-Only after activation and process setup succeed does the adapter record pending activation.
-Reticulate then accepts the returned configuration and writes the requirement binding that publishes `PythonActivated`.
+The shared requirement owner retains live interpreter identity separately from provisional declarations and resolved candidates.
+Reached imports use its native resolver callback with or without R; they no longer call `reticulate::py_require()`.
+The server validates each inferred addition against the accepted declaration and resolves and inspects its candidate on the execution host.
+The optional R adapter prepares the declaration's representation and history before interpreter mutation and commits them afterwards.
+
+Idle tool preparation still has separate server entry points.
+Its R path snapshots the declaration before calling `reticulate::py_require(..., action = "add")`; before Python initializes, it materializes the complete lazy declaration without initializing Python.
+R declarations preserve argument conversion, package warnings, history, live version and package checks, and R conditions.
+Their candidate library and prefixes come from the host-inspected identity.
+Additional conversion metadata is obtained from that exact executable without generic reticulate discovery.
+
+The shared activation operation compares the candidate and retained interpreter's `libpython` strings exactly before conversion metadata or interpreter mutation.
+For a compatible candidate, it runs the environment's activation script and updates executable, multiprocessing, and child-process setup without replacing the interpreter or its objects.
+Compatibility and other failures before mutation leave the accepted declaration and usable worker intact.
+An activation exception or other unsafe failure marks the generation restart-required; this also applies to failures surfaced through an R condition.
+The R adapter preserves the original Python exception and traceback through reticulate's condition boundary.
+Only successful activation and process setup can publish the complete manifest to the server.
+For an R declaration, the adapter records pending activation, then reticulate accepts the configuration and writes the binding that publishes `PythonActivated`.
 
 In R-present sessions, the server retains a Python environment and its host-inspected launch identity when the worker reports that reticulate accepted its complete normalized manifest.
 Successful preparation of a still-lazy interpreter also retains both at its existing preparation commit point.

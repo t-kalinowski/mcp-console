@@ -258,10 +258,22 @@ When R is available, its initialization remains eager; managed SQL remains R-bac
 Command readiness is separate from waiting: when no command is ready, the coordinator uses R's event-aware wait and services its idle callbacks before waiting again.
 Without R integration, it uses the native sideband, interrupt, and stdin-closure wait.
 R retains the native unwind boundaries for its event and interpreter operations.
+Scheduled `later` callbacks do not require another R cell: idle processing publishes their output for the next response, including Python and SQL responses.
 Cell dispatch starts graphics before marking the cell active, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
 Both R and Python cells use those R graphics hooks because Python can call R and create plots; SQL retains its existing exclusion.
 Idle event processing retains its own graphics and input cleanup ordering in the R adapter.
 R-present startup supplies the existing R session temporary directory to Python cache setup without changing its location or cleanup ownership.
+
+The coordinator and both interpreters use the same owning thread.
+R's `setup_Rmainloop()` installs R services; it is not the outer Console command loop.
+R stack setup, protected objects, event servicing, and the C-owned unwind boundaries remain on that thread.
+CPython entry points acquire the GIL and its retained initial thread state is restored for process exit; initialization and external adoption remain distinct ownership states.
+No library mutex or requirement-state borrow spans interpreter execution, startup hooks, or reentrant callbacks.
+The signal handler only marks native state and wakes descriptors; it never enters R or Python.
+Reticulate's event service schedules main-thread pending calls and protects R event processing with `R_ToplevelExec()`.
+Its Python background callbacks, including the services used by Positron, enqueue work for the main thread and wait for results.
+A future split across evaluator threads would need explicit R affinity and stack ownership, reentrant cross-thread requests, GIL release while waiting, cancellation delivery, and coordinated shutdown.
+It cannot assign the existing synchronous evaluators to independent blocking threads unchanged.
 
 When R is available, the built-in worker embeds it on its main thread.
 Before entering the native DLL REPL, it validates the entire cell with a cached private R function that calls `suppressWarnings(str2expression(source))` and discards the generated expression vector.
@@ -320,9 +332,12 @@ Native CPython path initialization follows the selected executable's virtualenv 
 Startup failures retain Python tracebacks on the startup diagnostic stream, and every coordinator return restores the Python thread before extension-library exit destructors.
 The native runner owns sandbox temporary storage; direct relay lifetimes own a private directory and retire it after the worker, including failed startup.
 Neither lifetime owns resolver cache removal.
-The retained library state records each completed installation step and marks setup configured only after the CPython configuration call succeeds, so an incomplete setup can retry without initializing the interpreter again.
+The retained library state records each completed installation step and marks setup configured only after environment, module defaults, and managed or disabled import policy succeed, so an incomplete setup can retry without initializing the interpreter again.
 The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
-The R adapter still calls the Matplotlib setup helper through a narrow native entry point at the existing module-load and first-cell lifecycle points.
+The shared Python module loader applies NumPy, pandas, and Matplotlib defaults once, preserving existing nondefault widths and subsequent user overrides.
+Applying defaults to modules loaded by startup hooks is a retryable setup step after the evaluator is installed; an interrupt preserves the running interpreter and its objects.
+The R setup entry point preserves the caller's interrupt context while Python hooks run and protects R conversions separately.
+Reticulate attachment does not rerun these module defaults.
 The native calls preserve the caller's R interrupt state while Python runs.
 Failed setup retains the original Python exception and traceback for reticulate's existing R condition and interrupt conversion, without native error printing.
 Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
@@ -331,7 +346,8 @@ The worker's native signal handler wakes blocked input and marks interrupts for 
 Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
 Reticulate's event polling remains active.
 
-In R-present sessions, reticulate remains required for interpreter discovery and selection, automatic-resolution callbacks, object conversion, and cross-language and module-load integration.
+In R-present sessions, reticulate remains required for interpreter discovery and selection, object conversion, and cross-language integration.
+Reached imports use the same native managed-requirement callback with and without R.
 Console owns initialization of the selected interpreter and tracks completion of its private runtime setup in the retained library state.
 Both a first Python cell and Python use from R reach that native owner before reticulate attaches.
 A failed or interrupted selection has not applied generic process-environment changes.
@@ -339,34 +355,32 @@ Once CPython is running, attachment errors retain the selected environment and c
 `RETICULATE_PYTHONPATH`, when supplied, selects the common startup `PYTHONPATH` for both the interpreter and its children.
 R's already-initialized interoperability marker remains a bridge input.
 RStudio-only loader symlink manipulation and Windows Qt plugin setup are not part of Console's embedding path.
-Console's native requirement store owns declaration transitions and preparation orchestration for explicit Python requirements, automatic imports, and managed `reticulate::py_require()` calls.
-It holds the operative character values behind the existing R active binding; `src/python/requirements/r.rs` preserves field presence and ordering, attributes, encodings, history, and copy isolation.
-Call-local candidates use that representation without introducing another retained manifest.
-Reticulate converts declaration arguments and reports package warnings, while its existing helpers check live version and package compatibility and configure the native owner's chosen candidate.
-The native owner compares that candidate's `libpython` with reticulate's live configuration and activates the selected environment through the retained CPython library.
-The live interpreter pin is resolver input, separate from retained user version declarations.
-The native store also owns the transient pending-activation key, matches the subsequent requirement write, and publishes `PythonActivated` after committing that write.
-The R adapter supplies the existing normalized R projection when the native owner records the pending key after activation and process-environment setup succeed, without mirroring the current requirement object.
-The successful initial reticulate initialization hook reports through the same native owner at its separate lifecycle point, without a pending-activation transaction.
-The store remains R-dependent for candidate lookup, reticulate configuration, and the existing host-resolver callback.
-Lazy declarations and snapshot restoration do not report activation; explicit preparation can materialize a lazy manifest without initializing Python.
-Every managed resolver candidate carries the execution-host inspection through the existing transaction, including R-mediated resolution.
-The server commits that identity together with the accepted environment at activation or successful lazy preparation; discarded candidates cannot change a later launch.
-The R adapter caches only the provisional inspected identity for selection, without another retained requirement manifest.
-Requirement objects and their protection stay on the R thread, and native state borrows end before R allocation, comparison, protection release, resolver callbacks, interpreter execution, or notification publication.
-Cell dispatch and runtime installation release the library-state lock before executing Python, and native console callbacks release the GIL while blocking on worker services.
-Python stream wrappers restrict those callbacks to the main worker thread; binary buffers, descriptors, background threads, and fork children use their underlying streams, including cached or redirected stream objects.
-R API calls and R object protection are confined to the thread that initialized R; the GIL alone cannot authorize an R call from a Python thread.
-CPython API access acquires the GIL, and Console saves and restores its initial thread state on that same worker thread.
-Serializing all cells on this thread is Console's current scheduling choice; R affinity, synchronous R-to-Python-to-R callbacks, and process-global signals constrain any later separation.
-Reticulate's Positron helper (`R/thread.R`, `inst/python/rpytools/thread.py`) runs Python services on background threads and schedules R callbacks back onto the main thread; it does not move R evaluation to an arbitrary Python thread.
-A separate Python execution thread would require callback routing, interrupt ownership, and shutdown coordination before synchronous cross-language calls could preserve their behavior.
-The remaining initialization and managed-control work is tracked separately in [the peer-runtime completion proposal](../design-sketches/peer-runtime-completion.md).
-The DB-API adapter continues to execute through the CPython API, while managed DuckDB remains in R.
-Before normal worker exit, it restores the main Python thread's saved attachment so extension-library exit destructors, including DuckDB's, can use Python safely.
-Its private Python runtime conditionally appends a last-chance import finder, while the R Python bridge connects reticulate to that store and supplies the callback into the existing managed-Python resolver.
-Bare sessions leave both resolution adapters disabled.
-Their user-visible behavior belongs in the [built-in runtime guide](BUILTIN_RUNTIME.md), while the sideband contract remains independent of the interpreter implementation.
+`src/python/requirements.rs` retains the worker's live normalized declaration and inspected identity, the last resolved candidate, and provisional R declaration values.
+This replaces the separate `native.rs` store and reticulate adapter's resolved-selection slot.
+These values describe worker state; only the server can accept an environment for a generation and retain it for replacement.
+The R adapter preserves field presence and ordering, NA values, string bytes and encoding, attributes, history, protected lifetimes, and copy isolation without a JSON round trip.
+R declarations retain reticulate's argument validation, warnings, live version/package checks, conditions, and add-only restrictions.
+Reached imports resolve and activate through the common owner, projecting R metadata before mutation and publishing it after success when the adapter exists.
+The host-inspected identity supplies the candidate library and prefixes.
+Reticulate's exact-executable inspection supplies only additional conversion metadata; generic `python_config()` discovery is not used for activation.
+Compatibility rejection precedes conversion metadata and interpreter mutation.
+An unsafe activation failure marks the generation restart-required even when reported through an R condition.
+A successfully published activation remains accepted when the subsequent import or cell fails.
+Idle tool preparation still has separate server entry points, and its R path still calls the R declaration adapter.
+Removing that control split, independently initializing available R, and attaching the bridge after ordinary Python startup remain unfinished.
+Lazy declarations and snapshot restoration do not publish activation.
+Successful pre-initialization preparation materializes the declaration and commits its inspected launch identity through the existing preparation receipt.
+The live interpreter pin is resolver input, separate from retained user version constraints.
+R activation retains a transient matching key until reticulate accepts its configuration and writes the declaration; initial interpreter setup publishes through its own hook without that key.
+The initial hook records the running inspected identity directly, including R-side selections that did not require a managed resolver candidate.
+If a startup package already initialized reticulate, adapter installation records its managed state after registering that running identity and before common setup, without waiting for another initialization event.
+When Python initializes before worker readiness, the coordinator publishes its initial requirements immediately after `Ready`; subsequent initialization publishes directly through the same owner.
+If adoption bypassed the resolver hook, the first reached import inspects the accepted executable on its execution host before preparing a candidate; the worker still checks that candidate against its actual retained library before mutation.
+An external startup package can select its original environment again on restart; accepted declarations survive, but adoption does not replay activation into that already-running interpreter.
+Native console callbacks release the GIL while blocking on worker services and are confined to the configuring worker thread.
+Background threads and fork children use their underlying streams and cannot enter R through these services.
+Bare sessions leave managed resolution disabled.
+The remaining initialization and managed-control work is tracked in [the peer-runtime completion proposal](../design-sketches/peer-runtime-completion.md).
 
 ## Worker generations
 

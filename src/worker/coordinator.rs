@@ -61,6 +61,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         (r, python, sql)
     };
     writer.send(&WorkerMessage::Ready)?;
+    python.publish_initial_requirements()?;
     let mut coordinator = Coordinator {
         writer,
         r,

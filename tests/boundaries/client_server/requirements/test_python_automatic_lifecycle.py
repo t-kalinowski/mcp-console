@@ -247,8 +247,9 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(python="None")
-            assert last_result_text(client) == "[done]"
+            client.send(python="import sys; print(sys.executable)")
+            executable = last_result_text(client).strip()
+            client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
             server = capture_process_identity(client.process.pid)
             owner = local_resolver_owner(server, binary)
             existing_children = child_process_identities(owner)
@@ -287,7 +288,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             ):
                 assert expected in error, (expected, error)
             interrupt["result"]["content"][0]["text"] = (
-                normalize_python_resolution_error(error)
+                normalize_python_resolution_error(error, executable=executable)
             )
 
             client.send(

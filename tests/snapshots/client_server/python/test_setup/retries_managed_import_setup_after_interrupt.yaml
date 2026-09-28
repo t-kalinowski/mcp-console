@@ -1,0 +1,139 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    options(reticulate.python.afterInitialized = function() {
+      reticulate::py_run_string(paste(
+        "import numpy as np, threading",
+        "original_get_printoptions = np.get_printoptions",
+        "original_get_ident = threading.get_ident",
+        "runtime_identity = object()",
+        "runtime_identity_id = id(runtime_identity)",
+        "def configuring_thread():",
+        "    threading.get_ident = original_get_ident",
+        "    input('Managed import setup> ')",
+        "    return original_get_ident()",
+        "def configure_thread_checkpoint():",
+        "    np.get_printoptions = original_get_printoptions",
+        "    threading.get_ident = configuring_thread",
+        "    return original_get_printoptions()",
+        "np.get_printoptions = configure_thread_checkpoint",
+        sep = "\n"
+      ))
+    })
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: raise AssertionError('interrupted setup ran the cell')
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "Managed import setup> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: "\n"
+  isError: false
+---
+send:
+  python: >-
+    import yaml12; assert id(runtime_identity) == runtime_identity_id;
+    print('managed import setup retried')
+result:
+  content:
+    - type: text
+      text: |
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
+        managed import setup retried
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas",
+              "py-yaml12"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python:
+        - numpy
+        - pandas
+        - py-yaml12
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false

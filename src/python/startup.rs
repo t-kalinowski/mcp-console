@@ -70,8 +70,8 @@ pub(super) fn install_services(libpython: &Path) -> Result<(), String> {
 }
 
 /// Install the shared evaluator after the selected interpreter is live.
-/// Reticulate may call this from its initialization hook, while a native
-/// caller can pass no callback without constructing an R adapter.
+/// Reticulate may call this from its initialization hook. Both compositions
+/// install their managed or disabled import policy through this setup boundary.
 /// Successful steps remain in the process-lifetime library state, so a later
 /// call resumes incomplete setup without replacing the interpreter.
 pub(crate) fn setup_runtime(
@@ -92,12 +92,10 @@ pub(crate) fn setup_runtime(
     if !super::library::configure_environment()? {
         return Ok(false);
     }
-    // The finder starts with automatic resolution disabled. A native caller
-    // with neither input keeps that default rather than replacing its reason
-    // with Python None.
-    if (resolution.callback.is_some() || resolution.disabled_reason.is_some())
-        && !super::library::configure_import_resolution(resolution)?
-    {
+    if !super::library::configure_module_defaults()? {
+        return Ok(false);
+    }
+    if !super::library::configure_import_resolution(resolution)? {
         return Ok(false);
     }
     super::library::mark_runtime_configured()?;
@@ -118,17 +116,16 @@ pub(super) fn initialize_native(
     initialize_selected(configuration)?;
     let result = setup_runtime(
         Path::new(&selected.libpython),
-        ImportResolution {
-            callback: None,
-            disabled_reason: Some(if managed {
-                crate::local_runtime::MANAGED_IMPORT_DISABLED
-            } else {
+        if managed {
+            ImportResolution::Managed
+        } else {
+            ImportResolution::Disabled(
                 match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
                     Ok("docker") => "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session",
                     Ok("docker_sandbox") => "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session",
                     _ => crate::local_runtime::IMPORT_DISABLED,
-                }
-            }),
+                },
+            )
         },
     )
     .and_then(|configured| {
@@ -136,9 +133,6 @@ pub(super) fn initialize_native(
             return Err("native Python setup did not complete".into());
         }
         super::library::configure_native_sql()?;
-        if !super::library::disable_matplotlib_show()? {
-            return Err("Python plotting setup did not complete".into());
-        }
         Ok(())
     });
     if result.is_err() {
@@ -152,8 +146,7 @@ pub(super) fn initialize_native(
             .map_err(|error| format!("managed Python launch omitted its declaration: {error}"))?;
         let manifest = serde_json::from_str(&manifest)
             .map_err(|error| format!("invalid managed Python declaration: {error}"))?;
-        super::native::initialize(configuration, manifest)?;
-        super::library::configure_native_import_resolution()?;
+        super::requirements::initialize(configuration, manifest)?;
     }
     Ok(())
 }
