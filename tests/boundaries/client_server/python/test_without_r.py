@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
+    assert_exact_interleaving,
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
@@ -2427,12 +2428,32 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             temporary = Path((workspace / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "failed startup removed selected environment"
-            for record in records:
-                for content in record.get("result", {}).get("content", []):
-                    if content["type"] == "text":
-                        content["text"] = content["text"].replace(
-                            str(venv), "<selected environment>"
-                        )
+            content = records[-1]["result"]["content"][0]
+            diagnostic = (
+                "Traceback (most recent call last):\n"
+                '  File "<string>", line 705, in _mcp_console_configure_environment\n'
+                "RuntimeError: embedded Python prefix differs from the selected environment: "
+                f"'changed-by-startup-hook' != {str(venv)!r}\n"
+            )
+            stderr = (
+                "Python environment setup failed; restart required\n"
+                "Python exit thread attached\n"
+            )
+            lifecycle = (
+                "[worker sideband read failed: worker sideband closed]\n"
+                "[worker exited with status 1]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n[idle]"
+            )
+            assert content["text"].endswith(lifecycle), content
+            # Sideband diagnostics and terminal stderr are independent streams.
+            # Preserve every byte and each producer's order before recording.
+            assert_exact_interleaving(
+                content["text"][: -len(lifecycle)], diagnostic, stderr
+            )
+            content["text"] = (diagnostic + stderr + lifecycle).replace(
+                str(venv), "<selected environment>"
+            )
             return records
 
 
