@@ -55,7 +55,7 @@ base::local(
       on.exit(close(connection), add = TRUE)
       metadata <- read.dcf(connection, all = TRUE)
       root <- dirname(dirname(python))
-      structure(
+      config <- structure(
         list(
           python = python,
           executable = python,
@@ -96,6 +96,10 @@ base::local(
         ),
         class = "py_config"
       )
+      if (!is.na(managed)) {
+        config$ephemeral <- TRUE
+      }
+      config
     }
 
     install_managed_python <- function(...) {

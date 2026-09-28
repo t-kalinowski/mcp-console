@@ -27,10 +27,13 @@ base::local(
       running <- .Call("mcp_console_running_python")
       if (!is.null(running)) {
         identity <- jsonlite::fromJSON(running)
-        for (requested in c(
-          Sys.getenv("RETICULATE_PYTHON"),
-          globals$required_python_version
-        )) {
+        requests <- globals$required_python_version
+        # An unchanged hint already selected the captured identity. Resolving
+        # it again after Python changes cwd or PATH would select a new path.
+        if (!.Call("mcp_console_python_environment_selection_unchanged")) {
+          requests <- c(Sys.getenv("RETICULATE_PYTHON"), requests)
+        }
+        for (requested in requests) {
           if (
             nzchar(requested) &&
               requested != "managed" &&

@@ -381,6 +381,8 @@ An R cell, Python-side `r` access, or R-owned SQL initializes R.
 Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, and display settings.
 Linux loader preparation happens before either interpreter starts.
 R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
+An unchanged `RETICULATE_PYTHON` selection retains that identity after Python changes the working directory or `PATH`.
+Late attachment preserves reticulate's `ephemeral` marker for Console-managed environments.
 Console activates live managed environments through its retained CPython library.
 The shared Python runtime sets NumPy and pandas display width to 200 columns when they retain their library defaults.
 A different width selected by a Python startup hook is preserved, as are subsequent user changes.

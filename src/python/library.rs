@@ -121,6 +121,8 @@ enum Interpreter {
 
 struct Configuration {
     selected: super::NativePython,
+    // Preserve the selection hint before startup hooks can change cwd or PATH.
+    reticulate_python: Option<std::ffi::OsString>,
     program_name_wide: Vec<libc::wchar_t>,
 }
 
@@ -174,6 +176,17 @@ pub(super) fn initialized_selection() -> Result<Option<super::NativePython>, Str
         })
         .flatten()
     }))
+}
+
+pub(super) fn environment_selection_unchanged() -> Result<bool, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    let configuration = slot
+        .as_ref()
+        .and_then(|library| library.configuration.as_ref())
+        .ok_or("Python interpreter selection is unavailable")?;
+    Ok(std::env::var_os("RETICULATE_PYTHON") == configuration.reticulate_python)
 }
 
 pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String> {
@@ -1099,6 +1112,7 @@ impl Configuration {
     fn new(selected: &super::NativePython) -> Result<Self, String> {
         Ok(Self {
             selected: selected.clone(),
+            reticulate_python: std::env::var_os("RETICULATE_PYTHON"),
             program_name_wide: wide_string(&selected.embedding.python, "program name")?,
         })
     }

@@ -330,6 +330,8 @@ Prepared targets instead expose their inspected capabilities: genuine Python abs
 Availability, captured identity, library initialization, shared setup completion, and bridge attachment are separate state.
 When Python is already running, R startup packages are deferred until Console installs the selection hooks.
 Attachment obtains conversion metadata from the captured executable.
+The native configuration retains the `RETICULATE_PYTHON` hint present at initialization; an unchanged hint is not resolved again against a later working directory or `PATH`.
+Reconstructed reticulate configuration carries the managed environment's `ephemeral` marker.
 Conflicting later selections require restart; a completed selection callback is not replayed during attachment.
 Failed partial R initialization requires worker replacement.
 Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.

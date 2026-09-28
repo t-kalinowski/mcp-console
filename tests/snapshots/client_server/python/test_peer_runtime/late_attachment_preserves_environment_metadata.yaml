@@ -14,6 +14,7 @@ send:
     config <- reticulate::py_config()
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+      !isTRUE(config$ephemeral),
       identical(
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
@@ -52,6 +53,7 @@ send:
     config <- reticulate::py_config()
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+      !isTRUE(config$ephemeral),
       identical(
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
@@ -90,6 +92,7 @@ send:
     config <- reticulate::py_config()
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+      !isTRUE(config$ephemeral),
       identical(
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"

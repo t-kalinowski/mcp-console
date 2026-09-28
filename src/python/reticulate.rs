@@ -81,6 +81,15 @@ pub extern "C-unwind" fn mcp_console_running_python() -> harp::Result<SEXP> {
     }
 }
 
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_environment_selection_unchanged() -> harp::Result<SEXP>
+{
+    let unchanged = super::library::environment_selection_unchanged()
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(unchanged).sexp)
+}
+
 impl Adapter {
     pub(super) fn initialize() -> Result<Self, String> {
         let managed = std::env::var_os("MCP_CONSOLE_MANAGED_PYTHON").is_some();

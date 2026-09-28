@@ -52,7 +52,9 @@ result:
   isError: false
 ---
 send:
-  r: stopifnot("packaging" %in% reticulate::py_require()$packages)
+  r: >-
+    stopifnot("packaging" %in% reticulate::py_require()$packages,
+    isTRUE(reticulate::py_config()$ephemeral))
 result:
   content:
     - type: text

@@ -1,6 +1,6 @@
 ---
 send:
-  r: invisible(NULL)
+  r: stopifnot(!isTRUE(reticulate::py_config()$ephemeral))
 result:
   content:
     - type: text

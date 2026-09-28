@@ -247,7 +247,7 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
     return records
 
 
-@requires(R)
+@requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_late_attachment_preserves_environment_metadata(
     binary: Path, execution: Execution
@@ -264,6 +264,13 @@ def test_late_attachment_preserves_environment_metadata(
                     check=True,
                 )
                 executable = prefix / "bin/python"
+                # Explicit environments still need reticulate's default
+                # NumPy declaration satisfied before bridge attachment.
+                subprocess.run(
+                    ["uv", "pip", "install", "--python", str(executable), "numpy"],
+                    check=True,
+                    capture_output=True,
+                )
             elif kind == "conda-marker":
                 # Exercise both values of reticulate's Conda metadata marker in
                 # a test-owned environment, without installing a Conda manager.
@@ -287,6 +294,7 @@ def test_late_attachment_preserves_environment_metadata(
                     config <- reticulate::py_config()
                     stopifnot(
                       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+                      !isTRUE(config$ephemeral),
                       identical(
                         config$conda,
                         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
@@ -497,7 +505,7 @@ def test_idle_preparation_keeps_r_uninitialized(
                 last_result_text(client) == "idle preparation uses the Python owner\n"
             ), client.transcript[-1]
             client.send(
-                r='stopifnot("packaging" %in% reticulate::py_require()$packages)'
+                r='stopifnot("packaging" %in% reticulate::py_require()$packages, isTRUE(reticulate::py_config()$ephemeral))'
             )
             assert last_result_text(client) == "[done]", client.transcript[-1]
             return client.finish()[3:]
@@ -751,17 +759,35 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
         )
         reference = None
         records = None
-        for mode in ("without-r", "python-first", "r-first"):
-            workspace = root / mode
-            workspace.mkdir()
+        for mode in (
+            "without-r",
+            "python-first",
+            "python-first-relative",
+            "python-first-command",
+            "r-first",
+        ):
+            workspace = root if mode == "python-first-relative" else root / mode
+            if workspace != root:
+                workspace.mkdir()
+            (workspace / "after-startup").mkdir()
+            selection = (
+                os.path.relpath(executable, workspace)
+                if mode == "python-first-relative"
+                else str(executable)
+            )
             environment = dict(
                 os.environ,
-                RETICULATE_PYTHON=str(executable),
-                MCP_CONSOLE_TEST_PYTHON=str(executable),
+                RETICULATE_PYTHON=selection,
+                MCP_CONSOLE_TEST_PYTHON=str(workspace.resolve() / selection),
                 MCP_CONSOLE_TEST_PYTHON_PREFIX=str(venv),
                 PYTHONPATH=str(root / "unselected-modules"),
                 RETICULATE_PYTHONPATH=str(modules),
             )
+            if mode == "python-first-command":
+                environment["RETICULATE_PYTHON"] = "python"
+                environment["PATH"] = os.pathsep.join(
+                    (str(executable.parent), environment["PATH"])
+                )
             if mode == "without-r":
                 without_r(environment, workspace)
             with McpClient(binary, execution.serve(), environment, workspace) as client:
@@ -813,13 +839,36 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                     records = client.finish()[3:]
                 else:
                     assert actual == reference
+                    client.send(
+                        python="peer_object = object(); peer_id = id(peer_object); os.chdir('after-startup')"
+                    )
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
                     client.send(r=CLI_CHECK)
                     assert last_result_text(client) == "[done]", client.transcript[-1]
+                    if mode == "python-first-relative":
+                        # A genuinely changed selection still fails before
+                        # attachment, and restoring the original hint retries.
+                        client.send(
+                            r=code("""
+                            original <- Sys.getenv("RETICULATE_PYTHON")
+                            Sys.setenv(RETICULATE_PYTHON = "/incompatible-python")
+                            failure <- tryCatch(reticulate::py_config(), error = conditionMessage)
+                            stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
+                            Sys.setenv(RETICULATE_PYTHON = original)
+                            """)
+                        )
+                        assert last_result_text(client) == "[done]", client.transcript[
+                            -1
+                        ]
                     client.send(r='check_cli("peer-cli", "mcp_console_test_cli")')
                     assert (
                         last_result_text(client)
                         == "installed CLI uses the selected Python environment\n"
                     ), client.transcript[-1]
+                    client.send(
+                        python="assert id(peer_object) == peer_id; assert builtins.peer_bootstrap_count == 1"
+                    )
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
                     client.finish()
         assert records is not None
         return records
@@ -939,11 +988,12 @@ def test_shared_managed_bootstrap_and_replacement(
     binary: Path, execution: Execution
 ) -> Transcript:
     records = None
-    for with_r in (False, True):
+    for mode in ("without-r", "python-first", "r-first"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             environment = dict(os.environ)
             environment.pop("RETICULATE_PYTHON", None)
+            with_r = mode != "without-r"
             if not with_r:
                 uv = shutil.which("uv")
                 assert uv is not None
@@ -955,7 +1005,7 @@ def test_shared_managed_bootstrap_and_replacement(
                     "structuredContent"
                 ]["requirements"]["python"]
                 assert "numpy" in defaults, defaults
-                if with_r:
+                if mode == "r-first":
                     client.send(
                         r="stopifnot(!reticulate::py_available(initialize = FALSE))"
                     )
@@ -998,6 +1048,11 @@ def test_shared_managed_bootstrap_and_replacement(
                     last_result_text(client)
                     == "managed identity and child environment agree\n"
                 ), client.transcript[-1]
+                if with_r:
+                    client.send(
+                        r="stopifnot(isTRUE(reticulate::py_config()$ephemeral))"
+                    )
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
                 client.send(
                     python="import more_itertools; assert id(peer_object) == peer_id; assert sys.base_prefix == peer_library; print('live import retained objects')"
                 )
@@ -1169,7 +1224,7 @@ def attach_python_initialized_during_r_startup(
                 assert last_result_text(client) == "[done]", client.transcript[-1]
             # R-first startup adopts external CPython. With Python already live,
             # the same startup package must attach to Console's interpreter.
-            client.send(r="invisible(NULL)")
+            client.send(r="stopifnot(!isTRUE(reticulate::py_config()$ephemeral))")
             assert last_result_text(client) == "[done]", client.transcript[-1]
             if python_first:
                 client.send(
