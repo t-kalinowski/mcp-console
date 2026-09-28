@@ -409,7 +409,9 @@ fn run(
                         .map_err(|_| format!("{owner} writer stopped"))?;
                 }
                 Event::Control { id, control, reply } => {
-                    if active.as_ref().is_some_and(|pending| pending.id == id) {
+                    // Close already cancels active work and is the final host
+                    // request. A concurrent control must not write after it.
+                    if !close_requested && active.as_ref().is_some_and(|pending| pending.id == id) {
                         outgoing
                             .send(Input::Control { id, control })
                             .map_err(|_| format!("{owner} writer stopped"))?;
