@@ -1,0 +1,29 @@
+# Build from the repository root: docker build -f examples/docker/Dockerfile.python -t my-console:python .
+FROM rust:1.95-bookworm AS build
+ENV CARGO_PROFILE_RELEASE_DEBUG=0
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv pkg-config libcap-dev cmake clang && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/build && /opt/build/bin/pip install uv
+WORKDIR /source
+COPY sandbox-runner.json checkout_workflow.py ./
+COPY scripts/stage-sandbox-runner ./scripts/
+RUN python3 scripts/stage-sandbox-runner
+COPY . .
+RUN /opt/build/bin/uv build --wheel --out-dir /wheels
+
+# CPython's shared library is supplied by the image; no R or reticulate is installed.
+FROM python:3.12-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcap2 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/console-python && /opt/console-python/bin/pip install \
+    numpy pandas matplotlib duckdb uv
+# A second preinstalled interpreter also exercises missing optional dependencies.
+RUN python3 -m venv /opt/console-minimal
+COPY --from=build /wheels /wheels
+RUN /opt/console-python/bin/pip install /wheels/*.whl && rm -rf /wheels
+# Preinstall an extension in the image's normal cache, outside disposable storage.
+RUN /opt/console-python/bin/python -c 'import duckdb; duckdb.connect().install_extension("fts")'
+ENV PATH="/opt/console-python/bin:${PATH}"
+RUN mkdir /workspace
+WORKDIR /workspace
+CMD ["mcp-console"]

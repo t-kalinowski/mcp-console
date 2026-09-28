@@ -115,9 +115,81 @@ elif args[0] == "exec":
     probe = args[-1] == "docker-sandbox-probe"
     if (probe and mode == "probe-gate") or (not probe and mode == "launch-gate"):
         gate()
-    frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
+    frame(
+        1,
+        {
+            "version": 3 if mode == "probe-version" else bootstrap["version"],
+            "build": "unsupported" if mode == "probe-build" else bootstrap["build"],
+        },
+    )
     if probe:
-        frame(3, {"confirmed": True, "error": None})
+        if mode.startswith("native-"):
+            runtime = {
+                "discovery": {
+                    "managed": False,
+                    "selections": {"r_home": None, "python": None},
+                },
+                "r": None,
+                "python": None,
+                "native": {
+                    "kind": "python",
+                    "selected": {
+                        "embedding": {
+                            "python": "/target-only/bin/python3",
+                            "libpython": "/target-only/lib/libpython.so",
+                            "python_home": "/target-only",
+                        },
+                        "prefix": "/target-only",
+                        "exec_prefix": "/target-only",
+                        "base_prefix": "/target-only",
+                        "base_exec_prefix": "/target-only",
+                    },
+                    "explicit": None,
+                    "managed": False,
+                    "duckdb_extension_directory": None,
+                },
+            }
+        else:
+            runtime = {
+                "discovery": {
+                    "managed": False,
+                    "selections": {
+                        "r_home": "/usr/lib/R",
+                        "python": "/opt/analysis/bin/python",
+                    },
+                },
+                "r": None,
+                "python": None,
+            }
+        if mode == "native-managed":
+            runtime["native"]["managed"] = True
+        if mode == "native-r-conflict":
+            runtime["discovery"]["selections"]["r_home"] = "/usr/lib/R"
+        if mode == "native-relative":
+            runtime["native"]["selected"]["embedding"]["python"] = "relative/python"
+        if mode == "native-prefix":
+            runtime["native"]["selected"]["embedding"]["python_home"] = "/other"
+        if mode == "native-unknown":
+            runtime["native"]["unused"] = "unsupported"
+        if mode == "native-embedding-unknown":
+            runtime["native"]["selected"]["embedding"]["unused"] = "unsupported"
+        if mode == "probe-managed":
+            runtime["discovery"]["managed"] = True
+        if mode == "probe-oversized":
+            runtime["discovery"]["selections"]["r_home"] = "/" + "r" * (64 * 1024)
+        if mode != "missing-runtime":
+            frame(2 if mode == "probe-data" else 4, runtime)
+        if mode == "duplicate-runtime":
+            frame(4, runtime)
+        if mode == "probe-extra":
+            print("unframed startup output", flush=True)
+        frame(
+            3,
+            {
+                "confirmed": mode != "probe-unconfirmed",
+                "error": "probe validation failed" if mode == "probe-failed" else None,
+            },
+        )
     else:
         frame(2, {"kind": "ready"})
         for line in source:

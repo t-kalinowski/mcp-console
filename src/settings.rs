@@ -164,15 +164,21 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .map_err(|error| format!("{name}: {error}"))?;
     }
     let target = project.target.filter(|target| !target.is_local_host());
-    let remote_python = target
-        .as_ref()
-        .is_some_and(|target| matches!(target.compute, Compute::Host {}));
+    let remote_python = target.is_some();
     Ok(Captured {
         python: project
             .python
             .map(|path| {
                 if path.as_os_str().is_empty() {
-                    return Err("python must name an executable; omit it to use uv".to_string());
+                    let default = match target.as_ref().map(|target| &target.compute) {
+                        Some(Compute::Docker(_) | Compute::DockerSandbox(_)) => {
+                            "select preinstalled target Python"
+                        }
+                        _ => "use uv",
+                    };
+                    return Err(format!(
+                        "python must name an executable; omit it to {default}"
+                    ));
                 }
                 if remote_python {
                     Ok(path)

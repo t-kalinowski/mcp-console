@@ -157,14 +157,66 @@ Standalone `sandbox -- COMMAND` remains local for supported native selections an
 ## Runtime and policy
 
 The in-VM launcher verifies the existing working directory and compatible runtime, applies workload environment controls, and starts the ordinary relay and worker directly.
-R needs a loadable shared library; Python must satisfy Console's existing image-runtime compatibility checks.
+R discovery and CPython inspection use the same prepared-runtime implementation as Docker, under the effective workload environment.
+Discovered R needs a loadable shared library; explicit or discovered broken R reports its own error.
+Genuine R absence selects native Python/SQL without constructing reticulate or R DBI.
+CPython must provide a loadable matching shared embedding library and satisfy Python 3.10 or later.
 Explicit `R_HOME` and `RETICULATE_PYTHON` are VM paths.
 Image environment is preserved by default.
 Workload controls are applied inside the VM, after the SBX CLI has launched, and cannot configure the controller CLI or daemon.
 
 Use preinstalled packages.
-`requirements` is omitted from the tool schema and rejected if supplied.
+The schema exposes `requirements.action="get"` for the retained declaration; it is not an installed-package inventory.
+Requirement mutations are rejected before control, code, or input delivery.
 Console never discovers controller interpreters or runs controller resolvers for this target.
+
+### Prepared Python without R
+
+The [R-free template Dockerfile](../examples/docker-sandbox/Dockerfile.python) uses the existing shell template, preinstalls Python analysis packages and `fts`, and copies the compatible Linux application from the wheel-installed [Docker Python image](../examples/docker/Dockerfile.python).
+The final template has no R, reticulate, or native companion.
+Build both images from the repository root:
+
+```sh
+docker build -f examples/docker/Dockerfile.python -t my-console:python .
+docker build -f examples/docker-sandbox/Dockerfile.python \
+  --build-arg CONSOLE_IMAGE=my-console:python -t my-console-sbx:python .
+docker image save my-console-sbx:python -o console-python.tar
+python3 examples/docker-sandbox/qualify-oci.py \
+  console-python.tar console-python.oci.tar \
+  docker.io/library/my-console-sbx > console-python-reference.txt
+sbx template load console-python.oci.tar
+```
+
+Use that digest-qualified reference in `.agents/console/config.yaml`:
+
+```yaml
+python: ../opt/console-python/bin/python
+target:
+  workspace: /workspace
+  compute:
+    kind: docker_sandbox
+    template: docker.io/library/my-console-sbx@sha256:<manifest-digest>
+sandbox:
+  provider: compute
+```
+
+Top-level `python` takes precedence over workload/image `RETICULATE_PYTHON`.
+Relative paths, including a bare filename, resolve inside `target.workspace`.
+Without an explicit selection, discovery uses preinstalled `python3`, then `python`, from the effective workload PATH.
+A selected interpreter that fails inspection retains its error; Console never selects another interpreter or invokes uv.
+The same retained native descriptor reaches every generation even with disabled environment inheritance or conflicting Python layout overrides.
+
+Python and SQL use the existing evaluator and DB-API backend.
+Optional NumPy, pandas, DuckDB, and Matplotlib are not startup prerequisites.
+Missing packages remain ordinary errors; missing DuckDB leaves Python and custom connections available.
+Preinstalled extensions load from the template's cache; Console never prepares or automatically installs them.
+Rebuild and import a new template, then start a new server session, to change packages or runtime selection.
+Plain restart and crash replacement retain the captured template/interpreter and reset Python state and the in-memory catalog.
+
+The in-VM target launcher owns a private temporary directory through relay retirement.
+SQL spill files and stored secrets remain disposable; shared paths and preinstalled caches retain their provider ownership.
+SBX compute enforcement, inherited policy, VM removal checks, and isolation limits remain unchanged.
+No native companion is discovered or launched, including with `serve --no-sandbox`.
 Dynamic resolution and reticulate's implicit managed installation stay disabled even when `uv` or `ir` is installed in the template, or YAML tries to enable Console's private dynamic-resolution variable.
 To change packages, prepare another template and start another server session.
 
@@ -256,6 +308,8 @@ After host, daemon, or owner-helper failure, Console cannot guarantee independen
 Retain reported identities for manual recovery after the provider becomes available.
 
 Records identify the compute kind, effective provider, CLI version, captured template reference, VM name/UUID, target cwd, and shared-path access separately from controller recording paths.
+Runtime metadata identifies R or native Python, its non-managed status, and retained target interpreter paths; native Python also records embedding-library and prefix paths.
+These paths belong to the template and are never checked or loaded on the controller.
 Target metadata contains no workload environment or credential values.
 MicroVM UUIDs are not labeled Docker container IDs.
 Quarto exports remain source-only and execute the captured cells when rendered; recreate the runtime and files first.
@@ -279,6 +333,11 @@ scripts/test client_server/server/test_docker_sandbox_runtime \
   client_server/server/test_docker_sandbox_lifecycle \
   client_server/server/test_docker_sandbox_policy
 ```
+
+For the R-free example, set `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE` to the reference in `console-python-reference.txt` and run `scripts/test client_server/python/test_prepared_without_r`.
+Set `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE` to the R-free Docker image to exercise both providers with the shared suite.
+The cases use installed compatible builds, real resources, controller runtime/resolver sentinels, and authoritative removal checks.
+The [cross-target acceptance audit](PREPARED_RUNTIME_ACCEPTANCE.md) records the validation scope and provider limitations.
 
 Network inheritance acceptance additionally requires `MCP_CONSOLE_TEST_SBX_NETWORK=1` and an existing policy allowing `pypi.org:443` and `registry.npmjs.org:443` while denying `example.com:443`.
 Independent container retirement acceptance requires `MCP_CONSOLE_TEST_SBX_INNER_DOCKER=1`, the example `shell-docker` template, and existing provider access to pull `busybox:1.37.0` inside the owned VM.

@@ -597,7 +597,12 @@ impl Client {
         }
         let session = startup::with_input_owner(|started| {
             crate::target_session::Session::setup_compute(
-                target, roots, &policy, no_sandbox, started,
+                target,
+                roots,
+                &policy,
+                no_sandbox,
+                python.as_deref(),
+                started,
             )
         })?;
         let mut client = Self::with_arguments(
@@ -616,7 +621,9 @@ impl Client {
                 r_resolver: RResolver::Disabled,
             }),
         );
-        Arc::get_mut(&mut client.0).expect("new client").target = Some(session);
+        let inner = Arc::get_mut(&mut client.0).expect("new client");
+        inner.python_only = session.python_only();
+        inner.target = Some(session);
         Ok(client)
     }
 
@@ -714,6 +721,20 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        if let Some(target) = &self.0.target
+            && !target.is_ssh()
+            && request.requirements.is_some()
+        {
+            let source = if matches!(target, crate::target_session::Session::Docker(..)) {
+                "image"
+            } else {
+                "template"
+            };
+            return Err(format!(
+                "dynamic environment resolution is disabled for {} targets; install packages in the {source} and start a new server session",
+                target.protocol().0
+            ));
+        }
         if self.python_only() {
             if let Some(requirements) = &request.requirements {
                 if !self.python_preparation() {
@@ -733,15 +754,6 @@ impl Client {
             {
                 return Err("R cells are unavailable in Python sessions without R".into());
             }
-        }
-        if let Some(target) = &self.0.target
-            && !target.is_ssh()
-            && request.requirements.is_some()
-        {
-            return Err(format!(
-                "dynamic environment resolution is disabled for {} targets; install packages in the image and start a new server session",
-                target.protocol().0
-            ));
         }
         request.validate(self.dynamic_resolution() || self.python_preparation())?;
         if let Some(control) = request.control {

@@ -9,7 +9,7 @@ Ordinary Docker retains native provider selection by default; its `external-sand
 The MCP server and recordings stay on the controller.
 Each worker generation gets a fresh Console-owned container containing both the relay and built-in worker.
 Docker image setup happens once before MCP readiness.
-R, Python, Console, its companion bundle, and analysis packages must come from the image; this mode never prepares packages dynamically.
+Python, Console, analysis packages, optional R, and any required native companion must come from the image; this mode never prepares packages dynamically.
 
 ## Build an image and start a session
 
@@ -127,11 +127,14 @@ Select an appropriate image user or `compute.user` when this matters; Console do
 
 ## Environment and sandbox selection
 
-Setup checks Console package/protocol compatibility, the container workspace, R discovery and shared `libR` loadability, Python execution, and native preflight before announcing readiness.
-When `R_HOME` is not selected, both the readiness probe and worker discover R using the effective workload environment, including its configured `PATH`.
-Python 3.10 or later is required.
-Supply `RETICULATE_PYTHON` in the image or workload environment to select an interpreter; without it, the readiness probe requires `python3` on the workload's `PATH`.
-It does not start the analysis worker during this probe.
+Setup checks Console package/protocol compatibility, the container workspace, applicable native policy, and runtimes before announcing readiness.
+R discovery uses the effective workload environment, including `R_HOME` and `PATH`.
+A discovered R installation must supply a loadable shared `libR`; explicit or discovered broken R reports its own error.
+Genuine absence selects the existing native Python/SQL runtime.
+The shared prepared-target probe inspects the selected CPython executable and shared embedding library, requiring Python 3.10 or later.
+It returns a bounded structured runtime descriptor through the [target envelope](RELAY_PROTOCOL.md#target-launch-envelope), with diagnostics on stderr.
+The controller retains it only after compatibility checks, successful validation, and confirmed removal of the disposable probe container.
+It does not start the analysis worker or open a SQL catalog during this probe.
 Missing analysis packages retain ordinary package or adapter errors.
 Install them in the Dockerfile and start a new server session.
 
@@ -143,8 +146,54 @@ Future container preparation must have a separate trusted lifecycle from the rel
 
 The workload starts with image environment defaults plus `sandbox.environment` and `sandbox.inherit_environment`.
 R and Python selections are resolved inside the container.
-Image or explicit target `R_HOME` and `RETICULATE_PYTHON` selections and Console's runtime variables take precedence over conflicting workload controls; malformed native values still reach target-side validation.
+Top-level `python` takes precedence over workload/image `RETICULATE_PYTHON`; runtime selection then remains fixed through workload projection and all worker generations.
+Python layout overrides cannot replace the inspected native interpreter, including with `inherit_environment: false`.
+Malformed native values still reach target-side validation.
 The controller's `HOME`, `TMPDIR`, library paths, and interpreter selections are never forwarded.
+
+### Prepared Python without R
+
+The [R-free Dockerfile](../examples/docker/Dockerfile.python) builds and installs a compatible Linux wheel and its native companion, then preinstalls NumPy, pandas, Matplotlib, DuckDB, and an example `fts` extension.
+It includes CPython's shared embedding library and no R or reticulate.
+Build from the repository root:
+
+```sh
+docker build -f examples/docker/Dockerfile.python -t my-console:python .
+```
+
+Configure the controller's `.agents/console/config.yaml`:
+
+```yaml
+python: ../opt/console-python/bin/python
+target:
+  workspace: /workspace
+  compute:
+    kind: docker
+    image: my-console:python
+    pull: never
+sandbox:
+  filesystem: {kind: external-sandbox}
+  network: enabled
+```
+
+Relative `python` paths, including a bare filename, resolve inside `target.workspace`.
+Omitting `python` preserves an explicit image/workload `RETICULATE_PYTHON`; otherwise it selects `python3`, then `python`, from the effective target PATH.
+Validation failure never falls back to another interpreter.
+The selected executable spelling, virtual environment, prefixes, site-packages, and child interpreter remain intact.
+If environment inheritance is disabled, supply a workload PATH containing any desired discovery commands, or select Python explicitly.
+
+Use Python and SQL cells normally.
+SQL opens its in-memory DuckDB connection on first use and supports user-owned DB-API connections through `console_sql_connection(connection)`.
+If DuckDB is absent, Python and custom connections remain usable.
+Missing packages are ordinary errors; Console never installs them or prepares extensions.
+Rebuild the image and start a new server session to change its dependencies.
+Plain restart and crash replacement use the captured image and interpreter with fresh objects and an empty catalog.
+
+Native sandbox launches retain runner-owned private storage.
+`serve --no-sandbox` supplies private temporary storage through the target launcher and removes it after relay retirement; Docker's outer container cleanup still applies.
+SQL spill files and stored secrets use this disposable storage.
+Preinstalled extension caches and user binds retain their intended locations and ownership.
+The existing Docker isolation limits, bridge networking, mount access, and cleanup-confirmation requirements apply unchanged.
 
 Default native sandbox selection is unchanged.
 Native enforcement runs through the public `mcp-console sandbox` boundary inside the container, with a container-local owner PID.
@@ -200,6 +249,8 @@ After daemon, host, or ownership-helper failure, Console cannot guarantee cleanu
 There is no reconnect, resume, later attachment, heartbeat, or recovery after the local owner itself is killed.
 
 The controller journal records target identity separately from its recording directory and includes generation container IDs.
+Runtime metadata identifies R or native Python, its non-managed status, and retained target interpreter paths; native Python also records embedding-library and prefix paths.
+These paths belong to the image and are never checked or loaded on the controller.
 It records no credential values or environment dump.
 Journals, transcripts, output spools, and returned image bytes remain beneath the controller project's `.agents/console/sessions/` when `.agents/console` already exists there, or beneath the controller's `~/.agents/console/sessions/` otherwise.
 Declared binds may expose the selected directory to the workload.
@@ -242,6 +293,11 @@ export MCP_CONSOLE_TEST_DOCKER_IMAGE=mcp-console-test:analysis
 scripts/test cli/test_docker client_server/server/test_docker client_server/server/test_docker_setup client_server/server/test_docker_lifecycle client_server/server/test_docker_sandbox
 scripts/check --full
 ```
+
+For the R-free example, set `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE` to the Python image and run `scripts/test client_server/python/test_prepared_without_r`.
+The shared suite also accepts `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE` for real SBX execution.
+It covers the retained interpreter, native and direct Docker launches, missing packages, offline extension loading, and owned retirement through public MCP calls.
+The [cross-target acceptance audit](PREPARED_RUNTIME_ACCEPTANCE.md) records the validation scope and provider limitations.
 
 Deferred capabilities include SSH plus Docker, ordinary Docker compute enforcement, Podman guarantees, Windows containers or controllers, inline Dockerfiles, GPU/device/resource controls, arbitrary Docker flags, managed package preparation, synchronization, reconnect/resume, and reusable user containers.
 Transport and compute remain separate fields for future composition.

@@ -59,14 +59,16 @@ There are two environment modes:
   It retains the environment for subsequent workers.
   Resolution failure is reported without trying another interpreter.
 - Set `python: .venv/bin/python` in `.agents/console/config.yaml`, or pass `-c python=.venv/bin/python`, to use an existing environment.
-  Local relative paths use the launch directory; SSH relative paths use `target.workspace` on the execution host.
+  Local relative paths use the launch directory; execution-target relative paths use `target.workspace` on the execution host.
   Console does not invoke uv in this mode, and package preparation is disabled.
   The selected CPython must provide a usable shared embedding library.
 
 The `python` setting takes precedence over inherited `RETICULATE_PYTHON`, which remains supported for compatibility.
 Selection is captured at server startup, including when sandbox environment controls provide different values.
-Without an explicit selection, uv is required; there is no automatic PATH-Python fallback.
-The `python` setting is unavailable with custom workers, Docker, and Docker Sandbox targets.
+Without an explicit selection, local and SSH sessions require uv; there is no automatic PATH-Python fallback for those sessions.
+The `python` setting is unavailable with custom workers.
+Prepared Docker and SBX targets use their preinstalled `python3`, then `python`, from the effective workload PATH when no interpreter is explicitly selected.
+They share the same native runtime and never resolve or install dependencies.
 
 Managed sessions use the execution host's uv configuration, cache, and Python installations.
 Local preparation uses the hidden `mcp-console resolve` subcommand; SSH uses its remote preparation owner.
@@ -131,7 +133,15 @@ R requirements and R cells are unavailable.
 An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
 The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
-Docker and Docker Sandbox targets retain their existing R runtime requirements.
+Docker and Docker Sandbox targets discover R inside the image or template.
+Genuine absence selects native Python; an invalid `R_HOME` or broken R installation reports its R error.
+The CPython inspector checks the selected executable and embedding library without starting an analysis worker or opening a SQL catalog.
+Optional NumPy, pandas, DuckDB, and Matplotlib packages are not required for startup.
+Missing imports keep the non-managed runtime's normal errors.
+Missing DuckDB leaves Python and user-owned DB-API connections available.
+These targets retain one runtime selection with the immutable image/template identity; restart and crash replacement reuse it.
+Private worker storage holds SQL spill files and stored secrets, while preinstalled extension caches retain the target's usual location.
+See the [Docker](DOCKER.md#prepared-python-without-r) and [SBX](DOCKER_SANDBOX.md#prepared-python-without-r) examples.
 
 SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection that opens on the first SQL cell or `sql_connection()` call.
 Python-only cells do not open it.

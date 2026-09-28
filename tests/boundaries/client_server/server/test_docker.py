@@ -51,6 +51,11 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
             assert tool["inputSchema"]["properties"]["requirements"]["properties"][
                 "action"
             ]["enum"] == ["get"], tool
+            for language in ("r", "python", "sql"):
+                assert (
+                    "preinstalled"
+                    in tool["inputSchema"]["properties"][language]["description"]
+                )
             client.send(
                 r='x <- 41; stopifnot(getwd() == "/workspace", file.exists("/.dockerenv")); x + 1'
             )
@@ -81,6 +86,10 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
             )
             client.send(sql="SELECT 6 * 7 AS answer")
             assert "42" in last_result_text(client), last_result_text(client)
+            client.send(
+                r="stopifnot(!DBI::dbGetQuery(sql_connection(), \"SELECT current_setting('autoinstall_known_extensions')\")[[1]])"
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
             client.send(python='print(input("container prompt: "))')
             assert "[waiting for stdin]" in last_result_text(client)
             wait_for_evaluation_output(

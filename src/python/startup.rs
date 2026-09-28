@@ -2,6 +2,7 @@ use super::{ImportResolution, PreparationOutcome, reticulate};
 use std::path::Path;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SelectedPython {
     pub(crate) python: String,
     pub(crate) libpython: String,
@@ -99,7 +100,11 @@ impl Runtime {
                 disabled_reason: Some(if managed {
                     crate::local_runtime::MANAGED_IMPORT_DISABLED
                 } else {
-                    crate::local_runtime::IMPORT_DISABLED
+                    match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
+                        Ok("docker") => "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session",
+                        Ok("docker_sandbox") => "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session",
+                        _ => crate::local_runtime::IMPORT_DISABLED,
+                    }
                 }),
             },
             true,

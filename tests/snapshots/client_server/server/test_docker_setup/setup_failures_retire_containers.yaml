@@ -15,21 +15,26 @@ stderr: |
 rejected_before_readiness: runtime
 container_absent: true
 stderr: |
-  container RETICULATE_PYTHON must select an existing interpreter
+  prepared target RETICULATE_PYTHON validation failed: selected Python executable is not an absolute file: /missing-python
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
 ---
 rejected_before_readiness: python_executable
 container_absent: true
 stderr: |
-  container Python probe failed: Permission denied (os error 13)
+  prepared target RETICULATE_PYTHON validation failed: failed to inspect selected Python executable `/etc/hostname`: Permission denied (os error 13)
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
 ---
 rejected_before_readiness: python_version
 container_absent: true
 stderr: |
-  container Python probe failed with exit status: 1: MCP Console requires Python 3.10 or later
+  prepared target RETICULATE_PYTHON validation failed: selected Python inspection failed (exit status: 1): Traceback (most recent call last):
+    File "/python-version", line 7, in <module>
+      exec(sys.argv[sys.argv.index("-c") + 1])
+    File "<string>", line 99, in <module>
+    File "<string>", line 15, in describe
+  RuntimeError: MCP Console requires Python 3.10 or later
 
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
@@ -37,8 +42,8 @@ stderr: |
 rejected_before_readiness: compatibility
 container_absent: true
 stderr: >
-  incompatible Docker bootstrap: expected protocol 3, Console 0.0.4;
-  received protocol 999, Console incompatible
+  incompatible Docker bootstrap: expected protocol 4, Console 0.0.4; received
+  protocol 999, Console incompatible
 ---
 rejected_before_readiness: native_environment
 container_absent: true

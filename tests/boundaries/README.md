@@ -28,6 +28,13 @@ Docker Sandbox cases separately require standalone `sbx`, usable virtualization/
 Its controller-isolation fixture relocates Console without its companion and installs sentinels for forbidden native/runtime/resolver calls; fake-provider and real-runtime cases retain separate coverage.
 Fake peers establish orchestration contracts, not real container or VM cleanup.
 
+R-free prepared acceptance uses `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE` and `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE`, built with the corresponding `Dockerfile.python` examples.
+Run `scripts/test client_server/python/test_prepared_without_r` after selecting these fixtures.
+The shared public MCP cases exercise real containers/microVMs with target-only interpreter paths and controller/target resolver sentinels.
+They cover SQL-first startup, Python and catalog persistence, custom connections, plotting, input, interruption, debugger continuation, recording, restart/crash replacement, attachment loss, explicit selection and missing dependencies, and resource retirement.
+Offline extension cases disconnect the owned Docker container or deny network access for the owned SBX VM; they leave global provider policy unchanged.
+Prepared protocol rejection cases use a separate deterministic CLI peer and do not establish provider acceptance.
+
 SSH cases use a private localhost OpenSSH server, pinned temporary host and client keys, and a test alias.
 The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Linux server and prepares `/run/sshd`.
 `MCP_CONSOLE_TEST_SSH_R_LIBS` can supply preinstalled R libraries to this fixture without adding dependency setup to SSH execution.
