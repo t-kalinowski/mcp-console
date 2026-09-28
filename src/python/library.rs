@@ -711,8 +711,12 @@ impl LoadedLibrary {
         Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }))
     }
 
-    fn ensure_configuration(&self, selected: &super::NativePython) -> Result<(), String> {
+    fn ensure_configuration(&mut self, selected: &super::NativePython) -> Result<(), String> {
         let Some(configuration) = self.configuration.as_ref() else {
+            // Retain the observed identity when attaching to an interpreter
+            // initialized before Console installed its startup adapter. Its
+            // environment and thread-state ownership are already established.
+            self.configuration = Some(Configuration::new(selected)?);
             return Ok(());
         };
         if &configuration.selected == selected {

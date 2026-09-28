@@ -26,7 +26,26 @@ base::local(
         return(selected)
       }
       if (get("is_python_initialized", envir = namespace)()) {
-        selected <<- globals$py_config
+        # A startup package may have initialized Python before this adapter
+        # existed. Its running identity takes precedence over selection hints;
+        # do not rediscover an executable or rerun environment activation.
+        config <- globals$py_config
+        sys <- reticulate::import("sys", convert = TRUE)
+        inspected <<- jsonlite::toJSON(
+          list(
+            embedding = list(
+              python = sys$executable,
+              libpython = config$libpython,
+              python_home = config$pythonhome
+            ),
+            prefix = sys$prefix,
+            exec_prefix = sys$exec_prefix,
+            base_prefix = sys$base_prefix,
+            base_exec_prefix = sys$base_exec_prefix
+          ),
+          auto_unbox = TRUE
+        )
+        selected <<- config
         return(selected)
       }
       if (run_before_initialized) {
@@ -221,15 +240,18 @@ base::local(
       replace_binding("install_interrupt_handlers", install_console_services)
 
       if (get("is_python_initialized", envir = namespace)()) {
-        rust_owned <- isTRUE(.Call(
-          "mcp_console_load_python_library",
-          reticulate::py_config()$libpython
+        select_python()
+        invisible(.Call(
+          "mcp_console_initialize_python",
+          inspected,
+          system.file("python", package = "reticulate")
         ))
-        if (rust_owned) {
-          finish_python_initialization()
-        }
+        finish_python_initialization()
         install_console_services()
       }
+      # Already-live interpreters need their retained identity registered
+      # before the bridge's eager initialization hook enters common setup.
+      state$install_python_hooks()
       invisible()
     }
 

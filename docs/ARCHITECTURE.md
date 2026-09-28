@@ -293,6 +293,8 @@ The Rust Python facade loads and retains that file-backed `libpython`, initializ
 The worker-facing `python::Runtime` retains an optional reticulate adapter directly.
 That adapter owns lazy selection, attachment, and their completion state; `python::startup` provides bootstrap and shared setup operations without depending on the R adapter.
 The retained CPython library owns interpreter lifetime and shared setup completion, so interrupted setup can resume without replacing the interpreter.
+If an R startup package initializes reticulate before the adapter is installed, Console captures that interpreter's live executable and prefixes together with reticulate's loaded-library configuration.
+It registers this identity before installing bridge hooks, preserves external interpreter ownership, and enters common setup without rerunning environment activation.
 Native sessions complete bootstrap before constructing the runtime and have no reticulate adapter.
 Reticulate then attaches its conversion and event runtime to the running interpreter; Console calls the existing private cell evaluator directly through the CPython API.
 Common setup installs Console's stream, input, interrupt, and plot services, private evaluator, and SQL adapter, then configures automatic import resolution through the retained CPython interface.

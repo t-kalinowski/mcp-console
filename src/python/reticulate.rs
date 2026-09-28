@@ -158,18 +158,6 @@ pub extern "C-unwind" fn mcp_console_initialize_python(
     Ok(harp::object::RObject::from(rust_owned).sexp)
 }
 
-// If Python was initialized before the direct initializer was installed,
-// attach the Rust-owned process-lifetime handle to that interpreter.
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_load_python_library(path: SEXP) -> harp::Result<SEXP> {
-    let path = Option::<String>::try_from(harp::object::RObject::view(path))?
-        .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-    let rust_owned = super::library::load(std::path::Path::new(&path))
-        .map_err(|error| harp::anyhow!("{error}"))?;
-    Ok(harp::object::RObject::from(rust_owned).sexp)
-}
-
 // Reticulate calls this after installing its own stream and input hooks.
 #[allow(clippy::result_large_err)]
 #[harp::register]

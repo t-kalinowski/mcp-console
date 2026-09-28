@@ -459,3 +459,62 @@ def test_shared_managed_bootstrap_and_replacement(
                     records = current
     assert records is not None
     return records
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_attaches_to_python_initialized_during_r_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        library = root / "library"
+        library.mkdir()
+        environment, rscript = r_test_environment()
+        fixture = Path(__file__).resolve().parents[3] / "fixtures/early_python"
+        subprocess.run(
+            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", fixture],
+            check=True,
+            capture_output=True,
+            env=environment,
+        )
+        environment.update(
+            R_LIBS=os.pathsep.join(
+                filter(None, (str(library), environment.get("R_LIBS")))
+            ),
+            R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsoleearlypython",
+            RETICULATE_PYTHON=sys.executable,
+            MCP_CONSOLE_TEST_PYTHON=sys.executable,
+            MCP_CONSOLE_TEST_PYTHON_PREFIX=sys.prefix,
+        )
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            exercise_python(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import json
+                    import subprocess
+
+                    assert id(early_object) == early_identity
+                    assert sys.executable == early_executable
+                    assert (
+                        sys.prefix,
+                        sys.exec_prefix,
+                        sys.base_prefix,
+                        sys.base_exec_prefix,
+                    ) == early_prefixes
+                    assert os.environ["PATH"] == early_path
+                    child = json.loads(
+                        subprocess.check_output([sys.executable, "-c", early_child_program], text=True)
+                    )
+                    assert child == early_child, (child, early_child)
+                    print("attached to the existing interpreter")
+                    """)
+            )
+            assert (
+                last_result_text(client) == "attached to the existing interpreter\n"
+            ), client.transcript[-1]
+            client.send(r='reticulate::py_eval("id(early_object) == early_identity")')
+            assert last_result_text(client) == "[1] TRUE\n", client.transcript[-1]
+            return client.finish()[3:]

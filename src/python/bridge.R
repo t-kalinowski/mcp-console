@@ -456,15 +456,6 @@ base::local(
       }
       invisible()
     }
-    setHook(
-      packageEvent("reticulate", "onLoad"),
-      install_python_hooks,
-      action = "append"
-    )
-    if ("reticulate" %in% loadedNamespaces()) {
-      install_python_hooks()
-    }
-
     prepare <- function(request) {
       if (is.na(managed)) {
         stop("Python preparation requires a server-managed interpreter")
