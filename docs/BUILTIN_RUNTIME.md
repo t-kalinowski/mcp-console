@@ -32,6 +32,9 @@ With R available, each worker generation creates these resources when needed:
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
 
+Worker readiness precedes interpreter initialization.
+A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
+
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
 Restart, worker replacement, or server exit discards all in-memory state.

@@ -229,6 +229,9 @@ Startup text may use fd 1 or fd 2, but no semantic worker frame may precede `rea
 `ready` is sent exactly once.
 A second `ready` is a protocol violation.
 
+For the built-in worker, readiness confirms process services and command admission; it does not imply that R or Python has initialized.
+Interpreter startup runs on demand after readiness, so a fatal startup-hook failure follows ordinary worker-generation failure and replacement handling.
+
 ### Evaluation
 
 An evaluation begins with one `evaluate` frame while the worker is idle.
