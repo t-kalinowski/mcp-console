@@ -19,7 +19,7 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
 from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.events import Events
@@ -680,9 +680,11 @@ def test_failed_live_python_requirements_do_not_run_cell(
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(
-                python="import os; live_sentinel = 42; live_worker_pid = os.getpid()"
+                python="import os, sys; live_sentinel = 42; live_worker_pid = os.getpid(); print(sys.executable)"
             )
-            assert last_tool_text(client) == "[done]"
+            executable = last_tool_text(client).strip()
+            assert Path(executable).is_absolute(), executable
+            client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
             # Ordinary tool preparation must remain independent of the public
             # reticulate declaration function, even after R is initialized.
             client.send(
@@ -706,8 +708,11 @@ def test_failed_live_python_requirements_do_not_run_cell(
             ).split("\nuv output:\n")
             requested = json.loads(request)
             assert requested["packages"] == ["numpy", "pandas", "py-yaml12"], requested
-            assert Path(requested["python"]).is_absolute(), requested
+            assert requested["python"] == executable, requested
             assert diagnostic == "synthetic uv failure", diagnostic
+            result["content"][0]["text"] = normalize_python_resolution_error(
+                error, executable=executable
+            )
             (root / "uv-failure").unlink()
             client.send(
                 python="import yaml12; (live_sentinel, os.getpid() == live_worker_pid, 'failed_live_python_cell' not in globals(), yaml12.__name__)",
