@@ -45,8 +45,6 @@ pub(crate) enum ServerMessage {
     },
     PreparePython {
         packages: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolved {
         python: String,
@@ -134,6 +132,8 @@ pub(crate) struct PythonImportResolution {
 pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
     pub(crate) retained_requirements: PythonRequirementManifest,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) initialized: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) import_resolution: Option<PythonImportResolution>,
 }
@@ -344,6 +344,7 @@ mod tests {
             &PythonResolveRequest {
                 requirements: requirements.clone(),
                 retained_requirements: requirements,
+                initialized: false,
                 import_resolution: Some(PythonImportResolution {
                     module: "yaml12".to_string(),
                     distribution: "py-yaml12".to_string(),

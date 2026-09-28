@@ -2,33 +2,6 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: |
-    options(reticulate.python.afterInitialized = function() {
-      reticulate::py_run_string(paste(
-        "import numpy as np, threading",
-        "original_get_printoptions = np.get_printoptions",
-        "original_get_ident = threading.get_ident",
-        "runtime_identity = object()",
-        "runtime_identity_id = id(runtime_identity)",
-        "def configuring_thread():",
-        "    threading.get_ident = original_get_ident",
-        "    input('Managed import setup> ')",
-        "    return original_get_ident()",
-        "def configure_thread_checkpoint():",
-        "    np.get_printoptions = original_get_printoptions",
-        "    threading.get_ident = configuring_thread",
-        "    return original_get_printoptions()",
-        "np.get_printoptions = configure_thread_checkpoint",
-        sep = "\n"
-      ))
-    })
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   python: raise AssertionError('interrupted setup ran the cell')
 result:
   content:
@@ -43,7 +16,12 @@ send:
 result:
   content:
     - type: text
-      text: "\n"
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 129, in configure
+          File "<setup checkpoint>", line 9, in configuring_thread
+          File "<string>", line 50, in _console_input
+        KeyboardInterrupt
   isError: false
 ---
 send:

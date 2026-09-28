@@ -1,6 +1,38 @@
 ---
 send:
+  python: before_r = object(); before_r_identity = id(before_r)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: >-
+    assert id(before_r) == before_r_identity; assert early_executable ==
+    sys.executable; print('startup package attached to running Python')
+result:
+  content:
+    - type: text
+      text: |
+        startup package attached to running Python
+  isError: false
+---
+send:
+  r: |
+    incompatible <- tryCatch(
+        reticulate::use_python("/incompatible-python", required = TRUE),
+        error = conditionMessage
+    )
+    stopifnot(identical(incompatible, "Python is already initialized with another selection; restart required"))
 result:
   content:
     - type: text
@@ -39,7 +71,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e2>", line 2, in <module>
+          File "<mcp-console:python:e4>", line 2, in <module>
         ValueError: peer runtime sentinel
   isError: false
 ---

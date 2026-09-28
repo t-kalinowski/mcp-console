@@ -32,8 +32,6 @@ pub(crate) enum RelayCommand {
     },
     PreparePython {
         packages: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolved {
         python: String,

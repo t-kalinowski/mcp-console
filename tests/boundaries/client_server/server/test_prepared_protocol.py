@@ -85,10 +85,30 @@ def test_native_probe_projects_capabilities_without_controller_paths(
 
 
 @requires(POSIX)
+def test_r_only_probe_projects_optional_python(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("r-only-probe")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                "properties"
+            ]
+            assert "r" in properties and "sql" in properties
+            assert "python" not in properties
+            assert "Python" not in properties["r"]["description"]
+            assert "Python" not in properties["sql"]["description"]
+            client.finish()
+        assert not (root / "peer/vms").exists()
+        return client.transcript
+
+
+@requires(POSIX)
 def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 6"),
+        ("probe-version", "expected protocol 7"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),

@@ -234,7 +234,7 @@ Keep these invariants intact:
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
 - `src/worker.rs`, `src/worker/{coordinator,core,input,r_integration}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, interactive stdin buffering, and optional R event, graphics, and interrupt hooks.
-- `src/worker/interrupt.{rs,c}` — native signal distribution, blocking R-free waiting, managed-input wakeups, and Python acknowledgment through startup-supplied interrupt-state callbacks.
+- `src/worker/interrupt.{rs,c}` — process-lifetime signal distribution, native waiting, managed-input wakeups, and an explicit R attachment transition preserving pending interrupts.
 - `src/worker/embedded_r.rs`, `src/worker/embedded_r/parse.{rs,R}`, `src/r_repl.c` — R runtime, complete-cell parsing, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
@@ -245,9 +245,12 @@ Keep these invariants intact:
 - `src/python/requirements.rs`, `src/python/requirements/r.rs` — shared live managed selection, resolved candidates and import control, R declaration values and transitions, shared CPython activation, and R binding conversion and history.
 - `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — reticulate selection compatibility and attachment adapter, full Console identity handoff, exact-candidate conversion metadata and declaration checks.
   Common Python module hooks and reached-import resolution do not use an R callback.
-  Idle tool preparation still has separate R-backed and R-free entry points.
-  The Python facade retains this optional adapter directly; it owns lazy attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
-  R-present sessions initialize R eagerly; local sessions without R use the same coordinator and native Python evaluator.
+  Idle tool preparation, reached imports, and R declarations share the Console requirement and activation owner; the R adapter retains declaration representation and conditions.
+  The Python facade retains the optional adapter after R initialization; it owns attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
+  Both interpreters initialize on demand on the same serialized thread.
+  An explicit or host-resolved Python selection starts without R; unresolved R-side selection hints require R.
+  R cells, Python-side R access, and R-owned SQL initialize R.
+  Late bridge attachment uses the running Python identity and preserves its state.
   Sans-R defaults require uv on the startup PATH and an absolute HOME for the shared DuckDB extension cache; top-level `python` selects an existing environment without invoking uv.
   Managed R-backed and sans-R sessions prepare SQLite as a default DuckDB extension on the execution host; exact declaration replacements can remove it, and reset restores it.
   Managed environments support explicit prestart/restart preparation, idle Python and DuckDB additions, and resolution at reached missing Python imports through shared native activation, with the accepted manifest and launch configuration committed together.

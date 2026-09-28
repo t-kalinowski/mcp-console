@@ -38,3 +38,9 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     )
     .into())
 }
+
+#[cfg(unix)]
+pub(crate) use r_integration::{
+    available as r_available, ensure_bridge, ensure_initialized as ensure_r,
+    initialized as r_initialized,
+};

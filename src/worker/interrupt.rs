@@ -15,13 +15,24 @@ pub(super) struct State {
     pub acknowledge: fn() -> bool,
 }
 
-static STATE: OnceLock<State> = OnceLock::new();
+static R_STATE: OnceLock<State> = OnceLock::new();
+static SIGNAL_WAKEUP: OnceLock<libc::c_int> = OnceLock::new();
 static NATIVE_PENDING: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static NATIVE_INPUT_WATCH: OnceLock<OwnedFd> = OnceLock::new();
 
-unsafe extern "C" fn record_native_interrupt() {
-    NATIVE_PENDING.store(true, Ordering::SeqCst);
+unsafe extern "C" fn record_interrupt() {
+    if let Some(state) = R_STATE.get() {
+        unsafe { (state.signal)() };
+    } else {
+        NATIVE_PENDING.store(true, Ordering::SeqCst);
+        // Attachment may have raced signal delivery on another native thread.
+        if let Some(state) = R_STATE.get()
+            && NATIVE_PENDING.swap(false, Ordering::SeqCst)
+        {
+            unsafe { (state.signal)() };
+        }
+    }
 }
 
 fn native_pending() -> bool {
@@ -57,13 +68,19 @@ pub(super) fn normalize_signal() -> io::Result<()> {
         .ok_or_else(|| io::Error::from_raw_os_error(result))
 }
 
-pub(super) fn initialize(state: State) -> io::Result<()> {
-    let signal = state.signal;
-    STATE
+pub(super) fn attach_r(state: State) -> io::Result<()> {
+    R_STATE
         .set(state)
-        .map_err(|_| io::Error::other("interrupt state already initialized"))?;
-    let wakeup = super::input::initialize_interrupt_wakeup()?;
-    if unsafe { mcp_worker_interrupt_configure(signal, wakeup) } != 0 {
+        .map_err(|_| io::Error::other("R interrupt state already attached"))?;
+    if NATIVE_PENDING.swap(false, Ordering::SeqCst) {
+        unsafe { (R_STATE.get().unwrap().signal)() };
+    }
+    reinstall()
+}
+
+pub(super) fn reinstall() -> io::Result<()> {
+    let wakeup = *SIGNAL_WAKEUP.get().expect("signal wakeup initialized");
+    if unsafe { mcp_worker_interrupt_configure(record_interrupt, wakeup) } != 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
@@ -72,12 +89,16 @@ pub(super) fn initialize(state: State) -> io::Result<()> {
 pub(super) fn initialize_native() -> io::Result<()> {
     #[cfg(target_os = "macos")]
     initialize_native_input_watch()?;
-    initialize(State {
-        signal: record_native_interrupt,
-        requested: native_pending,
-        pending: native_pending,
-        acknowledge: acknowledge_native_interrupt,
-    })
+    SIGNAL_WAKEUP
+        .set(super::input::initialize_interrupt_wakeup()?)
+        .map_err(|_| io::Error::other("signal wakeup already initialized"))?;
+    reinstall()
+}
+
+fn requested() -> bool {
+    R_STATE
+        .get()
+        .map_or_else(native_pending, |state| (state.requested)())
 }
 
 #[cfg(target_os = "macos")]
@@ -223,14 +244,15 @@ fn observe_native_input_watch() -> Result<(), String> {
 }
 
 pub(super) fn pending() -> bool {
-    (STATE.get().expect("interrupt state initialized").pending)()
+    R_STATE
+        .get()
+        .map_or_else(native_pending, |state| (state.pending)())
 }
 
 pub(crate) fn acknowledge_python_interrupt() -> bool {
-    (STATE
+    R_STATE
         .get()
-        .expect("interrupt state initialized")
-        .acknowledge)()
+        .map_or_else(acknowledge_native_interrupt, |state| (state.acknowledge)())
 }
 
 pub(crate) fn install_python_interrupt(
@@ -246,7 +268,7 @@ pub(crate) fn install_python_interrupt(
 }
 
 pub(crate) fn check_python_selection_interrupt() -> Result<(), String> {
-    if (STATE.get().expect("interrupt state initialized").requested)() {
+    if requested() {
         Err("Python inspection interrupted".into())
     } else {
         Ok(())
@@ -258,7 +280,6 @@ pub(crate) fn check_python_selection_interrupt() -> Result<(), String> {
 pub(crate) fn inspect_python(
     executable: &std::path::Path,
 ) -> Result<crate::python::NativePython, String> {
-    let requested = STATE.get().expect("interrupt state initialized").requested;
     super::input::drain_interrupt_wakeup().map_err(|error| error.to_string())?;
     let (finished, completion) = io::pipe().map_err(|error| error.to_string())?;
     std::thread::scope(|scope| {

@@ -10,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -19,7 +20,15 @@ from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, R, command, requires
 from support.r import r_test_environment
 from support.python import write_test_wheel
-from support.ssh import SSH, configure, localhost, poison_controller, remote_command
+from support.ssh import (
+    SSH,
+    configure,
+    localhost,
+    poison_controller,
+    remote_command,
+    client_environment,
+)
+from support.ssh_external import EXTERNAL_SSH, external_target
 
 
 # fmt: python
@@ -76,6 +85,357 @@ def without_r(environment: dict[str, str], root: Path) -> None:
     environment["PATH"] = str(path)
     for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
         environment.pop(name, None)
+
+
+def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
+    # Inspect libR's actual state, not cell order or PID. A loader
+    # re-exec after this cell would lose the objects below.
+    # fmt: python
+    source = code("""
+        import builtins
+        import ctypes
+        import os
+        import sqlite3
+        import sys
+        import numpy as np
+
+        def r_initialized():
+            try:
+                return bool(ctypes.c_void_p.in_dll(ctypes.CDLL(None), "R_GlobalEnv").value)
+            except ValueError:
+                return False
+
+        assert not r_initialized(), "R initialized before Python demand"
+        assert builtins.peer_startups == 1
+        persistent = object()
+        connection = sqlite3.connect(":memory:")
+        connection.execute("create table peer(value integer)")
+        connection.execute("insert into peer values (42)")
+        console_sql_connection(connection)
+        np.set_printoptions(linewidth=73)
+        before = (id(persistent), id(connection), sys.executable, sys.prefix,
+                  os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])
+        print("Python live; R absent")
+        """)
+    client.send(python=source)
+    assert last_result_text(client) == "Python live; R absent\n", client.transcript[-1]
+    if trigger == "r-cell":
+        client.send(
+            r="peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))"
+        )
+        assert last_result_text(client) == "[done]", client.transcript[-1]
+    else:
+        client.send(
+            python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41; print('lazy R access')"
+        )
+        assert last_result_text(client) == "lazy R access\n", client.transcript[-1]
+    # fmt: python
+    source = code("""
+        assert r_initialized()
+        assert builtins.peer_startups == 1
+        assert before == (
+            id(persistent),
+            id(connection),
+            sys.executable,
+            sys.prefix,
+            os.environ["MPLCONFIGDIR"],
+            os.environ["XDG_CACHE_HOME"],
+        )
+        assert connection.execute("select value from peer").fetchone() == (42,)
+        assert np.get_printoptions()["linewidth"] == 73
+
+
+        def nested_peer():
+            return int(r["sum(c(40, 2))"])
+
+
+        print("Python state and services retained")
+        """)
+    client.send(python=source)
+    assert last_result_text(client) == "Python state and services retained\n", (
+        client.transcript[-1]
+    )
+    client.send(sql="select value from peer")
+    assert "42" in last_result_text(client), client.transcript[-1]
+    client.send(r="stopifnot(identical(reticulate::py$nested_peer(), 42L))")
+    assert last_result_text(client) == "[done]", client.transcript[-1]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_late_r_preserves_python_runtime(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = None
+    for trigger in ("r-cell", "python-access"):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            modules = root / "modules"
+            modules.mkdir()
+            (modules / "sitecustomize.py").write_text(
+                "import builtins\n"
+                "builtins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\n"
+            )
+            environment = dict(
+                os.environ,
+                RETICULATE_PYTHON=sys.executable,
+                RETICULATE_PYTHONPATH=str(modules),
+            )
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                exercise_late_r(client, trigger)
+                current = client.finish()[3:]
+                if records is None:
+                    records = current
+    assert records is not None
+    return records
+
+
+@requires(EXTERNAL_SSH)
+def test_external_peer_initialization_order(binary: Path) -> Transcript:
+    records = []
+    with external_target() as external, tempfile.TemporaryDirectory() as directory:
+        local = Path(directory)
+        hooks = external["target"]["workspace"] + "/cli/python-hooks"
+        config = local / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "target": external["target"],
+                    "sandbox": {
+                        "environment": {
+                            **external["environment"],
+                            "RETICULATE_PYTHONPATH": hooks,
+                        }
+                    },
+                }
+            )
+        )
+        environment = client_environment(
+            local, config=external.get("ssh_config"), remote_path=external.get("path")
+        )
+        trap = poison_controller(local, environment)
+        for execution in (DIRECT, SANDBOXED):
+            serve = (
+                execution.serve("--writable-root", "cli")
+                if execution == SANDBOXED
+                else execution.serve()
+            )
+            with McpClient(binary, serve, environment, local) as client:
+                client.initialize_and_list_tools()
+                # Create the startup-hook fixture on its execution host, then
+                # start the generation whose in-memory continuity is exercised.
+                client.send(
+                    python=code("""
+                    import os
+                    from pathlib import Path
+                    hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
+                    hooks.mkdir(exist_ok=True)
+                    _ = (hooks / "sitecustomize.py").write_text(
+                        "import builtins\\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\\n"
+                    )
+                    """)
+                )
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+                client.send(control="restart")
+                exercise_late_r(client)
+                records.extend(client.finish()[3:])
+        assert not trap.exists(), (
+            "controller inspected or resolved an execution-host runtime"
+        )
+    return records
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_interrupt_wakes_input_before_and_after_attachment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        release = FifoCheckpoint.create(root / "interrupt")
+        environment = dict(os.environ, RETICULATE_PYTHON=sys.executable)
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        try:
+            with McpClient(binary, serve, environment, root) as client:
+                client.initialize_and_list_tools()
+                for attached in (False, True):
+                    if attached:
+                        client.send(python="assert int(r['42L']) == 42")
+                        assert last_result_text(client) == "[done]", client.transcript[
+                            -1
+                        ]
+                    client.send(
+                        python=code("""
+                        import signal
+                        import threading
+
+                        def interrupt_from_background():
+                            with open("interrupt", "rb", buffering=0) as gate:
+                                assert gate.read(1) == b"1"
+                            signal.pthread_kill(threading.get_ident(), signal.SIGINT)
+
+                        sender = threading.Thread(target=interrupt_from_background)
+                        sender.start()
+                        try:
+                            input("interrupt gate> ")
+                        except KeyboardInterrupt:
+                            print("input cancelled once")
+                        else:
+                            raise AssertionError("input was not interrupted")
+                        sender.join()
+                        """)
+                    )
+                    assert (
+                        last_result_text(client)
+                        == '[input requested: "interrupt gate> "]\n[waiting for stdin]'
+                    ), client.transcript[-1]
+                    # The public input request proves the main thread is blocked.
+                    # SIGINT goes to another thread, so only the self-pipe wakes it.
+                    release.release()
+                    wait_for_evaluation_output(
+                        client, "input cancelled once\n", "background-thread interrupt"
+                    )
+                    client.send(python="print('no duplicate interrupt')")
+                    assert last_result_text(client) == "no duplicate interrupt\n", (
+                        client.transcript[-1]
+                    )
+                return client.finish()[3:]
+        finally:
+            release.close()
+
+
+def exercise_prepared_r_only(binary: Path, provider: str) -> None:
+    # Extend each provider's existing public runtime-discovery acceptance.
+    from support import docker, docker_sandbox
+
+    fixture = docker if provider == "docker" else docker_sandbox
+    workspace = (
+        fixture.workspace() if provider == "docker" else fixture.workspace(real=True)
+    )
+    with workspace as root:
+        environment = {
+            "R_HOME": "/usr/lib/R",
+            "PATH": "/no-python",
+            "RETICULATE_PYTHON": "",
+        }
+        if provider == "docker":
+            config = fixture.configure(
+                root,
+                fixture.image(),
+                command=["/opt/analysis/bin/mcp-console"],
+                environment=environment,
+            )
+        else:
+            config = fixture.configure(
+                root, command=["/usr/local/bin/mcp-console"], environment=environment
+            )
+        policy = json.loads(config.read_text())
+        policy["sandbox"]["inherit_environment"] = False
+        config.write_text(json.dumps(policy))
+        with McpClient(
+            binary, ("serve", "--no-sandbox"), current_directory=root
+        ) as client:
+            client.initialize_and_list_tools()
+            fields = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                "properties"
+            ]
+            assert "r" in fields and "sql" in fields and "python" not in fields, fields
+            client.send(
+                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer"
+            )
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.send(
+                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer"
+            )
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.finish()
+        policy["python"] = "/missing-explicit-python"
+        config.write_text(json.dumps(policy))
+        with McpClient(
+            binary, ("serve", "--no-sandbox"), current_directory=root
+        ) as client:
+            assert client.stdout.read(timeout=30) == ""
+            error = client.stderr.read(timeout=30)
+            assert "python configuration validation failed" in error, error
+            assert client.process.wait(timeout=5) != 0
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_idle_preparation_keeps_r_uninitialized(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment = dict(os.environ)
+        environment.pop("RETICULATE_PYTHON", None)
+        arguments = root / "uv-arguments"
+        environment.update(
+            RETICULATE_UV=str(
+                Path(__file__).parents[3] / "fixtures/record_uv_environment"
+            ),
+            MCP_CONSOLE_TEST_REAL_UV=shutil.which("uv"),
+            MCP_CONSOLE_TEST_UV_RECORD=str(root / "uv-environment"),
+            MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD=str(arguments),
+        )
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import sys; from pathlib import Path; sentinel = object(); original = sentinel; _ = Path('running-python').write_text(sys.executable)"
+            )
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            arguments.write_text("")
+            client.send(requirements={"python": ["packaging"]})
+            assert last_result_text(client) == "[prepared]", client.transcript[-1]
+            calls = [json.loads(line) for line in arguments.read_text().splitlines()]
+            resolution = next(call for call in calls if call[:2] == ["tool", "run"])
+            assert (
+                resolution[resolution.index("--python") + 1]
+                == (root / "running-python").read_text()
+            ), resolution
+            assert not any(call[:2] == ["python", "list"] for call in calls), calls
+            arguments.write_text("")
+            rejected = client.send(requirements={"python": ["NumPy>=0"]})
+            assert rejected["isError"], rejected
+            assert "changes already-declared `numpy`" in last_result_text(client), (
+                client.transcript[-1]
+            )
+            assert arguments.read_text() == "", (
+                "incompatible live declaration reached resolver"
+            )
+            # fmt: python
+            source = code("""
+                import ctypes
+                import packaging
+
+                try:
+                    initialized = bool(ctypes.c_void_p.in_dll(ctypes.CDLL(None), "R_GlobalEnv").value)
+                except ValueError:
+                    initialized = False
+                assert not initialized, "idle Python preparation initialized R"
+                assert sentinel is original
+                print("idle preparation uses the Python owner")
+                """)
+            client.send(python=source)
+            assert (
+                last_result_text(client) == "idle preparation uses the Python owner\n"
+            ), client.transcript[-1]
+            client.send(
+                r='stopifnot("packaging" %in% reticulate::py_require()$packages)'
+            )
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -153,7 +513,7 @@ def test_shared_module_configuration(binary: Path, execution: Execution) -> Tran
     return records
 
 
-def exercise_python(client: McpClient) -> tuple[str, ...]:
+def exercise_python(client: McpClient, *, first_evaluation: int = 1) -> tuple[str, ...]:
     # Every configuration exercises the same evaluator and NumPy availability
     # without referring to the R/Python bridge.
     # fmt: python
@@ -204,7 +564,7 @@ def exercise_python(client: McpClient) -> tuple[str, ...]:
         if len(output) == 1:
             assert output[0] == "shared stdout\nshared stderr\n41\n", output[0]
     assert output[0] == "shared stdout\nshared stderr\n41\n", output[0]
-    assert "<mcp-console:python:e2>" in output[1], output[1]
+    assert f"<mcp-console:python:e{first_evaluation + 1}>" in output[1], output[1]
     assert output[1].endswith("ValueError: peer runtime sentinel\n"), output[1]
     assert output[2:] == ["(42, True, True)\n", "42\n", "43\n"], output[2:]
     return tuple(output)
@@ -216,8 +576,8 @@ def test_python_contract_with_and_without_r(
     binary: Path, execution: Execution
 ) -> Transcript:
     # The host must have R so the same test can compare both configurations.
-    # "python-first" describes cell order, not late R initialization: current
-    # workers still initialize R eagerly whenever the selected session has R.
+    # Both orders compose the same evaluator; the late-R case above probes
+    # initialization itself and checks in-memory continuity across attachment.
     reference = None
     records = None
     for mode in ("without-r", "r-first", "python-first"):
@@ -680,8 +1040,18 @@ def test_managed_import_after_python_initialized_during_r_startup(
     return attach_python_initialized_during_r_startup(binary, execution, managed=True)
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_late_r_startup_uses_running_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return attach_python_initialized_during_r_startup(
+        binary, execution, managed=False, python_first=True
+    )
+
+
 def attach_python_initialized_during_r_startup(
-    binary: Path, execution: Execution, *, managed: bool
+    binary: Path, execution: Execution, *, managed: bool, python_first: bool = False
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -727,8 +1097,35 @@ def attach_python_initialized_during_r_startup(
             if managed:
                 client.send(requirements={"python_version": [version]})
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]
-            else:
-                exercise_python(client)
+            if python_first:
+                client.send(
+                    python="before_r = object(); before_r_identity = id(before_r)"
+                )
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+            # R-first startup adopts external CPython. With Python already live,
+            # the same startup package must attach to Console's interpreter.
+            client.send(r="invisible(NULL)")
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            if python_first:
+                client.send(
+                    python="assert id(before_r) == before_r_identity; assert early_executable == sys.executable; print('startup package attached to running Python')"
+                )
+                assert (
+                    last_result_text(client)
+                    == "startup package attached to running Python\n"
+                ), client.transcript[-1]
+                client.send(
+                    r=code("""
+                    incompatible <- tryCatch(
+                        reticulate::use_python("/incompatible-python", required = TRUE),
+                        error = conditionMessage
+                    )
+                    stopifnot(identical(incompatible, "Python is already initialized with another selection; restart required"))
+                    """)
+                )
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+            if not managed:
+                exercise_python(client, first_evaluation=3 if python_first else 1)
             client.send(
                 # fmt: python
                 python=code("""

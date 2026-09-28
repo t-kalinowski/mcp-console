@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
 import subprocess
@@ -28,6 +29,7 @@ from support.resolvers import (
     checkpoint_uv_environment,
     matplotlib_test_environment,
     named_requirement_error,
+    recording_uv_environment,
 )
 from support.suites import run_this_suite
 
@@ -672,66 +674,49 @@ def test_prepares_python_requirements_after_worker_startup(
 def test_failed_live_python_requirements_do_not_run_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
-    assert last_tool_text(client) == "[done]"
-
-    # fmt: r
-    r = code(r"""
-        reticulate_namespace <- asNamespace("reticulate")
-        original_py_require <- get("py_require", envir = reticulate_namespace)
-        unlockBinding("py_require", reticulate_namespace)
-        assign(
-          "py_require",
-          function(...) stop("synthetic live Python preparation failure"),
-          envir = reticulate_namespace
-        )
-        lockBinding("py_require", reticulate_namespace)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
-    result = client.send(
-        python="failed_live_python_cell = True",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert result["isError"] is True, result
-    assert result["content"][0]["text"] == (
-        "synthetic live Python preparation failure"
-    ), result
-
-    # fmt: r
-    r = code(r"""
-        unlockBinding("py_require", reticulate_namespace)
-        assign(
-          "py_require",
-          original_py_require,
-          envir = reticulate_namespace
-        )
-        lockBinding("py_require", reticulate_namespace)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-
-    # fmt: python
-    python = code("""
-        import os
-        import yaml12
-
-        (
-            live_sentinel,
-            os.getpid() == live_worker_pid,
-            "failed_live_python_cell" not in globals(),
-            yaml12.__name__,
-        )
-        """)
-    client.send(
-        python=python,
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
-    return client.finish()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = recording_uv_environment(root, fail_requirement="py-yaml12")
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import os; live_sentinel = 42; live_worker_pid = os.getpid()"
+            )
+            assert last_tool_text(client) == "[done]"
+            # Ordinary tool preparation must remain independent of the public
+            # reticulate declaration function, even after R is initialized.
+            client.send(
+                r=code(r"""
+                reticulate_namespace <- asNamespace("reticulate")
+                unlockBinding("py_require", reticulate_namespace)
+                assign("py_require", function(...) stop("tool entered reticulate declaration"),
+                       envir = reticulate_namespace)
+                lockBinding("py_require", reticulate_namespace)
+                """)
+            )
+            assert last_tool_text(client) == "[done]"
+            result = client.send(
+                python="failed_live_python_cell = True",
+                requirements={"python": ["py-yaml12"]},
+            )
+            assert result["isError"] is True, result
+            error = result["content"][0]["text"]
+            request, diagnostic = error.removeprefix(
+                "managed Python resolution failed:\nresolver input:\n"
+            ).split("\nuv output:\n")
+            requested = json.loads(request)
+            assert requested["packages"] == ["numpy", "pandas", "py-yaml12"], requested
+            assert Path(requested["python"]).is_absolute(), requested
+            assert diagnostic == "synthetic uv failure", diagnostic
+            (root / "uv-failure").unlink()
+            client.send(
+                python="import yaml12; (live_sentinel, os.getpid() == live_worker_pid, 'failed_live_python_cell' not in globals(), yaml12.__name__)",
+                requirements={"python": ["py-yaml12"]},
+            )
+            assert last_tool_text(client) == "(42, True, True, 'yaml12')\n", (
+                client.transcript[-1]
+            )
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

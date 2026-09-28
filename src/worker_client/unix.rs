@@ -185,9 +185,7 @@ impl WorkerRuntime {
             };
             (command, None, None)
         };
-        let temporary = if no_sandbox
-            && local_runtime.is_some_and(crate::local_runtime::Selection::python_only)
-        {
+        let temporary = if no_sandbox && target.is_none() && local_runtime.is_some() {
             Some(crate::local_runtime::TemporaryDirectory::create()?)
         } else {
             None
@@ -752,28 +750,17 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         continue_environment_preparation: bool,
-        native: Option<(
-            crate::resolver::ManagedPython,
-            crate::python::NativePython,
-            Option<std::collections::BTreeSet<String>>,
-        )>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let activation = native.as_ref().map(|(managed, selected, _)| {
-            Box::new(crate::worker_protocol::NativePythonActivation {
-                selected: selected.clone(),
-                requirements: managed.requirements().clone(),
-            })
-        });
         let result = self.operation.begin_python_preparation(
             commit,
             continue_environment_preparation,
-            native.map(Box::new),
+            duckdb_extensions,
         )?;
-        self.relay.commands.send(RelayCommand::PreparePython {
-            packages,
-            native: activation,
-        })?;
+        self.relay
+            .commands
+            .send(RelayCommand::PreparePython { packages })?;
         match receive_operation(result)? {
             OperationResult::PythonPrepared(result) => Ok(result),
             _ => Err("worker sent an unexpected Python preparation message".to_string()),

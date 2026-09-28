@@ -1,6 +1,6 @@
 use libr::SEXP;
 
-use super::{NativePython, PreparationOutcome};
+use super::NativePython;
 
 const PYTHON_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
@@ -11,10 +11,11 @@ const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 /// loading, lifetime, and cell evaluation remain owned by Console.
 pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
-    completed: bool,
+    completed: std::cell::Cell<bool>,
+    pub(super) managed: bool,
 }
 
-pub(super) fn configure_worker_environment() -> std::io::Result<()> {
+pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)?;
     // R is already embedded. Keep the interoperability marker independently
     // of Python selection, including Python startup hooks that import rpy2.
@@ -22,8 +23,67 @@ pub(super) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"R_SESSION_INITIALIZED", &marker, true)
 }
 
+// When Python is already live, install selection hooks before R startup
+// packages can enter reticulate. R-first startup retains external adoption.
+pub(crate) fn defer_r_startup() -> Result<Option<Option<std::ffi::OsString>>, String> {
+    if super::library::initialized_selection()?.is_none() {
+        return Ok(None);
+    }
+    let packages = std::env::var_os("R_DEFAULT_PACKAGES");
+    unsafe { std::env::set_var("R_DEFAULT_PACKAGES", "NULL") };
+    Ok(Some(packages))
+}
+
+pub(crate) fn finish_r_startup(deferred: Option<Option<std::ffi::OsString>>) -> Result<(), String> {
+    let Some(packages) = deferred else {
+        return Ok(());
+    };
+    unsafe {
+        match packages {
+            Some(packages) => std::env::set_var("R_DEFAULT_PACKAGES", packages),
+            None => std::env::remove_var("R_DEFAULT_PACKAGES"),
+        }
+    }
+    harp::parse_eval_base(r#"local({
+        dp <- Sys.getenv("R_DEFAULT_PACKAGES")
+        if (identical(dp, "")) dp <- c("datasets", "utils", "grDevices", "graphics", "stats", "methods")
+        else if (identical(dp, "NULL")) dp <- character()
+        else dp <- strsplit(dp, ",")[[1L]]
+        options(defaultPackages = trimws(dp))
+        .OptRequireMethods()
+        .First.sys()
+    })"#).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_retained_manifest() -> harp::Result<SEXP> {
+    let manifest = super::requirements::retained_manifest()
+        .ok_or_else(|| harp::anyhow!("managed Python declaration is unavailable"))?;
+    Ok(harp::object::RObject::from(
+        serde_json::to_string(&manifest).map_err(|error| harp::anyhow!("{error}"))?,
+    )
+    .sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_running_python() -> harp::Result<SEXP> {
+    let selected =
+        super::library::initialized_selection().map_err(|error| harp::anyhow!("{error}"))?;
+    match selected {
+        Some(selected) => Ok(harp::object::RObject::from(
+            serde_json::to_string(&selected).map_err(|error| harp::anyhow!("{error}"))?,
+        )
+        .sexp),
+        None => unsafe { Ok(libr::R_NilValue) },
+    }
+}
+
 impl Adapter {
     pub(super) fn initialize() -> Result<Self, String> {
+        let managed = std::env::var_os("MCP_CONSOLE_MANAGED_PYTHON").is_some();
         let source = format!(
             "base::local(
   {{
@@ -36,12 +96,13 @@ impl Adapter {
         );
         Ok(Self {
             bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
-            completed: false,
+            completed: std::cell::Cell::new(false),
+            managed,
         })
     }
 
-    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
-        if !self.completed {
+    pub(super) fn ensure_initialized(&self) -> Result<bool, String> {
+        if !self.completed.get() {
             let Some(selected) = self.select()? else {
                 return Ok(false);
             };
@@ -58,12 +119,12 @@ impl Adapter {
             let finished = super::finish_initialization();
             let completed = result?;
             finished?;
-            self.completed = completed;
+            self.completed.set(completed);
         }
-        Ok(self.completed)
+        Ok(self.completed.get())
     }
 
-    fn select(&mut self) -> Result<Option<NativePython>, String> {
+    pub(super) fn select(&self) -> Result<Option<NativePython>, String> {
         // Discovery and serialization share the existing R interrupt boundary.
         self.bridge
             .evaluate_completed_string("select")?
@@ -80,23 +141,12 @@ impl Adapter {
         Ok(())
     }
 
-    fn attach(&mut self) -> Result<bool, String> {
+    fn attach(&self) -> Result<bool, String> {
         self.bridge.evaluate_completed("attach")
     }
 
-    fn setup(&mut self) -> Result<bool, String> {
+    fn setup(&self) -> Result<bool, String> {
         self.bridge.evaluate_completed("setup")
-    }
-
-    pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        let request = serde_json::to_string(&packages)
-            .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
-        let response = self
-            .bridge
-            .call1_string(c"prepare", &request)?
-            .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
-        serde_json::from_str(&response)
-            .map_err(|error| format!("invalid Python preparation response: {error}"))
     }
 }
 
@@ -176,43 +226,22 @@ fn register_python_setup() {
             fun: Some(std::mem::transmute::<*const (), CallMethod>(
                 setup_python_runtime as *const (),
             )),
-            numArgs: 3,
+            numArgs: 2,
         });
     }
 }
 
 #[allow(clippy::result_large_err)]
-extern "C-unwind" fn setup_python_runtime(
-    libpython: SEXP,
-    managed: SEXP,
-    disabled_reason: SEXP,
-) -> SEXP {
+extern "C-unwind" fn setup_python_runtime(libpython: SEXP, managed: SEXP) -> SEXP {
     harp::exec::r_unwrap(|| -> harp::Result<SEXP> {
-        let (libpython, managed, disabled_reason) =
-            harp::exec::r_sandbox(|| -> harp::Result<_> {
-                let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
-                    .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
-                let disabled_reason = if unsafe { disabled_reason == libr::R_NilValue } {
-                    None
-                } else {
-                    Some(String::try_from(harp::object::RObject::view(
-                        disabled_reason,
-                    ))?)
-                };
-                let managed = bool::try_from(harp::object::RObject::view(managed))?;
-                Ok((libpython, managed, disabled_reason))
-            })??;
-        let completed = super::setup_runtime(
-            std::path::Path::new(&libpython),
-            if managed {
-                super::ImportResolution::Managed
-            } else {
-                super::ImportResolution::Disabled(disabled_reason.as_deref().ok_or_else(|| {
-                    harp::anyhow!("unmanaged Python setup omitted its import policy")
-                })?)
-            },
-        )
-        .map_err(|error| harp::anyhow!("{error}"))?;
+        let (libpython, managed) = harp::exec::r_sandbox(|| -> harp::Result<_> {
+            let libpython = Option::<String>::try_from(harp::object::RObject::view(libpython))?
+                .ok_or_else(|| harp::anyhow!("Python-hosted R is not supported"))?;
+            let managed = bool::try_from(harp::object::RObject::view(managed))?;
+            Ok((libpython, managed))
+        })??;
+        let completed = super::setup_runtime(std::path::Path::new(&libpython), managed)
+            .map_err(|error| harp::anyhow!("{error}"))?;
         harp::exec::r_sandbox(|| harp::object::RObject::from(completed).sexp)
     })
 }

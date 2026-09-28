@@ -1,47 +1,10 @@
 base::local(
   {
     managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
-    dynamic_resolution <- identical(
-      Sys.getenv(
-        "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-        unset = "1"
-      ),
-      "1"
-    )
     # Python 3.9 and older are intentionally outside the bridge contract.
     minimum_python <- base::numeric_version("3.10")
     requirements_adapter <- NULL
     `%||%` <- function(x, y) if (is.null(x)) y else x
-    managed_python_disabled_message <- if (
-      !dynamic_resolution &&
-        Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE") %in%
-          c("docker", "docker_sandbox")
-    ) {
-      paste0(
-        "MCP Console dynamic environment resolution is unavailable for ",
-        if (Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE") == "docker") {
-          "Docker"
-        } else {
-          "Docker Sandbox"
-        },
-        " targets. ",
-        "Install the distribution in the image and start a new server session."
-      )
-    } else if (!dynamic_resolution) {
-      paste0(
-        "MCP Console dynamic environment resolution is unavailable. ",
-        "Install the distribution into the ambient Python environment, or ",
-        "install `ir` or `uv` and restart MCP Console."
-      )
-    } else {
-      paste0(
-        "MCP Console is using a user-selected Python environment. ",
-        "Automatic managed package resolution is disabled, and ",
-        "`requirements.python` is also disabled for this interpreter selection. ",
-        "Install the distribution into the selected environment or restart MCP ",
-        "Console with managed Python enabled."
-      )
-    }
 
     manifest <- function(packages, python_version, exclude_newer) {
       list(
@@ -86,7 +49,56 @@ base::local(
       )
     }
 
+    conversion_config <- function(selection) {
+      python <- selection$embedding$python
+      connection <- textConnection(reticulate:::python_config_impl(python))
+      on.exit(close(connection), add = TRUE)
+      metadata <- read.dcf(connection, all = TRUE)
+      structure(
+        list(
+          python = python,
+          executable = python,
+          libpython = selection$embedding$libpython,
+          pythonhome = selection$embedding$python_home,
+          prefix = selection$prefix,
+          exec_prefix = selection$exec_prefix,
+          base_exec_prefix = selection$base_exec_prefix,
+          base_executable = metadata$BaseExecutable,
+          pythonpath = metadata$PythonPath,
+          version_string = metadata$Version,
+          version = as.package_version(metadata$VersionNumber),
+          architecture = metadata$Architecture,
+          anaconda = grepl(
+            "anaconda|continuum",
+            metadata$Version,
+            ignore.case = TRUE
+          ),
+          conda = metadata$IsConda,
+          virtualenv = if (selection$prefix != selection$base_prefix) {
+            selection$prefix
+          } else {
+            ""
+          },
+          virtualenv_activate = "",
+          python_versions = python,
+          numpy = if (!is.null(metadata$NumpyPath)) {
+            list(
+              path = reticulate:::canonical_path(metadata$NumpyPath),
+              version = numeric_version(reticulate:::clean_version(
+                metadata$NumpyVersion
+              ))
+            )
+          } else {
+            NULL
+          },
+          available = FALSE
+        ),
+        class = "py_config"
+      )
+    }
+
     install_managed_python <- function(...) {
+      managed <- .Call("mcp_console_python_retained_manifest")
       namespace <- asNamespace("reticulate")
       current_requirements <- function() {
         reticulate:::py_reqs_get()
@@ -288,6 +300,12 @@ base::local(
       replace_binding("uv_get_or_create_env", resolve)
       replace_binding("resolve_python_version", resolve_version)
       transition <- function(current, request, initialized) {
+        if (!is.null(.Call("mcp_console_running_python"))) {
+          # A declaration against a live interpreter needs its R compatibility
+          # metadata; ordinary Python execution does not need this attachment.
+          reticulate::py_config()
+          initialized <- TRUE
+        }
         result <- .Call(
           "mcp_console_python_transition",
           current,
@@ -300,18 +318,16 @@ base::local(
         }
         result
       }
-      declare_packages <- function(packages) {
-        reticulate::py_require(packages, action = "add")
+      manifest_json <- function() {
+        jsonlite::toJSON(
+          activation_manifest(current_requirements()),
+          auto_unbox = TRUE,
+          null = "null",
+          na = "null"
+        )
       }
-      declared_requirements <- function() reticulate::py_require()
-      python_initialized <- function() {
-        reticulate:::is_python_initialized()
-      }
-      restore_requirements <- function(snapshot) {
-        globals$python_requirements <- snapshot
-        invisible()
-      }
-      project_import <- function(selection, distribution) {
+      project_packages <- function(selection, additions) {
+        distribution <- unlist(jsonlite::fromJSON(additions), use.names = FALSE)
         # Construct only the R presentation of an already validated addition.
         # Resolution and interpreter mutation belong to the common owner.
         caller <- topenv(environment())
@@ -325,13 +341,26 @@ base::local(
           action = "add"
         )
         current <- current_requirements()
-        current$packages <- unique(c(distribution, current$packages))
+        added <- setdiff(distribution, current$packages)
+        initialized <- !is.null(.Call("mcp_console_running_python"))
+        current$packages <- if (initialized) {
+          c(added, current$packages)
+        } else {
+          c(current$packages, added)
+        }
         current$history <- c(current$history, list(request))
-        list(manifest = current, config = activation_config(selection))
+        list(
+          manifest = current,
+          config = if (initialized) activation_config(selection) else NULL
+        )
       }
       commit_import <- function(projection) {
-        record_activation(projection$manifest)
-        globals$py_config <- available_config(projection$config)
+        if (!is.null(projection$config)) {
+          record_activation(projection$manifest)
+          if (reticulate:::is_python_initialized()) {
+            globals$py_config <- available_config(projection$config)
+          }
+        }
         globals$python_requirements <- projection$manifest
         invisible()
       }
@@ -364,26 +393,6 @@ base::local(
       }
     }
 
-    prepare_packages <- function(packages) {
-      if (is.na(managed)) {
-        return(list(
-          kind = "disabled",
-          message = managed_python_disabled_message
-        ))
-      }
-      # Loading reticulate installs the adapter without initializing Python.
-      asNamespace("reticulate")
-      result <- .Call(
-        "mcp_console_python_prepare",
-        packages,
-        requirements_adapter
-      )
-      if (inherits(result, "interrupt")) {
-        stop(result)
-      }
-      result
-    }
-
     check_python_setup <- function(completed) {
       if (!completed) {
         # Native setup retains the exception without printing it. Preserve
@@ -397,13 +406,7 @@ base::local(
     }
 
     attached_python_config <- function() {
-      local({
-        # Python-first selection already delivered this callback before
-        # discovery. Reticulate's attachment must not deliver it again.
-        previous_options <- options(reticulate.python.beforeInitialized = NULL)
-        on.exit(options(previous_options), add = TRUE)
-        reticulate::py_config()
-      })
+      reticulate::py_config()
     }
 
     check_python_version <- function(python_config, strict = TRUE) {
@@ -431,16 +434,10 @@ base::local(
       if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
         return(invisible(TRUE))
       }
-      disabled_reason <- if (is.na(managed)) {
-        managed_python_disabled_message
-      } else {
-        NULL
-      }
       check_python_setup(.Call(
         "mcp_console_setup_python_runtime",
         python_config$libpython,
-        !is.na(managed),
-        disabled_reason
+        !is.na(managed)
       ))
       invisible(TRUE)
     }
@@ -464,23 +461,6 @@ base::local(
       }
       invisible()
     }
-    prepare <- function(request) {
-      if (is.na(managed)) {
-        stop("Python preparation requires a server-managed interpreter")
-      }
-      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
-      result <- prepare_packages(packages)
-      if (identical(result$kind, "ready")) {
-        result$kind <- "prepared"
-      }
-      jsonlite::toJSON(
-        result,
-        auto_unbox = TRUE,
-        null = "null",
-        na = "null"
-      )
-    }
-
     evaluate_impl <- function() {
       if (identical(source, "select")) {
         return(selected_python())

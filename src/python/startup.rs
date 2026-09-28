@@ -74,10 +74,7 @@ pub(super) fn install_services(libpython: &Path) -> Result<(), String> {
 /// install their managed or disabled import policy through this setup boundary.
 /// Successful steps remain in the process-lifetime library state, so a later
 /// call resumes incomplete setup without replacing the interpreter.
-pub(crate) fn setup_runtime(
-    libpython: &Path,
-    resolution: ImportResolution<'_>,
-) -> Result<bool, String> {
+pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, String> {
     super::library::load(libpython)?;
     if super::library::runtime_configured()? {
         return Ok(true);
@@ -90,16 +87,40 @@ pub(crate) fn setup_runtime(
     super::library::install_runtime(super::RUNTIME_SOURCE)?;
     crate::sql::install_python_runtime()?;
     if !super::library::configure_environment()? {
-        return Ok(false);
+        return Err("Python environment setup failed; restart required".into());
     }
     if !super::library::configure_module_defaults()? {
         return Ok(false);
     }
-    if !super::library::configure_import_resolution(resolution)? {
+    if !super::library::configure_import_resolution(import_policy(managed))? {
         return Ok(false);
     }
     super::library::mark_runtime_configured()?;
     Ok(true)
+}
+
+fn import_policy(managed: bool) -> ImportResolution<'static> {
+    if managed {
+        return ImportResolution::Managed;
+    }
+    ImportResolution::Disabled(
+        match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
+            Ok("docker") => {
+                "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session"
+            }
+            Ok("docker_sandbox") => {
+                "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session"
+            }
+            _ if std::env::var("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION").as_deref()
+                == Ok("0") =>
+            {
+                "MCP Console dynamic environment resolution is unavailable. Install the distribution into the ambient Python environment, or install `ir` or `uv` and restart MCP Console."
+            }
+            _ => {
+                "MCP Console is using a user-selected Python environment. Automatic managed package resolution is disabled, and `requirements.python` is also disabled for this interpreter selection. Install the distribution into the selected environment or restart MCP Console with managed Python enabled."
+            }
+        },
+    )
 }
 
 pub(crate) fn finish_initialization() -> Result<(), String> {
@@ -111,42 +132,24 @@ pub(crate) fn finish_initialization() -> Result<(), String> {
 pub(super) fn initialize_native(
     configuration: &super::NativePython,
     managed: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let selected = &configuration.embedding;
     initialize_selected(configuration)?;
-    let result = setup_runtime(
-        Path::new(&selected.libpython),
-        if managed {
-            ImportResolution::Managed
-        } else {
-            ImportResolution::Disabled(
-                match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
-                    Ok("docker") => "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session",
-                    Ok("docker_sandbox") => "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session",
-                    _ => crate::local_runtime::IMPORT_DISABLED,
-                },
-            )
-        },
-    )
-    .and_then(|configured| {
-        if !configured {
-            return Err("native Python setup did not complete".into());
+    let result = setup_runtime(Path::new(&selected.libpython), managed).and_then(|configured| {
+        if configured && !crate::worker::r_available() {
+            super::library::configure_native_sql()?;
         }
-        super::library::configure_native_sql()?;
-        Ok(())
+        Ok(configured)
     });
-    if result.is_err() {
+    if !matches!(result, Ok(true)) {
         super::library::display_setup_exception()?;
     }
     let finished = finish_initialization();
-    result?;
+    let configured = result?;
     finished?;
-    if managed {
-        let manifest = std::env::var("MCP_CONSOLE_MANAGED_PYTHON")
-            .map_err(|error| format!("managed Python launch omitted its declaration: {error}"))?;
-        let manifest = serde_json::from_str(&manifest)
-            .map_err(|error| format!("invalid managed Python declaration: {error}"))?;
+    if managed && !super::requirements::initialized() {
+        let manifest = super::requirements::declaration()?;
         super::requirements::initialize(configuration, manifest)?;
     }
-    Ok(())
+    Ok(configured)
 }

@@ -2,28 +2,6 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: |
-    options(reticulate.python.afterInitialized = function() {
-      reticulate::py_run_string(paste(
-        "import numpy as np",
-        "original_get_printoptions = np.get_printoptions",
-        "runtime_identity = object()",
-        "runtime_identity_id = id(runtime_identity)",
-        "def configuration_checkpoint():",
-        "    np.get_printoptions = original_get_printoptions",
-        "    input('python runtime configuring> ')",
-        "    return original_get_printoptions()",
-        "np.get_printoptions = configuration_checkpoint",
-        sep = "\n"
-      ))
-    })
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   python: "42"
 result:
   content:
@@ -39,15 +17,13 @@ send:
 result:
   content:
     - type: text
-      text: ""
-  isError: false
----
-send:
-  r: options(reticulate.python.afterInitialized = NULL)
-result:
-  content:
-    - type: text
-      text: "[done]"
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 838, in _mcp_console_configure_module_defaults
+          File "<string>", line 796, in apply
+          File "<runtime setup checkpoint>", line 9, in configuration_checkpoint
+          File "<string>", line 50, in _console_input
+        KeyboardInterrupt
   isError: false
 ---
 send:

@@ -44,7 +44,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
         let services = SERVICES
             .get()
             .expect("installed Python services retain callbacks");
-        api.call_unit(c"_mcp_console_services", c"install_interrupt")?;
+        api.call_unit(c"_mcp_console_services", c"install_services")?;
         return worker::install_python_interrupt(services.set_interrupt);
     }
     let services = if let Some(services) = SERVICES.get() {
@@ -88,6 +88,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             method(c"readline", readline, 8),
             method(c"publish_plot", publish_plot, 8),
             method(c"resolve_import_request", resolve_import_request, 8),
+            method(c"attach_r", attach_r, 4),
             method(c"interrupt", interrupt, 1), // METH_VARARGS: signal number and frame
             Method {
                 name: std::ptr::null(),
@@ -206,6 +207,13 @@ unsafe extern "C" fn publish_plot(_: *mut PyObject, image: *mut PyObject) -> *mu
     callback(|services| {
         let image = services.text(image)?;
         services.without_gil(|| worker::publish_plot(Ok(image)));
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn attach_r(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        services.without_gil(crate::worker::ensure_bridge)?;
         Ok(services.none())
     })
 }

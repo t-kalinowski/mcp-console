@@ -9,6 +9,7 @@ pub(super) fn configure_prepared(
     kind: &str,
     python_only: bool,
 ) {
+    let python_available = properties.contains_key("python");
     let source = if kind == "docker" {
         "image"
     } else {
@@ -57,6 +58,11 @@ pub(super) fn configure_prepared(
             let text = property["description"]
                 .as_str()
                 .expect("language description");
+            let text = if python_available {
+                text.to_owned()
+            } else {
+                text.replace(" Read Python globals through py$name.", "")
+            };
             property["description"] =
                 format!("{text} Dependencies must be preinstalled in the {source}.").into();
         }
@@ -68,11 +74,17 @@ pub(super) fn configure_prepared(
                 "Python data frames require explicit registration with sql_connection().register(name, frame).",
                 "console_sql_connection(None)",
             )
-        } else {
+        } else if python_available {
             (
                 "R DBI or Python DB-API",
                 "The default catalog can query R global data frames by name; Python data frames require explicit registration with sql_connection().register(name, frame).",
                 "console_sql_connection(None) in Python or console_sql_connection(NULL) in R",
+            )
+        } else {
+            (
+                "R DBI",
+                "The default catalog can query R global data frames by name.",
+                "console_sql_connection(NULL) in R",
             )
         };
         property["description"] = format!(

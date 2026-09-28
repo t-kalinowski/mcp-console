@@ -10,6 +10,14 @@ result:
   isError: false
 ---
 send:
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   python: |
     import json
     import subprocess

@@ -148,6 +148,13 @@ impl Session {
         matches!(self, Self::Ssh(_))
     }
 
+    pub fn python_available(&self) -> bool {
+        self.compute()
+            .and_then(|state| state.runtime.as_ref())
+            .and_then(|runtime| runtime.native.as_ref())
+            .is_none_or(|runtime| runtime.python.is_some())
+    }
+
     pub fn python_only(&self) -> bool {
         self.compute()
             .and_then(|state| state.runtime.as_ref())

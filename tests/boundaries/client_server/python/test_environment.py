@@ -141,27 +141,18 @@ def test_rejects_python_older_than_3_10(
     client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    version_failure = (
-        "Error: MCP Console requires Python 3.10 or later; "
-        "selected interpreter reports Python 3.9\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
+    assert result["isError"] is False, result
     output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        version_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
+    assert output.startswith(
+        "Error: selected Python inspection failed (exit status: 1): Traceback"
+    ), output
+    assert output.endswith(
+        "RuntimeError: MCP Console requires Python 3.10 or later\n\n"
+    ), output
+    assert "[worker stopped" not in output, output
+    # Inspection rejects the selection before interpreter mutation. R remains usable.
+    client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE)); 42L")
+    assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
     return client.finish()
 
 

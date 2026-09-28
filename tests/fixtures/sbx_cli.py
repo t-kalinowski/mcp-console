@@ -167,6 +167,8 @@ elif args[0] == "exec":
                 },
             },
         }
+        if mode == "r-only-probe":
+            runtime["native"]["python"] = None
         if mode == "native-managed":
             runtime["native"]["python"]["managed"] = True
         if mode == "native-r-conflict":

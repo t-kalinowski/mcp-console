@@ -326,14 +326,10 @@ impl ConsoleServer {
                 }
             }
         };
-        let python_only = worker.python_only();
-        let languages = if python_only {
-            Languages {
-                r: false,
-                ..languages
-            }
-        } else {
-            languages
+        let languages = Languages {
+            r: languages.r && !worker.python_only(),
+            python: languages.python && worker.python_available(),
+            ..languages
         };
         let target = worker.target_metadata();
         let dynamic_resolution = worker.dynamic_resolution();

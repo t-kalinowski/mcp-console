@@ -193,32 +193,6 @@ impl Client {
             return Ok(PrepareResult::RestartRequired);
         }
         if matches!(*worker, WorkerState::Running(_)) {
-            if self.python_only() && delta.has_live_python_additions() {
-                let requirements = delta
-                    .python_candidate
-                    .clone()
-                    .expect("live Python delta includes a candidate");
-                let (candidate, inspected) = match self.resolve_live_native_python(
-                    generation,
-                    &environment,
-                    requirements,
-                    &delta.duckdb_extensions,
-                ) {
-                    Ok(candidate) => candidate,
-                    Err(failure) => {
-                        return self
-                            .finish_environment_resolution_failure(generation, intent, failure);
-                    }
-                };
-                drop(environment);
-                return self.prepare_running_native_python(
-                    generation,
-                    worker,
-                    candidate,
-                    inspected,
-                    delta.duckdb_changed.then_some(delta.duckdb_extensions),
-                );
-            }
             let RequirementDelta {
                 duckdb_extensions,
                 duckdb_changed,
@@ -239,7 +213,7 @@ impl Client {
             } else {
                 None
             };
-            if self.python_only() && duckdb_changed {
+            if self.python_only() && duckdb_changed && python_candidate.is_none() {
                 let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
                 if let Err(failure) = self.resolve_python_duckdb_extensions_for_environment(
                     generation,
@@ -248,7 +222,10 @@ impl Client {
                 ) {
                     return self.finish_environment_resolution_failure(generation, intent, failure);
                 }
-            } else if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
+            } else if !self.python_only()
+                && !duckdb_extensions.is_empty()
+                && (duckdb_changed || managed_r.is_some())
+            {
                 let mut targets = Vec::new();
                 if duckdb_changed {
                     targets.extend(environment.duckdb_r_targets.iter().cloned());
@@ -446,7 +423,14 @@ impl Client {
                 }
                 Ok(PreparationOutcome::Completed(Ok(())))
             });
-            let result = running.prepare_python(python_packages, includes_r, None, commit);
+            let result = running.prepare_python(
+                python_packages,
+                includes_r,
+                self.python_only()
+                    .then(|| duckdb_extensions.clone())
+                    .flatten(),
+                commit,
+            );
             match result {
                 Ok(PreparationOutcome::Completed(Ok(()))) => {}
                 Ok(PreparationOutcome::Completed(Err(error))) => {
@@ -521,61 +505,6 @@ impl Client {
             return self.fail_running_preparation(&mut worker, generation, true, error, includes_r);
         }
         Ok(PrepareResult::Prepared)
-    }
-
-    fn prepare_running_native_python(
-        &self,
-        generation: &WorkerGeneration,
-        mut worker: std::sync::MutexGuard<'_, WorkerState>,
-        candidate: crate::resolver::ManagedPython,
-        inspected: crate::python::NativePython,
-        duckdb_extensions: Option<BTreeSet<String>>,
-    ) -> Result<PrepareResult, String> {
-        self.ensure_generation(generation)?;
-        let WorkerState::Running(running) = &mut *worker else {
-            return Err("worker state changed during requirement preparation".into());
-        };
-        let client = self.clone();
-        let commit_generation = generation.clone();
-        let commit = Box::new(move |result| {
-            let (disposition, result) = match result {
-                Ok(None) => (
-                    client.old_generation_commit_disposition(&commit_generation)?,
-                    Ok(()),
-                ),
-                Ok(Some(_)) => {
-                    return Err(
-                        "native Python preparation returned an unexpected resolver candidate"
-                            .into(),
-                    );
-                }
-                Err(error) => (
-                    client.require_restart_for_requirement_changes(&commit_generation)?,
-                    Err(requirement_restart_error(error)),
-                ),
-            };
-            Ok(match disposition {
-                OldGenerationCommitDisposition::Commit => PreparationOutcome::Completed(result),
-                OldGenerationCommitDisposition::DiscardForReplacement => {
-                    PreparationOutcome::DiscardedByReplacement
-                }
-            })
-        });
-        match running.prepare_python(
-            Vec::new(),
-            false,
-            Some((candidate, inspected, duckdb_extensions)),
-            commit,
-        ) {
-            Ok(PreparationOutcome::Completed(Ok(()))) => Ok(PrepareResult::Prepared),
-            Ok(PreparationOutcome::Completed(Err(error))) => {
-                self.fail_running_preparation(&mut worker, generation, false, error, false)
-            }
-            Ok(PreparationOutcome::DiscardedByReplacement) => Err(preparation_cancelled(false)),
-            Err(error) => {
-                self.fail_running_preparation(&mut worker, generation, true, error, false)
-            }
-        }
     }
 
     fn fail_running_preparation(

@@ -157,6 +157,25 @@ pub(super) fn load(path: &Path) -> Result<bool, String> {
     with_library(path, LoadedLibrary::attach)
 }
 
+pub(super) fn initialized_selection() -> Result<Option<super::NativePython>, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    Ok(slot.as_ref().and_then(|library| {
+        matches!(
+            library.interpreter,
+            Interpreter::RustOwned { .. } | Interpreter::External
+        )
+        .then(|| {
+            library
+                .configuration
+                .as_ref()
+                .map(|config| config.selected.clone())
+        })
+        .flatten()
+    }))
+}
+
 pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String> {
     let path = Path::new(&selected.embedding.libpython);
     let path = path.canonicalize().map_err(|error| {
@@ -251,6 +270,20 @@ pub(super) fn configure_environment() -> Result<bool, String> {
         .setup
         .environment = true;
     Ok(true)
+}
+
+pub(super) fn accept_configuration(selected: &super::NativePython) -> Result<(), String> {
+    let mut slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    let configuration = slot
+        .as_mut()
+        .and_then(|library| library.configuration.as_mut())
+        .ok_or("Python has no inspected selection")?;
+    // Keep the original program-name allocation alive for CPython. Only its
+    // current environment identity changes after successful live activation.
+    configuration.selected = selected.clone();
+    Ok(())
 }
 
 pub(super) fn selected_configuration() -> Result<super::NativePython, String> {
@@ -400,9 +433,7 @@ pub(super) fn runtime_configured() -> Result<bool, String> {
         .map_err(|_| "Python shared library state is unavailable")?;
     Ok(slot
         .as_ref()
-        .ok_or("Python shared library is not loaded")?
-        .setup
-        .configured)
+        .is_some_and(|library| library.setup.configured))
 }
 
 pub(super) fn mark_runtime_configured() -> Result<(), String> {
@@ -463,7 +494,7 @@ pub(super) fn display_setup_exception() -> Result<(), String> {
         }
         library.api
     };
-    api.with_gil(|api| api.call_unit(c"_mcp_console", c"display_setup_exception"))
+    api.with_gil(|api| api.call_unit(c"_mcp_console", c"display_activation_exception"))
 }
 
 pub(super) fn display_activation_exception() -> Result<(), String> {

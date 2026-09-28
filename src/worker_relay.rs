@@ -807,11 +807,10 @@ mod platform {
                                     return;
                                 }
                             }
-                            RelayCommand::PreparePython { packages, native } => {
+                            RelayCommand::PreparePython { packages } => {
                                 if sideband
                                     .send(SidebandWrite::Message(ServerMessage::PreparePython {
                                         packages,
-                                        native,
                                     }))
                                     .is_err()
                                 {

@@ -219,9 +219,14 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
     }
 }
 
-pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
+
+    // Console owns SIGINT before either interpreter starts. R must not
+    // replace that owner while startup hooks run (or reset a queued request).
+    let library = libloading::os::unix::Library::this();
+    unsafe { **library.get::<*mut c_int>(b"R_SignalHandlers\0")? = 0 };
 
     let arguments = ["mcp-console", "--quiet", "--interactive", "--vanilla"]
         .into_iter()
@@ -261,7 +266,7 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
     initialize_r_repl()?;
-    Ok(String::try_from(harp::parse_eval_base("base::tempdir()")?)?.into())
+    Ok(())
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
@@ -305,7 +310,7 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     unsafe {
         mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
     }
-    super::interrupt::initialize(super::interrupt::State {
+    super::interrupt::attach_r(super::interrupt::State {
         signal: mcp_r_record_interrupt,
         requested: interrupt_pending,
         pending: console_interrupt_pending,

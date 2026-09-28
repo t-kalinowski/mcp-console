@@ -24,7 +24,7 @@ A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned 
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
 Dynamic package preparation is disabled, and Docker Quarto projections likewise execute captured cells when rendered.
 They do not reproduce the remote filesystem when rendered locally.
-With R available, each worker generation contains:
+With R available, each worker generation creates these resources when needed:
 
 - one persistent R global environment;
 - one persistent Python `__main__` namespace embedded by Console, with reticulate supplying the R bridge; and
@@ -366,17 +366,28 @@ Python cell tracebacks omit Console's private runtime frames while retaining use
 Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-When R is available, it is initialized eagerly and reticulate supplies Python interpreter selection, candidate configuration, and cross-language access.
+R and Python initialize on demand.
+An explicit or independently resolved Python selection can run while R remains uninitialized.
+Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
 Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
 Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
 Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
 Ordinary R evaluation does not initialize Python.
-R itself still starts eagerly when available; submitting Python first does not mean R starts later.
+An R cell, Python-side `r` access, or R-owned SQL initializes R.
+Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, and display settings.
+Linux loader preparation happens before either interpreter starts.
+R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
 Console activates live managed environments through its retained CPython library.
 The shared Python runtime sets NumPy and pandas display width to 200 columns when they retain their library defaults.
 A different width selected by a Python startup hook is preserved, as are subsequent user changes.
 Matplotlib setup also runs through the shared runtime; bridge setup does not reapply these defaults.
+An attachment failure before reticulate publishes its configuration can be retried with the same interpreter.
+Independent Python selection errors are reported before initialization; rejecting an unsupported interpreter leaves R and the worker available.
+Shared Python setup reports Python tracebacks without requiring the bridge.
+Interrupted module or import setup can retry on the same interpreter; startup hooks that leave incompatible interpreter identity require worker replacement.
+A failing later initialization hook requires restart before further bridge use; ordinary Python objects and evaluation remain available.
+A partially initialized R runtime also requires restart.
 
 Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
 Binary buffers, native file descriptors, background threads, and fork children retain raw-stream behavior, including cached output streams and logging handlers.
@@ -440,7 +451,8 @@ Errors include the inferred distribution, the host resolver diagnostic when avai
 Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
 Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
 
-Automatic resolution runs only from the main worker process and the Python thread that configured the runtime; R-present sessions call R and reticulate there.
+Automatic resolution runs only from the main worker process and the Python thread that configured the runtime.
+Optional R declaration projection runs on that same thread.
 A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
 Imports already handled by ordinary Python finders remain available in those contexts.
 
@@ -449,14 +461,16 @@ Its missing-import error directs the user to install the distribution into that 
 
 A bare runtime also disables the import resolver and `requirements.python`.
 If ambient reticulate and Python are usable, installed distributions import normally and a missing import directs the user to install `ir` or `uv` before restarting.
-If reticulate is not installed, Python cells report that ambient adapter error directly.
+An independently selected Python does not require reticulate.
+Unresolved R-side selection or cross-language access reports a missing reticulate adapter when it is needed.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
 A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `control = "interrupt"`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 
-The two languages share reticulate's live bridge:
+The two languages share reticulate's live bridge, attached on demand.
+Python-side `r` access works without a preceding R cell:
 
 - Python reads R globals and calls R functions through `r.name`;
 - R reads and writes Python globals through `py$name`; and

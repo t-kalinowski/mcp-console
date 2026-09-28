@@ -31,7 +31,7 @@ DuckDB is resolved with the rest of the Python manifest through the hidden host 
 If it is absent after an explicit replacement, Python and a selected DB-API connection remain usable, while managed SQL reports how to obtain DuckDB.
 An extension requirement with no importable DuckDB package in the candidate fails and explains how to include `duckdb` in `requirements.python`.
 The managed sans-R declaration includes the SQLite extension, prepared on the execution host before MCP readiness.
-The R-backed live preparation path below applies only to sessions with R.
+Python preparation uses one control path with or without R; R declaration compatibility is an optional adapter.
 
 Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
 Its private JSON exchange carries requirement manifests, resolved environment data, controls, and cleanup receipts.
@@ -298,11 +298,10 @@ These cases report an actionable import error instead of installing an ambiguous
 A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
 Both forms report the full missing-submodule name.
 
-When inference succeeds in an R-present session, the finder calls the reticulate bridge's private R closure.
-That closure adds the inferred distribution through `reticulate::py_require(..., action = "add")` and materializes the complete manifest through the existing managed-Python callback.
-In a managed sans-R session, the finder calls a native callback that forms the same additive request from the worker's accepted manifest.
+When inference succeeds, the finder calls the shared native requirement owner, which forms an additive request from the retained manifest.
+Optional R declaration metadata is projected before mutation and committed after successful activation.
 The server resolves the complete candidate through the captured host resolver and returns a provisional environment in the existing `PythonResolved` exchange.
-For sans-R Python, the reply also carries the inspected candidate configuration, constrained to the running interpreter.
+The reply carries the inspected candidate configuration, constrained to the running interpreter.
 After Console activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
 The worker emits that report before the original Python import resumes.
 The server matches and commits the candidate when it processes the report; sideband order places it before any later evaluation outcome.
@@ -396,8 +395,10 @@ Reached imports use its native resolver callback with or without R; they no long
 The server validates each inferred addition against the accepted declaration and resolves and inspects its candidate on the execution host.
 The optional R adapter prepares the declaration's representation and history before interpreter mutation and commits them afterwards.
 
-Idle tool preparation still has separate server entry points.
-Its R path snapshots the declaration before calling `reticulate::py_require(..., action = "add")`; before Python initializes, it materializes the complete lazy declaration without initializing Python.
+Idle tool preparation uses the same worker operation with or without R.
+It resolves the complete declaration through the common owner and projects detached R metadata when that adapter exists.
+Before Python initializes, it materializes the declaration and retains the inspected launch identity without initializing either interpreter.
+Once Python is live, resolution pins the accepted executable and activation preserves its objects.
 R declarations preserve argument conversion, package warnings, history, live version and package checks, and R conditions.
 Their candidate library and prefixes come from the host-inspected identity.
 Additional conversion metadata is obtained from that exact executable without generic reticulate discovery.
@@ -410,7 +411,8 @@ The R adapter preserves the original Python exception and traceback through reti
 Only successful activation and process setup can publish the complete manifest to the server.
 For an R declaration, the adapter records pending activation, then reticulate accepts the configuration and writes the binding that publishes `PythonActivated`.
 
-In R-present sessions, the server retains a Python environment and its host-inspected launch identity when the worker reports that reticulate accepted its complete normalized manifest.
+The server retains a Python environment and its host-inspected launch identity when the worker publishes its complete normalized manifest.
+The R adapter publishes through the existing active binding after committing its presentation metadata.
 Successful preparation of a still-lazy interpreter also retains both at its existing preparation commit point.
 Failed or discarded candidates change neither retained value.
 A runtime import reports that activation before the original import continues.
@@ -428,7 +430,7 @@ Use explicit restart for upgrades or dependency changes that need fresh imports.
 The host resolves the complete candidate through the hidden resolver using the running environment's executable, then inspects the candidate and compares its `libpython` with the worker's active configuration.
 The host prepares the complete retained DuckDB extension set, including additions from the same request, against the candidate before activation.
 No candidate declaration appears in `action="get"` while this work is pending.
-The worker receives only this approved candidate and uses the shared native activation operation without loading R or installing packages inside the worker.
+The worker requests and receives the approved candidate through the shared resolver exchange, then uses the common activation operation without initializing R or installing packages inside the worker.
 For an automatic import, the importing cell stays suspended while the server prepares that candidate through the same host path; the worker activates it and retries the import through the existing finder.
 Its `PythonActivated` report commits the manifest, native launch configuration, and any new extension declaration together before a same-call cell begins.
 Python objects, the managed DuckDB catalog, and the selected SQL connection remain in the worker; a later cell error does not discard an accepted activation.
