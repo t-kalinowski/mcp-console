@@ -609,11 +609,13 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             tool = client.transcript[-1]["result"]["tools"][0]
             fields = tool["inputSchema"]["properties"]
             assert {"r", "sql", "python"} <= fields.keys(), fields
-            assert "when available" in tool["description"], tool
+            assert "listed language fields do not guarantee" in tool["description"], (
+                tool
+            )
             result = client.send(python="raise AssertionError('unavailable cell ran')")
             assert result["isError"], result
             assert last_result_text(client) == (
-                "Python cells are unavailable: the target has no Python runtime"
+                "[Python cells are unavailable: the session has no Python runtime]"
             ), result
             client.send(
                 r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer"
@@ -1547,13 +1549,16 @@ def attach_python_initialized_during_r_startup(
                 client.send(
                     python="before_r = object(); before_r_identity = id(before_r)"
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
+                if startup_plots:
+                    assert_result_content(client, expected_plots)
+                else:
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
             # The default package can enter the common owner during startup.
             if trigger == "python-access":
                 client.send(python="assert 3 < r.pi < 4")
             else:
                 client.send(r="invisible(NULL)")
-            if startup_plots:
+            if startup_plots and not python_first:
                 assert_result_content(client, expected_plots)
             else:
                 assert last_result_text(client) == "[done]", client.transcript[-1]

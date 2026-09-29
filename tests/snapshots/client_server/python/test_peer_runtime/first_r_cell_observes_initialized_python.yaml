@@ -45,8 +45,7 @@ result:
 ---
 send:
   python: >-
-    assert id(peer_object) == peer_identity; print('runtime objects
-    retained')
+    assert id(peer_object) == peer_identity; print('runtime objects retained')
 result:
   content:
     - type: text

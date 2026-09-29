@@ -77,11 +77,11 @@ send:
         sys.base_exec_prefix,
     ]
     program = "import sys, json; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix]))"
-    child_identity = json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))
-    assert child_identity == expected, (child_identity, expected)
-    assert os.environ["VIRTUAL_ENV"] == sys.prefix, (
-        os.environ["VIRTUAL_ENV"], sys.prefix
+    child_identity = json.loads(
+        subprocess.check_output([sys.executable, "-c", program], text=True)
     )
+    assert child_identity == expected, (child_identity, expected)
+    assert os.environ["VIRTUAL_ENV"] == sys.prefix, (os.environ["VIRTUAL_ENV"], sys.prefix)
     print("managed identity and child environment agree")
 result:
   content:
@@ -125,8 +125,7 @@ result:
 ---
 send:
   python: >-
-    import yaml12, more_itertools; print('accepted additions survived
-    restart')
+    import yaml12, more_itertools; print('accepted additions survived restart')
 result:
   content:
     - type: text
@@ -149,8 +148,7 @@ result:
 ---
 send:
   python: >-
-    import yaml12, more_itertools; print('accepted additions survived
-    crash')
+    import yaml12, more_itertools; print('accepted additions survived crash')
 result:
   content:
     - type: text

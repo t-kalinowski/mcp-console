@@ -828,7 +828,7 @@ def test_restart_cancels_live_python_preparation(
                     "type": "text",
                     "text": (
                         "[worker stopped: in-memory state lost]\n"
-                        "[starting new worker]\n[idle]"
+                        "[starting new worker]\n[worker starting]"
                     ),
                 }
             ], restart

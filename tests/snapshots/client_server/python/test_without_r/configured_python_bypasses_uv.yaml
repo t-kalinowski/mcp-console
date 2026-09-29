@@ -1,5 +1,5 @@
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: |
@@ -49,8 +49,8 @@ result:
 send:
   control: restart
   python: >-
-    import sys; from pathlib import Path; assert Path(sys.prefix) ==
-    Path.cwd() / '.venv'; 42
+    import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd()
+    / '.venv'; 42
 result:
   content:
     - type: text
@@ -61,12 +61,12 @@ result:
         [done]
   isError: false
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: >-
-    import sys; from pathlib import Path; assert Path(sys.prefix) ==
-    Path.cwd() / '.venv'; 42
+    import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd()
+    / '.venv'; 42
 result:
   content:
     - type: text

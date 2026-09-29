@@ -76,6 +76,7 @@ def before_resolver_spawn(
                 "MCP_CONSOLE_TEST_SPAWN_RELEASE": str(release.path),
             }
         )
+        (root / "armed").touch()
         client = resources.enter_context(
             McpClient(
                 Path(sys.executable),
@@ -86,7 +87,6 @@ def before_resolver_spawn(
         )
         try:
             client.initialize_and_list_tools()
-            (root / "armed").touch()
             yield client, started, release, root
         finally:
             # Release the resolver fork before transport teardown, even when an
@@ -116,6 +116,9 @@ def test_interrupts_first_cell_before_resolver_registration(
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
+        failed = client.send(r="stop('interrupted startup must remain failed')")
+        assert failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
+        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )
@@ -150,6 +153,9 @@ def test_interrupts_first_cell_between_resolver_phases(
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
+        failed = client.send(r="stop('interrupted startup must remain failed')")
+        assert failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
+        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )
@@ -182,6 +188,7 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         client.receive(stdin)
         assert stdin["result"]["isError"] is True, stdin
         client.send(timeout_ms=600_000)
+        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )

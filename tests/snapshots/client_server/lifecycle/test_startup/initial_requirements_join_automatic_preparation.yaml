@@ -102,8 +102,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
+      text: |
         Loading required namespace: praise
         initial cell ran once
-        [done]
   isError: false

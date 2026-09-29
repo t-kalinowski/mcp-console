@@ -1,8 +1,7 @@
 ---
 send:
   python: >-
-    assert peer_startups == 1; cell_count = globals().get('cell_count', 0) +
-    1
+    assert peer_startups == 1; cell_count = globals().get('cell_count', 0) + 1
   timeout_ms: 0
 result:
   content:

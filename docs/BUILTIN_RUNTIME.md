@@ -38,14 +38,12 @@ The initial schema is stable and conditional: configured language filters and pr
 Within the worker, transport readiness precedes the explicit initialization operation.
 That operation initializes R, Python through the common native owner, the optional reticulate bridge, and the actual managed DuckDB connection, in that order, omitting genuinely absent runtimes.
 The first cell joins this work or uses the completed worker; it never starts a parallel initialization.
-Startup text and plots are retained for a later send or poll and recorded as session output even if no tool is called.
+Startup text, prompts, and plots are retained for a later send or poll and recorded as session output even if no tool is called.
 They do not create a user cell or a source entry.
 Before code or interactive input is accepted, warm capacity is speculative.
 Initial requirements can replace it safely without an explicit restart.
 Inspection and polling do not claim state.
 After stateful admission, live-environment rules preserve objects and connections and changes that require replacement need explicit restart.
-Startup output, prompts, and plots are pending session output and can be collected by later send/poll calls.
-They are not a user cell.
 A startup failure leaves MCP available, retains diagnostics, and requires explicit restart after confirmed cleanup; it does not repeatedly rerun a failing hook.
 Unconfirmed retirement blocks replacement.
 
@@ -102,8 +100,8 @@ The resolver and its inputs are trusted: Console does not prevent worker-created
 See the [concrete escape scenario and trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
 
 A plain restart clears Python objects and reuses the accepted environment without resolving again.
-In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the first worker starts, alone or with a Python or SQL cell.
-Once a worker is running, idle `action: "add"` calls can prepare new Python distributions and DuckDB extensions without replacement, with or without accompanying Python or SQL code.
+In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the session accepts stateful work, alone or with a Python or SQL cell.
+Once stateful work has been admitted, idle `action: "add"` calls can prepare new Python distributions and DuckDB extensions without replacement, with or without accompanying Python or SQL code.
 Already-retained declarations remain no-ops.
 Changing a requirement for a declared distribution, interpreter constraints, publication cutoffs, or a `set` or `reset` declaration still requires `control: "restart"`.
 Requirements already retained are a no-op, including on a running worker.
@@ -148,8 +146,9 @@ Matplotlib plots are returned when Matplotlib is already installed in the select
 Explicitly selected environments remain non-managed; prepare their packages before starting Console.
 R requirements and R cells are unavailable.
 An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
-`requirements.action="get"` inspects the retained declaration without starting a worker.
-The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
+`requirements.action="get"` inspects the retained declaration independently of background startup.
+The initial schema describes availability conditionally; execution-host discovery validates these limits before admitting an operation.
+Rejected requests leave existing Python state usable.
 Docker and Docker Sandbox targets discover R inside the image or template.
 Genuine absence selects native Python; an invalid `R_HOME` or broken R installation reports its R error.
 The CPython inspector checks the selected executable and embedding library without starting an analysis worker or opening a SQL catalog.
@@ -163,7 +162,6 @@ See the [Docker](DOCKER.md#prepared-python-without-r) and [SBX](DOCKER_SANDBOX.m
 SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection opened during initialization when DuckDB is installed.
 Missing optional DuckDB leaves Python available and reports an SQL capability error.
 Connection creation does not run a synthetic SQL cell.
-Python-only cells do not open it.
 `sql_connection()` returns the connection currently selected for SQL cells, including a user-owned DB-API connection selected with `console_sql_connection(connection)`.
 `console_sql_connection(None)` restores the same managed DuckDB connection and catalog without closing the user-owned connection.
 Register a Python data frame explicitly with `sql_connection().register("name", frame)` before querying it; automatic frame scanning is disabled.
@@ -395,6 +393,7 @@ Linux loader preparation occurs before either interpreter exists.
 Supported R startup declarations and reticulate hooks run inside initialization, before loading Python through its common owner.
 Conflicting interpreter hints fail with a configuration/restart diagnostic.
 A first R cell can no longer select a different interpreter before Python starts; use launch configuration or an explicit requirements/restart transaction.
+Python also captures `os.environ` during warmup. Later R `Sys.setenv()` calls change the process environment but do not update that Python mapping; update `os.environ` from Python when Python code needs a new value.
 R default packages include settings from system Renviron.
 Console defers their loading until its adapter is installed, preserves their hooks and plots through the startup output/graphics scope, and attaches tools:mcp-console afterward at search position 2.
 Reticulate metadata retains active/base prefixes and the managed environment's ephemeral marker.
@@ -443,7 +442,7 @@ For other conservative ASCII identifiers, it assumes that the PyPI distribution 
 Automatic inference produces one bare distribution name; it does not infer versions, extras, markers, URLs, paths, or other requirement syntax.
 
 MCP Console declines the fallback when it cannot safely identify one distribution.
-This includes broad shared namespaces such as `google`, `azure`, `zope`, `opentelemetry`, and `backports`, a missing submodule whose top-level package is already present, and a standard-library module absent from the selected Python build.
+This includes broad shared namespaces such as `google`, `azure`, `zope`, `opentelemetry`, and `backports`, the `rpython` alternate-interpreter toolchain, a missing submodule whose top-level package is already present, and a standard-library module absent from the selected Python build.
 The resulting import error asks for the correct distribution through `requirements.python` when explicit preparation can help.
 A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
 Both forms report the full missing-submodule name.
@@ -505,7 +504,7 @@ Objects and proxies tied to a worker generation become invalid when that generat
 
 ## SQL and DuckDB
 
-With R present, the managed in-memory DuckDB connection is the default SQL backend and is created lazily.
+With R present, the managed in-memory DuckDB connection uses R DBI and is created during runtime initialization, when its provider packages are installed.
 Later managed SQL cells, DBI calls, and dplyr relations reuse its catalog.
 DuckDB CLI dot commands are not supported.
 Managed defaults include the SQLite extension, so existing databases can be queried with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)` without an explicit preparation call.

@@ -19,7 +19,5 @@ send:
 result:
   content:
     - type: text
-      text: |-
-
-        [idle]
-  isError: false
+      text: worker startup interrupted
+  isError: true

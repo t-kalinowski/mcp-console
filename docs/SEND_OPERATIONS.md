@@ -20,7 +20,7 @@ Actual capability validation precedes control, stdin, and evaluation side effect
 Prepared Docker/SBX targets have a get-only requirements schema from configuration.
 
 Local and SSH sans-R sessions managed through uv on the execution host expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
-They support standalone preparation and preparation with a Python or SQL cell before first worker startup, and explicit restart preparation with or without a cell.
+They support standalone preparation and preparation with a Python or SQL cell before the session accepts stateful work, and explicit restart preparation with or without a cell.
 An idle running worker also accepts effective new Python-distribution and DuckDB-extension additions with `action: "add"`, including both in one call; already-retained declarations remain no-ops.
 Automatic missing-import resolution starts only when a managed Python cell reaches that import and uses the running evaluation's resolver exchange.
 Changes to a declared distribution, interpreter constraints, publication cutoffs, and changed `set` or `reset` declarations require explicit restart.
@@ -80,7 +80,7 @@ Standalone success returns `[prepared]`; preparation bundled with a cell adds no
 Packages and extensions become available without being attached, imported, or loaded.
 
 Preparation is not a general rollback boundary.
-Before the first worker starts and during restart preparation, the server commits changed retained candidates together after their host resolution succeeds.
+During initial preparation of an unclaimed session and explicit restart preparation, the server commits changed retained candidates together after their host resolution succeeds.
 Host cache writes and installation or build side effects may survive a failed request.
 Live preparation has separate activation points: a Python addition can remain retained if a following R update fails, and a failed R update can leave a changed library path that requires restart.
 The [live preparation rules](REQUIREMENTS.md#live-r-preparation) describe these outcomes and infrastructure failures that stop a worker.

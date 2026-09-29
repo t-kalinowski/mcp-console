@@ -1,4 +1,14 @@
 ---
-stderr: >
-  Python sessions without R require `uv` on PATH; set python in
-  .agents/console/config.yaml to use an existing environment
+send:
+  python: raise AssertionError('missing interpreter ran')
+result:
+  content:
+    - type: text
+      text: >-
+        [Python sessions without R require `uv` on PATH; set python in
+        .agents/console/config.yaml to use an existing environment]
+  isError: true
+---
+input:
+  method: ping
+result: {}

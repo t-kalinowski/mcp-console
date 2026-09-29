@@ -25,6 +25,8 @@ send:
     import signal
     import sys
 
+    probe_started = str(r.probe_started)
+    probe_release = str(r.probe_release)
 
     # The native checkpoint accepts Python's pending signal while
     # PyDLL still holds the GIL and owns the Python call frame.
@@ -61,10 +63,10 @@ send:
             try:
                 with (
                     open(
-                        os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"], "wb", buffering=0
+                        probe_started, "wb", buffering=0
                     ) as started,
                     open(
-                        os.environ["MCP_CONSOLE_SQL_PROBE_RELEASE"], "rb", buffering=0
+                        probe_release, "rb", buffering=0
                     ) as release,
                 ):
                     assert (
@@ -121,7 +123,7 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 254, in dispatch
-          File "<mcp-console:python:e1>", line 49, in pause_provider_probe
+          File "<mcp-console:python:e1>", line 51, in pause_provider_probe
         KeyboardInterrupt
   isError: false
 ---

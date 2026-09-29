@@ -432,7 +432,7 @@ def test_restart_loses_state_and_retains_python_requirements(
 
     client.send(control="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     )
 
     # fmt: python
@@ -570,7 +570,7 @@ def restart_discards_pre_marker_activation(
                         "[active evaluation stopped by session restart request]\n"
                         "[worker stopped: in-memory state lost]\n"
                         "[starting new worker]\n"
-                        "[idle]"
+                        "[worker starting]"
                     ),
                 }
             ], restart_result
@@ -651,7 +651,7 @@ def test_prepares_python_requirements_after_worker_startup(
 
     client.send(control="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     )
     client.send(r="is.null(reticulate::py_require()$python_version)")
     assert last_tool_text(client) == "[1] TRUE\n"
@@ -809,7 +809,7 @@ def test_retains_idle_python_activation_during_continuous_collection(
 
     client.send(control="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     )
     client.send(python="import yaml12; yaml12.__name__")
     assert last_tool_text(client) == "'yaml12'\n"
@@ -857,7 +857,7 @@ def test_does_not_retain_stale_python_materialization(
     assert last_tool_text(client) == "[prepared]"
     client.send(control="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     )
     client.send(python="import yaml12; yaml12.__name__")
     assert last_tool_text(client) == "'yaml12'\n"
@@ -956,7 +956,7 @@ def test_layers_python_requirements_declared_by_r_packages(
 
         client.send(control="restart")
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
 
         # fmt: python

@@ -125,7 +125,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             requirements={"r": ["praise"], "python": ["six"]},
         )
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         assert Path(current_r_library()).is_dir()
         assert_resolver_ignored_r_library()
@@ -206,7 +206,7 @@ def test_validates_registry_only_python_requirements(
             control="restart",
             requirements={"python": [restarted]},
         )
-        assert last_result_text(client) == "[starting new worker]\n[idle]"
+        assert last_result_text(client) == "[starting new worker]\n[worker starting]"
 
         # fmt: r
         r = code(rf"""

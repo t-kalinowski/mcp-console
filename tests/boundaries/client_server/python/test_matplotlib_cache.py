@@ -94,7 +94,7 @@ def test_preserves_matplotlib_cache_across_activation_and_restart(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         # fmt: python
         python = code("""

@@ -18,7 +18,7 @@ After stateful work is admitted, changes to a declared distribution or constrain
 Unchanged declarations are a no-op.
 The existing prestart/restart transaction resolves the complete Python candidate and inspects its executable before preparing all retained extensions with that candidate's DuckDB.
 The execution-host preparation owner owns cancellation, output, and child cleanup for the Python-backed extension operation.
-Before startup and during restart, resolution, inspection, or extension preparation failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
+Before stateful admission and during explicit restart, resolution, inspection, or extension preparation failure preserves the current worker and environment; successful commit updates the retained manifest, executable, and launch configuration together.
 Live extension installation uses the accepted managed Python environment and captured cache directory without resolving or inspecting another interpreter.
 It commits the complete extension declaration only after host preparation succeeds in the same worker generation.
 Live Python preparation resolves against the running executable, inspects the candidate, checks `libpython`, and prepares retained extensions before sending the candidate to the worker.
@@ -293,7 +293,7 @@ Otherwise a conservative ASCII identifier maps to the same bare distribution nam
 The inferred name is validated through the same named-registry requirement path used for explicit managed-Python requests before `uv` starts.
 
 Automatic inference does not produce versions, extras, markers, paths, URLs, direct references, or other requirement syntax.
-It also declines a same-name fallback for broad shared namespaces, a missing submodule whose top-level package is already present, and a standard-library module unavailable in the selected Python build.
+It also declines a same-name fallback for broad shared namespaces, the `rpython` alternate-interpreter toolchain, a missing submodule whose top-level package is already present, and a standard-library module unavailable in the selected Python build.
 These cases report an actionable import error instead of installing an ambiguous or misleading distribution.
 A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
 Both forms report the full missing-submodule name.
@@ -455,7 +455,7 @@ DuckDB extension installation occurs entirely on the trusted host resolver.
 It uses DuckDB's default repository and signature checks, then leaves `LOAD` to the worker.
 The server accepts validated names, not repository, URL, path, or version selectors.
 
-In managed sans-R sessions, `requirements.duckdb` is available before first worker startup, during explicit restart, and as an idle live addition, alone or with a Python or SQL cell.
+In managed sans-R sessions, `requirements.duckdb` is available before the session accepts stateful work, during explicit restart, and as an idle live addition, alone or with a Python or SQL cell.
 The resolver runs the accepted or candidate environment's Python in isolated mode and imports its DuckDB package; `PYTHONPATH` and workspace modules do not redirect this helper.
 It calls DuckDB's extension installation API with names as data, without R or a separate DuckDB executable.
 On a Python environment change, the server inspects the candidate first and prepares the complete retained extension set against its DuckDB version, even if the extension names did not change.
@@ -701,7 +701,7 @@ This setting configures `uv`; only the default sandbox supplies a process-level 
 
 ## Failure atomicity and cache effects
 
-Before worker startup and during restart, the server commits the retained R, Python, and DuckDB candidates only after all requested resolution succeeds.
+Before stateful admission and during explicit restart, the server commits the retained R, Python, and DuckDB candidates only after all requested resolution succeeds.
 A failure does not change the retained manifest or replace the current worker.
 The same pre-start transaction is used for requirements declared by a cell, and any failure prevents that cell from being dispatched.
 For inline restart, the same failure also prevents stdin enqueue and worker replacement.

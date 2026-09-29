@@ -550,7 +550,7 @@ def test_preserves_selected_python_duckdb_connection_state(
     client.send(control="restart")
     assert (
         last_tool_text(client)
-        == "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        == "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     ), last_tool_text(client)
     client.send(python='print("new interpreter")')
     assert last_tool_text(client) == "new interpreter\n"
@@ -780,7 +780,6 @@ def test_interrupts_selected_python_dbapi_connection(
             python = code(r"""
                 import ctypes
                 import os
-import shutil
                 import signal
                 from pathlib import Path
 
@@ -938,10 +937,11 @@ def test_interrupts_python_dbapi_provider_probe(
             python = code("""
                 import ctypes
                 import os
-import shutil
                 import signal
                 import sys
 
+                probe_started = str(r.probe_started)
+                probe_release = str(r.probe_release)
 
                 # The native checkpoint accepts Python's pending signal while
                 # PyDLL still holds the GIL and owns the Python call frame.
@@ -978,10 +978,10 @@ import shutil
                         try:
                             with (
                                 open(
-                                    os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"], "wb", buffering=0
+                                    probe_started, "wb", buffering=0
                                 ) as started,
                                 open(
-                                    os.environ["MCP_CONSOLE_SQL_PROBE_RELEASE"], "rb", buffering=0
+                                    probe_release, "rb", buffering=0
                                 ) as release,
                             ):
                                 assert (

@@ -489,8 +489,8 @@ def test_prints_requirements_with_host_uv_cache(
         }
         assert all(record == expected for record in records), records
         if execution == DIRECT:
-            # Reticulate also checks the activated environment with a local
-            # dry-run, which inherits worker settings and may create its cache.
+            # The startup dry-run precedes the first cell's environment edits.
+            # Live activation reuses the host-inspected conversion metadata.
             diagnostics = [
                 json.loads(line)
                 for line in Path(str(uv_record) + ".diagnostics")
@@ -511,12 +511,10 @@ def test_prints_requirements_with_host_uv_cache(
                 "--no-config",
                 "--python",
             ], diagnostic
-            assert diagnostic["arguments"][11:] == ["numpy", "pandas", "py-yaml12"], (
-                diagnostic
-            )
+            assert diagnostic["arguments"][11:] == ["numpy", "pandas"], diagnostic
             assert diagnostic["environment"] == {
-                "UV_CACHE_DIR": str(worker_cache),
-                "UV_DEFAULT_INDEX": "file:///worker-selected-index",
+                "UV_CACHE_DIR": str(trusted_cache),
+                "UV_DEFAULT_INDEX": "https://pypi.org/simple",
                 "UV_OFFLINE": "1",
             }, diagnostic
         else:

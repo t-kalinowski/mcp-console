@@ -18,7 +18,7 @@ result:
       text: |-
         [active evaluation stopped by session restart request]
         [starting new worker]
-        [idle]
+        [worker starting]
   isError: false
 ---
 send:

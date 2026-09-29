@@ -65,6 +65,7 @@ def test_sqlite_is_available_by_default(
             current_directory=root,
         ) as client:
             client.initialize_and_list_tools()
+            client.send(sql="SET autoinstall_known_extensions = false")
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
                 "sqlite"
@@ -74,7 +75,6 @@ def test_sqlite_is_available_by_default(
                     "v*/**/sqlite_scanner.duckdb_extension"
                 )
             )
-            client.send(sql="SET autoinstall_known_extensions = false")
             client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
             client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
             assert "42" in last_tool_text(client), last_tool_text(client)
@@ -96,13 +96,16 @@ def test_managed_python_requires_home_for_default_extensions(
             env,
             record_in_project=False,
         ) as client:
-            client.process.wait(timeout=60)
-            diagnostic = client.stderr.read()
-            assert client.process.returncode != 0
+            client.initialize_and_list_tools()
+            result = client.send(sql="SELECT 1")
+            assert result["isError"], result
+            diagnostic = last_result_text(client)
             assert (
                 "DuckDB extension preparation requires an absolute HOME" in diagnostic
             )
-            return [{"stderr": diagnostic}]
+            client.request("ping")
+            client.finish()
+            return [{"startup_error": diagnostic}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -128,15 +131,18 @@ def test_default_extension_failure_preserves_close_failure(
             env,
             record_in_project=False,
         ) as client:
-            assert client.process.wait(timeout=60) != 0
-            assert not client.stdout.read()
-            diagnostic = client.stderr.read()
+            client.initialize_and_list_tools()
+            result = client.send(sql="SELECT 1")
+            assert result["isError"], result
+            diagnostic = last_result_text(client)
             assert marker.exists(), ("resolver did not receive Close", diagnostic)
             assert diagnostic.strip() == (
-                "DuckDB extension preparation requires an absolute HOME at server startup; "
-                "resolver input closed"
+                "[DuckDB extension preparation requires an absolute HOME at server startup; "
+                "resolver input closed]"
             ), diagnostic
-            return [{"stderr": diagnostic}]
+            client.request("ping")
+            client.finish()
+            return [{"startup_error": diagnostic}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -156,6 +162,9 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
             "raise RuntimeError('workspace DuckDB shadow was imported')\n"
         )
         env = dict(environment(root), HOME=str(home), PYTHONPATH=str(root))
+        # Poison the preparation host's Python path while keeping the selected
+        # worker's startup imports usable during automatic SQL initialization.
+        env["RETICULATE_PYTHONPATH"] = ""
         if execution == DIRECT:
             env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
             env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
@@ -440,6 +449,8 @@ def test_extension_actions_replace_and_reset_declarations(
             dict(environment(root), HOME=str(home)),
         ) as client:
             client.initialize_and_list_tools()
+            client.send(requirements={"python": ["numpy"]})
+            assert last_tool_text(client) == "[prepared]"
 
             def declaration():
                 inspected = client.send(requirements={"action": "get"})
@@ -949,6 +960,7 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
             installed_binary(binary, root), execution.serve(), env
         ) as client:
             client.initialize_and_list_tools()
+            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
 
             def declaration():
                 result = client.send(requirements={"action": "get"})
@@ -956,7 +968,6 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
                 return result["structuredContent"]["requirements"]["python"]
 
             assert declaration() == ["numpy", "pandas", "duckdb"]
-            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
             client.send(python="identity = object(); identity_id = id(identity)")
             failed = client.send(
                 control="restart",

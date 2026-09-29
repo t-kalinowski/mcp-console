@@ -152,13 +152,12 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [idle]
+        [worker starting]
   isError: false
 ---
 send:
   python: >-
-    assert 'identity' not in globals(); print('accepted environment
-    retained')
+    assert 'identity' not in globals(); print('accepted environment retained')
 result:
   content:
     - type: text

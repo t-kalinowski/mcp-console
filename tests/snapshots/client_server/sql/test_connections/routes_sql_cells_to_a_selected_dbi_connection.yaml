@@ -83,8 +83,8 @@ result:
 ---
 send:
   sql: >-
-    WITH incoming(label, value) AS (VALUES ('cte', 9)) INSERT INTO
-    custom_values SELECT label, value FROM incoming
+    WITH incoming(label, value) AS (VALUES ('cte', 9)) INSERT INTO custom_values
+    SELECT label, value FROM incoming
 result:
   content:
     - type: text

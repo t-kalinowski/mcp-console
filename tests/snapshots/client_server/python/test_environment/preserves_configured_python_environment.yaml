@@ -8,7 +8,7 @@ send:
     stopifnot(
       identical(
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
-        "configured-by-user"
+        Sys.getenv("EXPECTED_PYTHON_SELECTION")
       )
     )
     "configured-by-user"
@@ -91,7 +91,7 @@ send:
       !exists("external_python_combined_side_effect", inherits = FALSE),
       identical(
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
-        "configured-by-user"
+        Sys.getenv("EXPECTED_PYTHON_SELECTION")
       )
     )
     42L

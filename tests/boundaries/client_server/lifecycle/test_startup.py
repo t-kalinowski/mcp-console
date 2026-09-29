@@ -226,6 +226,9 @@ def test_stdin_before_transport_readiness_joins_startup(
         # requests remain available and discovery is still held at the gate.
         client.request("ping")
         fixture.release.release()
+        # The protocol deadline above covers the gated phase. Once released,
+        # input joins real package preparation under the normal runtime budget.
+        client.response_timeout = 600
         client.receive(pending)
         assert not pending["result"]["isError"], pending
         client.send(requirements={"action": "set", "r": []})

@@ -1,6 +1,16 @@
 ---
 send:
   requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
     action: get
 result:
   content:
@@ -273,7 +283,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [idle]
+        [worker starting]
   isError: false
 ---
 send:
@@ -334,7 +344,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [idle]
+        [worker starting]
   isError: false
 ---
 send:

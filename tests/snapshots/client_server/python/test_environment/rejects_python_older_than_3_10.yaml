@@ -6,19 +6,23 @@ send:
 result:
   content:
     - type: text
-      text: |+
-        Error: selected Python inspection failed (exit status: 1): Traceback (most recent call last):
-          File "<string>", line 98, in <module>
-          File "<string>", line 15, in describe
+      text: |-
+        [selected Python inspection failed (exit status: 1): Traceback (most recent call last):
+          File "<string>", line 122, in <module>
+          File "<string>", line 18, in describe
         RuntimeError: MCP Console requires Python 3.10 or later
-
-  isError: false
+        ]
+  isError: true
 ---
 send:
-  r: stopifnot(!reticulate::py_available(initialize = FALSE)); 42L
+  r: 42L
 result:
   content:
     - type: text
-      text: |
-        [1] 42
-  isError: false
+      text: |-
+        [selected Python inspection failed (exit status: 1): Traceback (most recent call last):
+          File "<string>", line 122, in <module>
+          File "<string>", line 18, in describe
+        RuntimeError: MCP Console requires Python 3.10 or later
+        ]
+  isError: true

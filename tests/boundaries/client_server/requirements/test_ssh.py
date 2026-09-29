@@ -36,7 +36,9 @@ from support.suites import run_this_suite
 
 
 @requires(SSH, WORKER)
-def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcript:
+def test_failed_background_preparation_preserves_remote_protocol(
+    binary: Path,
+) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
@@ -73,14 +75,15 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
                 client.initialize_and_list_tools()
                 schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
                 assert "requirements" in schema["properties"], schema
-                client.send()
-                assert last_result_text(client) == "\n[idle]"
+                client.send(r="must_not_run <- TRUE")
+                assert client.transcript[-1]["result"]["isError"]
+                assert "exit status: 93" in last_result_text(client)
                 client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
                 assert client.transcript[-1]["result"]["isError"] is True
                 client.finish()
             assert not trap.exists(), "controller discovered an execution runtime"
-            assert not marker.exists(), (
-                "discovery, poll, or validation invoked installation"
+            assert marker.read_text() == "called", (
+                "warmup must prepare once without a tool trigger"
             )
             assert not (remote / "ir-cache").exists()
             assert not (remote / "uv-cache").exists()
@@ -89,7 +92,7 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         return [
             {
                 "remote_managed_schema": True,
-                "preparation_is_lazy": True,
+                "background_preparation_failed_once": True,
                 "controller_runtime_unused": True,
             }
         ]
@@ -236,8 +239,6 @@ def managed_session(
                 binary, execution.serve(), controller, local, response_timeout=180
             ) as client:
                 client.initialize_and_list_tools()
-                assert not ir_run_records(ir_record)
-                assert not uv_tool_run_requirements(uv_record)
                 yield client, remote, ir_record, uv_record
             assert not trap.exists()
             assert not (root / "sshd/controller-ir").exists()
@@ -257,10 +258,6 @@ def test_bootstraps_managed_requirements_through_uv(
     ):
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
         assert "requirements" in schema["properties"], schema
-        client.send()
-        assert last_result_text(client) == "\n[idle]"
-        assert not uv_record.exists(), "discovery or polling invoked uv"
-        assert not (remote / "uv-tools").exists()
 
         output = send_and_collect_runtime_python_resolution(
             client,

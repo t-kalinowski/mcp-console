@@ -197,8 +197,6 @@ exec "{shutil.which("uv")}" "$@"
         )
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
-            assert marker.read_text() == "host resolver ran"
-            marker.unlink()
             client.send(
                 requirements={"python": ["py-yaml12"]}, python="import yaml12; 42"
             )
@@ -216,6 +214,8 @@ def test_inspects_and_replaces_managed_requirements(
         (root / "uv").symlink_to(shutil.which("uv"))
         with McpClient(binary, execution.serve(), environment(root)) as client:
             client.initialize_and_list_tools()
+            client.send(requirements={"python": ["numpy", "pandas", "duckdb"]})
+            assert last_result_text(client) == "[prepared]"
 
             def declaration(extensions: tuple[str, ...] = ()) -> list[str]:
                 result = client.send(requirements={"action": "get"})
@@ -440,10 +440,12 @@ def test_ignores_unrelated_non_utf8_environment(
         env = environment(root)
         env["UNRELATED_STARTUP_VALUE"] = os.fsdecode(b"non-utf8-\xff")
         env[os.fsdecode(b"UNRELATED_STARTUP_NAME_\xff")] = "unused"
-        with McpClient(binary, execution.serve(), env) as client:
+        # Preparation receives the controller environment. Native launch policy
+        # independently requires UTF-8, so exclude inherited worker variables.
+        with McpClient(
+            binary, execution.serve("-c", "sandbox.inherit_environment=false"), env
+        ) as client:
             client.initialize_and_list_tools()
-            # Exercise preparation independently of the native worker launcher's
-            # existing requirement that its inherited environment be UTF-8.
             result = client.send(requirements={"python": ["py-yaml12"]})
             assert not result["isError"], result
             assert last_result_text(client) == "[prepared]"
@@ -477,10 +479,11 @@ def test_prepares_managed_python_at_startup_and_restart(
             )
             assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
             schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
-            assert "r" not in schema["properties"]
+            assert "r" in schema["properties"]
             assert "sql" in schema["properties"]
             requirement_schema = schema["properties"]["requirements"]
             assert set(requirement_schema["properties"]) == {
+                "r",
                 "python",
                 "duckdb",
                 "action",
@@ -1844,13 +1847,13 @@ def test_resolves_default_python_without_r(
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             schema = client.transcript[-1]["result"]["tools"][0]
-            assert "r" not in schema["inputSchema"]["properties"]
+            assert "r" in schema["inputSchema"]["properties"]
             assert "sql" in schema["inputSchema"]["properties"]
             assert (
                 "duckdb"
                 in schema["inputSchema"]["properties"]["requirements"]["properties"]
             )
-            assert "without R" in schema["description"]
+            assert "listed language fields do not guarantee" in schema["description"]
             client.send(
                 # fmt: python
                 python=code("""
@@ -2037,17 +2040,18 @@ False
 def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         (Path(directory) / "python3").symlink_to(sys.executable)
-        result = subprocess.run(
-            [binary, *execution.serve()],
-            env=environment(Path(directory)),
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode != 0
-        assert "require `uv` on PATH" in result.stderr, result.stderr
-        return [{"stderr": result.stderr}]
+        with McpClient(
+            binary, execution.serve(), environment(Path(directory))
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(
+                python="raise AssertionError('missing interpreter ran')"
+            )
+            assert result["isError"] and "require `uv` on PATH" in last_result_text(
+                client
+            ), result
+            client.request("ping")
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -2064,54 +2068,49 @@ def test_resolver_failure_does_not_fall_back(
         # Keep MCP input open: the resolver failure, rather than input-owner
         # cancellation, must determine the outcome.
         with McpClient(binary, execution.serve(), env) as client:
-            client.process.wait(timeout=30)
-            diagnostic = client.stderr.read()
-            assert client.process.returncode != 0
-            assert "fixture uv resolution failed" in diagnostic, diagnostic
-            return [{"stderr": diagnostic}]
+            client.initialize_and_list_tools()
+            result = client.send(
+                python="raise AssertionError('fallback interpreter ran')"
+            )
+            assert result[
+                "isError"
+            ] and "fixture uv resolution failed" in last_result_text(client), result
+            client.request("ping")
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
 def test_rejects_broken_r_instead_of_selecting_python(
     binary: Path, execution: Execution
 ) -> Transcript:
+    records = []
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
         (path / "python3").symlink_to(sys.executable)
         env = environment(path)
         env["R_HOME"] = str(path / "missing-r")
-        result = subprocess.run(
-            [binary, *execution.serve()],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode != 0 and "Rscript" in result.stderr, result.stderr
-        explicit = result.stderr.replace(str(path), "<fixture>")
-        env.pop("R_HOME")
-        broken = path / "R"
-        broken.write_text(
-            code("""
-            #!/bin/sh
-            echo 'broken discovered R' >&2
-            exit 41
-            """)
-        )
-        broken.chmod(0o755)
-        result = subprocess.run(
-            [binary, *execution.serve()],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode != 0 and "broken discovered R" in result.stderr, (
-            result.stderr
-        )
-        return [{"invalid_R_HOME": explicit}, {"broken_R": result.stderr}]
+        for selection, diagnostic in (
+            ("R_HOME", "Rscript"),
+            ("PATH", "broken discovered R"),
+        ):
+            if selection == "PATH":
+                env.pop("R_HOME")
+                broken = path / "R"
+                broken.write_text(
+                    "#!/bin/sh\necho 'broken discovered R' >&2\nexit 41\n"
+                )
+                broken.chmod(0o755)
+            with McpClient(binary, execution.serve(), env) as client:
+                client.initialize_and_list_tools()
+                result = client.send(
+                    python="raise AssertionError('invalid R selected another runtime')"
+                )
+                assert result["isError"] and diagnostic in last_result_text(client), (
+                    result
+                )
+                client.request("ping")
+                records.extend(client.finish()[3:])
+        return json.loads(json.dumps(records).replace(str(path), "<fixture>"))
 
 
 @executions(DIRECT, SANDBOXED)
@@ -2162,13 +2161,18 @@ def test_cleans_temporary_storage_after_startup_failure(
             temporary = Path((root / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "startup failure deleted the environment"
-            # Python now starts on cell demand after worker readiness. The
-            # replacement is idle and has not entered the failing hook again.
             (site / "sitecustomize.py").unlink()
-            client.send(python="print('replacement initializes on demand')")
-            assert last_result_text(client) == "replacement initializes on demand\n", (
-                client.transcript[-1]
+            rejected = client.send(
+                python="raise AssertionError('failure was not retained')"
             )
+            assert rejected["isError"] and "restart required" in last_result_text(
+                client
+            ), rejected
+            client.send(control="restart", python="print('replacement initialized')")
+            assert (
+                last_result_text(client)
+                == "[starting new worker]\nreplacement initialized\n[done]"
+            ), client.transcript[-1]
             return client.finish()
 
 
@@ -2368,10 +2372,13 @@ def test_inspection_excludes_workspace_and_pythonpath(
         poisoned_path.mkdir()
         # fmt: python
         payload = code("""
+            import os
             from pathlib import Path
 
-            Path("host-import-executed").touch()
-            raise RuntimeError("inspection imported workspace code")
+            if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
+                Path("host-import-executed").touch()
+                raise RuntimeError("inspection imported workspace code")
+            worker_module_value = 42
             """)
         (workspace / "ctypes.py").write_text(payload)
         (poisoned_path / "sitecustomize.py").write_text(payload)
@@ -2380,13 +2387,13 @@ def test_inspection_excludes_workspace_and_pythonpath(
         env["PYTHONPATH"] = str(poisoned_path)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
+            # The same modules remain visible to the workload after trusted
+            # inspection has excluded both the workspace and PYTHONPATH.
+            client.send(
+                python="import ctypes, sitecustomize; assert sitecustomize.worker_module_value == 42; ctypes.worker_module_value"
+            )
+            assert last_result_text(client) == "42\n", client.transcript[-1]
             assert not (workspace / "host-import-executed").exists()
-            # Workload imports keep their ordinary semantics inside the worker.
-            (workspace / "ctypes.py").unlink()
-            (poisoned_path / "sitecustomize.py").unlink()
-            shutil.rmtree(poisoned_path / "__pycache__", ignore_errors=True)
-            client.send(python="41 + 1")
-            assert last_result_text(client) == "42\n"
             return client.finish()
 
 
@@ -2453,8 +2460,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             lifecycle = (
                 "[worker sideband read failed: worker sideband closed]\n"
                 "[worker exited with status 1]\n"
-                "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n[idle]"
+                "[worker stopped: in-memory state lost]"
             )
             assert content["text"].endswith(lifecycle), content
             # Sideband diagnostics and terminal stderr are independent streams.
@@ -2818,8 +2824,13 @@ def test_records_managed_python_defaults(
             json.loads(line)
             for line in (session / "internal/events.jsonl").read_text().splitlines()
         ]
-        assert events[0]["dynamic_resolution"] is False
-        assert events[0]["python_preparation"] is True
+        assert events[0]["dynamic_resolution"] is None
+        assert events[0]["python_preparation"] is None
+        discovered = next(
+            event for event in events if event["event"] == "environment_discovered"
+        )
+        assert discovered["dynamic_resolution"] is False
+        assert discovered["python_preparation"] is True
         return TranscriptWithCompanions(
             records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
         )

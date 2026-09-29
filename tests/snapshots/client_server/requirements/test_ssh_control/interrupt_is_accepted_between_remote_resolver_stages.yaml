@@ -6,7 +6,7 @@ send:
 result:
   content:
     - type: text
-      text: "managed Python version resolution failed with signal: 2 (SIGINT): "
+      text: worker startup interrupted
   isError: true
 ---
 input:
@@ -25,10 +25,13 @@ result:
   isError: false
 ---
 send:
+  control: restart
   r: 42L
 result:
   content:
     - type: text
-      text: |
+      text: |-
+        [starting new worker]
         [1] 42
+        [done]
   isError: false
