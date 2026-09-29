@@ -24,7 +24,8 @@ send:
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
       ),
-      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"))
+      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+      identical(config$virtualenv_activate, "")
     )
     cat("environment metadata retained\n")
 result:
@@ -68,7 +69,8 @@ send:
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
       ),
-      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"))
+      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+      identical(config$virtualenv_activate, "")
     )
     cat("environment metadata retained\n")
 result:
@@ -112,7 +114,8 @@ send:
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
       ),
-      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"))
+      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+      identical(config$virtualenv_activate, "")
     )
     cat("environment metadata retained\n")
 result:

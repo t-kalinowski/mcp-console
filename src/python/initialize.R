@@ -36,11 +36,11 @@ base::local(
         for (requested in requests) {
           if (
             nzchar(requested) &&
-              requested != "managed" &&
-              !identical(
-                normalizePath(requested, mustWork = FALSE),
-                normalizePath(identity$embedding$python, mustWork = FALSE)
-              )
+              (requested == "managed" ||
+                !identical(
+                  normalizePath(requested, mustWork = FALSE),
+                  normalizePath(identity$embedding$python, mustWork = FALSE)
+                ))
           ) {
             stop(
               "Python is already initialized with another selection; restart required",

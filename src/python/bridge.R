@@ -55,6 +55,7 @@ base::local(
       on.exit(close(connection), add = TRUE)
       metadata <- read.dcf(connection, all = TRUE)
       root <- dirname(dirname(python))
+      activate <- file.path(dirname(python), "activate_this.py")
       config <- structure(
         list(
           python = python,
@@ -81,7 +82,7 @@ base::local(
           } else {
             ""
           },
-          virtualenv_activate = "",
+          virtualenv_activate = if (file.exists(activate)) activate else "",
           python_versions = python,
           numpy = if (!is.null(metadata$NumpyPath)) {
             list(

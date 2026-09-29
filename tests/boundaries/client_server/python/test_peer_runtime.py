@@ -310,7 +310,8 @@ def test_late_attachment_preserves_environment_metadata(
                         config$conda,
                         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
                       ),
-                      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"))
+                      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+                      identical(config$virtualenv_activate, "")
                     )
                     cat("environment metadata retained\\n")
                     """)
@@ -862,9 +863,11 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                         client.send(
                             r=code("""
                             original <- Sys.getenv("RETICULATE_PYTHON")
-                            Sys.setenv(RETICULATE_PYTHON = "/incompatible-python")
-                            failure <- tryCatch(reticulate::py_config(), error = conditionMessage)
-                            stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
+                            for (selection in c("/incompatible-python", "managed")) {
+                              Sys.setenv(RETICULATE_PYTHON = selection)
+                              failure <- tryCatch(reticulate::py_config(), error = conditionMessage)
+                              stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
+                            }
                             Sys.setenv(RETICULATE_PYTHON = original)
                             """)
                         )
@@ -876,6 +879,21 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                         last_result_text(client)
                         == "installed CLI uses the selected Python environment\n"
                     ), client.transcript[-1]
+                    # fmt: r
+                    client.send(
+                        r=code("""
+                        actual <- reticulate::py_config()$virtualenv_activate
+                        expected <- file.path(
+                          dirname(Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+                          "activate_this.py"
+                        )
+                        stopifnot(identical(
+                          normalizePath(actual, mustWork = TRUE),
+                          normalizePath(expected, mustWork = TRUE)
+                        ))
+                        """)
+                    )
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
                     client.send(
                         python="assert id(peer_object) == peer_id; assert builtins.peer_bootstrap_count == 1"
                     )
@@ -1004,6 +1022,8 @@ def test_shared_managed_bootstrap_and_replacement(
             root = Path(directory)
             environment = dict(os.environ)
             environment.pop("RETICULATE_PYTHON", None)
+            if mode == "python-first":
+                environment["RETICULATE_PYTHON"] = "managed"
             with_r = mode != "without-r"
             if not with_r:
                 uv = shutil.which("uv")
