@@ -3,6 +3,7 @@ send:
   python: |
     import builtins
     import ctypes
+    import io
     import os
     import sqlite3
     import sys
@@ -25,6 +26,10 @@ send:
     before = (id(persistent), id(connection), sys.executable, sys.prefix,
               os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])
     print("Python live; R absent")
+    original_streams = (sys.stdout, sys.stderr)
+    redirected_stdout = io.StringIO()
+    redirected_stderr = io.StringIO()
+    sys.stdout, sys.stderr = redirected_stdout, redirected_stderr
 result:
   content:
     - type: text
@@ -45,6 +50,13 @@ result:
 send:
   python: |
     assert r_initialized()
+    assert sys.stdout is redirected_stdout
+    assert sys.stderr is redirected_stderr
+    print("redirected stdout")
+    print("redirected stderr", file=sys.stderr)
+    assert redirected_stdout.getvalue() == "redirected stdout\n"
+    assert redirected_stderr.getvalue() == "redirected stderr\n"
+    sys.stdout, sys.stderr = original_streams
     assert builtins.peer_startups == 1
     assert before == (
         id(persistent),

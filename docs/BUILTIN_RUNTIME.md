@@ -378,7 +378,7 @@ Console applies the environment before Python startup hooks run; reticulate atta
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
 Ordinary R evaluation does not initialize Python.
 An R cell, Python-side `r` access, or R-owned SQL initializes R.
-Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, and display settings.
+Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, display settings, and user redirections of `sys.stdout` and `sys.stderr`.
 Linux loader preparation happens before either interpreter starts.
 R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
 Deferred startup packages load within the initiating R or Python cell's graphics scope, before `tools:mcp-console` is attached at search position 2.

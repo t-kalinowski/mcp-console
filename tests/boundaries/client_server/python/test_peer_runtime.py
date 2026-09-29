@@ -105,6 +105,7 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
     source = code("""
         import builtins
         import ctypes
+        import io
         import os
         import sqlite3
         import sys
@@ -127,6 +128,10 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
         before = (id(persistent), id(connection), sys.executable, sys.prefix,
                   os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])
         print("Python live; R absent")
+        original_streams = (sys.stdout, sys.stderr)
+        redirected_stdout = io.StringIO()
+        redirected_stderr = io.StringIO()
+        sys.stdout, sys.stderr = redirected_stdout, redirected_stderr
         """)
     client.send(python=source)
     assert last_result_text(client) == "Python live; R absent\n", client.transcript[-1]
@@ -136,13 +141,18 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
         )
         assert last_result_text(client) == "[done]", client.transcript[-1]
     else:
-        client.send(
-            python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41; print('lazy R access')"
-        )
-        assert last_result_text(client) == "lazy R access\n", client.transcript[-1]
+        client.send(python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41")
+        assert last_result_text(client) == "[done]", client.transcript[-1]
     # fmt: python
     source = code("""
         assert r_initialized()
+        assert sys.stdout is redirected_stdout
+        assert sys.stderr is redirected_stderr
+        print("redirected stdout")
+        print("redirected stderr", file=sys.stderr)
+        assert redirected_stdout.getvalue() == "redirected stdout\\n"
+        assert redirected_stderr.getvalue() == "redirected stderr\\n"
+        sys.stdout, sys.stderr = original_streams
         assert builtins.peer_startups == 1
         assert before == (
             id(persistent),

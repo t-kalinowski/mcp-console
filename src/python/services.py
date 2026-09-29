@@ -60,13 +60,13 @@ def install_interrupt() -> None:
     signal.signal(signal.SIGINT, interrupt)
 
 
-_stdout = _Output(sys.stdout, write)
-_stderr = _Output(sys.stderr, diagnostic)
+# Reticulate output remapping is disabled. Install these wrappers once so
+# restoring input and interrupt hooks preserves user stream redirections.
+sys.stdout = _Output(sys.stdout, write)
+sys.stderr = _Output(sys.stderr, diagnostic)
 
 
 def install_services() -> None:
-    sys.stdout = _stdout
-    sys.stderr = _stderr
     builtins.input = _console_input
     install_interrupt()
 
