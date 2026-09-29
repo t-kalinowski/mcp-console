@@ -36,6 +36,8 @@ def test_discovery_outlives_connection_setup_timeout(binary):
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
                 started.wait("peer sent the handshake and held discovery")
+                client.initialize_and_list_tools()
+                client.request("ping")
                 try:
                     # Exercise the actual 30-second connection deadline while
                     # discovery is held at a checkpoint, without network delays.
@@ -45,7 +47,6 @@ def test_discovery_outlives_connection_setup_timeout(binary):
                 finally:
                     release.release()
                 assert client.process.poll() is None, client.stderr.read()
-                client.initialize_and_list_tools()
                 client.send(requirements={"action": "get"})
                 assert not client.transcript[-1]["result"]["isError"]
                 records = client.finish()[3:]
@@ -72,23 +73,64 @@ def test_python_preparation_preserves_v3_peer_compatibility(binary):
                 requests = [
                     json.loads(line) for line in record.read_text().splitlines()
                 ]
-                (python,) = [
+                python_requests = [
                     r["operation"]["Python"]
                     for r in requests
                     if "Python" in r["operation"]
                 ]
-                assert set(python) == {"requirements", "r"}, python
-                (inspection,) = [
+                assert python_requests
+                assert all(
+                    set(request) == {"requirements", "r"} for request in python_requests
+                ), python_requests
+                assert any(
+                    "six" in request["requirements"]["packages"]
+                    for request in python_requests
+                )
+                inspections = [
                     r["operation"]["InspectPython"]
                     for r in requests
                     if "InspectPython" in r["operation"]
                 ]
-                assert inspection == {"executable": "/remote-only/python"}
+                assert inspections and all(
+                    inspection == {"executable": "/remote-only/python"}
+                    for inspection in inspections
+                )
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]
                 declaration = client.send(requirements={"action": "get"})[
                     "structuredContent"
                 ]["requirements"]
                 assert "six" in declaration["python"], declaration
+                records = client.finish()[3:]
+            assert not trap.exists()
+            return records
+
+
+@requires(SSH)
+def test_initial_requirements_replace_a_launch_before_ready(binary):
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        record = root / "requests"
+        peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
+        configure(
+            root, root, [sys.executable, str(peer), "replace-before-ready", str(record)]
+        )
+        with (
+            closing(FifoCheckpoint.create(record.with_suffix(".started"))) as started,
+            localhost(root / "sshd") as environment,
+        ):
+            trap = poison_controller(root / "sshd", environment)
+            with McpClient(
+                binary, ("serve", "--no-sandbox"), environment, root
+            ) as client:
+                started.wait("automatic launch withheld Ready until shutdown")
+                client.initialize_and_list_tools()
+                client.send(requirements={"python": ["six"]})
+                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+                declaration = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]["requirements"]
+                assert "six" in declaration["python"], declaration
+                assert record.with_suffix(".launches").read_text() == "launch\nlaunch\n"
                 records = client.finish()[3:]
             assert not trap.exists()
             return records
@@ -160,14 +202,17 @@ def test_default_extension_failure_closes_preparation(
                 with McpClient(
                     binary, ("serve", "--no-sandbox"), environment, root
                 ) as client:
-                    assert client.process.wait(timeout=15) != 0
-                    assert not client.stdout.read()
-                    errors = client.stderr.read()
+                    client.initialize_and_list_tools()
+                    client.send(python="42")
+                    assert client.transcript[-1]["result"]["isError"]
+                    errors = last_result_text(client)
                     expected = "SQLite preparation failed"
                     if mode == "default-extension-close-failure":
                         # The close error proves startup waited for the peer's reply.
                         expected += "; unexpected SSH preparation event"
-                    assert errors.strip() == expected, errors
+                    assert errors == "[" + expected + "]", errors
+                    client.request("ping")
+                    client.finish()
                     assert record.with_suffix(".closed").exists()
                     assert not trap.exists()
                     transcript.append({"peer": mode, "stderr": errors})
@@ -175,7 +220,7 @@ def test_default_extension_failure_closes_preparation(
 
 
 @requires(SSH)
-def test_incompatible_preparation_peer_fails_before_mcp_ready(binary):
+def test_incompatible_preparation_peer_preserves_mcp_readiness(binary):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
@@ -189,10 +234,13 @@ def test_incompatible_preparation_peer_fails_before_mcp_ready(binary):
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
-                assert client.process.wait(timeout=12) != 0
-                assert not client.stdout.read()
-                errors = client.stderr.read()
+                client.initialize_and_list_tools()
+                client.send(r="42")
+                assert client.transcript[-1]["result"]["isError"]
+                errors = last_result_text(client)
                 assert "incompatible SSH preparation" in errors, errors
+                client.request("ping")
+                client.finish()
                 assert not trap.exists()
                 return [{"stderr": errors}]
 

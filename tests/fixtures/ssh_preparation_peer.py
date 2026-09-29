@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 mode, record, operation = sys.argv[1:]
-assert operation == "ssh-prepare", operation
+assert operation in ("ssh-prepare", "ssh-launch"), operation
 
 
 def read():
@@ -35,6 +35,42 @@ def complete(id, value, confirmed=True):
         }
     )
 
+
+if operation == "ssh-launch":
+    assert mode in ("legacy-python", "delayed-discovery", "replace-before-ready"), mode
+    bootstrap = read()
+    first_launch = False
+    if mode == "replace-before-ready":
+        launches = Path(record).with_suffix(".launches")
+        first_launch = not launches.exists()
+        with launches.open("a") as stream:
+            stream.write("launch\n")
+
+    def launch_frame(tag, value):
+        payload = json.dumps(value).encode() + (b"\n" if tag == 2 else b"")
+        sys.stdout.buffer.write(struct.pack(">BI", tag, len(payload)) + payload)
+        sys.stdout.buffer.flush()
+
+    launch_frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
+    if first_launch:
+        with Path(record).with_suffix(".started").open("wb", buffering=0) as started:
+            assert started.write(b"1") == 1
+    else:
+        launch_frame(2, {"kind": "ready"})
+    for line in sys.stdin.buffer:
+        command = json.loads(line)
+        if command["kind"] == "initialize":
+            launch_frame(2, {"kind": "initialized"})
+        elif command["kind"] == "shutdown":
+            if first_launch:
+                launch_frame(2, {"kind": "ready"})
+            launch_frame(2, {"kind": "shutdown_started"})
+            launch_frame(2, {"kind": "worker_exited", "code": 0})
+            launch_frame(3, {"confirmed": True, "error": None})
+            break
+        else:
+            raise AssertionError(command)
+    raise SystemExit(0)
 
 opened = read()["Open"]
 assert opened["version"] == 6
@@ -105,6 +141,9 @@ while (message := read()) is not None:
                 break
         write("Closed")
         break
+    if "Control" in message:
+        write({"Controlled": {"id": message["Control"]["id"], "result": {"Ok": False}}})
+        continue
     request = message["Run"]
     with Path(record).open("a") as stream:
         stream.write(json.dumps(request) + "\n")
@@ -122,7 +161,7 @@ while (message := read()) is not None:
             }
         )
         continue
-    if mode == "legacy-python":
+    if mode in ("legacy-python", "delayed-discovery", "replace-before-ready"):
         operation = request["operation"]
         if operation == "Bootstrap" or "Duckdb" in operation:
             complete(id, None)

@@ -199,6 +199,8 @@ At generation retirement, it first requests graceful shutdown through the relay 
 In sandboxed mode, it then sends `SIGTERM` to the launcher to request managed retirement and uses a hard launcher kill only as the final fail-safe.
 On normal and owned-retirement paths, the server treats successful managed launcher exit as the synchronous cleanup barrier before reaping.
 Cancellation before worker readiness follows the same runner-retirement request and grace period, including when the startup I/O join reaches the child first.
+Before the server commits transport readiness, the launcher receives the existing bounded relay-retirement allowance even if connection setup prevents it from acknowledging shutdown within the worker's grace.
+SSH stays connected for that receipt; an unconfirmed retirement still blocks replacement.
 For local host execution with `--no-sandbox`, the server owns and reaps the relay directly; no runner supplies descendant cleanup.
 SSH, Docker, and Docker Sandbox keep their target adapters; compute targets require confirmed container or microVM retirement.
 After the relay deadline, the server accepts termination from its own successful `SIGTERM` request as completed direct retirement.

@@ -1213,12 +1213,16 @@ impl WorkerShutdownHandle {
         worker_deadline: Instant,
         completion_deadline: Instant,
     ) -> (RelayRetirementAllowance, Result<(), String>) {
-        self.ready_commit.finish(ReadyCommitOutcome::Retiring);
+        let starting = self.ready_commit.finish(ReadyCommitOutcome::Retiring);
         let requested = self.shutdown_started.request(worker_deadline);
+        // Before Ready, the launcher may still be connecting and cannot yet
+        // acknowledge the queued shutdown. Give it the existing retirement
+        // allowance independently of a running worker's acceptance deadline.
         let allowance = if self
             .commands
             .shutdown(worker_deadline, completion_deadline)
             .is_ok()
+            && !starting
         {
             RelayRetirementAllowance::TimelyAcceptance
         } else {
