@@ -81,7 +81,9 @@ Reads and writes proceed independently.
 The built-in endpoints use nonblocking descriptor I/O and readiness polling, while message sends and receives wait for progress.
 Relay reader and writer waits also poll explicit cancellation pipes, so full pipes or descendants retaining endpoints cannot prevent their threads from joining.
 Cancellation does not close a descriptor being used by another thread.
-Pipe writes suppress their own `SIGPIPE` using a temporary thread-local signal mask, preserve a previously pending signal, and restore the caller's mask.
+Pipe writes suppress `SIGPIPE` without changing the process-wide handler.
+macOS uses `F_SETNOSIGPIPE` on the owned descriptor, because a writer-local mask cannot prevent delivery to another native thread.
+Linux uses a temporary thread-local signal mask, preserves a previously pending signal, and restores the caller's mask.
 They report `EPIPE` without changing the process-wide signal disposition installed by R or Python.
 
 Each frame is one UTF-8 JSON object followed by line feed (`\n`).
