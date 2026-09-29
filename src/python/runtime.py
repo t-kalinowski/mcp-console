@@ -39,11 +39,15 @@ _MCP_CONSOLE_IMPORT_DISTRIBUTIONS = {
     "yaml12": "py-yaml12",
 }
 
+# Shared namespaces and alternate-interpreter toolchains need an explicit
+# distribution. In particular, CPython libraries can probe rpython with an
+# ImportError fallback; installing the Python 2 toolchain breaks that fallback.
 _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS = {
     "azure",
     "backports",
     "google",
     "opentelemetry",
+    "rpython",
     "zope",
 }
 

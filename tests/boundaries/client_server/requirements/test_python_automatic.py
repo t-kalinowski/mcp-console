@@ -596,7 +596,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         client.send(python="import yaml12; yaml12.__name__")
         assert last_result_text(client) == "'yaml12'\n"
@@ -652,6 +652,25 @@ def test_reports_automatic_python_resolution_failure(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_runtime_toolchain_probe_does_not_install_a_distribution(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_uv_environment(Path(temporary))
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"python": ["rply"]})
+            assert last_result_text(client) == "[prepared]"
+            baseline = len(uv_tool_run_requirements(record))
+            client.send(python="import rply; rply.LexerGenerator().build(); print('CPython lexer ready')")
+            assert last_result_text(client) == "CPython lexer ready\n", client.transcript[-1]
+            assert len(uv_tool_run_requirements(record)) == baseline
+            declaration = client.send(requirements={"action": "get"})["structuredContent"]
+            assert "rpython" not in declaration["requirements"]["python"], declaration
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_retains_inferred_distribution_that_does_not_provide_import(
     binary: Path,
     execution: Execution,
@@ -693,7 +712,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         client.send(r=f'"{inferred}" %in% reticulate::py_require()$packages')
         assert last_result_text(client) == "[1] TRUE\n"
