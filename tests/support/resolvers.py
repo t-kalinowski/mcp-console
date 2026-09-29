@@ -536,7 +536,8 @@ def send_and_collect_runtime_python_resolution(
             client.send(timeout_ms=30_000)
             continue
 
-        if output != "[done]" or not chunks:
+        # Empty running polls do not replace a silent cell's completion marker.
+        if output != "[done]" or not any(chunks):
             chunks.append(output)
         collected = "".join(chunks)
 

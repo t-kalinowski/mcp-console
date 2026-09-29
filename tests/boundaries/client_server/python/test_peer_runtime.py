@@ -22,7 +22,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
-from support.records import Transcript
+from support.records import ToolResult, Transcript
 from support.resolvers import (
     checkpoint_uv_environment,
     send_and_collect_runtime_python_resolution,
@@ -995,7 +995,20 @@ def test_remote_managed_identity_survives_restart(
         configure(local, remote, remote_command(remote, binary, environment))
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
-            with McpClient(binary, execution.serve(), controller, local) as client:
+
+            class ReleaseResolverAfterPoll(McpClient):
+                def send(self, **arguments: object) -> ToolResult:
+                    result = super().send(**arguments)
+                    if arguments == {"timeout_ms": 0}:
+                        assert last_result_text(self) == (
+                            "\n[running; poll with an empty send]"
+                        ), result
+                        release.release()
+                    return result
+
+            with ReleaseResolverAfterPoll(
+                binary, execution.serve(), controller, local
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     python="import sys; peer_object = object(); peer_id = id(peer_object)",
@@ -1004,10 +1017,12 @@ def test_remote_managed_identity_survives_restart(
                 assert last_result_text(client) == (
                     "\n[running; poll with an empty send]"
                 ), client.transcript[-1]
-                # Hold resolution until the running response is observed, then
-                # collect completion through the ordinary public polling path.
-                release.release()
-                assert send_and_collect_runtime_python_resolution(client) == "[done]"
+                # Release only after the collector observes an empty running
+                # poll, so completion must survive that earlier empty cut.
+                collected = send_and_collect_runtime_python_resolution(
+                    client, timeout_ms=0
+                )
+                assert collected == "[done]", repr(collected)
                 started.wait("remote managed Python resolver")
                 client.send(requirements={"python": ["py-yaml12"]})
                 assert not client.transcript[-1]["result"].get("isError"), (
