@@ -35,6 +35,45 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+def test_declares_imports_and_uses_python_packages(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(r='reticulate::py_require("py-yaml12")')
+        assert last_tool_text(client) == "[done]"
+        client.send(r='yaml12 <- reticulate::import("yaml12")')
+        assert last_tool_text(client) == "[done]"
+        client.send(r='yaml12$parse_yaml("answer: 42")$answer')
+        assert last_tool_text(client) == "[1] 42\n"
+        client.send(
+            # fmt: python
+            python=code(r"""
+                import yaml12
+
+                yaml12.parse_yaml("answer: 42")["answer"]
+                """),
+        )
+        assert last_tool_text(client) == "42\n"
+        client.send(r='reticulate::py_require("more-itertools")')
+        assert last_tool_text(client) == "[done]"
+        client.send(r='more_itertools <- reticulate::import("more_itertools")')
+        assert last_tool_text(client) == "[done]"
+        client.send(r="unlist(more_itertools$take(3L, list(0L, 1L, 2L, 3L, 4L)))")
+        assert last_tool_text(client) == "[1] 0 1 2\n"
+        client.send(
+            # fmt: python
+            python=code(r"""
+                import more_itertools
+
+                more_itertools.take(3, range(5))
+                """),
+        )
+        assert last_tool_text(client) == "[0, 1, 2]\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_prepares_initial_python_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
