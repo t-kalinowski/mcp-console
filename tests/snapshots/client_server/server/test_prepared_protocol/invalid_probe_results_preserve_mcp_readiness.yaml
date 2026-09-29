@@ -1,0 +1,64 @@
+---
+mode: probe-version
+diagnostic: >-
+  [incompatible Docker Sandbox bootstrap: expected protocol 8, Console 0.0.4;
+  received protocol 3, Console 0.0.4]
+---
+mode: probe-build
+diagnostic: >-
+  [incompatible Docker Sandbox bootstrap: expected protocol 8, Console 0.0.4;
+  received protocol 8, Console unsupported]
+---
+mode: missing-runtime
+diagnostic: "[prepared runtime probe returned no runtime result]"
+---
+mode: duplicate-runtime
+diagnostic: "[unexpected stdout in Docker Sandbox launch protocol]"
+---
+mode: probe-data
+diagnostic: "[unexpected stdout in Docker Sandbox launch protocol]"
+---
+mode: probe-extra
+diagnostic: "[unexpected stdout in Docker Sandbox launch protocol]"
+---
+mode: probe-oversized
+diagnostic: "[Docker Sandbox frame exceeds 65536 bytes]"
+---
+mode: probe-unconfirmed
+diagnostic: >-
+  [target retirement is unconfirmed (transport exit is not a cleanup barrier)]
+---
+mode: probe-failed
+diagnostic: "[probe validation failed]"
+---
+mode: probe-closed-output
+diagnostic: >-
+  [Docker Sandbox launch stream ended before confirmed retirement: failed to
+  fill whole buffer]
+---
+mode: probe-managed
+diagnostic: "[prepared runtime cannot contain managed or preparation state]"
+---
+mode: native-managed
+diagnostic: >-
+  [prepared Python cannot contain another selection or a managed cache]
+---
+mode: native-r-conflict
+diagnostic: >-
+  [prepared runtime R capability differs from its captured selection]
+---
+mode: native-relative
+diagnostic: >-
+  [prepared runtime requires an absolute target path: relative/python]
+---
+mode: native-prefix
+diagnostic: "[prepared Python has inconsistent executable or base prefixes]"
+---
+mode: native-unknown
+diagnostic: >-
+  [unknown field `unused`, expected `r_home` or `python` at line 1 column 690]
+---
+mode: native-embedding-unknown
+diagnostic: >-
+  [unknown field `unused`, expected one of `python`, `libpython`, `python_home`
+  at line 1 column 297]

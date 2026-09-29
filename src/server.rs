@@ -465,7 +465,7 @@ impl ConsoleServer {
             1,
         );
         if let Some(kind @ ("docker" | "docker_sandbox")) = prepared {
-            execution::configure_prepared(description, properties, kind, false);
+            execution::configure_prepared(description, properties, kind);
         }
         if !dynamic_resolution {
             let requirements = properties

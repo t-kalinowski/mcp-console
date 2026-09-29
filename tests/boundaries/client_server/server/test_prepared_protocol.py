@@ -77,6 +77,9 @@ def test_native_probe_projects_capabilities_without_controller_paths(
                 tool
             )
             assert "/target-only/lib/libpython.so" not in tool["description"]
+            sql_description = tool["inputSchema"]["properties"]["sql"]["description"]
+            assert "during initialization" in sql_description, sql_description
+            assert "when R is available" in sql_description, sql_description
             client.send(python="42")
             assert last_result_text(client) == "provider peer\n"
             client.request("tools/list")
@@ -104,7 +107,7 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
             properties = tool["inputSchema"]["properties"]
             assert "r" in properties and "sql" in properties
             assert "python" in properties
-            assert "when available" in properties["python"]["description"]
+            assert "listed language fields do not guarantee" in tool["description"]
             result = client.send(python="raise AssertionError('unavailable cell ran')")
             assert result["isError"], result
             assert last_result_text(client) == (

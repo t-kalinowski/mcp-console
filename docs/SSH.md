@@ -23,7 +23,7 @@ target:
 Then run `mcp-console serve` from the local project.
 During owned background warmup, after making MCP initialization and tool discovery available, Console connects to `analysis-host`, checks protocol compatibility and the remote directory, and discovers that host's resolver capability.
 This does not install analysis packages or start a worker.
-The first operation that needs an environment prepares the managed defaults there; worker launch then validates the sandbox and starts the relay and worker in `/srv/projects/analysis`.
+Automatic background startup prepares the managed defaults there; worker launch then validates the sandbox and starts the relay and worker in `/srv/projects/analysis`.
 `extends` is optional: omitting it preserves Console's restricted policy with host reads and private temporary writes.
 Selecting SSH alone grants no workspace writes.
 

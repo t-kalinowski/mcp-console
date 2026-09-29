@@ -7,9 +7,7 @@ pub(super) fn configure_prepared(
     description: &mut String,
     properties: &mut Map<String, Value>,
     kind: &str,
-    python_only: bool,
 ) {
-    let python_available = properties.contains_key("python");
     let source = if kind == "docker" {
         "image"
     } else {
@@ -30,37 +28,25 @@ pub(super) fn configure_prepared(
             "SQL through the Console-owned DuckDB catalog",
         )
         .replace("managed DuckDB", "the Console-owned DuckDB catalog");
-    if !python_available {
-        *description = description
-            .replace("R, Python, and SQL", "R and SQL")
-            .replace(
-                "Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and ",
-                "Reuse live state when switching: ",
-            )
-            .replace("R or Python can select", "R can select")
-            .replace("`r`, `python`, or `sql` cell", "`r` or `sql` cell");
-    }
     description.push_str(&format!(
         "\n\nRuntimes are discovered inside the selected {source} during background preparation. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
     ));
-    if !python_only {
-        for (field, text) in [
+    for (field, text) in [
             (
                 "r",
-                "One complete R cell in persistent state. Expressions display automatically; R plots return as PNG images. Read Python globals through py$name. The Console-owned DuckDB catalog can query R global data frames by name. console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable.",
+                "One complete R cell when R is installed in the target. Expressions display automatically; R plots return as PNG images. When the Python bridge is available, read Python globals through py$name. The R-backed Console-owned DuckDB catalog can query R global data frames by name. console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable.",
             ),
             (
                 "python",
-                "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Missing imports report ordinary Python errors; automatic package installation is unavailable.",
+                "One complete Python cell when Python is installed in the target. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When the R bridge is available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Missing imports report ordinary Python errors; automatic package installation is unavailable.",
             ),
             (
                 "control",
                 "Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable.",
             ),
-        ] {
-            if let Some(property) = properties.get_mut(field) {
-                property["description"] = text.into();
-            }
+    ] {
+        if let Some(property) = properties.get_mut(field) {
+            property["description"] = text.into();
         }
     }
     for field in ["r", "python"] {
@@ -68,42 +54,14 @@ pub(super) fn configure_prepared(
             let text = property["description"]
                 .as_str()
                 .expect("language description");
-            let text = if python_available {
-                text.to_owned()
-            } else {
-                text.replace(" Read Python globals through py$name.", "")
-            };
             property["description"] =
                 format!("{text} Dependencies must be preinstalled in the {source}.").into();
         }
     }
     if let Some(property) = properties.get_mut("sql") {
-        let (connection, frames, restore) = if python_only {
-            (
-                "Python DB-API",
-                "Python data frames require explicit registration with sql_connection().register(name, frame).",
-                "console_sql_connection(None)",
-            )
-        } else if python_available {
-            (
-                "R DBI or Python DB-API",
-                "The default catalog can query R global data frames by name; Python data frames require explicit registration with sql_connection().register(name, frame).",
-                "console_sql_connection(None) in Python or console_sql_connection(NULL) in R",
-            )
-        } else {
-            (
-                "R DBI",
-                "The default catalog can query R global data frames by name.",
-                "console_sql_connection(NULL) in R",
-            )
-        };
         property["description"] = format!(
-            "One complete SQL cell through the active {connection} connection. Console opens its in-memory DuckDB catalog lazily when the adapter and DuckDB are preinstalled in the {source}. {frames} console_sql_connection(connection) selects a user-owned connection, and {restore} restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Extensions load from the {source}'s cache; Console does not install extensions or resolve packages. Spill files and stored secrets use private disposable worker storage. Worker replacement resets the catalog."
+            "One complete SQL cell through the active R DBI or Python DB-API connection. Console opens its in-memory DuckDB catalog during initialization when the adapter and DuckDB are preinstalled in the {source}. The default catalog uses R DBI when R is available, otherwise Python DB-API. The R-backed catalog can query R global data frames by name; Python data frames require explicit registration with sql_connection().register(name, frame). console_sql_connection(connection) selects a user-owned connection, and console_sql_connection(None) in Python or console_sql_connection(NULL) in R restores the Console-owned catalog without discarding it. Missing DuckDB leaves the installed interpreters and custom connections usable. A query with columns returns a bounded preview. Extensions load from the {source}'s cache; Console does not install extensions or resolve packages. Spill files and stored secrets use private disposable worker storage. Worker replacement resets the catalog."
         ).into();
-        if python_only {
-            let text = property["description"].as_str().expect("SQL description");
-            property["description"] = format!("{text} Missing DuckDB leaves Python and custom connections usable. R cells are unavailable.").into();
-        }
     }
 }
 

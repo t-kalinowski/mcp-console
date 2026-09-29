@@ -308,21 +308,12 @@ pub(crate) struct WorkerEnvironment {
 impl WorkerEnvironment {
     #[cfg(unix)]
     pub fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
-        let selected = self
+        let runtime = self
             .native
             .as_ref()
-            .and_then(|runtime| runtime.python.as_ref());
-        let home = self
-            .native
-            .as_ref()
-            .and_then(|runtime| runtime.r_home.as_deref())
-            .or_else(|| {
-                self.discovery
-                    .selections
-                    .r_home
-                    .as_deref()
-                    .map(std::path::Path::new)
-            });
+            .ok_or("worker bootstrap has no complete runtime selection")?;
+        let selected = runtime.python.as_ref();
+        let home = runtime.r_home.as_deref();
         if home.is_none() && selected.is_none() {
             return Err("SSH worker bootstrap has no selected runtime".into());
         }
@@ -361,16 +352,7 @@ impl WorkerEnvironment {
                 }
             }
         }
-        if let Some(runtime) = &self.native {
-            runtime.configure(command)?;
-        } else {
-            // Compatibility with a lazily selected R-capable launch.
-            crate::local_runtime::Selection {
-                r_home: home.map(std::path::Path::to_path_buf),
-                python: None,
-            }
-            .configure(command)?;
-        }
+        runtime.configure(command)?;
         command.env(
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
             if self.discovery.managed || selected.is_some_and(|selected| selected.managed) {

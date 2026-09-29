@@ -115,7 +115,7 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             while b'"completed"' not in data:
                 tag, body = read_frame(process.stdout)
                 if tag == 1:
-                    assert json.loads(body)["version"] == 7
+                    assert json.loads(body)["version"] == 8
                 else:
                     assert tag == 2, (tag, body)
                     data.extend(body)
@@ -153,6 +153,20 @@ def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
             (root, {"version": 3}, "incompatible SSH bootstrap"),
             (root, {"version": 999}, "incompatible SSH bootstrap"),
             (root, {"build": "incompatible-build"}, "incompatible SSH bootstrap"),
+            (
+                root,
+                {
+                    "environment": {
+                        "discovery": {
+                            "managed": False,
+                            "selections": {"r_home": "/unused-r", "python": None},
+                        },
+                        "r": None,
+                        "python": None,
+                    }
+                },
+                "worker bootstrap has no complete runtime selection",
+            ),
             (
                 root,
                 {

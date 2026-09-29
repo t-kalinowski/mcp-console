@@ -24,15 +24,16 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent R and SQL workbench for exact computation, file and data
-        inspection, transformation, visualization, statistics, simulation, and
-        modeling. State persists across calls.
+        Persistent R, Python, and SQL workbench for exact computation, file and
+        data inspection, transformation, visualization, statistics, simulation,
+        and modeling. State persists across calls.
 
 
         For databases and structured files, consider DuckDB SQL first for schema
         inspection, filtering, joins, aggregation, and nested JSON extraction.
         Use R for vectorized data and string operations, statistics, and plots.
-        Switch languages when useful, reusing persistent state.
+        Use Python when its libraries or format-specific parsing simplify the
+        task. Switch languages when useful, reusing persistent state.
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is
@@ -42,16 +43,17 @@ result:
         inspection.
 
 
-        Reuse live state when switching: SQL through the Console-owned DuckDB
-        catalog can query R data frames by name. R accesses its SQL connection
-        through `sql_connection()`; R can select a user-owned connection with
-        `console_sql_connection(connection)`.
+        Reuse live state when switching: Python reads R globals through
+        `r.name`, R reads Python globals through `py$name`, and SQL through the
+        Console-owned DuckDB catalog can query R data frames by name. R accesses
+        its SQL connection through `sql_connection()`; R or Python can select a
+        user-owned connection with `console_sql_connection(connection)`.
 
 
-        Send one complete `r` or `sql` cell per call. Code-bearing calls must be
-        sequential; a control-only interrupt may overlap a pending `send`.
-        Inspect intermediate results before submitting dependent cells. Cells
-        are not transactional; changes made before an error may remain.
+        Send one complete `r`, `python`, or `sql` cell per call. Code-bearing
+        calls must be sequential; a control-only interrupt may overlap a pending
+        `send`. Inspect intermediate results before submitting dependent cells.
+        Cells are not transactional; changes made before an error may remain.
 
 
         Omit code to poll, supply stdin, control the session, or prepare
@@ -81,26 +83,34 @@ result:
 
 
         Execution target:
-        {"transport":{"kind":"local"},"workspace":"/workspace","compute":{"kind":"docker_sandbox","template":"docker.io/example/console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","template_identity":"docker.io/example/console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mounts":[],"cli_version":"sbx
-        version: v0.42.1
-        fixture"},"runtime":{"kind":"r","managed":false,"r_home":"/usr/lib/R","python":null},"provider":"compute","inner_native_runner":false}.
+        {"transport":{"kind":"local"},"compute":{"kind":"docker_sandbox","template":"docker.io/example/console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mounts":[]},"workspace":"/workspace","command":["mcp-console"],"provider":"compute"}.
         Each generation uses the captured immutable template identity and
-        runtime selection. Use preinstalled R and SQL packages; dynamic package
-        preparation is disabled even if ir or uv is installed. Records, output
-        spools, and returned images are written by the controller beneath its
-        existing project .agents/console directory or its Console home
+        runtime selection. Use preinstalled R, Python, and SQL packages; dynamic
+        package preparation is disabled even if ir or uv is installed. Records,
+        output spools, and returned images are written by the controller beneath
+        its existing project .agents/console directory or its Console home
         directory; declared shares can expose them to the worker. Restart
         discards files stored only in the VM and preserves shared files. Quarto
         exports execute recorded cells when rendered; prepare the target
         environment and files first.
 
 
-        Runtimes were inspected inside the captured template. All dependencies
-        and DuckDB extensions must be preinstalled there; Console never invokes
-        dependency resolvers or installs missing imports. Rebuild the template
-        and start a new server session to change its runtime or packages. Plain
-        worker restart retains the selected interpreter and creates fresh
-        language state and an empty in-memory SQL catalog.
+        The session prepares automatically in the background. Runtime
+        capabilities are discovered on the execution host; the listed language
+        fields do not guarantee that an interpreter is installed. R/Python
+        sharing requires both runtimes and their bridge. Managed DuckDB requires
+        its provider packages. Each operation validates the session's actual
+        capabilities. Requirements inspection reports the known declaration and
+        preparation status, not an installed-package inventory.
+
+
+        Runtimes are discovered inside the selected template during background
+        preparation. All dependencies and DuckDB extensions must be preinstalled
+        there; Console never invokes dependency resolvers or installs missing
+        imports. Rebuild the template and start a new server session to change
+        its runtime or packages. Plain worker restart retains the selected
+        interpreter and creates fresh language state and an empty in-memory SQL
+        catalog.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -108,42 +118,63 @@ result:
         properties:
           r:
             description: >-
-              One complete R cell in persistent state. Expressions display
-              automatically; R plots return as PNG images. The Console-owned DuckDB
-              catalog can query R global data frames by name.
-              console_sql_connection(connection) selects a user-owned DBI connection,
-              and console_sql_connection(NULL) restores the Console-owned catalog.
-              Missing packages report ordinary R errors; automatic package
-              installation is unavailable. Dependencies must be preinstalled in the
-              template.
+              One complete R cell when R is installed in the target. Expressions
+              display automatically; R plots return as PNG images. When the
+              Python bridge is available, read Python globals through py$name.
+              The R-backed Console-owned DuckDB catalog can query R global data
+              frames by name. console_sql_connection(connection) selects a
+              user-owned DBI connection, and console_sql_connection(NULL)
+              restores the Console-owned catalog. Missing packages report
+              ordinary R errors; automatic package installation is unavailable.
+              Dependencies must be preinstalled in the template.
+            type:
+              - string
+              - "null"
+          python:
+            description: >-
+              One complete Python cell when Python is installed in the target.
+              The final expression displays automatically. Use input() for
+              managed stdin; Matplotlib plots return as PNG images when
+              installed. When the R bridge is available, read R globals through
+              r.name. console_sql_connection(connection) selects a user-owned
+              DB-API connection, and console_sql_connection(None) restores the
+              Console-owned catalog. Missing imports report ordinary Python
+              errors; automatic package installation is unavailable.
+              Dependencies must be preinstalled in the template.
             type:
               - string
               - "null"
           sql:
             description: >-
-              One complete SQL cell through the active R DBI connection. Console opens
-              its in-memory DuckDB catalog lazily when the adapter and DuckDB are
-              preinstalled in the template. The default catalog can query R global
-              data frames by name. console_sql_connection(connection) selects a
-              user-owned connection, and console_sql_connection(NULL) in R restores
-              the Console-owned catalog without discarding it. A query with columns
-              returns a bounded preview. Extensions load from the template's cache;
-              Console does not install extensions or resolve packages. Spill files and
-              stored secrets use private disposable worker storage. Worker replacement
-              resets the catalog.
+              One complete SQL cell through the active R DBI or Python DB-API
+              connection. Console opens its in-memory DuckDB catalog during
+              initialization when the adapter and DuckDB are preinstalled in the
+              template. The default catalog uses R DBI when R is available,
+              otherwise Python DB-API. The R-backed catalog can query R global
+              data frames by name; Python data frames require explicit
+              registration with sql_connection().register(name, frame).
+              console_sql_connection(connection) selects a user-owned
+              connection, and console_sql_connection(None) in Python or
+              console_sql_connection(NULL) in R restores the Console-owned
+              catalog without discarding it. Missing DuckDB leaves the installed
+              interpreters and custom connections usable. A query with columns
+              returns a bounded preview. Extensions load from the template's
+              cache; Console does not install extensions or resolve packages.
+              Spill files and stored secrets use private disposable worker
+              storage. Worker replacement resets the catalog.
             type:
               - string
               - "null"
           control:
             description: >-
-              Applies lifecycle control alone or before compatible same-call fields.
-              interrupt signals the live worker and preserves state; compatible
-              following input is queued before the interrupt grace. A following cell
-              runs only after the earlier operation finishes. restart discards
-              language objects, debugger state, unread stdin, and the in-memory SQL
-              catalog, retains the captured image/template and interpreter, and sends
-              same-call input and code only to the replacement worker. Dependency
-              preparation is unavailable.
+              Applies lifecycle control alone or before compatible same-call
+              fields. interrupt signals the live worker and preserves state;
+              compatible following input is queued before the interrupt grace. A
+              following cell runs only after the earlier operation finishes.
+              restart discards language objects, debugger state, unread stdin,
+              and the in-memory SQL catalog, retains the captured image/template
+              and interpreter, and sends same-call input and code only to the
+              replacement worker. Dependency preparation is unavailable.
             type: string
             enum:
               - interrupt
@@ -153,9 +184,9 @@ result:
               - object
               - "null"
             description: >-
-              Inspect the server's retained declaration with action=get. Preparation
-              is unavailable for this target; the declaration is not an
-              installed-package inventory.
+              Inspect the server's retained declaration with action=get.
+              Preparation is unavailable for this target; the declaration is not
+              an installed-package inventory.
             properties:
               action:
                 type: string
@@ -185,8 +216,8 @@ result:
               when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
               background work, then poll with an empty `send`.
 
-              Defaults to 60,000 milliseconds. The wait starts after cell dispatch or attachment to an active
-              evaluation and includes one automatic worker replacement attempt. It does not cancel resolution
+              Defaults to 60,000 milliseconds. The wait starts when a cell is admitted or a call attaches to
+              its evaluation, including pending background startup and one automatic replacement attempt. It does not cancel resolution
               or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
               before dispatch and may make the complete call take longer. This value does not limit standalone
               preparation. Automatic R and Python import
@@ -204,5 +235,5 @@ send:
 result:
   content:
     - type: text
-      text: "Python cells are unavailable: the target has no Python runtime"
+      text: "[Python cells are unavailable: the session has no Python runtime]"
   isError: true

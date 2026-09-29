@@ -66,7 +66,7 @@ Docker resolves its image once before workload startup and uses that immutable I
 Each generation owns a fresh Linux container containing relay and worker; a local owner observes server and attachment loss and requires confirmed container removal before replacement.
 Docker uses image packages with dynamic preparation disabled, even if resolvers are installed.
 Docker and SBX share prepared-runtime discovery and configuration in `src/target_launch/runtime.rs`.
-Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and project its R/native-Python capabilities into the MCP schema.
+Probe inside the target under workload policy and retain one immutable worker-environment result only after confirmed probe-resource retirement. Initial MCP schemas use cheap configuration and conditional capability prose; discovered capabilities govern operation admission.
 Prepared targets select preinstalled CPython when R is genuinely absent, support target-relative `python`, never enter dependency preparation, and retain target paths as opaque controller metadata.
 Direct compute launches provide private Python storage through the existing target launcher; extension caches and shared paths retain their provider ownership.
 Docker Sandbox selects compute enforcement by default; explicit `sandbox.provider: compute` documents that selection.

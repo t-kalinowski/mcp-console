@@ -1,0 +1,15 @@
+---
+phase: create-gate
+protocol_available: true
+owned_resources_retired: true
+unconfirmed_create: true
+---
+phase: probe-gate
+protocol_available: true
+owned_resources_retired: true
+unconfirmed_create: false
+---
+phase: launch-gate
+protocol_available: true
+owned_resources_retired: true
+unconfirmed_create: false
