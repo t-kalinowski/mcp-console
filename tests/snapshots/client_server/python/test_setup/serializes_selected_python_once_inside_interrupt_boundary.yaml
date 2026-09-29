@@ -67,7 +67,14 @@ result:
   isError: false
 ---
 send:
-  python: "42"
+  python: |
+    import importlib.util
+
+    assert importlib.util.find_spec("yaml12") is not None
+    42
+  requirements:
+    python:
+      - py-yaml12
 result:
   content:
     - type: text

@@ -935,9 +935,14 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
-        # Retry the same selection. Tool materialization now supplies its own
-        # host-inspected identity and would bypass this R selection boundary.
-        client.send(python="42")
+        # fmt: python
+        python = code("""
+            import importlib.util
+
+            assert importlib.util.find_spec("yaml12") is not None
+            42
+            """)
+        client.send(python=python, requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "42\n", client.transcript[-1]
         client.send(r="stopifnot(selection_serializations == 2L); 42L")
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
