@@ -19,16 +19,19 @@ EXPECTED_SOURCES = {
     "src/python/bridge.R",
     "src/python/initialize.R",
     "src/python/environment.py",
+    "src/python/inspection.py",
     "src/python/probe.py",
     "src/python/runtime.py",
     "src/python/services.py",
     "src/r_environment/bridge.R",
     "src/r_graphics/bridge.R",
     "src/resolver/programs/duckdb_extensions.R",
+    "src/resolver/programs/duckdb_extensions.py",
     "src/resolver/programs/r_library.R",
     "src/resolver/programs/uv_binary.R",
     "src/sql/bridge.R",
     "src/sql/dbapi.py",
+    "src/worker/embedded_r/parse.R",
 }
 INCLUDE_PATTERN = re.compile(
     r'include_str!\(\s*"([^"\n]+\.(?:R|py))"\s*\)', re.MULTILINE

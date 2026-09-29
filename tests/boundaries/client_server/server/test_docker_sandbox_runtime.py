@@ -65,7 +65,9 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
         with McpClient(relocated, ("serve",), environment, project) as client:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
-            assert "requirements" not in tool["inputSchema"]["properties"]
+            assert tool["inputSchema"]["properties"]["requirements"]["properties"][
+                "action"
+            ]["enum"] == ["get"]
             assert (
                 "microVM" in tool["description"]
                 and "without a sandbox" not in tool["description"]
@@ -192,9 +194,10 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
             == os.environ["MCP_CONSOLE_TEST_SBX_TEMPLATE"]
         )
         qmd = (session / "transcript.qmd").read_text()
-        assert (
-            "root.dir" not in qmd and "eval: false" in qmd and "Docker Sandbox" in qmd
-        )
+        frontmatter = qmd.split("---", 2)[1]
+        assert "root.dir" not in qmd and "execute:" not in frontmatter, qmd
+        assert "# Run `ir render transcript.qmd`" in frontmatter, qmd
+        assert "Docker Sandbox" in qmd, qmd
         created = [call["args"] for call in calls(root) if call["args"][0] == "create"]
         assert len(created) == 3
         assert all(
@@ -263,6 +266,11 @@ def test_workload_environment_does_not_configure_controller_sbx(binary: Path) ->
                 records += finish(client, root)[3:]
             for identity in generations(root):
                 absent(**identity)
+    from boundaries.client_server.python.test_peer_runtime import (
+        exercise_prepared_r_only,
+    )
+
+    exercise_prepared_r_only(binary, "sbx")
     return records
 
 

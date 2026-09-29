@@ -8,6 +8,8 @@ mod embedded_r;
 mod input;
 #[cfg(unix)]
 mod interrupt;
+#[cfg(unix)]
+mod r_integration;
 
 // Keep the rest of the crate dependent on the worker facade. The core owns
 // runtime-neutral sideband state and host callbacks. The coordinator owns
@@ -16,17 +18,17 @@ mod interrupt;
 pub(crate) use coordinator::run;
 #[cfg(unix)]
 pub(crate) use core::{
-    emit_output, mark_shutting_down, publish_plot, publish_python_activation, publish_r_activation,
-    publish_r_activation_failure, record_worker_failure, resolve_python, resolve_python_version,
-    resolve_r,
+    emit_output, mark_shutting_down, publish_plot, publish_python_activation,
+    publish_python_activation_failure, publish_r_activation, publish_r_activation_failure,
+    record_worker_failure, resolve_python, resolve_python_version, resolve_r,
 };
-#[cfg(unix)]
-pub(crate) use embedded_r::{begin_python_commit, finish_python_commit};
 #[cfg(unix)]
 pub(crate) use input::{PythonInput, python_interrupt_wakeup, read_python_input};
 #[cfg(unix)]
 pub(crate) use interrupt::{
-    acknowledge_python_interrupt, install_python_interrupt, pending as python_interrupt_pending,
+    acknowledge_python_interrupt, begin_python_commit, check_python_selection_interrupt,
+    finish_python_commit, inspect_python, install_python_interrupt,
+    pending as python_interrupt_pending,
 };
 
 #[cfg(not(unix))]
@@ -37,3 +39,9 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     )
     .into())
 }
+
+#[cfg(unix)]
+pub(crate) use r_integration::{
+    available as r_available, ensure_bridge, ensure_initialized as ensure_r,
+    initialized as r_initialized,
+};

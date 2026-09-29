@@ -23,4 +23,4 @@ stderr: >
 override: "unknown={baz: [far, faz]}"
 stderr: >
   configuration with CLI overrides: unknown: unknown field `unknown`,
-  expected one of `extends`, `sandbox`, `target`
+  expected one of `python`, `extends`, `sandbox`, `target`

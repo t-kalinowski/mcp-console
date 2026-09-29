@@ -48,7 +48,11 @@ int mcp_worker_install_python_interrupt(interrupt_fn set_interrupt) {
 }
 
 int mcp_worker_interrupt_configure(interrupt_fn record, int wakeup) {
-    record_interrupt = record;
-    interrupt_wakeup = wakeup;
+    /* Reinstallation after R/reticulate hooks changes only the disposition.
+     * The process-lifetime callback and pipe never change under a handler. */
+    if (record_interrupt == NULL) {
+        record_interrupt = record;
+        interrupt_wakeup = wakeup;
+    }
     return install_interrupt_handler();
 }

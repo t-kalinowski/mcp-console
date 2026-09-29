@@ -40,6 +40,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    # The worker uses the current R library, while host uv must not inherit it.
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         real_uv = shutil.which("uv")
@@ -47,6 +48,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         uv_record = temporary / "uv-environment.jsonl"
         r_libs_record = temporary / "uv-r-libs.jsonl"
         environment, _ = r_test_environment()
+        environment.pop("R_LIBS", None)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -60,13 +62,19 @@ def test_uses_current_r_library_for_managed_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(r="initial_r_library <- .libPaths()[[1L]]")
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            initial_r_library <- .libPaths()[[managed_index]]
+            """)
+        client.send(r=r)
         assert last_result_text(client) == "[done]"
 
         def current_r_library() -> str:
             # fmt: r
             r = code(r"""
-                cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                cat(jsonlite::toJSON(.libPaths()[[managed_index]], auto_unbox = TRUE))
                 """)
             client.send(r=r)
             output = last_result_text(client)
@@ -76,19 +84,17 @@ def test_uses_current_r_library_for_managed_python_resolution(
             )
             return library
 
-        def assert_resolver_used(library: str) -> None:
+        def assert_resolver_ignored_r_library() -> None:
             records = [
                 json.loads(line)
                 for line in r_libs_record.read_text(encoding="utf-8").splitlines()
             ]
             assert records, "managed Python resolution did not invoke uv"
-            assert all(record is not None for record in records), records
-            first_libraries = [record.split(os.pathsep, 1)[0] for record in records]
-            assert first_libraries == [library] * len(records), first_libraries
+            assert all(record is None for record in records), records
 
         client.send(requirements={"r": ["zeallot"]})
         assert last_result_text(client) == "[prepared]"
-        prepared_r_library = current_r_library()
+        assert Path(current_r_library()).is_dir()
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
         # Printing unconstrained requirements asks the host for the default
@@ -99,7 +105,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        assert_resolver_used(prepared_r_library)
+        assert_resolver_ignored_r_library()
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -110,7 +116,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        assert_resolver_used(prepared_r_library)
+        assert_resolver_ignored_r_library()
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -121,8 +127,8 @@ def test_uses_current_r_library_for_managed_python_resolution(
         assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
-        restarted_r_library = current_r_library()
-        assert_resolver_used(restarted_r_library)
+        assert Path(current_r_library()).is_dir()
+        assert_resolver_ignored_r_library()
         return client.finish()
 
 
@@ -221,7 +227,10 @@ def test_validates_registry_only_python_requirements(
         worker_installation = temporary / "worker-python-installation"
         for selector in (worker_executable, worker_retained_selector):
             selector.write_text(
-                '#!/bin/sh\ntouch "$0.executed"\nexit 97\n',
+                """#!/bin/sh
+touch "$0.executed"
+exit 97
+""",
                 encoding="utf-8",
             )
             selector.chmod(0o755)
@@ -844,6 +853,21 @@ def test_interrupts_python_cache_warmup_without_committing(
                         )
                         return
                     if arguments[:2] == ["-I", "-c"]:
+                        if len(arguments) == 4:
+                            # Report this selected fixture while executing the
+                            # real inspection program in isolated CPython.
+                            program = "import sys; sys.executable = sys.argv.pop(1); "
+                            os.execv(
+                                sys.executable,
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    program + arguments[2],
+                                    sys.argv[0],
+                                    arguments[3],
+                                ],
+                            )
                         preflight = Path(os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"])
                         if not preflight.exists():
                             preflight.touch()
@@ -961,6 +985,21 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                     if arguments[:2] == ["-I", "-c"]:
                         if blocked.exists():
                             Path(os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]).touch()
+                        if len(arguments) == 4:
+                            # Report this selected fixture while executing the
+                            # real inspection program in isolated CPython.
+                            program = "import sys; sys.executable = sys.argv.pop(1); "
+                            os.execv(
+                                sys.executable,
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    program + arguments[2],
+                                    sys.argv[0],
+                                    arguments[3],
+                                ],
+                            )
                         return
                     raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
 

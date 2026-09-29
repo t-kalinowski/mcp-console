@@ -36,6 +36,8 @@ print(
             "version": sys.version.split()[0],
             "prefix": sys.prefix,
             "exec_prefix": sys.exec_prefix,
+            "base_executable": sys._base_executable,
+            "pythonpath": os.pathsep.join(path or "." for path in sys.path),
             "site_packages": directories,
             "site_paths": sorted(owned),
             "numpy": numpy,

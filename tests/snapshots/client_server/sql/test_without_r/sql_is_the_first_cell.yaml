@@ -1,0 +1,168 @@
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        answer
+        ------
+        42
+  isError: false
+---
+send:
+  sql: CREATE TABLE retained AS SELECT 7 AS value
+result:
+  content:
+    - type: text
+      text: |
+        Count
+        -----
+        1
+  isError: false
+---
+send:
+  python: |
+    import pandas as pd
+
+    managed = sql_connection()
+    assert managed.execute("SELECT value FROM retained").fetchone() == (7,)
+    frame = pd.DataFrame({"value": [3, 4]})
+    managed.register("registered", frame)
+    unregistered = pd.DataFrame({"value": [99]})
+    print("shared connection")
+result:
+  content:
+    - type: text
+      text: |
+        shared connection
+  isError: false
+---
+send:
+  sql: SELECT sum(value) AS total FROM registered
+result:
+  content:
+    - type: text
+      text: |
+        total
+        -----
+        7
+  isError: false
+---
+send:
+  sql: SELECT * FROM unregistered
+result:
+  content:
+    - type: text
+      text: |
+        Error: Catalog Error: Table with name unregistered does not exist!
+        Did you mean "registered"?
+
+        LINE 1: SELECT * FROM unregistered
+                              ^
+  isError: false
+---
+send:
+  python: |
+    import sqlite3
+
+    selected = sqlite3.connect(":memory:")
+    selected.execute("CREATE TABLE chosen(value INTEGER)")
+    selected.execute("INSERT INTO chosen VALUES (11)")
+    console_sql_connection(selected)
+    assert sql_connection() is selected
+    print("selected SQLite")
+result:
+  content:
+    - type: text
+      text: |
+        selected SQLite
+  isError: false
+---
+send:
+  sql: SELECT value FROM chosen
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        11
+  isError: false
+---
+send:
+  python: |
+    console_sql_connection(None)
+    assert sql_connection() is managed
+    assert selected.execute("SELECT value FROM chosen").fetchone() == (11,)
+    print("managed restored; SQLite remains open")
+result:
+  content:
+    - type: text
+      text: |
+        managed restored; SQLite remains open
+  isError: false
+---
+send:
+  sql: SELECT value FROM retained
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        7
+  isError: false
+---
+send:
+  sql: SELECT i FROM range(100) AS values(i)
+result:
+  content:
+    - type: text
+      text: |
+        i
+        --
+        0
+        1
+        2
+        3
+        4
+        5
+        6
+        7
+        8
+        9
+        10
+        11
+        12
+        13
+        14
+        15
+        16
+        17
+        18
+        19
+        [additional rows omitted]
+  isError: false
+---
+send:
+  sql: SELECT * FROM missing_table
+result:
+  content:
+    - type: text
+      text: |
+        Error: Catalog Error: Table with name missing_table does not exist!
+        Did you mean "pg_tables"?
+
+        LINE 1: SELECT * FROM missing_table
+                              ^
+  isError: false
+---
+send:
+  python: managed.execute('SELECT value FROM retained').fetchone()
+result:
+  content:
+    - type: text
+      text: |
+        (7,)
+  isError: false

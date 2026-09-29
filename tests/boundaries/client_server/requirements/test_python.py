@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
 import subprocess
@@ -18,7 +19,7 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_python_resolution_error
 from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.events import Events
@@ -28,6 +29,7 @@ from support.resolvers import (
     checkpoint_uv_environment,
     matplotlib_test_environment,
     named_requirement_error,
+    recording_uv_environment,
 )
 from support.suites import run_this_suite
 
@@ -279,6 +281,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
 
                 requirement = os.environ["MCP_CONSOLE_TEST_REQUIREMENT"]
                 if requirement in sys.argv[1:]:
+                    assert os.environ.get("R_LIBS") is None
                     child = os.fork()
                     if child == 0:
                         identity = os.environ["MCP_CONSOLE_TEST_DESCENDANT_IDENTITY"]
@@ -300,6 +303,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
 
         environment = os.environ.copy()
         environment.pop("RETICULATE_PYTHON", None)
+        environment.pop("R_LIBS", None)
         environment["RETICULATE_UV"] = str(wrapper)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_REQUIREMENT"] = "py-yaml12"
@@ -450,6 +454,19 @@ def test_restart_loses_state_and_retains_python_requirements(
 def test_restart_discards_pre_marker_python_activation(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return restart_discards_pre_marker_activation(binary, execution, {})
+
+
+@executions(DIRECT, SANDBOXED)
+def test_set_discards_pre_marker_python_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return restart_discards_pre_marker_activation(binary, execution, {"action": "set"})
+
+
+def restart_discards_pre_marker_activation(
+    binary: Path, execution: Execution, action: dict
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         replacement_requirement = "mcp-console-restart-fixture"
@@ -500,31 +517,31 @@ def test_restart_discards_pre_marker_python_activation(
                 (activation_ready, activation_release, activation_sent)
             )
 
-            # Gate PythonActivated while the delegated reticulate call is live.
-            # fmt: python
-            python = code(r"""
-                import _mcp_console_services as services
-
-                original_publish = services.publish_python_activation
-
-
-                def gated_publish(activation):
-                    with open(r.activation_ready, "wb", buffering=0) as ready:
-                        ready.write(b"1")
-                    with open(r.activation_release, "rb", buffering=0) as release:
-                        assert release.read(1) == b"1"
-                    original_publish(activation)
-                    with open(r.activation_sent, "wb", buffering=0) as sent:
-                        sent.write(b"1")
-
-
-                services.publish_python_activation = gated_publish
+            # Pause the real managed worker after its new environment resolves,
+            # immediately before its active binding publishes python_activated.
+            # fmt: r
+            r = code(r"""
+                globals <- get(".globals", envir = asNamespace("reticulate"))
+                original <- activeBindingFunction("python_requirements", globals)
+                rm(list = "python_requirements", envir = globals)
+                makeActiveBinding("python_requirements", function(value) {
+                  if (missing(value)) {
+                    return(original())
+                  }
+                  ready <- fifo(activation_ready, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), ready)
+                  close(ready)
+                  release <- fifo(activation_release, open = "rb", blocking = TRUE)
+                  stopifnot(identical(readBin(release, "raw", n = 1L), charToRaw("1")))
+                  close(release)
+                  original(value)
+                  sent <- fifo(activation_sent, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), sent)
+                  close(sent)
+                }, globals)
+                reticulate::py_require("py-yaml12")
                 """)
-            client.send(python=python)
-            assert last_tool_text(client) == "[done]"
-            evaluation = client.start_send(
-                r='reticulate::py_require("py-yaml12")', timeout_ms=0
-            )
+            evaluation = client.start_send(r=r, timeout_ms=0)
             activation_ready.wait("managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
@@ -540,7 +557,7 @@ def test_restart_discards_pre_marker_python_activation(
 
             restart = client.start_send(
                 control="restart",
-                requirements={"python": [replacement_requirement]},
+                requirements={**action, "python": [replacement_requirement]},
             )
             uv_started.wait("restart Python resolution")
             activation_release.release()
@@ -657,58 +674,54 @@ def test_prepares_python_requirements_after_worker_startup(
 def test_failed_live_python_requirements_do_not_run_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    client.send(python="import os; live_sentinel = 42; live_worker_pid = os.getpid()")
-    assert last_tool_text(client) == "[done]"
-
-    # Fail the candidate compatibility check through the real explicit path.
-    # fmt: python
-    python = code("""
-        import _mcp_console_environment as environment
-
-        original_check = environment._check_compatible
-
-
-        def fail_compatibility(candidate):
-            raise RuntimeError("synthetic live Python preparation failure")
-
-
-        environment._check_compatible = fail_compatibility
-        """)
-    client.send(python=python)
-    assert last_tool_text(client) == "[done]"
-
-    result = client.send(
-        python="failed_live_python_cell = True",
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert result["isError"] is True, result
-    assert result["content"][0]["text"] == (
-        "synthetic live Python preparation failure"
-    ), result
-
-    client.send(python="environment._check_compatible = original_check")
-    assert last_tool_text(client) == "[done]"
-
-    # fmt: python
-    python = code("""
-        import os
-        import yaml12
-
-        (
-            live_sentinel,
-            os.getpid() == live_worker_pid,
-            "failed_live_python_cell" not in globals(),
-            yaml12.__name__,
-        )
-        """)
-    client.send(
-        python=python,
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "(42, True, True, 'yaml12')\n"
-    return client.finish()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = recording_uv_environment(root, fail_requirement="py-yaml12")
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import os, sys; live_sentinel = 42; live_worker_pid = os.getpid(); print(sys.executable)"
+            )
+            executable = last_tool_text(client).strip()
+            assert Path(executable).is_absolute(), executable
+            client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
+            # Ordinary tool preparation must remain independent of the public
+            # reticulate declaration function, even after R is initialized.
+            client.send(
+                r=code(r"""
+                reticulate_namespace <- asNamespace("reticulate")
+                unlockBinding("py_require", reticulate_namespace)
+                assign("py_require", function(...) stop("tool entered reticulate declaration"),
+                       envir = reticulate_namespace)
+                lockBinding("py_require", reticulate_namespace)
+                """)
+            )
+            assert last_tool_text(client) == "[done]"
+            result = client.send(
+                python="failed_live_python_cell = True",
+                requirements={"python": ["py-yaml12"]},
+            )
+            assert result["isError"] is True, result
+            error = result["content"][0]["text"]
+            request, diagnostic = error.removeprefix(
+                "managed Python resolution failed:\nresolver input:\n"
+            ).split("\nuv output:\n")
+            requested = json.loads(request)
+            assert requested["packages"] == ["numpy", "pandas", "py-yaml12"], requested
+            assert requested["python"] == executable, requested
+            assert diagnostic == "synthetic uv failure", diagnostic
+            result["content"][0]["text"] = normalize_python_resolution_error(
+                error, executable=executable
+            )
+            (root / "uv-failure").unlink()
+            client.send(
+                python="import yaml12; (live_sentinel, os.getpid() == live_worker_pid, 'failed_live_python_cell' not in globals(), yaml12.__name__)",
+                requirements={"python": ["py-yaml12"]},
+            )
+            assert last_tool_text(client) == "(42, True, True, 'yaml12')\n", (
+                client.transcript[-1]
+            )
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

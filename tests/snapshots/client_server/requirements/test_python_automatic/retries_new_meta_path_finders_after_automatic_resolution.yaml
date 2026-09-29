@@ -41,19 +41,18 @@ result:
 ---
 send:
   python: |
+    import runpy
     import sys
-    import _mcp_console_services as services
 
-    original_prepare = services.prepare_python
+    original_run_path = runpy.run_path
 
-
-    def prepare_and_register(request):
-        result = original_prepare(request)
+    def activate_with_finder(*args, **kwargs):
+        result = original_run_path(*args, **kwargs)
         sys.meta_path.insert(0, automatic_meta_finder)
+        runpy.run_path = original_run_path
         return result
 
-
-    services.prepare_python = prepare_and_register
+    runpy.run_path = activate_with_finder
 result:
   content:
     - type: text

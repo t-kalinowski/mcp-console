@@ -127,7 +127,10 @@ def restart_after_r_segfault(client: McpClient, cause: str) -> Transcript:
     assert normalized.startswith(
         "\n *** caught segfault ***\n"
         f"address 0x0, cause '{cause}'\n"
-        '\nTraceback:\n 1: .C("mcp_test_segfault")\n'
+        """
+Traceback:
+ 1: .C("mcp_test_segfault")
+"""
     ), repr(fatal_output)
     client.transcript[-1]["result"]["content"][0]["text"] = normalized
     wait_for_evaluation_output(

@@ -20,8 +20,7 @@ send:
     assert "startup_cell_ran" not in globals()
     assert input() == "replacement input"
     print("replacement only")
-  stdin: |
-    replacement input
+  stdin: replacement input
   timeout_ms: 600000
 result:
   content:
@@ -30,6 +29,15 @@ result:
         [active evaluation stopped by session restart request]
         [starting new worker]
         [input requested: ""]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  stdin: "\n"
+result:
+  content:
+    - type: text
+      text: |-
         replacement only
         [done]
   isError: false

@@ -48,7 +48,14 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
         with McpClient(binary, ("serve",), environment, project) as client:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
-            assert "requirements" not in tool["inputSchema"]["properties"], tool
+            assert tool["inputSchema"]["properties"]["requirements"]["properties"][
+                "action"
+            ]["enum"] == ["get"], tool
+            for language in ("r", "python", "sql"):
+                assert (
+                    "preinstalled"
+                    in tool["inputSchema"]["properties"][language]["description"]
+                )
             client.send(
                 r='x <- 41; stopifnot(getwd() == "/workspace", file.exists("/.dockerenv")); x + 1'
             )
@@ -79,6 +86,10 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
             )
             client.send(sql="SELECT 6 * 7 AS answer")
             assert "42" in last_result_text(client), last_result_text(client)
+            client.send(
+                r="stopifnot(!DBI::dbGetQuery(sql_connection(), \"SELECT current_setting('autoinstall_known_extensions')\")[[1]])"
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
             client.send(python='print(input("container prompt: "))')
             assert "[waiting for stdin]" in last_result_text(client)
             wait_for_evaluation_output(
@@ -154,7 +165,10 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
         assert generations[0].startswith(container)
         assert generations[1].startswith(replacement)
         qmd = (session / "transcript.qmd").read_text()
-        assert "root.dir" not in qmd and "eval: false" in qmd and "Docker" in qmd, qmd
+        frontmatter = qmd.split("---", 2)[1]
+        assert "root.dir" not in qmd and "execute:" not in frontmatter, qmd
+        assert "# Run `ir render transcript.qmd`" in frontmatter, qmd
+        assert "Docker" in qmd, qmd
         result = json.dumps(transcript[3:]).replace(str(root), "<docker-test>")
         for identity in (container, replacement):
             result = result.replace(identity, "<container>")

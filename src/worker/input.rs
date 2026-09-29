@@ -1,20 +1,12 @@
 use std::collections::VecDeque;
 use std::ffi::{c_int, c_uchar};
 use std::io;
-use std::os::fd::{AsRawFd, IntoRawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::sync::{Mutex, OnceLock};
 
 use super::core;
 
 static INTERRUPT_WAKEUP: OnceLock<io::PipeReader> = OnceLock::new();
-
-pub(crate) fn python_interrupt_wakeup() -> Result<io::PipeReader, String> {
-    INTERRUPT_WAKEUP
-        .get()
-        .expect("interrupt wakeup initialized")
-        .try_clone()
-        .map_err(|error| error.to_string())
-}
 
 pub(super) fn initialize_interrupt_wakeup() -> io::Result<c_int> {
     let (reader, writer) = io::pipe()?;
@@ -28,6 +20,37 @@ pub(super) fn initialize_interrupt_wakeup() -> io::Result<c_int> {
         .map_err(|_| io::Error::other("interrupt wakeup already initialized"))?;
     // The signal handler retains this descriptor for the worker lifetime.
     Ok(writer.into_raw_fd())
+}
+
+pub(super) fn interrupt_wakeup_fd() -> RawFd {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .as_raw_fd()
+}
+
+pub(super) fn drain_interrupt_wakeup() -> io::Result<()> {
+    let mut bytes = [0u8; 64];
+    loop {
+        let count = unsafe {
+            libc::read(
+                interrupt_wakeup_fd(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
+        if count > 0 {
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if count < 0 && error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if count < 0 && error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(());
+        }
+        return Err(io::Error::other("worker interrupt wakeup closed"));
+    }
 }
 
 static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
@@ -269,4 +292,12 @@ pub(crate) fn read_python_input(prompt: &str) -> Result<PythonInput, String> {
         }
     })()
     .inspect_err(|error| core::record_worker_failure(error.clone()))
+}
+
+pub(crate) fn python_interrupt_wakeup() -> Result<io::PipeReader, String> {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .try_clone()
+        .map_err(|error| error.to_string())
 }

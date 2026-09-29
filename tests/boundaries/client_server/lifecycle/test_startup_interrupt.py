@@ -37,6 +37,7 @@ def before_resolver_spawn(
         import sys
 
         os.environ["MCP_CONSOLE_TEST_SPAWN_SERVER"] = str(os.getpid())
+        os.environ["MCP_CONSOLE_TEST_SPAWN_CHILD"] = "1"
         os.environ["DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"] = (
             os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
         )
@@ -52,15 +53,18 @@ def before_resolver_spawn(
         fake_bin.mkdir()
         fixtures = Path(__file__).resolve().parents[3] / "fixtures"
         (fake_bin / "ir").symlink_to(fixtures / "startup_ir")
+        (fake_bin / "uv").symlink_to(fixtures / "startup_ir")
         (fake_bin / "python3").symlink_to(sys.executable)
         environment, _ = r_test_environment()
         real_ir = shutil.which("ir")
-        assert real_ir is not None
+        real_uv = shutil.which("uv")
+        assert real_ir is not None and real_uv is not None
         environment.update(
             {
                 "TMPDIR": str(root),
                 "PATH": os.pathsep.join([str(fake_bin), environment["PATH"]]),
                 "MCP_CONSOLE_TEST_REAL_IR": real_ir,
+                "MCP_CONSOLE_TEST_REAL_UV": real_uv,
                 "MCP_CONSOLE_TEST_STARTUP_PHASE": "none",
                 "MCP_CONSOLE_TEST_STARTUP_RECORD": str(root / "resolver.jsonl"),
                 "MCP_CONSOLE_TEST_SPAWN_LIBRARY": str(
@@ -85,8 +89,9 @@ def before_resolver_spawn(
             (root / "armed").touch()
             yield client, started, release, root
         finally:
-            # Release the native server thread before transport teardown, even
-            # when an assertion fails while it is paused before child creation.
+            # Release the resolver fork before transport teardown, even when an
+            # assertion fails while it is paused before child creation.
+            (root / "armed").unlink(missing_ok=True)
             release.release()
 
 
@@ -107,6 +112,7 @@ def test_interrupts_first_cell_before_resolver_registration(
         assert not (root / "resolver.jsonl").exists()
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -135,9 +141,12 @@ def test_interrupts_first_cell_between_resolver_phases(
             json.loads(line)
             for line in (root / "resolver.jsonl").read_text().splitlines()
         ]
-        assert invocations == [{"program": "ir", "arguments": ["--version"]}]
+        assert len(invocations) == 1, invocations
+        assert invocations[0]["program"] == "uv", invocations
+        assert invocations[0]["arguments"][:2] == ["python", "list"], invocations
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -167,6 +176,7 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         assert last_tool_text(client) == RUNNING
         client.send(control="interrupt", timeout_ms=0)
         assert last_tool_text(client) == RUNNING
+        (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
         client.receive(stdin)

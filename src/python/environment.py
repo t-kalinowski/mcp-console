@@ -1,11 +1,11 @@
 """Live path activation; manifests and resolution belong to the native owner."""
 
+import builtins
 import importlib
 import importlib.metadata
 import json
 import os
 import re
-import runpy
 import sys
 
 import _mcp_console as runtime
@@ -21,6 +21,10 @@ class _Commit:
 
     def __exit__(self, *exception: object) -> None:
         services.finish_python_commit()
+
+
+class _ActivationFailure(Exception):
+    """Preserve the restart contract for failures after site mutation begins."""
 
 
 class _RollbackFailure(BaseException):
@@ -54,18 +58,7 @@ def initialize(request: str) -> str:
             for prefix in (sys.prefix, sys.exec_prefix)
         )
     }
-    runtime.configure_import_resolution(resolve_import, None)
     return json.dumps(_active)
-
-
-def resolve_import(module: str, distribution: str) -> str:
-    request = {"packages": [distribution]}
-    if module != distribution:
-        request["import_resolution"] = {"module": module, "distribution": distribution}
-    response = json.loads(services.prepare_python(json.dumps(request)))
-    if response["kind"] == "prepared":
-        response["kind"] = "ready"
-    return json.dumps(response)
 
 
 def _name(name: str) -> str:
@@ -125,13 +118,9 @@ def _activate(candidate: dict, manifest: dict) -> None:
         retained = set(sys.path)
         # The managed environment supplies its activation hook. Set identity
         # first so its .pth hooks observe the candidate, then track its additions.
-        runpy.run_path(
-            os.path.join(os.path.dirname(sys.executable), "activate_this.py")
-        )
+        services.activate_python_environment()
         sys.real_prefix = identity["prefix"]
         importlib.invalidate_caches()
-        # Optional process integration must probe the newly available packages.
-        runtime.activate_process_environment(candidate["executable"])
         added = (_site_paths - previous) | (set(sys.path) - retained)
         candidate["pythonpath"] = os.pathsep.join(path or "." for path in sys.path)
         # The native SIGINT callback consults this deferral and leaves R's
@@ -141,6 +130,8 @@ def _activate(candidate: dict, manifest: dict) -> None:
                 json.dumps({"environment": candidate, "manifest": manifest})
             )
             _active, _site_paths, committed = candidate, added, True
+    except Exception as error:
+        raise _ActivationFailure() from error
     finally:
         # Roll back state owned here, not arbitrary side effects of site hooks.
         with _Commit():
@@ -172,7 +163,12 @@ def prepare(request: str) -> str:
             _activate, request["environment"], request["manifest"]
         )
         return json.dumps({"kind": "prepared"})
+    except _ActivationFailure as failure:
+        builtins.__dict__["_mcp_console_setup_error"] = failure.__cause__
+        return json.dumps(
+            {"kind": "failed", "message": "Python activation failed; restart required"}
+        )
     except (Exception, KeyboardInterrupt) as error:
         return json.dumps(
-            {"kind": "failed", "message": str(error) or type(error).__name__}
+            {"kind": "rejected", "message": str(error) or type(error).__name__}
         )

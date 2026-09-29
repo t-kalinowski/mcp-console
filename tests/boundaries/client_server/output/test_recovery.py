@@ -83,7 +83,10 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             compact_previews(
                 client,
                 "\n[idle]",
-                "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                 "x",
             )
             return client.finish()
@@ -127,15 +130,15 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             cancellation_start = len(client.transcript)
             try:
                 for index in range(count):
+                    # Keep one worker for silent-cell stress. The recorded-text
+                    # case also exercises recovery across worker restarts.
                     pending = client.start_send(
-                        control="restart",
+                        control="interrupt" if silent else "restart",
                         r="complete silently"
                         if silent
                         else f"preview recovery cell {index}",
                     )
-                    reached.wait(
-                        "replacement cell result owns delivery before journaling"
-                    )
+                    reached.wait("cell result owns delivery before journaling")
                     client.notify("notifications/cancelled", requestId=pending["id"])
                     assert client.request("ping")["result"] == {}
                     release.release()
@@ -173,6 +176,7 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             }
             assert len(summaries) == count + 1, summaries.keys()
             if silent:
+                assert text == "\n".join(["[done]"] * count)
                 assert "output preview" not in text
             else:
                 assert "cell 0 head\n" in text and f"cell {count - 1} tail\n" in text
@@ -210,8 +214,12 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             compact_previews(
                 client,
                 "\n[idle]",
-                "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                 "x",
+                "\n[done]",
             )
             return client.finish()
 
@@ -357,7 +365,10 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 compact_previews(
                     client,
                     "\n[idle]",
-                    "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
+                    """
+[worker stopped: in-memory state lost]
+[starting new worker]
+[done]""",
                     "x",
                 )
                 return client.finish()
@@ -434,11 +445,16 @@ def test_image_recovery_moves_the_retained_preview(binary: Path) -> Transcript:
 def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcript:
     count = 1024
     with recovery_client(binary) as (client, profile, reached, release):
+        # The first cell has no cancelled response to hand off.
+        pending = client.start_send(r="preview rejected image")
+        cancel_result(client, pending, reached, release)
         start = len(client.transcript)
-        for _ in range(count):
-            pending = client.start_send(control="restart", r="preview rejected image")
+        for _ in range(count - 1):
+            # Handoff carries the cancelled result into the next cell while
+            # reusing the worker, preserving all image-admission cycles.
+            pending = client.start_send(control="interrupt", r="preview rejected image")
             cancel_result(client, pending, reached, release)
-        compact_cancelled_exchanges(client, start, count=count)
+        compact_cancelled_exchanges(client, start, count=count - 1)
         profile.pause_results(False)
         # Measure recovery after image parsing and admission have completed.
         profile.start()
@@ -455,10 +471,7 @@ def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcrip
         ) in text
         client.send()
         assert last_tool_text(client) == "\n[idle]"
-        compact_previews(
-            client,
-            "\n[worker stopped: in-memory state lost]\n[starting new worker]\n[done]",
-        )
+        compact_previews(client, "\n[done]")
         return client.finish()
 
 

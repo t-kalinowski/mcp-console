@@ -126,14 +126,22 @@ def test_preserves_empty_python_environment(
 def test_rejects_python_older_than_3_10(
     binary: Path, execution: Execution
 ) -> Transcript:
-    interpreter = SYSTEM_PYTHON
-    version = subprocess.run(
-        (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
+    # Resolve Apple's dispatcher before entering the sandbox; its Xcode probes
+    # can emit unrelated diagnostics even when Python itself starts correctly.
+    probe = subprocess.run(
+        (
+            SYSTEM_PYTHON,
+            "-I",
+            "-c",
+            "import json, sys; print(json.dumps([sys.executable, sys.version_info[:2]]))",
+        ),
         check=True,
         capture_output=True,
         text=True,
     )
-    assert version.stdout.strip() == "(3, 9)", version.stdout
+    interpreter, version = json.loads(probe.stdout)
+    assert version == [3, 9], version
+    assert Path(interpreter).is_absolute() and Path(interpreter) != SYSTEM_PYTHON
 
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)
@@ -141,27 +149,18 @@ def test_rejects_python_older_than_3_10(
     client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    version_failure = (
-        "Error: MCP Console requires Python 3.10 or later; "
-        "selected interpreter reports Python 3.9\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
+    assert result["isError"] is False, result
     output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        version_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
+    assert output.startswith(
+        "Error: selected Python inspection failed (exit status: 1): Traceback"
+    ), output
+    assert output.endswith(
+        "RuntimeError: MCP Console requires Python 3.10 or later\n\n"
+    ), output
+    assert "[worker stopped" not in output, output
+    # Inspection rejects the selection before interpreter mutation. R remains usable.
+    client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE)); 42L")
+    assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
     return client.finish()
 
 
@@ -384,7 +383,10 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     client.send(python=python)
     output = last_result_text(client)
     assert output.startswith(
-        "terminal columns: 200\npandas display.width: 200\nNumPy linewidth: 200\n"
+        """terminal columns: 200
+pandas display.width: 200
+NumPy linewidth: 200
+"""
     ), repr(output)
     for column in range(12):
         assert f"column_{column:02}" in output

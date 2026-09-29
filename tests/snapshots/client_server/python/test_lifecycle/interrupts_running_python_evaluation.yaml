@@ -91,7 +91,6 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 466, in _mcp_console_eval_cell
           File "<mcp-console:python:e1>", line 32, in <module>
         KeyboardInterrupt
   isError: false

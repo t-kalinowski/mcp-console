@@ -1,0 +1,29 @@
+---
+send:
+  python: >-
+    import os; alive = open('<execution host>/worker-alive', 'wb',
+    buffering=0); alive.write(b'1'); os.open('<execution host>/worker-gate',
+    os.O_RDONLY)
+result:
+  content:
+    - type: text
+      text: >-
+        [worker relay stdout read failed: SSH launch stream ended before
+        confirmed retirement: failed to fill whole buffer; additionally failed
+        to stop the worker: SSH process exited with signal: 9 (SIGKILL);
+        additionally failed to retire worker I/O: remote retirement is
+        unconfirmed (SSH exit is not a cleanup barrier)]
+  isError: true
+---
+send:
+  control: restart
+  python: raise AssertionError('unsafe replacement')
+result:
+  content:
+    - type: text
+      text: "[worker is shutting down]"
+  isError: true
+---
+standard_error: >
+  worker relay shutdown was requested twice; additionally SSH process
+  exited with signal: 9 (SIGKILL)

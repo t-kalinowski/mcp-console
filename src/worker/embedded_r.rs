@@ -13,6 +13,8 @@ use super::input::{finish_console_stdin_operation, read_console_stdin};
 use crate::cell::Language;
 use crate::worker_protocol::ConsoleChannel;
 
+mod parse;
+
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
@@ -77,6 +79,7 @@ struct REvents {
 }
 
 pub(super) struct Runtime {
+    parser: parse::Parser,
     graphics: crate::r_graphics::Bridge,
     environment: crate::r_environment::Bridge,
 }
@@ -84,6 +87,7 @@ pub(super) struct Runtime {
 impl Runtime {
     pub(super) fn initialize() -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            parser: parse::Parser::initialize()?,
             graphics: crate::r_graphics::Bridge::initialize()?,
             environment: crate::r_environment::Bridge::initialize()?,
         })
@@ -112,6 +116,11 @@ impl Runtime {
     }
 
     pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
+        // Console reads during preflight are interactive input, never cell source.
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
+        if !self.parser.complete(&source)? {
+            return Ok(());
+        }
         evaluate_r_cell(source)
     }
 }
@@ -186,23 +195,12 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
-thread_local! {
-    static PYTHON_COMMITS: std::cell::RefCell<Vec<libr::Rboolean>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-pub(crate) fn begin_python_commit() {
-    let previous = unsafe { libr::get(libr::R_interrupts_suspended) };
-    PYTHON_COMMITS.with_borrow_mut(|stack| stack.push(previous));
-    unsafe { libr::set(libr::R_interrupts_suspended, libr::Rboolean_TRUE) };
-}
-
-pub(crate) fn finish_python_commit() -> bool {
-    let previous =
-        PYTHON_COMMITS.with_borrow_mut(|stack| stack.pop().expect("Python commit started"));
-    unsafe { libr::set(libr::R_interrupts_suspended, previous) };
-    // A Python signal callback during deferral did not consume this bit. If R
-    // suspended delivery first, leave it pending for R's existing integration.
-    super::interrupt::acknowledge_python_interrupt()
+fn acknowledge_console_interrupt() -> bool {
+    if !console_interrupt_pending() {
+        return false;
+    }
+    discard_interrupts();
+    true
 }
 
 fn evaluate_r_cell(r: String) -> Result<(), String> {
@@ -221,7 +219,9 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
     }
 }
 
-pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+pub(super) fn initialize_r(
+    r_home: &std::path::Path,
+) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
@@ -252,6 +252,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
         libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
         libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
         libr::set(libr::ptr_R_Busy, Some(r_busy));
+    }
+    // Rf_initialize_R has read the system Renviron. Defer its effective package
+    // selection before setup_Rmainloop runs the base profile and .First.sys().
+    let deferred = crate::python::defer_r_startup()?;
+    unsafe {
         libr::setup_Rmainloop();
     }
 
@@ -262,8 +267,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
     harp::routines::r_register_routines();
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
+    // Preserve R's fatal-signal diagnostics. Its bootstrap SIGINT handler only
+    // records R's pending flag; attachment below retains that flag, transfers
+    // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
-    Ok(String::try_from(harp::parse_eval_base("base::tempdir()")?)?.into())
+    Ok(deferred)
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
@@ -307,10 +315,11 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     unsafe {
         mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
     }
-    super::interrupt::initialize(super::interrupt::State {
+    super::interrupt::attach_r(super::interrupt::State {
         signal: mcp_r_record_interrupt,
+        requested: interrupt_pending,
         pending: console_interrupt_pending,
-        clear: discard_interrupts,
+        acknowledge: acknowledge_console_interrupt,
     })?;
     Ok(())
 }

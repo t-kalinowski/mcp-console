@@ -19,15 +19,30 @@ This is a **development preview** with changing interfaces.
 MCP Console supports macOS and Linux; Windows is unsupported.
 See the [runtime limitations](docs/BUILTIN_RUNTIME.md#current-limitations) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
-The built-in worker requires **R even for Python and SQL**.
-It embeds R, uses reticulate for Python interoperability, and provides a persistent DuckDB connection for SQL.
-Python-only execution is not yet implemented.
+Local and SSH sessions can run Python and SQL without R on the execution host.
+When R is absent, Console uses `uv` from `PATH` to resolve its default environment.
+To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; for SSH, that path is relative to `target.workspace` on the remote host.
+This mode never invokes uv and disables package preparation.
+These sessions support Python, SQL, input, plots, interrupts, restart, and recording.
+SQL uses a lazy in-memory DuckDB connection or a selected Python DB-API connection.
+When Console manages Python through uv, `requirements.python` and `requirements.duckdb` prepare packages and extensions before first use or with an explicit restart.
+An idle running session can add new Python distributions and DuckDB extensions without replacing the worker or its SQL catalog.
+In managed sessions, a reached missing Python import can also prepare its inferred distribution during the cell.
+Changing a declared distribution or replacing the declaration still requires restart.
+With R installed, the worker retains mixed R/Python execution through reticulate and a persistent DuckDB connection for SQL.
+See [Python sessions without R](docs/BUILTIN_RUNTIME.md#python-sessions-without-r) for selection and package limitations.
+
+[Prepared Docker images](docs/DOCKER.md) and [Docker Sandbox templates](docs/DOCKER_SANDBOX.md) also support Python and SQL without R.
+They use a preinstalled target interpreter and dependencies; Console never prepares packages for these targets.
+Set `python` to an interpreter inside the target, relative to `target.workspace`.
+Without an explicit `python` or legacy `RETICULATE_PYTHON` selection, discovery uses `python3`, then `python`, from the workload's PATH.
+The R-free examples include NumPy, pandas, Matplotlib, and DuckDB.
 
 ## Quickstart
 
 Use an MCP client of your choice, such as [Codex](https://developers.openai.com/codex/mcp), [Claude Code](https://code.claude.com/docs/en/mcp), or [OpenCode](https://opencode.ai/docs/mcp-servers/).
 
-You need [uv](https://docs.astral.sh/uv/getting-started/installation/) and R on `PATH`.
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for installation and the default local Python environment.
 If you need R, install [rig](https://github.com/r-lib/rig#id-installation), then run `rig add release`.
 
 Installing the current source also needs Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and your platform's build tools.
@@ -39,12 +54,10 @@ sudo apt-get update
 sudo apt-get install -y build-essential git pkg-config libcap-dev libcurl4-openssl-dev binutils
 ```
 
-Install the current checkout, including its private sandbox runner:
+Install the current source directly from GitHub, including its private sandbox runner:
 
 ```sh
-git clone --depth 1 https://github.com/t-kalinowski/mcp-console.git
-cd mcp-console
-uv tool install --python 3.12 --reinstall .
+uv tool install git+https://github.com/t-kalinowski/mcp-console
 ```
 
 Configure your client to launch `uvx mcp-console serve` as a stdio server.
@@ -62,7 +75,7 @@ claude mcp add --transport stdio console -- uvx mcp-console serve
 claude
 ```
 
-uv supplies Python 3.12, the first installation builds the pinned runner with its own Rust toolchain, and the first analysis prepares R and Python packages and DuckDB extensions.
+The first installation builds the pinned runner with its own Rust toolchain, and the first analysis prepares R and Python packages and DuckDB extensions.
 These steps can download interpreters, packages, and build dependencies and take several minutes.
 See [source installation](RELEASE.md#private-sandbox-executable) and [managed dependencies](docs/REQUIREMENTS.md#retained-environments) for details.
 
@@ -81,7 +94,9 @@ Follow up in the same conversation:
 > Using the model and data already in the console, where does the model make the most mistakes?
 > Show me a plot and the path to the recorded console session transcript.
 
-Records and plot artifacts are written under `.agents/console/sessions/<run-id>/` in the server's working directory.
+If `.agents/console` exists in the server's working directory, records and plot artifacts are written under its `sessions/<run-id>/` directory.
+Otherwise, Console writes them under `~/.agents/console/sessions/<run-id>/` without creating a project `.agents` directory.
+Set [`MCP_CONSOLE_HOME`](docs/CONFIGURATION.md) to an absolute directory to relocate fallback configuration and recordings without changing `HOME`.
 Your client uses its configured model; the exact calls and responses can vary.
 
 ## Reproducible reports
@@ -101,7 +116,10 @@ The [process diagram and ownership guide](docs/ARCHITECTURE.md#process-layout) e
 - The **runtime worker** owns live R, Python, and SQL state and evaluates one cell at a time.
 - The **private sandbox runner** owns native enforcement, private temporary storage, and descendant supervision within its [documented limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
-Restart discards in-memory language and database state while retaining prepared requirements in the server.
+Restart discards in-memory language and database state while retaining selected requirements in the server.
+Use `send(requirements={"action": "get"})` to inspect them.
+Add is the default; `set` replaces the complete declaration, including with no optional packages, and `reset` restores startup defaults.
+Changed replacements of a live worker require `control="restart"`; see [requirements management](docs/REQUIREMENTS.md#inspecting-and-replacing-requirements).
 Recordings remain files; they are not session checkpoints.
 The architecture separates host setup and recording from evaluated code, while the shared worker enables interoperation and means a restart affects all three languages.
 
@@ -119,6 +137,7 @@ Linux requires mounted `/proc` and permission for the native sandbox's namespace
 Restricted containers or host security policy may prevent startup.
 
 Dependency preparation runs **outside the worker sandbox** and may execute trusted installation, build, or initialization code with host permissions.
+The trusted resolver subcommand has full host permissions; worker-writable resolver inputs can let crafted client code escape the worker sandbox.
 Use only trusted requirements and resolver configuration.
 See the [dependency trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust).
 

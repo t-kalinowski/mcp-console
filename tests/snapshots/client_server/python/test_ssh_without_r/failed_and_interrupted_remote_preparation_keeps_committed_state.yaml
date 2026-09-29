@@ -1,0 +1,341 @@
+---
+send:
+  python: identity = object(); identity_id = id(identity)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: CREATE TABLE retained AS SELECT 42 AS value
+result:
+  content:
+    - type: text
+      text: |
+        Count
+        -----
+        1
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb:
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  stdin: |
+    must not be queued
+  python: raise AssertionError('failed restart ran code')
+result:
+  content:
+    - type: text
+      text: |-
+        [managed Python resolution failed:
+        resolver input:
+        {
+          "python": "<execution-host Python>",
+          "packages": [
+            "numpy",
+            "pandas",
+            "duckdb",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        fixture Python resolution failed]
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb:
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  python: assert id(identity) == identity_id; print('old objects')
+result:
+  content:
+    - type: text
+      text: |
+        old objects
+  isError: false
+---
+send:
+  sql: SELECT value FROM retained
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        42
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+  python: raise AssertionError('interrupted preparation ran code')
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "<execution-host Python>",
+          "packages": [
+            "numpy",
+            "pandas",
+            "duckdb",
+            "py-yaml12"
+          ]
+        }
+        uv output:
+        fixture Python resolution interrupted
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb:
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  python: assert id(identity) == identity_id; print('still old worker')
+result:
+  content:
+    - type: text
+      text: |
+        still old worker
+  isError: false
+---
+send:
+  sql: SELECT value FROM retained
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        42
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    python:
+      - py-yaml12
+  python: raise AssertionError('failed inspection retired the worker')
+result:
+  content:
+    - type: text
+      text: >-
+        [selected Python embedding library is missing: <execution
+        host>/bin/missing-libpython]
+  isError: true
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: >
+        selected Python inspection failed (exit status: 1): fixture Python
+        inspection interrupted
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb:
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  control: interrupt
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  python: assert id(identity) == identity_id; print('inspection kept worker')
+result:
+  content:
+    - type: text
+      text: |
+        inspection kept worker
+  isError: false

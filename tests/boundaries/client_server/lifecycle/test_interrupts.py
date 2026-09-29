@@ -221,6 +221,7 @@ def test_reports_resolver_interrupt_permission_error(
             resolver_lifetime,
             resolver_group_record,
             denied_interrupt,
+            resolver_watches,
         ) = resolver_interrupt_permission_environment(temporary_path)
 
         client = McpClient(
@@ -239,6 +240,11 @@ def test_reports_resolver_interrupt_permission_error(
             resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
+            )
+            wait_for_path(
+                resolver_watches / str(resolver_group),
+                "active resolver supervision",
+                client,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)
@@ -319,6 +325,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             resolver_lifetime,
             resolver_group_record,
             denied_interrupt,
+            resolver_watches,
         ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
@@ -336,6 +343,11 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
+            )
+            wait_for_path(
+                resolver_watches / str(resolver_group),
+                "active resolver supervision",
+                client,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)

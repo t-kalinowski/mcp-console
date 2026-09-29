@@ -213,23 +213,22 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         client.send(python=python)
         assert last_result_text(client) == "[done]"
 
-        # Register the finder after native preparation, while the original
-        # import is waiting. Retrying must use the current meta-path list.
+        # Activation runs ordinary Python code. Install a finder while the
+        # original import is waiting, after the new environment is active.
         # fmt: python
-        python = code("""
+        python = code(r"""
+            import runpy
             import sys
-            import _mcp_console_services as services
 
-            original_prepare = services.prepare_python
+            original_run_path = runpy.run_path
 
-
-            def prepare_and_register(request):
-                result = original_prepare(request)
+            def activate_with_finder(*args, **kwargs):
+                result = original_run_path(*args, **kwargs)
                 sys.meta_path.insert(0, automatic_meta_finder)
+                runpy.run_path = original_run_path
                 return result
 
-
-            services.prepare_python = prepare_and_register
+            runpy.run_path = activate_with_finder
             """)
         client.send(python=python)
         assert last_result_text(client) == "[done]"
@@ -525,28 +524,25 @@ def test_does_not_reenter_automatic_python_resolution(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        # A recursive import inside the native preparation callback must not
-        # start another resolver while the outer import owns resolution.
+        # A missing import inside the activation script must not reenter
+        # resolution. Use ordinary Python's script hook in every composition.
         # fmt: python
-        python = code(f"""
-            import _mcp_console_services as services
-
-            original_prepare = services.prepare_python
+        python = code(rf"""
+            import runpy
+            original_run_path = runpy.run_path
             automatic_nested_calls = 0
             automatic_nested_error = None
 
-
-            def prepare_with_nested_import(request):
+            def activate_with_nested_import(*args, **kwargs):
                 global automatic_nested_calls, automatic_nested_error
                 automatic_nested_calls += 1
                 try:
                     import {nested}
                 except ModuleNotFoundError as error:
                     automatic_nested_error = str(error)
-                return original_prepare(request)
+                return original_run_path(*args, **kwargs)
 
-
-            services.prepare_python = prepare_with_nested_import
+            runpy.run_path = activate_with_nested_import
             """)
         client.send(python=python)
         assert last_result_text(client) == "[done]"
@@ -562,14 +558,10 @@ def test_does_not_reenter_automatic_python_resolution(
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and "py-yaml12" in runs[0], runs
 
-        # fmt: python
-        python = code(f"""
-            print(
-                automatic_nested_calls, str("{nested}" in automatic_nested_error).upper(), sep="\\n"
-            )
-            """)
-        client.send(python=python)
-        assert last_result_text(client) == "1\nTRUE\n", repr(last_result_text(client))
+        client.send(
+            python=f"assert automatic_nested_calls == 1; assert '{nested}' in automatic_nested_error; print('nested resolution suppressed')"
+        )
+        assert last_result_text(client) == "nested resolution suppressed\n"
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
@@ -627,6 +619,10 @@ def test_reports_automatic_python_resolution_failure(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
+        client.send(python="import sys; print(sys.executable)")
+        executable = last_result_text(client).strip()
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
+
         output = send_and_collect_runtime_python_resolution(
             client,
             python="import sklearn",
@@ -645,7 +641,7 @@ def test_reports_automatic_python_resolution_failure(
         assert len(runs) == 1, runs
         assert requirement in runs[0] and "sklearn" not in runs[0], runs
 
-        normalized = normalize_python_resolution_error(output)
+        normalized = normalize_python_resolution_error(output, executable=executable)
         client.transcript[-1]["result"]["content"][0]["text"] = normalized
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')

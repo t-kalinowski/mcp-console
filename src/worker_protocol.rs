@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::cell::Language;
 
 pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
+pub(crate) const DEFAULT_NATIVE_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas", "duckdb"];
 
 pub(crate) fn deserialize_payload_free<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
@@ -47,6 +48,8 @@ pub(crate) enum ServerMessage {
     },
     PythonResolved {
         python: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolutionFailed {
         message: String,
@@ -69,6 +72,13 @@ pub(crate) struct PythonRequirementManifest {
     pub(crate) python_version: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) exclude_newer: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativePythonActivation {
+    pub(crate) selected: crate::python::NativePython,
+    pub(crate) requirements: PythonRequirementManifest,
 }
 
 impl PythonRequirementManifest {
@@ -100,6 +110,16 @@ pub(crate) fn default_python_requirement_manifest() -> PythonRequirementManifest
     }
 }
 
+pub(crate) fn default_native_python_requirement_manifest() -> PythonRequirementManifest {
+    PythonRequirementManifest {
+        packages: DEFAULT_NATIVE_PYTHON_PACKAGES
+            .iter()
+            .map(|package| (*package).to_string())
+            .collect(),
+        ..Default::default()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonImportResolution {
@@ -112,6 +132,8 @@ pub(crate) struct PythonImportResolution {
 pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
     pub(crate) retained_requirements: PythonRequirementManifest,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) initialized: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) import_resolution: Option<PythonImportResolution>,
 }
@@ -175,9 +197,15 @@ pub(crate) enum WorkerMessage {
     PythonActivated {
         requirements: PythonRequirementManifest,
     },
+    PythonActivationFailed {
+        requirements: PythonRequirementManifest,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     PythonPrepared,
     PythonPreparationFailed {
+        message: String,
+    },
+    PythonPreparationRejected {
         message: String,
     },
     #[serde(deserialize_with = "deserialize_payload_free")]
@@ -316,6 +344,7 @@ mod tests {
             &PythonResolveRequest {
                 requirements: requirements.clone(),
                 retained_requirements: requirements,
+                initialized: false,
                 import_resolution: Some(PythonImportResolution {
                     module: "yaml12".to_string(),
                     distribution: "py-yaml12".to_string(),

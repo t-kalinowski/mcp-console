@@ -5,8 +5,26 @@ use std::process::Command;
 
 use super::requirements::push_duckdb_r_target;
 
+impl super::super::Client {
+    pub(in crate::worker_client) fn record_accepted_python(&self, environment: &Environment) {
+        if !self.python_preparation() {
+            return;
+        }
+        let selected = environment
+            .python
+            .as_ref()
+            .and_then(PythonEnvironment::managed)
+            .expect("managed Python preparation retains an environment");
+        if let Some(transcript) = self.0.recording.lock().expect("recording lock").as_ref() {
+            transcript.python_environment_accepted(&selected.requirements().packages);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
+    /// Launch configuration commits with the managed executable and manifest.
+    pub(in crate::worker_client) local_runtime: Option<crate::local_runtime::Selection>,
     pub(in crate::worker_client) custom_worker: bool,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.
@@ -49,7 +67,7 @@ impl PythonEnvironment {
         let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
         Ok(Self::Managed {
             selected,
-            resolver: crate::resolver::execution::PythonConfiguration::Local(resolver),
+            resolver: crate::resolver::execution::PythonConfiguration::Direct(resolver),
         })
     }
 
@@ -119,13 +137,7 @@ impl PythonEnvironment {
     }
 }
 
-pub(super) fn ensure_python_additions_available(
-    environment: &Environment,
-    additions: &[String],
-) -> Result<(), String> {
-    if additions.is_empty() {
-        return Ok(());
-    }
+pub(super) fn ensure_managed_python_available(environment: &Environment) -> Result<(), String> {
     if environment.custom_worker {
         return Err("Python requirements are unavailable with a custom worker".to_string());
     }

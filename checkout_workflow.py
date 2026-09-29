@@ -28,14 +28,14 @@ FAILURE = re.compile(
 
 
 @contextmanager
-def exclusive(paths: list[Path], label: str) -> Iterator[None]:
-    """Refuse conflicting owners; sequential descendants inherit the active token."""
+def exclusive(paths: list[Path], label: str, *, wait: bool = False) -> Iterator[None]:
+    """Claim ownership, optionally waiting; descendants inherit the active token."""
     # Ownership and cleanup require this process to stay alive. The inherited
     # token admits synchronous children; it is not recovery after owner death.
     inherited = os.environ.get(LOCKS_ENV, "{}")
     tokens = json.loads(inherited)
     owner = ""
-    # A nested owner must find its inherited slot before claiming a free one.
+    # A nested owner must find its inherited lock before claiming a free one.
     for path in sorted(paths, key=lambda path: str(path) not in tokens):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as lock:
@@ -52,7 +52,10 @@ def exclusive(paths: list[Path], label: str) -> Iterator[None]:
                 ):
                     yield
                     return
-                continue
+                if not wait:
+                    continue
+                print(f"waiting for {label}", file=sys.stderr, flush=True)
+                fcntl.flock(lock, fcntl.LOCK_EX)
             token = uuid.uuid4().hex
             lock.seek(0)
             lock.truncate()
@@ -77,20 +80,11 @@ def checkout_owner(root: Path) -> Iterator[None]:
         yield
 
 
-@contextmanager
-def full_check_slot() -> Iterator[None]:
-    slots = int(os.environ.get("MCP_CONSOLE_CHECK_SLOTS", "1"))
-    if slots < 1:
-        raise SystemExit("MCP_CONSOLE_CHECK_SLOTS must be at least 1")
+def cache_directory() -> Path:
     cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
     if not cache.is_absolute():
         raise SystemExit("XDG_CACHE_HOME must be an absolute path")
-    paths = [
-        cache.resolve() / "mcp-console/checks" / f"slot-{index}.lock"
-        for index in range(slots)
-    ]
-    with exclusive(paths, "full-check budget"):
-        yield
+    return cache.resolve()
 
 
 def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
@@ -214,6 +208,12 @@ class Run:
 
     def phase(self, name: str, command: list[str]) -> int:
         log_path = self.directory / f"{len(self.record['phases']) + 1:02}-{name}.log"
+        environment = os.environ | {RUN_ENV: str(self.path)}
+        timings = None
+        if self.record["command"][0] == "test" and name == "transcripts":
+            timings = self.directory / "case-timings.jsonl"
+            timings.touch()
+            environment["MCP_CONSOLE_TEST_TIMINGS"] = str(timings)
         started = time.monotonic()
         status = 1
         process = None
@@ -225,9 +225,7 @@ class Run:
         try:
             with (
                 log_path.open("wb") as log,
-                command_process(
-                    command, log=log, environment=os.environ | {RUN_ENV: str(self.path)}
-                ) as process,
+                command_process(command, log=log, environment=environment) as process,
             ):
                 status = process.wait()
         finally:
@@ -242,6 +240,7 @@ class Run:
                     "log": str(log_path),
                     "elapsed_seconds": time.monotonic() - started,
                     "exit_status": status,
+                    **({"case_timings": str(timings)} if timings else {}),
                 }
             )
             self.save()
@@ -275,8 +274,13 @@ def main() -> None:
     parser.add_argument("mode", choices=("check", "check-core", "test", "run", "phase"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     options = parser.parse_args()
-    if options.mode in {"check", "check-core"} and options.arguments:
-        parser.error(f"{options.mode} does not accept arguments")
+    if options.mode in {"check", "check-core"} and options.arguments not in (
+        [],
+        ["--quick"],
+        ["--full"],
+    ):
+        parser.error(f"{options.mode} accepts --full or --quick (the default)")
+    full = options.arguments == ["--full"]
     if options.mode in {"run", "phase"} and not options.arguments:
         parser.error("run requires a command")
     root = Path(__file__).resolve().parent
@@ -286,15 +290,25 @@ def main() -> None:
         # Nested workflows keep this group so the outer owner can retire it.
         os.environ[GROUP_ENV] = str(os.getpgrp())
         os.execvp(options.arguments[0], options.arguments)
-    core = [
-        ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
+    tooling = [
         ("release-tests", ["tests/release.py"]),
+        ("staging-tests", ["python3", "tests/staging.py"]),
         ("runner-tests", ["tests/transcript_runner.py"]),
         ("workflow-tests", ["python3", "tests/workflow.py"]),
         ("format-tests", ["python3", "tests/format.py"]),
         ("development-tests", ["python3", "tests/development.py"]),
         ("client-tests", ["tests/mcp_client.py"]),
-        ("architecture", ["tests/architecture.py"]),
+    ]
+    core = [
+        ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
+        *(tooling if full else []),
+        (
+            "architecture",
+            [
+                "tests/architecture.py",
+                *([] if full else ["SandboxProcessBoundaryTests"]),
+            ],
+        ),
         ("rust-format", ["cargo", "fmt", "--all", "--check"]),
         (
             "clippy",
@@ -313,9 +327,9 @@ def main() -> None:
     plans = {
         "check": [
             ("stage", ["scripts/stage-sandbox-runner"]),
-            ("core", ["scripts/check-core"]),
-            ("transcripts", ["scripts/test"]),
-            ("installation", ["python3", "tests/install.py"]),
+            ("core", ["scripts/check-core", *(["--full"] if full else [])]),
+            ("transcripts", ["scripts/test", *(["--full"] if full else [])]),
+            *([("installation", ["python3", "tests/install.py"])] if full else []),
         ],
         "check-core": core,
         "test": [
@@ -343,8 +357,6 @@ def main() -> None:
 
     with ExitStack() as stack:
         stack.enter_context(checkout_owner(root))
-        if options.mode in {"check", "test"}:
-            stack.enter_context(full_check_slot())
         run = None if options.mode == "run" else Run(root, sys.argv[1:])
         status = 1
         try:

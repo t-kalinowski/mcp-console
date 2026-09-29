@@ -45,11 +45,18 @@ def test_installs_a_local_wheel_into_private_storage(binary: Path) -> Transcript
             metadata = "sandbox_fixture-1.0.dist-info/"
             archive.writestr(
                 metadata + "METADATA",
-                "Metadata-Version: 2.1\nName: sandbox-fixture\nVersion: 1.0\n",
+                """Metadata-Version: 2.1
+Name: sandbox-fixture
+Version: 1.0
+""",
             )
             archive.writestr(
                 metadata + "WHEEL",
-                "Wheel-Version: 1.0\nGenerator: fixture\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                """Wheel-Version: 1.0
+Generator: fixture
+Root-Is-Purelib: true
+Tag: py3-none-any
+""",
             )
             archive.writestr(metadata + "RECORD", "")
         result = subprocess.run(

@@ -183,6 +183,39 @@ def test_initializes_before_uv_bootstrap_installation(
 
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
+def test_prepares_python_before_r_bootstrap_validation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="discovery") as fixture:
+        client = fixture.client
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            cat("ready\n")
+            """)
+        client.send(r=r, timeout_ms=0)
+        assert last_tool_text(client) == RUNNING
+        fixture.wait_for_resolver()
+        assert fixture.invocations()[-1] == {
+            "program": "ir",
+            "arguments": ["--version"],
+        }
+        assert any(
+            invocation["program"] == "uv"
+            and invocation["arguments"][:2] == ["tool", "run"]
+            for invocation in fixture.invocations()
+        ), "Python preparation waited for R bootstrap validation"
+        fixture.release.release()
+        client.response_timeout = 600
+        assert collect_running_output(client, "first cell", timeouts_ms=(600_000,)) == (
+            "ready\n",
+        )
+        fixture.wait_for_resolver_exit()
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_first_cell_prepares_defaults_after_running_response(
     binary: Path,
     execution: Execution,
@@ -200,7 +233,8 @@ def test_first_cell_prepares_defaults_after_running_response(
               "arrow",
               "nanoarrow"
             )
-            stopifnot(all(defaults %in% list.files(.libPaths()[[1L]])))
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
             stopifnot(identical(reticulate::py_require()$packages, c("numpy", "pandas")))
             cat("scientific defaults ready\n")
             """)
@@ -208,6 +242,11 @@ def test_first_cell_prepares_defaults_after_running_response(
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
         assert not list(fixture.root.glob("sandbox-*"))
+        assert any(
+            invocation["program"] == "uv"
+            and invocation["arguments"][:2] == ["tool", "run"]
+            for invocation in fixture.invocations()
+        ), "Python defaults waited for the managed R library"
         preparation = fixture.invocations()[-1]["arguments"]
         assert isinstance(preparation, list)
         assert {
@@ -221,6 +260,10 @@ def test_first_cell_prepares_defaults_after_running_response(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "jsonlite",
+            "pillar",
+            "tibble",
+            "utf8",
         }, preparation
         client.send(timeout_ms=0)
         assert last_tool_text(client) == RUNNING
@@ -236,14 +279,8 @@ def test_first_cell_prepares_defaults_after_running_response(
 
             print("Python defaults ready")
             """)
-        wait_for_evaluation_output(
-            client,
-            "Python defaults ready\n",
-            "first Python cell",
-            completion_timeout_seconds=client.response_timeout,
-            python=python,
-            timeout_ms=0,
-        )
+        client.send(python=python)
+        assert last_tool_text(client) == "Python defaults ready\n"
         sql = code("""
             SELECT extension_name
             FROM duckdb_extensions()
@@ -377,11 +414,19 @@ def test_restart_replaces_first_use_cell_and_stdin(
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
         contended = FifoCheckpoint.create(root / "contended")
+        completion_started = FifoCheckpoint.create(root / "completion-started")
         cancel_release = FifoCheckpoint.create(root / "cancel-release")
         unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
-        for checkpoint in (contended, cancel_release, unlocked, release, parked):
+        for checkpoint in (
+            contended,
+            completion_started,
+            cancel_release,
+            unlocked,
+            release,
+            parked,
+        ):
             resources.callback(checkpoint.close)
         armed = root / "armed"
         environment = {
@@ -389,6 +434,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
                 build_interposer(root, "evaluation_return_interposer")
             ),
             "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
+            "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(completion_started.path),
             "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
             "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
             "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
@@ -415,16 +461,34 @@ def test_restart_replaces_first_use_cell_and_stdin(
             assert input() == "replacement input"
             print("replacement only")
             """)
+        # Withhold the newline so managed input must report waiting before
+        # the replacement can complete, regardless of the input exposure grace.
         replacement = client.start_send(
             control="restart",
             python=python,
-            stdin="replacement input\n",
+            stdin="replacement input",
             timeout_ms=600_000,
         )
+        completion_started.wait("resolver completion reached the server")
         contended.wait("restart waits for the cancelling evaluation's worker lock")
+        assert not select.select([client.stdout], [], [], 0)[0], (
+            "restart replied before the old evaluation released the worker lock"
+        )
         cancel_release.release()
         unlocked.wait("old evaluation released the worker lock")
         client.receive(replacement)
+        assert last_tool_text(client) == code("""
+            [active evaluation stopped by session restart request]
+            [starting new worker]
+            [input requested: ""]
+            [waiting for stdin]
+            """).removesuffix("\n")
+        wait_for_evaluation_output(
+            client,
+            "replacement only\n[done]",
+            "replacement managed input",
+            stdin="\n",
+        )
         assert last_tool_text(client).count("replacement only\n") == 1, (
             client.transcript[-1]
         )

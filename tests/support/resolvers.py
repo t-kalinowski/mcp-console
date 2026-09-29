@@ -11,10 +11,27 @@ from support.client import McpClient
 from support.execution import Execution
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
+
+
+def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
+    owners = [
+        child
+        for child in child_process_identities(server)
+        if subprocess.run(
+            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == f"{binary} resolve"
+    ]
+    assert len(owners) == 1, owners
+    return owners[0]
 
 
 def recording_ir_environment(
@@ -145,7 +162,7 @@ def record_resolved_r_library(environment: dict[str, str], directory: Path) -> N
 
 def resolver_interrupt_permission_environment(
     temporary_path: Path,
-) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     fake_bin = temporary_path / "bin"
@@ -174,15 +191,18 @@ def resolver_interrupt_permission_environment(
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
+    resolver_watches = temporary_path / "resolver-watches"
+    resolver_watches.mkdir()
     resolver_group = temporary_path / "resolver-group"
     resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
     resolver_lifetime = FifoCheckpoint.create(temporary_path / "resolver-lifetime")
     environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
+    environment["MCP_CONSOLE_TEST_RESOLVER_WATCHES"] = str(resolver_watches)
     environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
     environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
-    # The interposer removes its loader variable after reaching the server, so
-    # the resolver and Zod do not inherit it.
+    # The server passes the interposer to its direct resolver owner. That child
+    # removes the loader variable before launching ir or the worker.
     environment[LOADER_VARIABLE] = str(
         build_interposer(temporary_path, "killpg_denial_interposer")
     )
@@ -192,6 +212,7 @@ def resolver_interrupt_permission_environment(
         resolver_lifetime,
         resolver_group,
         denied_interrupt,
+        resolver_watches,
     )
 
 
@@ -314,7 +335,7 @@ def python_inventory_client(
     )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["DBI"]})
-    assert last_result_text(client) == "[prepared]"
+    assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")
     if resolver_record is not None:
         resolver_record.write_text("", encoding="utf-8")
@@ -477,16 +498,15 @@ def resolve_managed_python(binary: Path, execution: Execution, directory: Path) 
         current_directory=workspace,
     ) as client:
         client.initialize_and_list_tools()
-        output = send_and_collect_runtime_python_resolution(
-            client,
+        client.send(
             # fmt: python
             python=code("""
                 import sys
 
                 print(f"managed-python={sys.executable}")
                 """),
-            timeout_ms=0,
         )
+        output = last_result_text(client)
         client.finish()
     executable = Path(
         next(
@@ -516,7 +536,8 @@ def send_and_collect_runtime_python_resolution(
             client.send(timeout_ms=30_000)
             continue
 
-        if output != "[done]" or not chunks:
+        # Empty running polls do not replace a silent cell's completion marker.
+        if output != "[done]" or not any(chunks):
             chunks.append(output)
         collected = "".join(chunks)
 

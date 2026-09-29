@@ -210,10 +210,24 @@ def test_preserves_live_reticulate_requirement_rules(
                   identical(config$prefix, sys$prefix),
                   identical(config$exec_prefix, sys$exec_prefix),
                   identical(config$virtualenv, sys$prefix),
+                  identical(
+                    config$pythonpath,
+                    paste(
+                      ifelse(nzchar(sys$path), sys$path, "."),
+                      collapse = .Platform$path.sep
+                    )
+                  ),
                   !grepl(initial$prefix, config$pythonpath, fixed = TRUE),
                   !nzchar(config$virtualenv_activate) ||
                     identical(dirname(config$virtualenv_activate), dirname(sys$executable)),
-                  identical(config$pythonhome, paste(sys$prefix, sys$exec_prefix, sep = ":"))
+                  identical(
+                    config$pythonhome,
+                    if (identical(sys$base_prefix, sys$base_exec_prefix)) {
+                      sys$base_prefix
+                    } else {
+                      paste(sys$base_prefix, sys$base_exec_prefix, sep = ":")
+                    }
+                  )
                 )
                 """)
         )

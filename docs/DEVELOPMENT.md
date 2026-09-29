@@ -1,8 +1,31 @@
 # Development workflow
 
 Run development commands from the repository root.
-`scripts/check` runs companion staging, core checks, release transcript tests, and installation checks in that order.
-Installation checks run last because they replace and hide the shared `target` directory.
+Use `scripts/test SELECTOR` for the red/green loop and `scripts/check` as the ordinary final local gate.
+Fast validation is the default; `--quick` remains an alias for it.
+Use `scripts/check --full` only when explicitly requested or when the changed area warrants exhaustive local validation, such as release preparation or changes spanning runtime, lifecycle, and packaging boundaries.
+CI explicitly runs full core checks, all capability-applicable transcripts, and installation checks as the comprehensive merge gate.
+Report the commands and scope actually validated; a default pass is not exhaustive validation.
+
+| Command                                    | Scope                                                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `scripts/check` or `scripts/check --quick` | Companion staging, focused core checks, release build, and the smoke transcript profile             |
+| `scripts/check --full`                     | Companion staging, full core checks, all capability-applicable transcripts, and installation checks |
+| `scripts/test` or `scripts/test --quick`   | The explicit smoke selection in [`tests/boundaries/_profiles.py`](../tests/boundaries/_profiles.py) |
+| `scripts/test --full`                      | All capability-applicable transcript cases and execution modes                                      |
+| `scripts/test SELECTOR`                    | The requested case or suite in its declared execution modes, including with `--quick` or `--full`   |
+
+The smoke profile selects existing cases and snapshots by exact case name.
+It covers MCP and CLI admission, real R/Python/SQL execution, persistent and mixed runtime state, interactive input, interruption, recording with an image, and native sandbox policy.
+It omits remote providers, installation, stress, and broad environment matrices by selection, without changing their assertions or capability requirements.
+Use `scripts/test --list` to inspect the smoke selection and `scripts/test --full --list` to discover the whole suite.
+Only `--full` without a case, suite, or `--locate` selector audits orphan snapshots globally; `scripts/test --full --update` can remove them after a successful complete update.
+Smoke and focused updates preserve unselected snapshots.
+
+Default core checks validate extracted runtime sources, architecture, Rust formatting, Clippy, and Rust tests.
+`scripts/check-core --full` additionally runs release, staging, transcript-runner, workflow, formatter, development-tool, test-client, and architecture-checker self-tests; `scripts/check-core` and its `--quick` alias run the default core selection.
+When changing repository tooling, run its owning test directly, for example `tests/transcript_runner.py`, `python3 tests/workflow.py`, or `python3 tests/staging.py`.
+Installation checks remain last in the full gate because they replace and hide the shared `target` directory.
 
 ## Resume from a small checkpoint
 
@@ -82,20 +105,73 @@ scripts/with-checkout cargo build --release --target-dir target
 
 For a source installation, use `scripts/with-checkout uv tool install --reinstall .`; its packaging backend stages and builds the companion and application.
 The companion's selected source checkout owns its Rust toolchain; Console uses the active toolchain in this checkout.
-Download caches can be reused, while each checkout keeps its own Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
+The pinned companion source and Cargo output are shared across worktrees under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Staging still invokes Cargo to check build inputs, including changed compiler flags.
+Use `MCP_CONSOLE_SANDBOX_SOURCE` for an explicit clean checkout at the pin.
+Each Console checkout keeps its own application Cargo output and wheel staging as described under [checkout ownership](#checkout-ownership).
 
 ## Find the public test
 
-Use `scripts/test --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.
+Use `scripts/test --full --list` to discover selectors and `scripts/test --locate SELECTOR` to find source lines and the primary snapshot before building.
 These routes are starting points; read the relevant contract and case before changing behavior.
 
-| Task                   | Owning source                                              | Public check                                      | Selected snapshot update                                                                                    |
-| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Output previews        | `src/worker_client/output/`                                | `scripts/test client_server/output/test_previews` | `scripts/test --update client_server/output/test_previews`                                                  |
-| Delivery recovery      | `src/worker_client/output/`, `src/server_transport.rs`     | `scripts/test client_server/output/test_recovery` | `scripts/test --update client_server/output/test_recovery`                                                  |
-| Configuration layering | `src/config.rs`, `src/config/`                             | `scripts/test cli/test_config_overrides`          | `scripts/test --update cli/test_config_overrides`                                                           |
-| Fixture serialization  | `tests/support/snapshots.py`, `tests/transcript_runner.py` | `tests/transcript_runner.py`                      | For handshake changes: `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools` |
-| Validation ownership   | `checkout_workflow.py`, `build_backend.py`                 | `python3 tests/workflow.py`                       | No transcript snapshots                                                                                     |
+| Task                   | Owning source                                                  | Public check                                                                  | Selected snapshot update                                                                                    |
+| ---------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Output previews        | `src/worker_client/output/`                                    | `scripts/test client_server/output/test_previews`                             | `scripts/test --update client_server/output/test_previews`                                                  |
+| Delivery recovery      | `src/worker_client/output/`, `src/server_transport.rs`         | `scripts/test client_server/output/test_recovery`                             | `scripts/test --update client_server/output/test_recovery`                                                  |
+| Configuration layering | `src/config.rs`, `src/config/`                                 | `scripts/test cli/test_config_overrides`                                      | `scripts/test --update cli/test_config_overrides`                                                           |
+| Console file locations | `src/console_paths.rs`, `src/settings.rs`, `src/transcript.rs` | `scripts/test cli/test_config_overrides client_server/recording/test_journal` | `scripts/test --update cli/test_config_overrides client_server/recording/test_journal`                      |
+| Fixture serialization  | `tests/support/snapshots.py`, `tests/transcript_runner.py`     | `tests/transcript_runner.py`                                                  | For handshake changes: `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools` |
+| Validation ownership   | `checkout_workflow.py`, `build_backend.py`                     | `python3 tests/workflow.py`                                                   | No transcript snapshots                                                                                     |
+
+For MCP admission changes, use the public server with a custom worker and resolver sentinels:
+
+```sh
+scripts/test \
+  client_server/server/test_tools::validates_send_arguments \
+  client_server/server/test_tools::validates_standalone_requirement_arguments \
+  client_server/server/test_tools::invalid_send_has_no_external_effects \
+  client_server/server/test_tools::bounds_argument_decoding_errors
+```
+
+These checks reject malformed requests before startup and with a live worker without preparing a package environment.
+Rejected requests contain real R, Python, and SQL source; the live-worker probes execute Python cells in the fixture and record every evaluation.
+Resolver capability discovery is distinct from dependency preparation.
+For preparation/lifecycle changes, also run the real-runtime sequence and the existing causal startup and custom-worker restart cases:
+
+```sh
+scripts/test \
+  client_server/requirements/test_r::prepares_with_empty_stdin_then_restarts \
+  client_server/requirements/test_custom_workers::standalone_preparation_before_worker_startup_is_causal_and_idempotent \
+  client_server/requirements/test_custom_workers::custom_worker_restart_prepares_r_and_duckdb_requirements
+```
+
+`prepares_with_empty_stdin_then_restarts` owns the successful preparation, repeated preparation with empty stdin, and preparation-plus-restart sequence formerly in `validates_send_arguments`.
+It uses small R packages, verifies their availability in the managed library, and checks live-state preservation and reset in direct and sandboxed execution.
+The smoke selection and its real R/Python/SQL, persistent-state, mixed-language recording, and native-sandbox executions remain unchanged.
+
+For automatic R package discovery and live activation, start with the reached-package case, then run its suite:
+
+```sh
+scripts/test client_server/requirements/test_r_automatic::resolves_reached_r_packages_at_runtime
+scripts/test client_server/requirements/test_r_automatic
+```
+
+The local-package cases retain the real MCP server, worker, R evaluator, and package loader.
+They install immutable fixture packages once per case process for its sequential direct and sandbox executions.
+Each execution creates fresh library views, resolver records, checkpoints, and runtime state; only requested packages become visible through activation.
+The recording resolver still uses real `ir` for the base environment.
+The suite also keeps real-resolver coverage of automatic installation, errors, and restart.
+
+For real `ir` resolution, installation, default-library selection, and explicit preparation before and after startup, also run:
+
+```sh
+scripts/test \
+  client_server/requirements/test_r::prepares_and_uses_cran_packages \
+  client_server/requirements/test_r::prepares_initial_r_requirements \
+  client_server/requirements/test_r::prepares_r_requirements_after_worker_startup \
+  client_server/requirements/test_r::evaluates_with_default_managed_r
+```
 
 A case selector narrows a suite further, for example:
 
@@ -143,7 +219,8 @@ For a stack, measure each layer against its intended parent rather than accumula
    For an internal refactor, establish the existing public suite's baseline.
 2. Implement the change and rerun the focused case or suite until it passes.
    Failures print an exact rerun command; completion records retain the selector and full log.
-   Full-update reruns retain nondefault concurrency; every rerun retains a nondefault timeout.
+   Full-update reruns retain `--full` and nondefault concurrency; focused reruns omit redundant profile flags.
+   Every rerun retains a nondefault timeout.
    A failed full snapshot update retains full-update scope so orphan cleanup remains available; other failures narrow the rerun to the failed case.
 3. Regenerate only the snapshots affected by an intentional behavior change with `scripts/test --update SELECTOR`, then rerun that selection without `--update`.
    A broader interface change may require a full update; inspect every resulting difference.
@@ -151,22 +228,24 @@ For a stack, measure each layer against its intended parent rather than accumula
 4. Run `scripts/format`, inspect every formatter's result, and review `git diff` and `git diff --check`.
    Check embedded program indentation after formatting.
    `scripts/format --strict` reports failure after attempting every formatter; the [authoring recipe](../tests/boundaries/AUTHORING.md) explains embedded program conventions.
-5. Run `scripts/check` before opening the PR.
-   Keep its completion record with the tested revision and log paths.
-   Use a failed phase's focused command for diagnosis; repeat the full gate when changes or unresolved failures require it.
+5. Run `scripts/check` as the ordinary final local gate, plus the owning focused tests for changed tooling.
+   Use `scripts/check --full` only when explicitly requested or when the changed area warrants exhaustive local validation.
+   Keep completion records with the tested revision and log paths, and report exactly which validation ran.
+   Use a failed phase's focused command for diagnosis; repeat checks when changes or unresolved failures require them.
+   CI supplies comprehensive validation before merge; opening a PR does not require a full local gate.
 
 ## Which commands mutate build state?
 
-| Command                                     | State it can change                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------------ |
-| `scripts/test --help`, `--list`, `--locate` | No compilation or bundle changes; uv may prepare the script environment        |
-| `scripts/stage-sandbox-runner`              | Companion source/build cache under `target`, staged manifest, and `wheel-data` |
-| `scripts/check-core`                        | Cargo debug build data and test fixture state                                  |
-| `scripts/test SELECTOR`                     | Cargo release build data and test fixture state                                |
-| `scripts/test --update SELECTOR`            | The preceding state plus selected snapshots                                    |
-| `scripts/format`                            | Source and documentation formatting, including snapshot formatting             |
-| `scripts/check`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`       |
-| `uv run` or source installation             | May build the local package and change its environment and bundle              |
+| Command                                            | State it can change                                                                   |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `scripts/test --help`, `--list`, `--locate`        | No compilation or bundle changes; uv may prepare the script environment               |
+| `scripts/stage-sandbox-runner`                     | Shared companion source/build cache, checkout-local staged manifest, and `wheel-data` |
+| `scripts/check-core`                               | Cargo debug build data and test fixture state                                         |
+| `scripts/check`, `scripts/test SELECTOR`           | Cargo debug/release build data and test fixture state                                 |
+| `scripts/test --update SELECTOR`                   | The preceding state plus selected snapshots                                           |
+| `scripts/format`                                   | Source and documentation formatting, including snapshot formatting                    |
+| `scripts/check --full`, `python3 tests/install.py` | Build and package state; installation checks temporarily rename `target`              |
+| `uv run` or source installation                    | May build the local package and change its environment and bundle                     |
 
 ## Checkout ownership
 
@@ -199,25 +278,31 @@ scripts/with-checkout scripts/stage-sandbox-runner
 Direct Cargo and Maturin builds still require `scripts/stage-sandbox-runner` first.
 The Python packaging backend performs staging for source installations.
 Commands invoked outside these entry points cannot be serialized by the wrapper.
-Keep separate checkouts' mutable build outputs separate; sharing download caches does not authorize sharing `target` or wheel staging.
+Keep separate Console checkouts' mutable build outputs separate; sharing download caches does not authorize sharing application `target` or wheel staging.
+The companion has separate source ownership at `<source-checkout>.stage.lock`, outside its Git checkout and Cargo output.
+That ownership covers fetch, build, and artifact copying, including when `MCP_CONSOLE_SANDBOX_SOURCE` selects the same source from different Console worktrees.
+A concurrent stage waits for that owner, then checks Cargo freshness and stages the runner into its own checkout.
+The same cooperative owner-lifetime limits apply to source ownership.
 
-## Host concurrency
+## Concurrent worktrees
 
 `scripts/test --help`, `--list`, and `--locate` run before ownership or compilation; invalid test arguments also fail before building.
 Help and syntax-only validation use Python's standard library before invoking `uv`.
 Listing, location lookup, and semantic selector validation may prepare the script's dependency environment.
-Full checks and transcript runs share a host budget of one active owner by default.
-Set `MCP_CONSOLE_CHECK_SLOTS` to a positive integer to select another budget, using the same setting for concurrent callers.
-When every slot is occupied, the command exits with `full-check budget is busy` before running a phase.
-Nested commands reuse their parent's slot.
-Slot locks live in `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/checks/`.
-An explicitly configured `XDG_CACHE_HOME` must be absolute; relative paths fail before phases run because they would make the budget checkout-local.
-Changing the budget does not change case assertions, deadlines, or transcript worker concurrency.
+Checks and transcript runs in separate worktrees can run concurrently.
+Each checkout owns its mutable build output, while staging serializes access to the shared pinned companion source and Cargo output.
+An explicitly configured `XDG_CACHE_HOME` must be absolute for companion staging.
+Transcript worker concurrency remains controlled by `scripts/test --jobs`.
 
 ## Completion records
 
 `scripts/check`, `scripts/check-core`, and execution through `scripts/test` print the path to `.dev-workflow/runs/<run>/result.json` on completion, including failures.
 Each record contains the checkout, command, Git revision and worktree status at admission, exit status, elapsed time, failing transcript selectors, and a log and timing for each phase that ran.
+Transcript phases also link `case_timings` to a `case-timings.jsonl` file beside the record.
+Each completed execution appends its selector, execution mode, status, and elapsed seconds, including snapshot comparison.
+These durations overlap across parallel cases and exclude case-process startup; do not sum them as wall time.
+An execution killed before its `finally` block can run has no timing record; the phase log and exit status remain authoritative for failures and cancellation.
+Direct runner calls can select an existing output directory with `MCP_CONSOLE_TEST_TIMINGS=/absolute/path/cases.jsonl`; records append to that file.
 Revision and worktree status are null for a source tree without Git metadata or when cancellation interrupts metadata collection.
 A dirty worktree is recorded explicitly; its result is not evidence for an unchanged clean revision.
 The overall exit status uses the shell convention `128 + signal` for a phase killed by a signal; the phase retains its negative subprocess status.

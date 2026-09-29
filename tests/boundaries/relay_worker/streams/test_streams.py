@@ -48,7 +48,11 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
         raise ValueError("boom")
         """)
     output = _tool_text(client.send(python=python))
-    assert output.startswith("Python stdout\nPython stderr\n🐍\n🐍\nTraceback"), output
+    assert output.startswith("""Python stdout
+Python stderr
+🐍
+🐍
+Traceback"""), output
     assert output.endswith("ValueError: boom\n"), output
 
     # fmt: python
@@ -126,7 +130,10 @@ def test_routes_background_python_text_to_raw_streams(
         thread.join()
         """)
     output = _tool_text(client.send(python=python))
-    expected = "thread stdout\nthread stderr\nthread log\n"
+    expected = """thread stdout
+thread stderr
+thread log
+"""
     output = client._collect_output(output, len(expected))
     assert sorted(output.splitlines()) == sorted(expected.splitlines()), output
     transcript = client.finish()
@@ -156,7 +163,10 @@ def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transc
         )
         """)
     assert _tool_text(client.send(r=r)) == (
-        "R output\nR diagnostic\nWARNING: Only editing the first in the list of files\n"
+        """R output
+R diagnostic
+WARNING: Only editing the first in the list of files
+"""
     )
     return client.finish()
 
@@ -261,7 +271,10 @@ def _finish_python_fork_output(
         logger.warning("parent log")
         """)
     assert _tool_text(client.send(python=python)) == (
-        "parent stdout\nparent stderr\nparent log\n"
+        """parent stdout
+parent stderr
+parent log
+"""
     )
     assert _tool_text(client.send(r="6 * 7")) == "[1] 42\n"
     transcript = client.finish()

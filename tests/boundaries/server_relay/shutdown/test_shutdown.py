@@ -25,8 +25,10 @@ from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.previews import compact_previews, assert_preview, normalize_preview_paths
 from support.records import Transcript
+from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
@@ -41,6 +43,7 @@ def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_shutdown_precedes_blocked_resolver_cancellation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -54,6 +57,13 @@ def test_shutdown_precedes_blocked_resolver_cancellation(
         os.mkfifo(resolver_release)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release)
+        armed = root / "shutdown-armed"
+        order = root / "shutdown-order"
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(root, "preparation_shutdown_order")
+        )
+        environment["MCP_CONSOLE_TEST_SHUTDOWN_ORDER_ARMED"] = str(armed)
+        environment["MCP_CONSOLE_TEST_SHUTDOWN_ORDER_RECORD"] = str(order)
 
         client = ServerRelayClient(
             binary, "blocked_live_r_resolver_shutdown", environment, execution=execution
@@ -70,6 +80,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait()
+            armed.touch()
             client.client.stdin.close()
             shutdown_received.wait()
             # Shutdown receipt precedes resolver cancellation. This response
@@ -87,6 +98,12 @@ def test_shutdown_precedes_blocked_resolver_cancellation(
             retirement_release.release()
             client.client.finish()
             finished = True
+            commands = order.read_text().splitlines()
+            assert commands == [
+                "shutdown",
+                "control",
+                "close",
+            ], commands
             transcript = client._read_open_capture(capture)
         finally:
             if not finished:
@@ -157,7 +174,10 @@ def test_cancelled_send_returns_owned_output_to_restart(
             "mimeType": "image/png",
         }, result
         assert result["content"][2]["text"] == (
-            "idle after image\n[output produced while idle]\ncell before image\n"
+            """idle after image
+[output produced while idle]
+cell before image
+"""
         ), result
         assert result["content"][3] == {
             "type": "image",

@@ -6,19 +6,27 @@ use pep508_rs::{
 };
 
 pub(crate) fn validate(requirement: &str) -> Result<(), String> {
-    let parsed = requirement.parse::<Requirement<VerbatimUrl>>();
-    if !matches!(
-        parsed,
-        Ok(Requirement {
-            version_or_url: None | Some(VersionOrUrl::VersionSpecifier(_)),
-            ..
-        })
-    ) {
-        return Err(format!(
+    parse_named(requirement).map(|_| ())
+}
+
+pub(crate) fn distribution_name(requirement: &str) -> Result<String, String> {
+    Ok(parse_named(requirement)?.name.to_string())
+}
+
+fn parse_named(requirement: &str) -> Result<Requirement<VerbatimUrl>, String> {
+    match requirement.parse::<Requirement<VerbatimUrl>>() {
+        Ok(parsed)
+            if matches!(
+                &parsed.version_or_url,
+                None | Some(VersionOrUrl::VersionSpecifier(_))
+            ) =>
+        {
+            Ok(parsed)
+        }
+        _ => Err(format!(
             "Python requirement `{requirement}` is not accepted: host-side managed resolution accepts named package requirements only"
-        ));
+        )),
     }
-    Ok(())
 }
 
 pub(crate) fn validate_all(requirements: &[String]) -> Result<(), String> {
@@ -59,7 +67,6 @@ pub(crate) fn validate_version_constraints(constraints: &[String]) -> Result<(),
         .try_for_each(|constraint| validate_version_constraint(constraint))
 }
 
-// Shared by host selection and declarations against the live interpreter.
 #[derive(Clone, Copy)]
 enum ConstraintOperator {
     Equal,
