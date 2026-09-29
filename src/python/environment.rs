@@ -32,18 +32,17 @@ pub(super) fn initialize(libpython: &str) -> Result<bool, String> {
 pub(super) fn prepare(
     inspected: Value,
     manifest: &PythonRequirementManifest,
-) -> Result<PreparationOutcome, String> {
+) -> Result<Option<PreparationOutcome>, String> {
     let response = library::environment_call(
         c"prepare",
         &json!({"environment": inspected, "manifest": manifest}).to_string(),
     )
     .map_err(infrastructure)?;
     let Some(response) = response else {
-        return Ok(PreparationOutcome::Rejected {
-            message: "KeyboardInterrupt".into(),
-        });
+        return Ok(None);
     };
     serde_json::from_str(&response)
+        .map(Some)
         .map_err(|error| infrastructure(format!("invalid Python preparation response: {error}")))
 }
 

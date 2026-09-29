@@ -202,6 +202,7 @@ use crate::worker_protocol::{
 
 pub(crate) enum ActivationOutcome {
     Prepared,
+    Interrupted,
     Rejected(String),
     Failed(String),
 }
@@ -263,6 +264,9 @@ fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, 
         resolved(candidate.clone());
         return match activate(&candidate, inspected, projection)? {
             ActivationOutcome::Prepared => Ok(super::PreparationOutcome::Prepared),
+            ActivationOutcome::Interrupted => Ok(super::PreparationOutcome::Rejected {
+                message: "KeyboardInterrupt".into(),
+            }),
             ActivationOutcome::Rejected(message) => {
                 Ok(super::PreparationOutcome::Rejected { message })
             }
@@ -420,9 +424,12 @@ fn activate(
     let previous = STATE.with_borrow_mut(|state| state.activation.take());
     drop(previous);
     Ok(match result? {
-        super::PreparationOutcome::Prepared => ActivationOutcome::Prepared,
-        super::PreparationOutcome::Rejected { message } => ActivationOutcome::Rejected(message),
-        super::PreparationOutcome::Failed { message } => {
+        None => ActivationOutcome::Interrupted,
+        Some(super::PreparationOutcome::Prepared) => ActivationOutcome::Prepared,
+        Some(super::PreparationOutcome::Rejected { message }) => {
+            ActivationOutcome::Rejected(message)
+        }
+        Some(super::PreparationOutcome::Failed { message }) => {
             crate::worker::publish_python_activation_failure(candidate.requirements.clone())?;
             ActivationOutcome::Failed(message)
         }
@@ -527,6 +534,7 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     resolved(candidate.clone());
     match activate(&candidate, inspected, projection)? {
         ActivationOutcome::Prepared => Ok(ready()),
+        ActivationOutcome::Interrupted => Ok(failed("KeyboardInterrupt".into())),
         ActivationOutcome::Rejected(error) => Ok(failed(error)),
         ActivationOutcome::Failed(error) => {
             super::library::display_activation_exception()?;

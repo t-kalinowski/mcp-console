@@ -301,6 +301,10 @@ base::local(
       }
       current_config <- function() globals$py_config
       raise_python_setup_error <- function() check_python_setup(FALSE)
+      raise_python_interrupt <- function() {
+        # Python already consumed the pending signal; preserve its R condition.
+        stop(structure(list(), class = c("interrupt", "condition")))
+      }
       record_activation <- function(requirements) {
         .Call(
           "mcp_console_python_activation_record",

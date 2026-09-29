@@ -175,7 +175,7 @@ def prepare(request: str) -> str:
         return json.dumps(
             {"kind": "failed", "message": "Python activation failed; restart required"}
         )
-    except (Exception, KeyboardInterrupt) as error:
+    except Exception as error:
         return json.dumps(
             {"kind": "rejected", "message": str(error) or type(error).__name__}
         )

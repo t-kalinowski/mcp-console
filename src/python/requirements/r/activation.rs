@@ -152,6 +152,9 @@ impl Adapter {
             .ok_or("Python activation has no resolved candidate")?;
         match super::super::activate(&activation, inspected, Some(projection))? {
             super::super::ActivationOutcome::Prepared => self.call("current_config", &[]),
+            super::super::ActivationOutcome::Interrupted => {
+                self.call("raise_python_interrupt", &[])
+            }
             super::super::ActivationOutcome::Rejected(message) => Err(message.into()),
             super::super::ActivationOutcome::Failed(_) => {
                 self.call("raise_python_setup_error", &[])?;

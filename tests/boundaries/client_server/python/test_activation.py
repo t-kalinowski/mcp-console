@@ -280,6 +280,81 @@ def test_rolls_back_interrupted_python_site_activation(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_preserves_r_interrupt_during_python_site_activation(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root, interrupt_site=True)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            initialize_managed_client(client)
+            client.send(
+                # fmt: r
+                r=code("""
+                    before_config <- reticulate::py_config()
+                    before_requirements <- reticulate::py_require()
+                    worker_pid <- Sys.getpid()
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+                    import sys
+
+                    original_environment = dict(os.environ)
+                    original_paths = list(sys.path)
+                    original_prefixes = sys.prefix, sys.exec_prefix, sys.executable
+                    original_real_prefix = getattr(sys, "real_prefix", None)
+                    marker = object()
+                    marker_id = id(marker)
+                    """)
+            )
+            client.send(
+                # fmt: r
+                r=code("""
+                    outcome <- tryCatch(
+                      {
+                        reticulate::py_require("console-activation-fixture")
+                        "activated"
+                      },
+                      interrupt = function(condition) {
+                        stopifnot(identical(class(condition), c("interrupt", "condition")))
+                        "interrupt"
+                      },
+                      error = function(condition) paste("error:", conditionMessage(condition))
+                    )
+                    print(outcome)
+                    stopifnot(
+                      identical(reticulate::py_require(), before_requirements),
+                      identical(reticulate::py_config(), before_config),
+                      identical(Sys.getpid(), worker_pid)
+                    )
+                    """)
+            )
+            assert last_result_text(client) == '[1] "interrupt"\n', last_result_text(
+                client
+            )
+            client.send(
+                # fmt: python
+                python=code("""
+                    assert dict(os.environ) == original_environment
+                    assert sys.path == original_paths
+                    assert (sys.prefix, sys.exec_prefix, sys.executable) == original_prefixes
+                    assert getattr(sys, "real_prefix", None) == original_real_prefix
+                    assert id(marker) == marker_id
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(r='reticulate::py_require("console-activation-fixture")')
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(python="import console_unloaded; console_unloaded.origin")
+            assert last_result_text(client) == "'candidate'\n", last_result_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_interrupts_publication_after_committing_python(
     binary: Path, execution: Execution
 ) -> list:
