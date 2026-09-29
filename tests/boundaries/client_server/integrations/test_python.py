@@ -21,7 +21,11 @@ from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
 from support.requirements import WORKER, requires
-from support.resolvers import bare_runtime_environment
+from support.resolvers import (
+    bare_runtime_environment,
+    fake_ir_environment,
+    recording_uv_environment,
+)
 from support.suites import run_this_suite
 
 
@@ -41,10 +45,20 @@ def test_clients_inspect_and_replace_requirements(
 ) -> Transcript:
     results = []
     with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = recording_uv_environment(root)
+        # These clients inspect manifests without evaluating a cell. Supply
+        # deterministic host resolver results; package installation is covered
+        # by the runtime requirements suites.
+        library = root / "prepared-r-library"
+        library.mkdir()
+        environment.update(fake_ir_environment(root, [library, library]))
+        environment.pop("RETICULATE_PYTHON", None)
+        environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         settings = {
             "command": binary,
             "args": execution.serve(),
-            "server_parameters": {"cwd": directory},
+            "server_parameters": {"cwd": directory, "env": environment},
         }
         with MCPConsole(**settings) as console:
             startup = json.loads(console.send(requirements={"action": "get"}))
@@ -59,6 +73,7 @@ def test_clients_inspect_and_replace_requirements(
             )
             selected = json.loads(console.send(requirements={"action": "get"}))
             console.send(requirements=dict(selected["requirements"], action="set"))
+            assert selected["prepared"] is True, selected
             assert selected["requirements"]["python"] == []
             results.append({"sync": selected})
 
@@ -74,6 +89,7 @@ def test_clients_inspect_and_replace_requirements(
                 results.append({"async": selected})
 
         asyncio.run(asynchronous())
+        assert (root / "ir-counter").read_text() == "2"
     return results
 
 
