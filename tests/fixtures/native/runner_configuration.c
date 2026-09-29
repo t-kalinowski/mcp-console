@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -27,6 +28,19 @@ static int capture_execvp(const char *path, char *const arguments[]) {
         size_t length = strlen(configuration);
         if (write(output, configuration, length) != (ssize_t)length ||
             write(output, "\n", 1) != 1 || close(output) != 0) _exit(125);
+        const char *started_path = getenv("MCP_CONSOLE_TEST_RUNNER_STARTED");
+        if (started_path != NULL) {
+            int started = open(started_path, O_WRONLY);
+            int release = open(getenv("MCP_CONSOLE_TEST_RUNNER_RELEASE"), O_RDONLY);
+            FILE *pid = fopen(getenv("MCP_CONSOLE_TEST_RUNNER_PID"), "w");
+            if (started < 0 || release < 0 || pid == NULL) _exit(125);
+            if (fprintf(pid, "%ld", (long)getpid()) < 0 || fclose(pid) != 0 ||
+                write(started, "1", 1) != 1) _exit(125);
+            char token;
+            if (read(release, &token, 1) != 1 || token != '1') _exit(125);
+            close(started);
+            close(release);
+        }
     }
     return execvp(path, arguments);
 }

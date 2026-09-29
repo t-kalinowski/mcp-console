@@ -1,6 +1,5 @@
 ---
 initially_configured: true
-validation_launches: 1
 identical_worker_launches: 4
 writable_roots:
   - output café 雪

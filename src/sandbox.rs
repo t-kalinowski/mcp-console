@@ -29,7 +29,7 @@ pub fn capture_settings(
     capture_policy(source.as_deref(), settings, roots)
 }
 
-pub fn capture_policy(
+fn capture_policy(
     source: Option<&str>,
     settings: crate::settings::SandboxSettings,
     roots: Vec<PathBuf>,
@@ -138,7 +138,7 @@ pub fn materialize_settings(
     Ok(settings)
 }
 
-/// Validate native policy and setup before workload startup or server readiness.
+/// Validate native policy and setup for the standalone sandbox command.
 /// The child explicitly consumes the snapshot, so it cannot rediscover settings.
 fn preflight(settings: &crate::settings::SandboxSettings) -> Result<(), String> {
     let executable = std::env::current_exe()
