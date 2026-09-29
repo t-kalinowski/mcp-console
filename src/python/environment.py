@@ -76,18 +76,25 @@ def _check_compatible(candidate: dict) -> None:
     versions = {
         _name(name): version for name, version in candidate["distributions"].items()
     }
-    packages = importlib.metadata.packages_distributions()
-    for root in {name.partition(".")[0] for name in sys.modules}:
-        for name in packages.get(root, ()):
-            distribution = importlib.metadata.distribution(name)
-            if str(distribution.locate_file("")) not in _site_paths:
-                continue
-            selected = versions.get(_name(name))
-            if selected != distribution.version:
-                raise RuntimeError(
-                    f"Cannot replace loaded {name} {distribution.version} with {selected or 'an absent distribution'}. "
-                    "Restart with compatible requirements; the running interpreter and objects are unchanged."
-                )
+    loaded = {
+        os.path.realpath(path)
+        for module in tuple(sys.modules.values())
+        if (path := getattr(module, "__file__", None)) is not None
+    }
+    for distribution in importlib.metadata.distributions(path=_site_paths):
+        # A namespace alone does not load all distributions contributing to it.
+        if not any(
+            os.path.realpath(distribution.locate_file(path)) in loaded
+            for path in distribution.files or ()
+        ):
+            continue
+        name = distribution.metadata["Name"]
+        selected = versions.get(_name(name))
+        if selected != distribution.version:
+            raise RuntimeError(
+                f"Cannot replace loaded {name} {distribution.version} with {selected or 'an absent distribution'}. "
+                "Restart with compatible requirements; the running interpreter and objects are unchanged."
+            )
 
 
 def _activate(candidate: dict, manifest: dict) -> None:

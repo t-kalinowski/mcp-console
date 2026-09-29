@@ -129,6 +129,23 @@ def initialize_managed_client(client: McpClient) -> None:
     assert last_result_text(client) == "[done]", last_result_text(client)
 
 
+def write_distribution(root: Path, name: str, module: str, version: str) -> None:
+    source = Path(*module.split(".")).with_suffix(".py")
+    (root / source).parent.mkdir(parents=True, exist_ok=True)
+    (root / source).write_text(
+        # fmt: python
+        code(f"""
+            __version__ = {version!r}
+            value = object()
+            """)
+    )
+    metadata = root / f"{name.replace('-', '_')}-{version}.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text(f"Name: {name}\nVersion: {version}\n")
+    (metadata / "top_level.txt").write_text(module.partition(".")[0] + "\n")
+    (metadata / "RECORD").write_text(f"{source.as_posix()},,\n")
+
+
 @executions(DIRECT, SANDBOXED)
 def test_removes_previous_environment_pth_paths(
     binary: Path, execution: Execution
@@ -373,19 +390,8 @@ def test_rejects_replacement_of_loaded_distribution(
         root = Path(temporary).resolve()
         environment = managed_environments(root)
         for name, version in (("initial", "1.0"), ("candidate", "2.0")):
-            extra = root / f"{name}-external"
-            metadata = extra / f"console_loaded-{version}.dist-info"
-            metadata.mkdir()
-            (metadata / "METADATA").write_text(
-                f"Name: console-loaded\nVersion: {version}\n"
-            )
-            (metadata / "top_level.txt").write_text("console_loaded\n")
-            (extra / "console_loaded.py").write_text(
-                # fmt: python
-                code(f"""
-                    __version__ = {version!r}
-                    value = object()
-                    """)
+            write_distribution(
+                root / f"{name}-external", "console-loaded", "console_loaded", version
             )
         with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
@@ -436,6 +442,58 @@ def test_rejects_replacement_of_loaded_distribution(
                     """)
             )
             assert last_result_text(client) == "1.0\n", last_result_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_allows_changes_to_unloaded_namespace_distributions(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        for name, version in (("initial", "1.0"), ("candidate", "2.0")):
+            extra = root / f"{name}-external"
+            write_distribution(extra, "console-auth", "console_namespace.auth", "1.0")
+            write_distribution(
+                extra, "console-cloud", "console_namespace.cloud", version
+            )
+        write_distribution(
+            root / "initial-external",
+            "console-storage",
+            "console_namespace.storage",
+            "1.0",
+        )
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            initialize_managed_client(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import console_namespace.auth
+                    import os
+
+                    marker = console_namespace.auth.value
+                    worker_pid = os.getpid()
+                    print(console_namespace.auth.__version__)
+                    """)
+            )
+            assert last_result_text(client) == "1.0\n", last_result_text(client)
+            client.send(requirements={"python": ["console-activation-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import console_namespace.cloud
+                    import importlib.util
+
+                    assert console_namespace.auth.value is marker
+                    assert os.getpid() == worker_pid
+                    assert importlib.util.find_spec("console_namespace.storage") is None
+                    print(console_namespace.auth.__version__)
+                    print(console_namespace.cloud.__version__)
+                    """)
+            )
+            assert last_result_text(client) == "1.0\n2.0\n", last_result_text(client)
             return client.finish()
 
 
