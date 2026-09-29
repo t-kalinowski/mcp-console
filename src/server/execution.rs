@@ -32,18 +32,18 @@ pub(super) fn configure_prepared(
         "\n\nRuntimes are discovered inside the selected {source} during background preparation. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
     ));
     for (field, text) in [
-            (
-                "r",
-                "One complete R cell when R is installed in the target. Expressions display automatically; R plots return as PNG images. When the Python bridge is available, read Python globals through py$name. The R-backed Console-owned DuckDB catalog can query R global data frames by name. console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable.",
-            ),
-            (
-                "python",
-                "One complete Python cell when Python is installed in the target. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When the R bridge is available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Missing imports report ordinary Python errors; automatic package installation is unavailable.",
-            ),
-            (
-                "control",
-                "Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable.",
-            ),
+        (
+            "r",
+            "One complete R cell when R is installed in the target. Expressions display automatically; R plots return as PNG images. When the Python bridge is available, read Python globals through py$name. The R-backed Console-owned DuckDB catalog can query R global data frames by name. console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable.",
+        ),
+        (
+            "python",
+            "One complete Python cell when Python is installed in the target. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When the R bridge is available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Missing imports report ordinary Python errors; automatic package installation is unavailable.",
+        ),
+        (
+            "control",
+            "Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable.",
+        ),
     ] {
         if let Some(property) = properties.get_mut(field) {
             property["description"] = text.into();

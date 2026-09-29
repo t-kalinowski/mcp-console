@@ -193,7 +193,9 @@ def test_prepares_with_empty_stdin_then_restarts(
         client.send(stdin="", requirements={"r": ["praise"]})
         assert last_result_text(client) == "[prepared]"
         client.send(control="restart", requirements={"r": ["praise"]})
-        assert last_result_text(client) == "[starting new worker]\n[idle]"
+        assert last_result_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+        ), client.transcript[-1]
 
         # fmt: r
         r = code(r"""
@@ -215,7 +217,7 @@ def test_prepares_with_empty_stdin_then_restarts(
         # Prepare a new package while replacing the live worker.
         client.send(control="restart", requirements={"r": ["zeallot"]})
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         # fmt: r
         r = code(r"""
@@ -428,7 +430,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
 
             client.send(control="restart")
             assert last_result_text(client) == (
-                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
             )
             # fmt: python
             python = code("""
@@ -518,13 +520,14 @@ def test_evaluates_with_default_managed_r(
         # fmt: r
         r = code(r"""
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            packages <- c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow")
+            # Loaded namespaces retain canonical cache paths; the managed
+            # library contains symlinks to those same package installations.
             stopifnot(
-              identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
+              identical(
+                normalizePath(find.package(packages)),
+                normalizePath(file.path(.libPaths()[[managed_index]], packages))
+              ),
               vapply(
                 c("ggplot2", "dplyr", "readr", "jsonlite"),
                 requireNamespace,
@@ -668,7 +671,7 @@ def test_prepares_initial_r_requirements(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         client.send(r=prepared_r)
         assert last_result_text(client) == "[1] 42\n"

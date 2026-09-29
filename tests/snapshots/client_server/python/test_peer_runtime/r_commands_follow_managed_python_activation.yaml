@@ -69,7 +69,8 @@ result:
 ---
 send:
   python: >-
-    assert id(peer_object) == peer_id; assert np.arange(3).tolist() == [0, 1, 2]
+    assert id(peer_object) == peer_id; assert np.arange(3).tolist() == [0,
+    1, 2]
 result:
   content:
     - type: text

@@ -40,10 +40,11 @@ result:
   isError: true
 ---
 stderr: >
-  worker relay shutdown was requested twice; additionally cannot remove worker
-  temporary directory <worker temporary>: Permission denied (os error 13);
-  additionally failed to retire worker I/O: cannot remove worker temporary
-  directory <worker temporary>: Permission denied (os error 13)
+  worker relay shutdown was requested twice; additionally cannot remove
+  worker temporary directory <worker temporary>: Permission denied (os
+  error 13); additionally failed to retire worker I/O: cannot remove
+  worker temporary directory <worker temporary>: Permission denied (os
+  error 13)
 ---
 stage: shutdown
 ---
@@ -67,9 +68,10 @@ result:
   isError: false
 ---
 stderr: >
-  cannot remove worker temporary directory <worker temporary>: Permission denied
-  (os error 13); additionally failed to retire worker I/O: cannot remove worker
-  temporary directory <worker temporary>: Permission denied (os error 13)
+  cannot remove worker temporary directory <worker temporary>: Permission
+  denied (os error 13); additionally failed to retire worker I/O: cannot
+  remove worker temporary directory <worker temporary>: Permission denied
+  (os error 13)
 ---
 stage: startup failure
 ---
@@ -89,5 +91,6 @@ result:
   isError: true
 ---
 stderr: >
-  worker relay shutdown was requested twice; additionally cannot remove worker
-  temporary directory <worker temporary>: Permission denied (os error 13)
+  worker relay shutdown was requested twice; additionally cannot remove
+  worker temporary directory <worker temporary>: Permission denied (os
+  error 13)

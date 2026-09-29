@@ -857,7 +857,8 @@ def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
 
 
 def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
-    with McpClient(binary, DIRECT.serve()) as client:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with McpClient(binary, DIRECT.serve("--worker", str(zod))) as client:
         client.initialize_and_list_tools()
         client.send(control="interrupt", timeout_ms=0)
         result = client.transcript[-1]["result"]

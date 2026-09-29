@@ -14,7 +14,6 @@ send:
 result:
   content:
     - type: text
-      text: |-
+      text: |
         [1] "ready"
-        [done]
   isError: false

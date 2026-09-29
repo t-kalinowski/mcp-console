@@ -89,9 +89,7 @@ Encoding: UTF-8
             install_output = last_tool_text(client)
             client.send(control="restart")
             restart_output = last_tool_text(client)
-            restart_notices = (
-                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-            )
+            restart_notices = "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
             assert restart_output.endswith(restart_notices), restart_output
 
             # Restart collects installer bytes that missed the evaluation cut.

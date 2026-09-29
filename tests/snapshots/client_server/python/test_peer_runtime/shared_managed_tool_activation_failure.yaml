@@ -67,7 +67,7 @@ result:
     - type: text
       text: |-
         Traceback (most recent call last):
-          File "<string>", line 683, in _mcp_console_activate_environment
+          File "<string>", line 687, in _mcp_console_activate_environment
           File "<frozen runpy>", line 287, in run_path
           File "<frozen runpy>", line 98, in _run_module_code
           File "<frozen runpy>", line 88, in _run_code
@@ -157,7 +157,8 @@ result:
 ---
 send:
   python: >-
-    assert 'identity' not in globals(); print('accepted environment retained')
+    assert 'identity' not in globals(); print('accepted environment
+    retained')
 result:
   content:
     - type: text

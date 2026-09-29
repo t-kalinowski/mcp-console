@@ -49,8 +49,8 @@ result:
 send:
   control: restart
   python: >-
-    import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd()
-    / '.venv'; 42
+    import sys; from pathlib import Path; assert Path(sys.prefix) ==
+    Path.cwd() / '.venv'; 42
 result:
   content:
     - type: text
@@ -65,8 +65,8 @@ result:
 ---
 send:
   python: >-
-    import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd()
-    / '.venv'; 42
+    import sys; from pathlib import Path; assert Path(sys.prefix) ==
+    Path.cwd() / '.venv'; 42
 result:
   content:
     - type: text

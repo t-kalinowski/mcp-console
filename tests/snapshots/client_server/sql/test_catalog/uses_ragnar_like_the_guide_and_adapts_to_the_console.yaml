@@ -100,9 +100,11 @@ result:
 ---
 send:
   r: |
+    # A second connection shares the existing writer's database instance;
+    # DuckDB cannot change that instance to read-only while it remains open.
     reader <- ragnar::ragnar_store_connect(
       store_path,
-      read_only = TRUE
+      read_only = FALSE
     )
     reader_result <- ragnar::ragnar_retrieve(
       reader,

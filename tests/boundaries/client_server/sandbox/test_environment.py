@@ -57,7 +57,7 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
                 if generation:
                     client.send(control="restart")
                     assert last_tool_text(client).endswith(
-                        "[starting new worker]\n[idle]"
+                        "[starting new worker]\n[worker starting]"
                     ), last_tool_text(client)
                 # Inspect the retained manifest before activating Python; automatic
                 # resolution must not mask a lost generation environment.

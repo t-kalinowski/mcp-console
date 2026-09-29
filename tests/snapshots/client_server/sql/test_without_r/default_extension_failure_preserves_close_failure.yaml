@@ -1,4 +1,4 @@
 ---
 startup_error: >-
-  [DuckDB extension preparation requires an absolute HOME at server startup;
-  resolver input closed]
+  [DuckDB extension preparation requires an absolute HOME at server
+  startup; resolver input closed]

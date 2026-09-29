@@ -41,6 +41,15 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.
 ---
 languages: python
 description: >-
@@ -84,6 +93,15 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.
 ---
 languages: sql
 description: >-
@@ -97,9 +115,9 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
-  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
-  sqlite, READ_ONLY)`. Prepare additional extensions with
+  in. When managed preparation is available, defaults include SQLite; attach the
+  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
+  Prepare additional extensions with
   `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
   table previews that abbreviate long text cells; return focused queries and
   summaries for inspection.
@@ -137,6 +155,15 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.
 ---
 languages: r,python
 description: >-
@@ -182,6 +209,15 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.
 ---
 languages: r,sql
 description: >-
@@ -197,9 +233,9 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
-  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
-  sqlite, READ_ONLY)`. Prepare additional extensions with
+  in. When managed preparation is available, defaults include SQLite; attach the
+  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
+  Prepare additional extensions with
   `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
   table previews that abbreviate long text cells; return focused queries and
   summaries for inspection.
@@ -237,6 +273,15 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.
 ---
 languages: python,sql
 description: >-
@@ -252,9 +297,9 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
-  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
-  sqlite, READ_ONLY)`. Prepare additional extensions with
+  in. When managed preparation is available, defaults include SQLite; attach the
+  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
+  Prepare additional extensions with
   `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
   table previews that abbreviate long text cells; return focused queries and
   summaries for inspection.
@@ -292,6 +337,15 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.
 ---
 languages: r,python,sql
 description: >-
@@ -308,9 +362,9 @@ description: >-
 
 
   DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}`
-  before use; attach the database read-only with `ATTACH 'path' AS name (TYPE
-  sqlite, READ_ONLY)`. Prepare additional extensions with
+  in. When managed preparation is available, defaults include SQLite; attach the
+  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
+  Prepare additional extensions with
   `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
   table previews that abbreviate long text cells; return focused queries and
   summaries for inspection.
@@ -348,3 +402,12 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
+
+
+  The session prepares automatically in the background. Runtime capabilities are
+  discovered on the execution host; the listed language fields do not guarantee
+  that an interpreter is installed. R/Python sharing requires both runtimes and
+  their bridge. Managed DuckDB requires its provider packages. Each operation
+  validates the session's actual capabilities. Requirements inspection reports
+  the known declaration and preparation status, not an installed-package
+  inventory.

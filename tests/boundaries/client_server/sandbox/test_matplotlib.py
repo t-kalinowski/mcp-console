@@ -114,7 +114,7 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
         assert last_result_text(client) == "[done]"
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         # fmt: python
         python = code("""

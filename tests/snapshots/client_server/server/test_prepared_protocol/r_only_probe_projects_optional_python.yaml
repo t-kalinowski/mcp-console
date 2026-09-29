@@ -119,28 +119,28 @@ result:
           r:
             description: >-
               One complete R cell when R is installed in the target. Expressions
-              display automatically; R plots return as PNG images. When the
-              Python bridge is available, read Python globals through py$name.
-              The R-backed Console-owned DuckDB catalog can query R global data
-              frames by name. console_sql_connection(connection) selects a
-              user-owned DBI connection, and console_sql_connection(NULL)
-              restores the Console-owned catalog. Missing packages report
-              ordinary R errors; automatic package installation is unavailable.
-              Dependencies must be preinstalled in the template.
+              display automatically; R plots return as PNG images. When the Python
+              bridge is available, read Python globals through py$name. The R-backed
+              Console-owned DuckDB catalog can query R global data frames by name.
+              console_sql_connection(connection) selects a user-owned DBI connection,
+              and console_sql_connection(NULL) restores the Console-owned catalog.
+              Missing packages report ordinary R errors; automatic package
+              installation is unavailable. Dependencies must be preinstalled in the
+              template.
             type:
               - string
               - "null"
           python:
             description: >-
-              One complete Python cell when Python is installed in the target.
-              The final expression displays automatically. Use input() for
-              managed stdin; Matplotlib plots return as PNG images when
-              installed. When the R bridge is available, read R globals through
-              r.name. console_sql_connection(connection) selects a user-owned
-              DB-API connection, and console_sql_connection(None) restores the
-              Console-owned catalog. Missing imports report ordinary Python
-              errors; automatic package installation is unavailable.
-              Dependencies must be preinstalled in the template.
+              One complete Python cell when Python is installed in the target. The
+              final expression displays automatically. Use input() for managed stdin;
+              Matplotlib plots return as PNG images when installed. When the R bridge
+              is available, read R globals through r.name.
+              console_sql_connection(connection) selects a user-owned DB-API
+              connection, and console_sql_connection(None) restores the Console-owned
+              catalog. Missing imports report ordinary Python errors; automatic
+              package installation is unavailable. Dependencies must be preinstalled
+              in the template.
             type:
               - string
               - "null"
@@ -149,32 +149,31 @@ result:
               One complete SQL cell through the active R DBI or Python DB-API
               connection. Console opens its in-memory DuckDB catalog during
               initialization when the adapter and DuckDB are preinstalled in the
-              template. The default catalog uses R DBI when R is available,
-              otherwise Python DB-API. The R-backed catalog can query R global
-              data frames by name; Python data frames require explicit
-              registration with sql_connection().register(name, frame).
-              console_sql_connection(connection) selects a user-owned
-              connection, and console_sql_connection(None) in Python or
-              console_sql_connection(NULL) in R restores the Console-owned
-              catalog without discarding it. Missing DuckDB leaves the installed
-              interpreters and custom connections usable. A query with columns
-              returns a bounded preview. Extensions load from the template's
-              cache; Console does not install extensions or resolve packages.
-              Spill files and stored secrets use private disposable worker
+              template. The default catalog uses R DBI when R is available, otherwise
+              Python DB-API. The R-backed catalog can query R global data frames by
+              name; Python data frames require explicit registration with
+              sql_connection().register(name, frame).
+              console_sql_connection(connection) selects a user-owned connection, and
+              console_sql_connection(None) in Python or console_sql_connection(NULL)
+              in R restores the Console-owned catalog without discarding it. Missing
+              DuckDB leaves the installed interpreters and custom connections usable.
+              A query with columns returns a bounded preview. Extensions load from the
+              template's cache; Console does not install extensions or resolve
+              packages. Spill files and stored secrets use private disposable worker
               storage. Worker replacement resets the catalog.
             type:
               - string
               - "null"
           control:
             description: >-
-              Applies lifecycle control alone or before compatible same-call
-              fields. interrupt signals the live worker and preserves state;
-              compatible following input is queued before the interrupt grace. A
-              following cell runs only after the earlier operation finishes.
-              restart discards language objects, debugger state, unread stdin,
-              and the in-memory SQL catalog, retains the captured image/template
-              and interpreter, and sends same-call input and code only to the
-              replacement worker. Dependency preparation is unavailable.
+              Applies lifecycle control alone or before compatible same-call fields.
+              interrupt signals the live worker and preserves state; compatible
+              following input is queued before the interrupt grace. A following cell
+              runs only after the earlier operation finishes. restart discards
+              language objects, debugger state, unread stdin, and the in-memory SQL
+              catalog, retains the captured image/template and interpreter, and sends
+              same-call input and code only to the replacement worker. Dependency
+              preparation is unavailable.
             type: string
             enum:
               - interrupt
@@ -184,9 +183,9 @@ result:
               - object
               - "null"
             description: >-
-              Inspect the server's retained declaration with action=get.
-              Preparation is unavailable for this target; the declaration is not
-              an installed-package inventory.
+              Inspect the server's retained declaration with action=get. Preparation
+              is unavailable for this target; the declaration is not an
+              installed-package inventory.
             properties:
               action:
                 type: string

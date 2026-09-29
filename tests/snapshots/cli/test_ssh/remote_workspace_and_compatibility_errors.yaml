@@ -1,7 +1,7 @@
 ---
 error: >
-  cannot access remote target.workspace '<workspace>/missing': No such file or
-  directory (os error 2)
+  cannot access remote target.workspace '<workspace>/missing': No such
+  file or directory (os error 2)
 ---
 error: |
   remote target.workspace '<workspace>/file' is not a directory

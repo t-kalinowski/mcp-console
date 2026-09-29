@@ -17,6 +17,12 @@ result:
       text: |
         Traceback (most recent call last):
           File "<mcp-console:python:e2>", line 1, in <module>
+          File "<reticulate>/python/rpytools/loader.py", line 122, in _find_and_load_hook
+            return _run_hook(name, _hook)
+          File "<reticulate>/python/rpytools/loader.py", line 96, in _run_hook
+            module = hook()
+          File "<reticulate>/python/rpytools/loader.py", line 120, in _hook
+            return _find_and_load(name, import_)
         ModuleNotFoundError: No module named 'mcp_console_user_selected_missing'.
 
         MCP Console is using a user-selected Python environment. Automatic managed package resolution is disabled, and `requirements.python` is also disabled for this interpreter selection. Install the distribution into the selected environment or restart MCP Console with managed Python enabled.

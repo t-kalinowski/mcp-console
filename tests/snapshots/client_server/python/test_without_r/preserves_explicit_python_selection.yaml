@@ -3,8 +3,9 @@
 ---
 send:
   python: >-
-    import os, sys; assert sys.executable == os.environ['RETICULATE_PYTHON'];
-    identity = object(); identity_id = id(identity); 42
+    import os, sys; assert sys.executable ==
+    os.environ['RETICULATE_PYTHON']; identity = object(); identity_id =
+    id(identity); 42
 result:
   content:
     - type: text

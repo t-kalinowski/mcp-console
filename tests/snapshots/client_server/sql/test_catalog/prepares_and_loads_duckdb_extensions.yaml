@@ -44,8 +44,7 @@ result:
   content:
     - type: text
       text: >-
-        Invalid Error: HTTP Error: Failed to download extension
-        "not_a_real_duckdb_extension"
+        HTTP Error: Failed to download extension "not_a_real_duckdb_extension"
   isError: true
 ---
 send:
@@ -115,7 +114,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [idle]
+        [worker starting]
   isError: false
 ---
 send:

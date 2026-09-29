@@ -117,7 +117,9 @@ def test_interrupts_first_cell_before_resolver_registration(
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
         failed = client.send(r="stop('interrupted startup must remain failed')")
-        assert failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
+        assert (
+            failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
+        )
         client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
@@ -154,7 +156,9 @@ def test_interrupts_first_cell_between_resolver_phases(
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
         failed = client.send(r="stop('interrupted startup must remain failed')")
-        assert failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
+        assert (
+            failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
+        )
         client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000

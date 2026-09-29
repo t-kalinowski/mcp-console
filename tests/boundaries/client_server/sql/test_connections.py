@@ -977,12 +977,8 @@ def test_interrupts_python_dbapi_provider_probe(
                         previous_wakeup = signal.set_wakeup_fd(wakeup_write)
                         try:
                             with (
-                                open(
-                                    probe_started, "wb", buffering=0
-                                ) as started,
-                                open(
-                                    probe_release, "rb", buffering=0
-                                ) as release,
+                                open(probe_started, "wb", buffering=0) as started,
+                                open(probe_release, "rb", buffering=0) as release,
                             ):
                                 assert (
                                     wait_for_probe_interrupt(

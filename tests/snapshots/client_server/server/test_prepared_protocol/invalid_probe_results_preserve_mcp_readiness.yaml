@@ -1,13 +1,13 @@
 ---
 mode: probe-version
 diagnostic: >-
-  [incompatible Docker Sandbox bootstrap: expected protocol 8, Console 0.0.4;
-  received protocol 3, Console 0.0.4]
+  [incompatible Docker Sandbox bootstrap: expected protocol 8, Console
+  0.0.4; received protocol 3, Console 0.0.4]
 ---
 mode: probe-build
 diagnostic: >-
-  [incompatible Docker Sandbox bootstrap: expected protocol 8, Console 0.0.4;
-  received protocol 8, Console unsupported]
+  [incompatible Docker Sandbox bootstrap: expected protocol 8, Console
+  0.0.4; received protocol 8, Console unsupported]
 ---
 mode: missing-runtime
 diagnostic: "[prepared runtime probe returned no runtime result]"
@@ -26,15 +26,16 @@ diagnostic: "[Docker Sandbox frame exceeds 65536 bytes]"
 ---
 mode: probe-unconfirmed
 diagnostic: >-
-  [target retirement is unconfirmed (transport exit is not a cleanup barrier)]
+  [target retirement is unconfirmed (transport exit is not a cleanup
+  barrier)]
 ---
 mode: probe-failed
 diagnostic: "[probe validation failed]"
 ---
 mode: probe-closed-output
 diagnostic: >-
-  [Docker Sandbox launch stream ended before confirmed retirement: failed to
-  fill whole buffer]
+  [Docker Sandbox launch stream ended before confirmed retirement: failed
+  to fill whole buffer]
 ---
 mode: probe-managed
 diagnostic: "[prepared runtime cannot contain managed or preparation state]"
@@ -56,9 +57,10 @@ diagnostic: "[prepared Python has inconsistent executable or base prefixes]"
 ---
 mode: native-unknown
 diagnostic: >-
-  [unknown field `unused`, expected `r_home` or `python` at line 1 column 690]
+  [unknown field `unused`, expected `r_home` or `python` at line 1 column
+  690]
 ---
 mode: native-embedding-unknown
 diagnostic: >-
-  [unknown field `unused`, expected one of `python`, `libpython`, `python_home`
-  at line 1 column 297]
+  [unknown field `unused`, expected one of `python`, `libpython`,
+  `python_home` at line 1 column 297]

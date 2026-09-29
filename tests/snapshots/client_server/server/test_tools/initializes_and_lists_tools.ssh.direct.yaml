@@ -94,7 +94,7 @@ result:
         the remote filesystem.
 
 
-        The session prepares automatically in the background. Runtime
+        Built-in sessions prepare automatically in the background. Runtime
         capabilities are discovered on the execution host; the listed language
         fields do not guarantee that an interpreter is installed. R/Python
         sharing requires both runtimes and their bridge. Managed DuckDB requires

@@ -26,6 +26,15 @@ result:
       text: |
         Traceback (most recent call last):
           File "<mcp-console:python:e3>", line 1, in <module>
+          File "<reticulate>/python/rpytools/loader.py", line 122, in _find_and_load_hook
+            return _run_hook(name, _hook)
+                   ^^^^^^^^^^^^^^^^^^^^^^
+          File "<reticulate>/python/rpytools/loader.py", line 96, in _run_hook
+            module = hook()
+                     ^^^^^^
+          File "<reticulate>/python/rpytools/loader.py", line 120, in _hook
+            return _find_and_load(name, import_)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         ModuleNotFoundError: No module named 'sklearn'.
 
         MCP Console inferred the PyPI distribution `scikit-learn` from the import `sklearn`, but automatic package resolution failed:

@@ -40,6 +40,7 @@ def test_uses_default_duckdb_extensions(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
+        client.send(sql="SET autoinstall_known_extensions = false")
         inspected = client.send(requirements={"action": "get"})
         assert inspected["structuredContent"]["requirements"]["duckdb"] == [
             "icu",
@@ -49,7 +50,6 @@ def test_uses_default_duckdb_extensions(
         with sqlite3.connect(workspace / "audit.sqlite") as database:
             database.execute("CREATE TABLE events (payload TEXT)")
             database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
-        client.send(sql="SET autoinstall_known_extensions = false")
         client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
         client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
         assert '"42"' in normalize_trailing_spaces(client), last_tool_text(client)
@@ -128,7 +128,7 @@ def test_restart_adds_r_and_duckdb_requirements(
             requirements={"r": ["praise"], "duckdb": ["fts"]},
         )
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
 
         client.send(
@@ -247,7 +247,7 @@ def test_prepares_and_loads_duckdb_extensions(
 
         client.send(control="restart")
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
 
         client.send(sql="LOAD fts")
@@ -387,7 +387,7 @@ def test_queries_a_ragnar_store_created_in_r(
         """)
     client.send(r=r)
     marker = "ragnar store ready\n"
-    assert normalize_duckdb_progress(client) == marker
+    assert normalize_duckdb_progress(client) == marker, client.transcript[-1]
 
     sql = code(r"""
         LOAD fts;
@@ -489,7 +489,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     client.send(r=r)
     assert normalize_duckdb_progress(client) == (
         "created store under the worker tempdir\n"
-    )
+    ), client.transcript[-1]
 
     client.send(
         requirements={"duckdb": ["fts", "vss"]},
@@ -526,9 +526,11 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
 
     # fmt: r
     r = code(r"""
+        # A second connection shares the existing writer's database instance;
+        # DuckDB cannot change that instance to read-only while it remains open.
         reader <- ragnar::ragnar_store_connect(
           store_path,
-          read_only = TRUE
+          read_only = FALSE
         )
         reader_result <- ragnar::ragnar_retrieve(
           reader,
@@ -539,7 +541,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "alpha.md" in preview and "Apples are red fruit" in preview
+    assert "alpha.md" in preview and "Apples are red fruit" in preview, preview
     assert "beta.md" not in preview
 
     sql = code(r"""

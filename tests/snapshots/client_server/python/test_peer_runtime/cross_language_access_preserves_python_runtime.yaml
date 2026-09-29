@@ -39,7 +39,8 @@ result:
 ---
 send:
   r: >-
-    peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))
+    peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not
+    None'))
 result:
   content:
     - type: text

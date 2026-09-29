@@ -24,7 +24,9 @@ The public `sandbox --config-env NAME -- COMMAND [ARG]...` option selects an exp
 See [sandbox configuration](SANDBOX_CONFIGURATION.md) for fields, defaults, trust boundaries, size limits, and runnable shell, Python, and R examples.
 `serve` and ordinary `sandbox` invocations discover project YAML beneath the launch working directory and forward its native policy settings, adding Console's application defaults and explicit writable roots.
 For local execution, `serve` retains one normalized snapshot for every worker launch, including when no configuration file existed.
-Native validation runs in the owned background worker launch, after MCP serving and input-closure handling are installed. A native setup failure is retained for the next operation while MCP remains available. The standalone `sandbox` command still validates before executing its workload.
+Native validation runs in the owned background worker launch, after MCP serving and input-closure handling are installed.
+A native setup failure is retained for the next operation while MCP remains available.
+The standalone `sandbox` command still validates before executing its workload.
 Ambient values never select its policy.
 
 With [SSH execution](SSH.md), only YAML discovery and user-policy capture happen locally.

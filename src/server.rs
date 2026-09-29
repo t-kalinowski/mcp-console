@@ -424,7 +424,7 @@ impl ConsoleServer {
                 properties.shift_remove(field);
             }
         }
-        description.push_str("\n\nThe session prepares automatically in the background. Runtime capabilities are discovered on the execution host; the listed language fields do not guarantee that an interpreter is installed. R/Python sharing requires both runtimes and their bridge. Managed DuckDB requires its provider packages. Each operation validates the session's actual capabilities. Requirements inspection reports the known declaration and preparation status, not an installed-package inventory.");
+        description.push_str("\n\nBuilt-in sessions prepare automatically in the background. Runtime capabilities are discovered on the execution host; the listed language fields do not guarantee that an interpreter is installed. R/Python sharing requires both runtimes and their bridge. Managed DuckDB requires its provider packages. Each operation validates the session's actual capabilities. Requirements inspection reports the known declaration and preparation status, not an installed-package inventory.");
         let mut guidance = String::new();
         if languages.sql {
             guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");

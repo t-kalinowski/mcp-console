@@ -427,7 +427,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                         "[active evaluation stopped by session restart request]\n"
                         "[worker stopped: in-memory state lost]\n"
                         "[starting new worker]\n"
-                        "[idle]"
+                        "[worker starting]"
                     ),
                 }
             ], restart_result

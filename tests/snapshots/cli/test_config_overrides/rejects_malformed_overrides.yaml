@@ -9,8 +9,8 @@ stderr: |
 ---
 override: sandbox..network=restricted
 stderr: >
-  invalid configuration override 'sandbox..network': expected a nonempty dotted
-  key
+  invalid configuration override 'sandbox..network': expected a nonempty
+  dotted key
 ---
 override: sandbox.=restricted
 stderr: |

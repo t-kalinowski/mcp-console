@@ -39,7 +39,9 @@ def test_protocol_and_eof_during_configured_native_launch(binary: Path) -> list:
         with (
             closing(FifoCheckpoint.create(root / "started")) as started,
             closing(FifoCheckpoint.create(root / "release")),
-            McpClient(binary, ("serve",), environment, root, response_timeout=3) as client,
+            McpClient(
+                binary, ("serve",), environment, root, response_timeout=3
+            ) as client,
         ):
             started.wait("configured native launch before runner exec")
             pid = int((root / "pid").read_text())

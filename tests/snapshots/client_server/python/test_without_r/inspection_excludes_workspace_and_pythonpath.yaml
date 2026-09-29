@@ -3,8 +3,8 @@
 ---
 send:
   python: >-
-    import ctypes, sitecustomize; assert sitecustomize.worker_module_value ==
-    42; ctypes.worker_module_value
+    import ctypes, sitecustomize; assert sitecustomize.worker_module_value
+    == 42; ctypes.worker_module_value
 result:
   content:
     - type: text

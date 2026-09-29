@@ -2,6 +2,14 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  sql: SET autoinstall_known_extensions = false
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   requirements:
     action: get
 result:
@@ -30,7 +38,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
-          "prepared": false,
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -64,7 +72,7 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
-    prepared: false
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -77,14 +85,6 @@ result:
         - tibble
         - utf8
       python: []
-  isError: false
----
-send:
-  sql: SET autoinstall_known_extensions = false
-result:
-  content:
-    - type: text
-      text: "[done]"
   isError: false
 ---
 send:

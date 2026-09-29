@@ -393,7 +393,8 @@ Linux loader preparation occurs before either interpreter exists.
 Supported R startup declarations and reticulate hooks run inside initialization, before loading Python through its common owner.
 Conflicting interpreter hints fail with a configuration/restart diagnostic.
 A first R cell can no longer select a different interpreter before Python starts; use launch configuration or an explicit requirements/restart transaction.
-Python also captures `os.environ` during warmup. Later R `Sys.setenv()` calls change the process environment but do not update that Python mapping; update `os.environ` from Python when Python code needs a new value.
+Python also captures `os.environ` during warmup.
+Later R `Sys.setenv()` calls change the process environment but do not update that Python mapping; update `os.environ` from Python when Python code needs a new value.
 R default packages include settings from system Renviron.
 Console defers their loading until its adapter is installed, preserves their hooks and plots through the startup output/graphics scope, and attaches tools:mcp-console afterward at search position 2.
 Reticulate metadata retains active/base prefixes and the managed environment's ephemeral marker.

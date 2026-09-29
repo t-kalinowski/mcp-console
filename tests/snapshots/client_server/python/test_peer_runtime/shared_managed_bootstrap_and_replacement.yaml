@@ -125,7 +125,8 @@ result:
 ---
 send:
   python: >-
-    import yaml12, more_itertools; print('accepted additions survived restart')
+    import yaml12, more_itertools; print('accepted additions survived
+    restart')
 result:
   content:
     - type: text
@@ -148,7 +149,8 @@ result:
 ---
 send:
   python: >-
-    import yaml12, more_itertools; print('accepted additions survived crash')
+    import yaml12, more_itertools; print('accepted additions survived
+    crash')
 result:
   content:
     - type: text

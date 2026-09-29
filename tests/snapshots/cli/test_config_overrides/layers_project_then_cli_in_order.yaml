@@ -8,7 +8,8 @@ overrides:
   - -c
   - >-
     sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: {entries:
-    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth: 3}}
+    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth:
+    3}}
   - -c
   - extends=null
   - -c
@@ -32,7 +33,8 @@ overrides:
   - -c
   - >-
     sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: {entries:
-    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth: 3}}
+    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth:
+    3}}
   - -c
   - extends=null
   - -c

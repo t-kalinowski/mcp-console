@@ -202,7 +202,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
 
     client.send(control="restart")
     assert last_result_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     )
     client.send(r='"psutil" %in% reticulate::py_require()$packages')
     assert last_result_text(client) == "[1] TRUE\n"

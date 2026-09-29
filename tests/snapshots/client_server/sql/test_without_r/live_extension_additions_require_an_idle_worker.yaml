@@ -11,7 +11,8 @@ result:
 ---
 send:
   python: >-
-    identity = object(); identity_id = id(identity); answer = input('answer> ')
+    identity = object(); identity_id = id(identity); answer = input('answer>
+    ')
 result:
   content:
     - type: text

@@ -417,7 +417,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
         assert last_result_text(client) == "[1] 42\n"
@@ -881,7 +881,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
         )
         client.send(
             r=(
@@ -969,7 +969,7 @@ def test_restart_discards_unactivated_r_candidate(
                 "[active evaluation stopped by session restart request]\n"
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n"
-                "[idle]"
+                "[worker starting]"
             )
             assert len(ir_run_records(record)) == baseline + 1
 
