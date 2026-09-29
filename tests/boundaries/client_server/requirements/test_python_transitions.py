@@ -2,16 +2,22 @@
 
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text, release_worker_callback_gate
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.resolvers import recording_uv_environment, uv_tool_run_requirements
+from support.resolvers import (
+    checkpoint_uv_environment,
+    recording_uv_environment,
+    uv_tool_run_requirements,
+)
 from support.suites import run_this_suite
 
 
@@ -372,12 +378,23 @@ def test_rejects_incompatible_live_libpython_before_activation(
 def test_idle_activation_failure_retains_worker_until_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as cleanup:
+        root = Path(temporary)
+        environment, resolver_started, resolver_release = checkpoint_uv_environment(
+            root, "py-yaml12", reuse_resolved_python_for=("py-yaml12",)
+        )
+        environment.pop("RETICULATE_PYTHON", None)
+        cleanup.callback(resolver_started.close)
+        cleanup.callback(resolver_release.close)
+        client = cleanup.enter_context(
+            McpClient(binary, execution.serve(), environment, root)
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["later"]})
         # fmt: python
         python = code("""
             import runpy
+            import sys
 
             identity = object()
             identity_id = id(identity)
@@ -388,9 +405,15 @@ def test_idle_activation_failure_retains_worker_until_restart(
 
 
             runpy.run_path = fail_activation
+            print(sys.executable)
             """)
         client.send(python=python)
-        assert last_tool_text(client) == "[done]"
+        executable = Path(last_tool_text(client).strip())
+        assert executable.is_absolute() and executable.is_file(), executable
+        Path(environment["MCP_CONSOLE_TEST_UV_REUSE_PYTHON"]).write_text(
+            str(executable), encoding="utf-8"
+        )
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
         before = client.send(requirements={"action": "get"})["structuredContent"][
             "requirements"
         ]
@@ -398,11 +421,13 @@ def test_idle_activation_failure_retains_worker_until_restart(
         r = code(r"""
             callback_gate <- tempfile("python-activation-gate-")
             callback_checkpoint <- tempfile("python-activation-checkpoint-")
+            callback_complete <- tempfile("python-activation-complete-")
             run_callback <- function() {
               if (!file.exists(callback_gate)) {
                 later::later(run_callback, delay = 0.01)
                 return(invisible(NULL))
               }
+              stopifnot(file.create(callback_checkpoint))
               condition <- tryCatch(
                 reticulate::py_require("py-yaml12"),
                 error = conditionMessage
@@ -413,13 +438,29 @@ def test_idle_activation_failure_retains_worker_until_restart(
                 fixed = TRUE
               ))
               cat("idle activation rejected\n")
-              stopifnot(file.create(callback_checkpoint))
+              complete <- fifo(callback_complete, open = "wb", blocking = TRUE)
+              writeBin(charToRaw("1"), complete)
+              close(complete)
             }
             later::later(run_callback, delay = 0.01)
-            cat(callback_gate, callback_checkpoint, sep = "\n")
+            cat(callback_gate, callback_checkpoint, callback_complete, sep = "\n")
             """)
         client.send(r=r)
-        release_worker_callback_gate(client, "idle Python activation failure")
+        callback_complete = FifoCheckpoint.create(
+            Path(last_tool_text(client).splitlines()[2])
+        )
+        cleanup.callback(callback_complete.close)
+        # Confirm idle callback entry while resolution is still held. Candidate
+        # preparation must not be included in the callback-entry deadline.
+        release_worker_callback_gate(
+            client, "idle Python activation failure", ("complete",)
+        )
+        resolver_started.wait("idle Python activation resolver")
+        resolver_release.release()
+        callback_complete.wait("idle Python activation failure", timeout=5)
+        assert Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"]).read_text() == (
+            "py-yaml12\n"
+        )
         client.send(python="assert id(identity) == identity_id; print('same object')")
         assert (
             last_tool_text(client)
