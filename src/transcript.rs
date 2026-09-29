@@ -108,6 +108,14 @@ impl Transcript {
         });
     }
 
+    pub(crate) fn startup_failed(&self, message: &str) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::StartupFailed { message }, Utc::now())
+        });
+    }
+
     pub(crate) fn target_generation(
         &self,
         container_id: Option<&str>,
@@ -131,6 +139,7 @@ impl Transcript {
         target: Option<serde_json::Value>,
     ) {
         self.update(|state| {
+            state.materialize()?;
             state.dynamic_resolution = Some(dynamic_resolution);
             state.python_preparation = Some(python_preparation);
             state.target = target.clone();
@@ -201,7 +210,20 @@ impl Transcript {
         mime_type: &str,
     ) -> Option<Artifact> {
         let call_id = call_id?;
-        self.update(|state| state.active()?.persist_image(call_id, bytes, mime_type))
+        self.update(|state| {
+            state
+                .active()?
+                .persist_image(Some(call_id), bytes, mime_type)
+        })
+    }
+
+    pub(crate) fn persist_session_image(
+        &self,
+        data: &str,
+        mime_type: &str,
+    ) -> Result<Option<Artifact>, String> {
+        let bytes = decode_image_data(data)?;
+        Ok(self.update(|state| state.materialize()?.persist_image(None, &bytes, mime_type)))
     }
 
     pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
@@ -527,7 +549,7 @@ impl ActiveTranscript {
 
     fn persist_image(
         &mut self,
-        call_id: u64,
+        call_id: Option<u64>,
         bytes: &[u8],
         mime_type: &str,
     ) -> Result<Artifact, String> {
@@ -536,7 +558,8 @@ impl ActiveTranscript {
             "image/png" => "png",
             _ => "bin",
         };
-        let filename = format!("call-{call_id:06}-image-{artifact_id:06}.{extension}");
+        let owner = call_id.map_or_else(|| "session".into(), |id| format!("call-{id:06}"));
+        let filename = format!("{owner}-image-{artifact_id:06}.{extension}");
         let relative_path = format!("artifacts/{filename}");
         write_new(&self.directory.join(&relative_path), bytes)?;
         self.append(

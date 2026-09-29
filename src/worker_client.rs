@@ -519,6 +519,9 @@ impl Client {
     }
 
     pub(crate) fn record_with(&self, transcript: crate::transcript::Transcript) {
+        if self.0.setup.is_some() {
+            self.0.output.record_session_output(transcript.clone());
+        }
         *self.0.recording.lock().expect("recording lock") = Some(transcript);
     }
 
@@ -1639,17 +1642,10 @@ impl Client {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
         if let Err(message) = running.wait_initialization() {
-            let mut lifecycle = self
-                .0
-                .lifecycle
-                .lock()
-                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            if lifecycle.generation.is(&generation) {
-                lifecycle.startup_failure.get_or_insert_with(|| {
-                    format!("runtime initialization failed: {message}; restart required")
-                });
-            }
-            drop(lifecycle);
+            self.retain_startup_failure(
+                &generation,
+                &format!("runtime initialization failed: {message}; restart required"),
+            );
             let mut failure = SendFailure::from(message);
             match self.stop_failed_worker(worker, &generation) {
                 Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
@@ -1784,6 +1780,33 @@ impl Client {
         }
     }
 
+    fn retain_startup_failure(&self, generation: &WorkerGeneration, error: &str) {
+        if self.0.setup.is_none() {
+            return;
+        }
+        let recorded = if let Ok(mut lifecycle) = self.0.lifecycle.lock()
+            && lifecycle.generation.is(generation)
+            && !matches!(
+                lifecycle.state,
+                lifecycle::LifecycleState::ShuttingDown { .. }
+            ) {
+            lifecycle.warming = false;
+            if lifecycle.startup_failure.is_none() {
+                lifecycle.startup_failure = Some(error.to_string());
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if recorded
+            && let Some(transcript) = self.0.recording.lock().expect("recording lock").as_ref()
+        {
+            transcript.startup_failed(error);
+        }
+    }
+
     fn start_worker(
         &self,
         worker: &mut WorkerState,
@@ -1792,189 +1815,212 @@ impl Client {
         on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
         on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<(), SendFailure> {
-        let replacing = matches!(&*worker, WorkerState::Stopped);
-        if !matches!(&*worker, WorkerState::Running(_)) {
-            self.ensure_startup(&generation)?;
-            if let Some(error) = &self
-                .0
-                .lifecycle
-                .lock()
-                .map_err(|_| "worker lifecycle lock poisoned".to_string())?
-                .startup_failure
-            {
-                return Err(error.clone().into());
-            }
-            let _startup = self.reserve_worker_startup(&generation)?;
-            if self.0.setup.is_some() {
-                self.0
-                    .lifecycle
-                    .lock()
-                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?
-                    .warming = true;
-            }
-            self.discover(&generation)?;
-            #[cfg(unix)]
-            if let Some(preparation) = &*self
-                .0
-                .local_preparation
-                .lock()
-                .map_err(|_| "local preparation lock poisoned".to_string())?
-            {
-                preparation.check_ready()?;
-            }
-            let _startup = self.reserve_worker_startup(&generation)?;
-            let mut environment = match &self.0.environment {
-                Some(environment) => Some(
-                    environment
-                        .lock()
-                        .map_err(|_| "worker environment lock poisoned".to_string())?,
-                ),
-                None => None,
-            };
-            if let Some(environment) = environment.as_mut()
-                && matches!(environment.r_resolver, RResolver::Pending(_))
-            {
-                let delta =
-                    environment::RequirementDelta::calculate(environment, Requirements::default())?;
-                let prepared = self
-                    .resolve_prestart_environment(&generation, environment, delta)
-                    .map_err(|failure| SendFailure::from(failure.into_message()))?;
-                let lifecycle = self
+        let result: Result<(), SendFailure> = (|| {
+            let replacing = matches!(&*worker, WorkerState::Stopped);
+            if !matches!(&*worker, WorkerState::Running(_)) {
+                self.ensure_startup(&generation)?;
+                if let Some(error) = &self
                     .0
                     .lifecycle
                     .lock()
-                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-                lifecycle.ensure_startup(&generation)?;
-                **environment = prepared;
-                self.publish_requirements(environment);
-            }
-            if let Some(environment) = environment.as_mut()
-                && environment.local_runtime.is_none()
-                && self.0.discovered_r_home.get().is_some()
-            {
-                let explicit = match environment.python.as_ref() {
-                    Some(PythonEnvironment::UserSelected(python)) => Some(python.clone()),
-                    _ => None,
-                };
-                let preparation = self
+                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?
+                    .startup_failure
+                {
+                    return Err(error.clone().into());
+                }
+                let _startup = self.reserve_worker_startup(&generation)?;
+                if self.0.setup.is_some() {
+                    self.0
+                        .lifecycle
+                        .lock()
+                        .map_err(|_| "worker lifecycle lock poisoned".to_string())?
+                        .warming = true;
+                }
+                self.discover(&generation)?;
+                #[cfg(unix)]
+                if let Some(preparation) = &*self
                     .0
                     .local_preparation
                     .lock()
                     .map_err(|_| "local preparation lock poisoned".to_string())?
-                    .clone()
-                    .or_else(|| {
-                        self.0
-                            .target
-                            .get()
-                            .and_then(crate::target_session::Session::ssh_preparation)
-                            .cloned()
-                    })
-                    .ok_or("runtime selection has no preparation owner".to_string())?;
-                let selected: Result<Option<crate::python::NativePython>, String> = preparation
-                    .call(
-                        crate::resolver::preparation::Operation::SelectPython {
-                            configured: explicit.clone().map(PathBuf::from),
-                        },
-                        |handle| self.register_resolver_stop_handle(&generation, handle),
-                    );
-                self.clear_resolver_stop_handle(&generation)?;
-                self.ensure_startup(&generation)?;
-                environment.local_runtime = Some(crate::local_runtime::Selection {
-                    r_home: self.0.discovered_r_home.get().cloned(),
-                    python: selected?.map(|selected| crate::local_runtime::Python {
-                        selected: Box::new(selected),
-                        explicit,
-                        managed: false,
-                        duckdb_extension_directory: None,
-                    }),
-                });
-            }
-            let snapshot = environment.as_deref().cloned();
-            drop(environment);
-            let environment = snapshot;
-            let python = environment
-                .as_ref()
-                .and_then(|environment| environment.python.as_ref());
-            let managed_r = environment
-                .as_ref()
-                .and_then(|environment| environment.r.as_ref());
-            let spec = WorkerSpec {
-                target: self.0.target.get(),
-                local_runtime: environment
-                    .as_ref()
-                    .and_then(|environment| environment.local_runtime.as_ref()),
-                executable: &self.0.program,
-                arguments: &self.0.arguments,
-                relay: self.0.relay.as_deref(),
-                no_sandbox: self.0.no_sandbox,
-                sandbox_settings: &self.0.sandbox_settings,
-                python,
-                managed_r,
-                dynamic_resolution: self.dynamic_resolution(),
-                callbacks: WorkerCallbacks {
-                    client: self.clone(),
-                    generation,
-                },
-            };
-            if replacing && announce_replacement {
-                self.0
-                    .output
-                    .push_notice_line(output::WORKER_STARTING_NOTICE);
-            }
-            let initialized_generation = spec.callbacks.generation.clone();
-            *worker = WorkerState::Running(self.0.runtime.spawn(
-                spec,
-                self.0.output.clone(),
-                on_started,
-                on_ready,
-            )?);
-            let WorkerState::Running(running) = worker else {
-                unreachable!()
-            };
-            if let Some(accepted) = &self.0.environment {
-                let mut accepted = accepted
-                    .lock()
-                    .map_err(|_| "worker environment lock poisoned".to_string())?;
-                let lifecycle = self
-                    .0
-                    .lifecycle
-                    .lock()
-                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-                lifecycle.ensure_startup(&initialized_generation)?;
-                accepted.duckdb_r_targets = environment
-                    .as_ref()
-                    .and_then(|environment| environment.r.clone())
-                    .into_iter()
-                    .collect();
-            }
-            if environment
-                .as_ref()
-                .is_some_and(|environment| !environment.custom_worker)
-            {
-                running.initialize()?;
-                if let Some(active) = self.current_evaluation()?
-                    && active.generation.is(&initialized_generation)
                 {
-                    running
-                        .shutdown_handle()
-                        .observe_startup(&active.evaluation)?;
+                    preparation.check_ready()?;
+                }
+                let _startup = self.reserve_worker_startup(&generation)?;
+                let mut environment = match &self.0.environment {
+                    Some(environment) => Some(
+                        environment
+                            .lock()
+                            .map_err(|_| "worker environment lock poisoned".to_string())?,
+                    ),
+                    None => None,
+                };
+                if let Some(environment) = environment.as_mut()
+                    && matches!(environment.r_resolver, RResolver::Pending(_))
+                {
+                    let delta = environment::RequirementDelta::calculate(
+                        environment,
+                        Requirements::default(),
+                    )?;
+                    let prepared = self
+                        .resolve_prestart_environment(&generation, environment, delta)
+                        .map_err(|failure| SendFailure::from(failure.into_message()))?;
+                    let lifecycle = self
+                        .0
+                        .lifecycle
+                        .lock()
+                        .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+                    lifecycle.ensure_startup(&generation)?;
+                    **environment = prepared;
+                    self.publish_requirements(environment);
+                }
+                if let Some(environment) = environment.as_mut()
+                    && environment.local_runtime.is_none()
+                    && self.0.discovered_r_home.get().is_some()
+                {
+                    let explicit = match environment.python.as_ref() {
+                        Some(PythonEnvironment::UserSelected(python)) => Some(python.clone()),
+                        _ => None,
+                    };
+                    let preparation = self
+                        .0
+                        .local_preparation
+                        .lock()
+                        .map_err(|_| "local preparation lock poisoned".to_string())?
+                        .clone()
+                        .or_else(|| {
+                            self.0
+                                .target
+                                .get()
+                                .and_then(crate::target_session::Session::ssh_preparation)
+                                .cloned()
+                        })
+                        .ok_or("runtime selection has no preparation owner".to_string())?;
+                    let selected: Result<Option<crate::python::NativePython>, String> = preparation
+                        .call(
+                            crate::resolver::preparation::Operation::SelectPython {
+                                configured: explicit.clone().map(PathBuf::from),
+                            },
+                            |handle| self.register_resolver_stop_handle(&generation, handle),
+                        );
+                    self.clear_resolver_stop_handle(&generation)?;
+                    self.ensure_startup(&generation)?;
+                    environment.local_runtime = Some(crate::local_runtime::Selection {
+                        r_home: self.0.discovered_r_home.get().cloned(),
+                        python: selected?.map(|selected| crate::local_runtime::Python {
+                            selected: Box::new(selected),
+                            explicit,
+                            managed: false,
+                            duckdb_extension_directory: None,
+                        }),
+                    });
+                }
+                let snapshot = environment.as_deref().cloned();
+                drop(environment);
+                let environment = snapshot;
+                let python = environment
+                    .as_ref()
+                    .and_then(|environment| environment.python.as_ref());
+                let managed_r = environment
+                    .as_ref()
+                    .and_then(|environment| environment.r.as_ref());
+                let spec = WorkerSpec {
+                    target: self.0.target.get(),
+                    local_runtime: environment
+                        .as_ref()
+                        .and_then(|environment| environment.local_runtime.as_ref()),
+                    executable: &self.0.program,
+                    arguments: &self.0.arguments,
+                    relay: self.0.relay.as_deref(),
+                    no_sandbox: self.0.no_sandbox,
+                    sandbox_settings: &self.0.sandbox_settings,
+                    python,
+                    managed_r,
+                    dynamic_resolution: self.dynamic_resolution(),
+                    callbacks: WorkerCallbacks {
+                        client: self.clone(),
+                        generation: generation.clone(),
+                    },
+                };
+                if replacing && announce_replacement {
+                    self.0
+                        .output
+                        .push_notice_line(output::WORKER_STARTING_NOTICE);
+                }
+                let initialized_generation = spec.callbacks.generation.clone();
+                *worker = WorkerState::Running(self.0.runtime.spawn(
+                    spec,
+                    self.0.output.clone(),
+                    on_started,
+                    on_ready,
+                )?);
+                let WorkerState::Running(running) = worker else {
+                    unreachable!()
+                };
+                if let Some(accepted) = &self.0.environment {
+                    let mut accepted = accepted
+                        .lock()
+                        .map_err(|_| "worker environment lock poisoned".to_string())?;
+                    let lifecycle = self
+                        .0
+                        .lifecycle
+                        .lock()
+                        .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+                    lifecycle.ensure_startup(&initialized_generation)?;
+                    accepted.duckdb_r_targets = environment
+                        .as_ref()
+                        .and_then(|environment| environment.r.clone())
+                        .into_iter()
+                        .collect();
+                }
+                if environment
+                    .as_ref()
+                    .is_some_and(|environment| !environment.custom_worker)
+                {
+                    running.initialize()?;
+                    if let Some(active) = self.current_evaluation()?
+                        && active.generation.is(&initialized_generation)
+                    {
+                        running
+                            .shutdown_handle()
+                            .observe_startup(&active.evaluation)?;
+                    }
                 }
             }
+            Ok(())
+        })();
+        if let Err(failure) = &result {
+            self.retain_startup_failure(&generation, &failure.message);
         }
-        Ok(())
+        result
     }
 }
 
 impl WorkerCallbacks {
-    fn initialization_failed(&self, error: &str) {
-        if let Ok(mut lifecycle) = self.client.0.lifecycle.lock()
-            && lifecycle.generation.is(&self.generation)
-        {
-            lifecycle.startup_failure.get_or_insert_with(|| {
-                format!("runtime initialization failed: {error}; restart required")
-            });
-            lifecycle.warming = false;
+    fn persist_session_image(
+        &self,
+        data: &str,
+        mime_type: &str,
+    ) -> Result<Option<crate::transcript::Artifact>, String> {
+        let recording = self
+            .client
+            .0
+            .recording
+            .lock()
+            .map_err(|_| "recording lock poisoned")?;
+        match recording.as_ref() {
+            Some(transcript) if self.client.0.setup.is_some() => {
+                transcript.persist_session_image(data, mime_type)
+            }
+            _ => crate::transcript::validate_image_data(data).map(|()| None),
         }
+    }
+
+    fn initialization_failed(&self, error: &str) {
+        self.client.retain_startup_failure(
+            &self.generation,
+            &format!("runtime initialization failed: {error}; restart required"),
+        );
     }
 
     fn initialized(&self) -> Result<(), String> {

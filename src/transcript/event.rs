@@ -31,6 +31,9 @@ pub(super) enum Event<'a> {
         python_preparation: bool,
         target: Option<&'a Value>,
     },
+    StartupFailed {
+        message: &'a str,
+    },
     TargetGeneration {
         #[serde(skip_serializing_if = "Option::is_none")]
         container_id: Option<&'a str>,
@@ -52,13 +55,20 @@ pub(super) enum Event<'a> {
     },
     ArtifactCreated {
         artifact_id: u64,
-        call_id: u64,
+        call_id: Option<u64>,
         path: &'a str,
         mime_type: &'a str,
         bytes: usize,
     },
     CellOutput {
         call_id: u64,
+        path: &'a str,
+        retained_bytes: u64,
+        inline_omitted_bytes: u64,
+        discarded_bytes: u64,
+        retention_limit_bytes: u64,
+    },
+    SessionOutput {
         path: &'a str,
         retained_bytes: u64,
         inline_omitted_bytes: u64,

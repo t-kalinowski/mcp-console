@@ -264,14 +264,6 @@ impl Client {
                     |handle| client.register_stop_handle(&generation, handle),
                     || Ok(()),
                 ) {
-                    let mut lifecycle = client
-                        .0
-                        .lifecycle
-                        .lock()
-                        .map_err(|_| "worker lifecycle lock poisoned")?;
-                    if lifecycle.generation.is(&generation) {
-                        lifecycle.startup_failure = Some(failure.message.clone());
-                    }
                     return Err(failure.message);
                 }
                 let super::WorkerState::Running(running) = &*worker else {
@@ -285,9 +277,9 @@ impl Client {
                 && lifecycle.generation.is(&generation)
             {
                 lifecycle.warming = false;
-                if let Err(error) = result {
-                    lifecycle.startup_failure.get_or_insert(error);
-                }
+            }
+            if let Err(error) = result {
+                client.retain_startup_failure(&generation, &error);
             }
             client.0.discovery_changed.notify_waiters();
         }));

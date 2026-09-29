@@ -14,6 +14,8 @@ pub(super) struct OutputTapeState {
     sealed: VecDeque<(u64, Response)>,
     next_cut: u64,
     cell_output: Option<crate::transcript::CellOutput>,
+    session_output: Option<crate::transcript::CellOutput>,
+    session_recording: Option<crate::transcript::Transcript>,
     raw_bytes: u64,
     recovered: Option<Response>,
 }
@@ -33,6 +35,23 @@ impl OutputTape {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
         self.0.lock().unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(in crate::worker_client) fn record_session_output(
+        &self,
+        transcript: crate::transcript::Transcript,
+    ) {
+        self.lock().session_recording = Some(transcript);
+    }
+
+    pub(in crate::worker_client) fn finish_session_output(&self) {
+        let mut state = self.lock();
+        state.seal(true);
+        if let Some(output) = state.session_output.take() {
+            let record = output.record();
+            state.recording_notice(output.finish());
+            record.publish();
+        }
     }
 
     pub(in crate::worker_client) fn direct_stdout(&self) -> DirectOutput {
@@ -68,16 +87,6 @@ impl OutputTape {
             &text,
         );
         state.recording_notice(notice);
-    }
-
-    pub(in crate::worker_client) fn push_image(
-        &self,
-        data: String,
-        mime_type: String,
-        artifact: Option<crate::transcript::Artifact>,
-    ) {
-        self.push_image_with_artifact(data, mime_type, move |_, _| Ok(artifact))
-            .expect("infallible artifact closure");
     }
 
     pub(in crate::worker_client) fn push_image_with_artifact<F>(
@@ -258,8 +267,17 @@ impl DirectOutput {
 impl OutputTapeState {
     fn spool(&mut self, bytes: &[u8]) -> Option<String> {
         self.raw_bytes = self.raw_bytes.saturating_add(bytes.len() as u64);
+        if self.cell_output.is_none()
+            && let Some(transcript) = self.session_recording.take()
+        {
+            match transcript.create_session_output() {
+                Ok(output) => self.session_output = output,
+                Err(error) => return Some(error),
+            }
+        }
         self.cell_output
             .as_mut()
+            .or(self.session_output.as_mut())
             .and_then(|output| output.append(bytes).1)
     }
 
@@ -314,9 +332,13 @@ impl OutputTapeState {
             self.flush_decoders();
         }
         self.flush_terminal();
-        let notice = self.cell_output.as_mut().and_then(|output| output.flush());
+        let notice = self
+            .cell_output
+            .as_mut()
+            .or(self.session_output.as_mut())
+            .and_then(|output| output.flush());
         self.recording_notice(notice);
-        let source = match &self.cell_output {
+        let source = match self.cell_output.as_ref().or(self.session_output.as_ref()) {
             Some(output) => Source {
                 file: Some(output.record()),
                 raw_bytes: self.raw_bytes,

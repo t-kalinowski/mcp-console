@@ -611,13 +611,17 @@ The [relay protocol](RELAY_PROTOCOL.md) owns that ordering guarantee, and the [b
 ## Recording, cell output, and image artifacts
 
 Recording is a server responsibility and does not add messages to either private protocol.
-On the first `send` call, the server creates a private run directory under the launch working directory's `.agents/console/sessions/` if `.agents/console` already exists there.
+Background discovery, startup output, or the first `send` materializes a private run directory under the launch working directory's `.agents/console/sessions/` if `.agents/console` already exists there.
+Construction only captures recording ownership; filesystem writes run outside the protocol task.
+Custom workers retain their first-use recording behavior.
 Otherwise it writes under `~/.agents/console/sessions/` without creating a project `.agents` directory.
 `MCP_CONSOLE_HOME` can replace the default `~/.agents/console` directory; project directory selection still takes precedence.
 Raw-log paths returned to clients are relative to the launch directory for project recordings and absolute for home recordings.
 It appends tool calls and assembled results to `internal/events.jsonl`.
-The initial `session_started` event records whether dynamic environment resolution is available.
-Sans-R uv-managed sessions separately record `python_preparation: true` while dynamic resolution remains disabled.
+The initial `session_started` event records only cheaply known preparation capabilities; undiscovered built-in capabilities are null.
+An `environment_discovered` event records the execution-host result and updates the projections.
+Sans-R uv-managed sessions then record `python_preparation: true` while dynamic resolution remains disabled.
+A generation's first startup failure is journaled once as `startup_failed`, including when no tool was called.
 The Quarto projection uses that capability and the captured Python-only managed selection separately to declare initial requirements.
 For SSH sessions, it also records `target.transport` and the initial remote `target.workspace` separately from the local launch `working_directory`.
 Docker session metadata additionally records compute kind, requested/resolved image identity, and container workspace; generation events identify created containers.
@@ -662,6 +666,11 @@ uv tool run --from r-lib-ir ir render transcript.qmd
 ```
 
 When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
+
+Startup and idle text share `outputs/session.log`; startup and idle images have session artifacts with a null `call_id`.
+They use the same bounded output and file retention rules as cells, remain available for one later response, and survive EOF without a tool call.
+Shutdown joins producers before closing the session output file and appending its `session_output` summary.
+No startup source or synthetic tool call is inserted into the transcript.
 
 Each admitted evaluation also owns `outputs/call-NNNNNN.log` beneath the run directory.
 The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before preview collection omits the middle, and detaches it at the evaluation's completion or restart cut.

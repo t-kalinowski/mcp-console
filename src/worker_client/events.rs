@@ -1108,9 +1108,9 @@ fn handle_semantic_event(
         RelayEvent::Image { data, mime_type } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.image(data, mime_type),
             Route::Preparation | Route::Idle => {
-                crate::transcript::validate_image_data(&data)?;
-                output.push_image(data, mime_type, None);
-                Ok(())
+                output.push_image_with_artifact(data, mime_type, |data, mime_type| {
+                    callbacks.persist_session_image(data, mime_type)
+                })
             }
         }),
         RelayEvent::InputRequested { prompt } => {

@@ -197,6 +197,8 @@ impl QuartoWriter {
             Event::TargetGeneration { .. }
             | Event::ArtifactCreated { .. }
             | Event::CellOutput { .. }
+            | Event::SessionOutput { .. }
+            | Event::StartupFailed { .. }
             | Event::ToolResult { .. } => false,
         };
         if !changed {
@@ -485,14 +487,32 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             path,
             ..
         } => {
+            let owner = call_id.map_or_else(|| "session".into(), |id| format!("call {id}"));
             writeln!(
                 document,
-                "## Artifact {artifact_id} for call {call_id}
+                "## Artifact {artifact_id} for {owner}
 
-[Artifact {artifact_id} from call {call_id}](<{path}>)
+[Artifact {artifact_id} from {owner}](<{path}>)
 "
             )
             .expect("writing to a String cannot fail");
+            Ok(())
+        }
+        Event::SessionOutput {
+            path,
+            retained_bytes,
+            discarded_bytes,
+            ..
+        } => {
+            if *retained_bytes != 0 || *discarded_bytes != 0 {
+                writeln!(document, "## Session output\n\n[Startup and idle output](<{path}>)\n\n{retained_bytes} raw bytes retained; {discarded_bytes} raw bytes not retained in this file.\n")
+                    .expect("writing to a String cannot fail");
+            }
+            Ok(())
+        }
+        Event::StartupFailed { message } => {
+            document.push_str("## Startup failed\n\n");
+            push_fence(document, "text", message);
             Ok(())
         }
         Event::CellOutput {

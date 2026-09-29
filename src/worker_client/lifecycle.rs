@@ -1398,6 +1398,7 @@ impl Client {
             task.await
                 .map_err(|error| format!("warmup task failed: {error}"))?;
         }
+        self.0.output.finish_session_output();
         result
     }
 }

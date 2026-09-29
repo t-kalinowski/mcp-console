@@ -38,6 +38,8 @@ The initial schema is stable and conditional: configured language filters and pr
 Within the worker, transport readiness precedes the explicit initialization operation.
 That operation initializes R, Python through the common native owner, the optional reticulate bridge, and the actual managed DuckDB connection, in that order, omitting genuinely absent runtimes.
 The first cell joins this work or uses the completed worker; it never starts a parallel initialization.
+Startup text and plots are retained for a later send or poll and recorded as session output even if no tool is called.
+They do not create a user cell or a source entry.
 Before code or interactive input is accepted, warm capacity is speculative.
 Initial requirements can replace it safely without an explicit restart.
 Inspection and polling do not claim state.

@@ -44,3 +44,11 @@ result:
         [worker R home discovery failed with exit status: 22: ]
         session restart did not complete; cell was not run
   isError: true
+---
+send:
+  r: stop('failed restart ran code')
+result:
+  content:
+    - type: text
+      text: "[worker R home discovery failed with exit status: 22: ]"
+  isError: true

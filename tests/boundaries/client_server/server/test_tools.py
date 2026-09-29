@@ -132,6 +132,11 @@ def test_failed_discovery_preserves_protocol_availability(
             assert counter.read_text() == "discovered\ndiscovered\n", (
                 "explicit restart must retry confirmed discovery once"
             )
+            result = client.send(r="stop('failed restart ran code')")
+            assert result["isError"], result
+            assert counter.read_text() == "discovered\ndiscovered\n", (
+                "a failed replacement must retain its startup failure"
+            )
             records = client.finish()
             return [records[3], *records[6:]]
 
