@@ -35,6 +35,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment, startup_r_package
 from support.events import Events
 from support.records import Transcript
+from support.resolvers import checkpoint_uv_environment
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
@@ -155,6 +156,27 @@ def startup_fixture(
 
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
+def test_protocol_initialization_failure_retires_warmup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="discovery") as fixture:
+        fixture.wait_for_resolver()
+        client = fixture.client
+        # Keep input open: failing protocol initialization must itself retire
+        # the already-owned resolver and its descendant.
+        client.stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n')
+        client.stdin.flush()
+        assert client.process.wait(timeout=10) != 0
+        fixture.wait_for_resolver_exit()
+        error = client.stderr.read()
+        assert "initialize" in error.lower(), error
+        return [
+            {"initialization_failed": True, "warmup_retired_without_input_eof": True}
+        ]
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_initial_requirements_join_automatic_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -267,6 +289,77 @@ def test_initial_requirements_replace_unused_interpreters(
                 release.close()
     assert records is not None
     return records
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"), command("uv"))
+def test_replacement_discards_startup_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        uv_environment, resolving, resolved = checkpoint_uv_environment(root, "six")
+        started = FifoCheckpoint.create(root / "startup-ready")
+        release = FifoCheckpoint.create(root / "startup-release")
+        activated = FifoCheckpoint.create(root / "startup-activated")
+        counter = root / "starts"
+        source = code(f"""
+            counter <- {json.dumps(str(counter))}
+            cat("start\\n", file = counter, append = TRUE)
+            if (length(readLines(counter)) == 1L) {{
+              ready <- fifo({json.dumps(str(started.path))}, "wb", blocking = TRUE)
+              writeBin(charToRaw("1"), ready)
+              close(ready)
+              gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+              stopifnot(identical(readBin(gate, "raw", 1L), charToRaw("1")))
+              close(gate)
+              reticulate::py_config()
+              sent <- fifo({json.dumps(str(activated.path))}, "wb", blocking = TRUE)
+              writeBin(charToRaw("1"), sent)
+              close(sent)
+            }}
+            """)
+        try:
+            with startup_r_package(root, source) as environment:
+                environment.update(
+                    {
+                        name: value
+                        for name, value in uv_environment.items()
+                        if name == "RETICULATE_UV"
+                        or name.startswith("MCP_CONSOLE_TEST_UV_")
+                        or name == "MCP_CONSOLE_TEST_REAL_UV"
+                    }
+                )
+                args = (
+                    execution.serve("--writable-root", str(root))
+                    if execution == SANDBOXED
+                    else execution.serve()
+                )
+                with McpClient(binary, args, environment, root) as client:
+                    client.initialize_and_list_tools()
+                    started.wait("startup before Python activation", timeout=60)
+                    preparation = client.start_send(requirements={"python": ["six"]})
+                    resolving.wait(
+                        "replacement holds environment during resolution", timeout=60
+                    )
+                    release.release()
+                    activated.wait(
+                        "old generation published Python activation", timeout=60
+                    )
+                    resolved.release()
+                    client.receive(preparation)
+                    assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+                    client.send(python="import six; 42")
+                    assert last_tool_text(client) == "42\n", client.transcript[-1]
+                    assert counter.read_text() == "start\nstart\n"
+                    declaration = client.send(requirements={"action": "get"})[
+                        "structuredContent"
+                    ]["requirements"]
+                    assert "six" in declaration["python"], declaration
+                    return client.finish()
+        finally:
+            for checkpoint in (started, release, activated, resolving, resolved):
+                checkpoint.close()
 
 
 @executions(DIRECT, SANDBOXED)

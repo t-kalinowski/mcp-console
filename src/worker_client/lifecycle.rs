@@ -1055,7 +1055,7 @@ impl Client {
                     && self.0.preparation.try_read().is_err() =>
             {
                 // Explicit preconditions own preparation admission. A resolver
-                // preparing lazy worker startup belongs to the operation that
+                // preparing automatic startup belongs to the generation that
                 // restart is retiring, even before a worker process exists.
                 return Err("requirement preparation is still running".to_string());
             }

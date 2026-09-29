@@ -1390,7 +1390,7 @@ impl Client {
             self.0.output.clone(),
             control_prelude.take().unwrap_or_default(),
             idle_prelude,
-            control.is_some(),
+            control.is_some_and(|control| !control.speculative),
         ));
         let wait_claim = evaluation
             .claim()

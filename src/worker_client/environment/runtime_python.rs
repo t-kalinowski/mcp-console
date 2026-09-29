@@ -207,6 +207,13 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
+        // Preparation can replace the accepted declaration while this callback
+        // waits for the environment. Its launch manifest belongs to the retired
+        // generation, so never validate it against the replacement's manifest.
+        let disposition = self.old_generation_commit_disposition(&generation)?;
+        if disposition == OldGenerationCommitDisposition::DiscardForReplacement {
+            return Ok(disposition);
+        }
         if environment.custom_worker {
             return Err("custom worker reported a managed Python activation".to_string());
         }
