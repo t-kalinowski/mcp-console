@@ -23,6 +23,19 @@
   if (identical(Sys.getenv("MCP_CONSOLE_TEST_STARTUP_PLOTS"), "1")) {
     graphics::plot(3:1)
   }
+  ready <- Sys.getenv("MCP_CONSOLE_TEST_STARTUP_READY")
+  if (interactive() && nzchar(ready)) {
+    ready <- fifo(ready, open = "wb", blocking = TRUE)
+    writeBin(charToRaw("1"), ready)
+    close(ready)
+    release <- fifo(
+      Sys.getenv("MCP_CONSOLE_TEST_STARTUP_RELEASE"),
+      open = "rb",
+      blocking = TRUE
+    )
+    stopifnot(identical(readBin(release, "raw", 1L), charToRaw("1")))
+    close(release)
+  }
 }
 
 py <- sql_connection <- console_sql_connection <- function(...) {

@@ -1323,7 +1323,7 @@ def attach_python_initialized_during_r_startup(
     system_default_packages: bool = False,
     trigger: str = "r-cell",
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as checkpoints:
         root = Path(directory)
         library = root / "library"
         library.mkdir()
@@ -1365,6 +1365,12 @@ def attach_python_initialized_during_r_startup(
                     "\nR_DEFAULT_PACKAGES=" + environment["R_DEFAULT_PACKAGES"] + "\n"
                 )
             environment["R_DEFAULT_PACKAGES"] = "NULL"
+            ready = FifoCheckpoint.create(root / "startup-ready")
+            release = FifoCheckpoint.create(root / "startup-release")
+            checkpoints.callback(ready.close)
+            checkpoints.callback(release.close)
+            environment["MCP_CONSOLE_TEST_STARTUP_READY"] = str(ready.path)
+            environment["MCP_CONSOLE_TEST_STARTUP_RELEASE"] = str(release.path)
         if managed:
             environment.pop("RETICULATE_PYTHON")
             # The startup package selects a prepared environment without
@@ -1383,7 +1389,12 @@ def attach_python_initialized_during_r_startup(
             )
             environment["MCP_CONSOLE_TEST_EARLY_PYTHON"] = str(early_python)
             version = "==" + ".".join(map(str, sys.version_info[:3]))
-        with McpClient(binary, execution.serve(), environment, root) as client:
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if system_default_packages and execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
             if managed:
                 client.send(requirements={"python_version": [version]})
@@ -1395,7 +1406,20 @@ def attach_python_initialized_during_r_startup(
                 assert last_result_text(client) == "[done]", client.transcript[-1]
             # R-first startup adopts external CPython. With Python already live,
             # the same startup package must attach to Console's interpreter.
-            if trigger == "python-access":
+            if system_default_packages:
+                # Package startup supplies the readiness boundary. Dependency
+                # preparation may outlive a send's response timeout in CI.
+                startup = client.start_send(r="invisible(NULL)", timeout_ms=0)
+                try:
+                    ready.wait("R startup package", timeout=client.response_timeout)
+                    client.receive(startup)
+                    assert last_result_text(client) == (
+                        "\n[running; poll with an empty send]"
+                    ), client.transcript[-1]
+                finally:
+                    release.release()
+                client.send()
+            elif trigger == "python-access":
                 client.send(python="assert 3 < r.pi < 4")
             else:
                 client.send(r="invisible(NULL)")
