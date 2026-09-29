@@ -14,7 +14,8 @@ pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, String> {
 }
 
 fn run(executable: &str) -> Result<serde_json::Value, String> {
-    let (mut notices, notify) = UnixStream::pair().map_err(|error| error.to_string())?;
+    // Linux's restricted network policy denies socket sends, including notices.
+    let (mut notices, notify) = std::io::pipe().map_err(|error| error.to_string())?;
     let (completion, completed) = UnixStream::pair().map_err(|error| error.to_string())?;
     let watch = crate::input_watch::InputWatch::new(completion.as_raw_fd())?;
     let (exited, exit_writer) = std::io::pipe().map_err(|error| error.to_string())?;
