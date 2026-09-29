@@ -18,6 +18,7 @@ result:
 send:
   r: |
     stopifnot(
+      "mcpconsoleearlypython" %in% getOption("defaultPackages"),
       !isTRUE(reticulate::py_config()$ephemeral),
       identical(search()[[2L]], "tools:mcp-console"),
       identical(find("py")[[1L]], "tools:mcp-console"),

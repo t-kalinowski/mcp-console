@@ -7,6 +7,20 @@ base::local(
     selection_callback <- NULL
     incomplete_attachment <- FALSE
 
+    same_python_selection <- function(requested, running) {
+      requested <- reticulate:::normalize_python_path(requested)$path
+      # Virtualenv executables can link to the same base binary. Compare their
+      # containing directories too, while allowing aliases within one bin directory.
+      identical(
+        normalizePath(dirname(requested), mustWork = FALSE),
+        normalizePath(dirname(running), mustWork = FALSE)
+      ) &&
+        identical(
+          normalizePath(requested, mustWork = FALSE),
+          normalizePath(running, mustWork = FALSE)
+        )
+    }
+
     replace_binding <- function(name, value) {
       was_locked <- bindingIsLocked(name, namespace)
       if (was_locked) {
@@ -37,10 +51,7 @@ base::local(
           if (
             nzchar(requested) &&
               (requested == "managed" ||
-                !identical(
-                  normalizePath(requested, mustWork = FALSE),
-                  normalizePath(identity$embedding$python, mustWork = FALSE)
-                ))
+                !same_python_selection(requested, identity$embedding$python))
           ) {
             stop(
               "Python is already initialized with another selection; restart required",
@@ -312,12 +323,7 @@ base::local(
         running <- .Call("mcp_console_running_python")
         if (!is.null(running) && !identical(required, FALSE)) {
           identity <- jsonlite::fromJSON(running)
-          if (
-            !identical(
-              normalizePath(python, mustWork = FALSE),
-              normalizePath(identity$embedding$python, mustWork = FALSE)
-            )
-          ) {
+          if (!same_python_selection(python, identity$embedding$python)) {
             stop(
               "Python is already initialized with another selection; restart required",
               call. = FALSE

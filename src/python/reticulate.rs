@@ -25,6 +25,7 @@ pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
 
 // When Python is already live, install selection hooks before R startup
 // packages can enter reticulate. R-first startup retains external adoption.
+// Called after R reads the system Renviron, before it loads default packages.
 // This and R's own bootstrap environment writes require no concurrent native
 // environment access. See the unresolved constraint in docs/ARCHITECTURE.md.
 pub(crate) fn defer_r_startup() -> Result<Option<Option<std::ffi::OsString>>, String> {

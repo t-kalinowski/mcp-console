@@ -46,8 +46,7 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
 }
 
 fn initialize(home: &std::path::Path) -> Result<(), String> {
-    let deferred = crate::python::defer_r_startup()?;
-    embedded_r::initialize_r(home).map_err(|error| error.to_string())?;
+    let deferred = embedded_r::initialize_r(home).map_err(|error| error.to_string())?;
     crate::python::configure_r_environment().map_err(|error| error.to_string())?;
     let runtime = Rc::new(embedded_r::Runtime::initialize().map_err(|error| error.to_string())?);
     RUNTIME.with(|slot| *slot.borrow_mut() = Some(runtime.clone()));

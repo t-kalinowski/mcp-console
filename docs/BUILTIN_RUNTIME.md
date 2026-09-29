@@ -381,7 +381,9 @@ An R cell, Python-side `r` access, or R-owned SQL initializes R.
 Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, display settings, and user redirections of `sys.stdout` and `sys.stderr`.
 Linux loader preparation happens before either interpreter starts.
 R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
+Different virtualenvs remain distinct selections even when their executables link to the same base Python.
 Deferred startup packages load within the initiating R or Python cell's graphics scope, before `tools:mcp-console` is attached at search position 2.
+Their selection includes `R_DEFAULT_PACKAGES` set by the installation's system `Renviron`.
 An unchanged `RETICULATE_PYTHON` selection retains that identity after Python changes the working directory or `PATH`.
 Late attachment preserves reticulate's `ephemeral` marker for Console-managed environments.
 Reconstructed reticulate configuration includes the running interpreter's active and base prefixes.

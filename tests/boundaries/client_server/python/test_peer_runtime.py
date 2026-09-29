@@ -28,7 +28,7 @@ from support.resolvers import (
     send_and_collect_runtime_python_resolution,
 )
 from support.requirements import NATIVE_FIXTURES, R, command, requires
-from support.r import r_test_environment, reference_plots
+from support.r import isolated_r_home, r_test_environment, reference_plots
 from support.python import write_test_wheel
 from support.ssh import (
     SSH,
@@ -748,6 +748,11 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
             [sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True
         )
         executable = venv / "bin/python"
+        other = root / "other environment"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", str(other)], check=True
+        )
+        assert executable.samefile(other / "bin/python")
         # Reticulate declares NumPy by default, including for explicit Python
         # selections. Satisfy that declaration before exercising the bridge.
         index = write_test_wheel(
@@ -812,6 +817,7 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                 RETICULATE_PYTHON=selection,
                 MCP_CONSOLE_TEST_PYTHON=str(workspace.resolve() / selection),
                 MCP_CONSOLE_TEST_PYTHON_PREFIX=str(venv),
+                MCP_CONSOLE_TEST_OTHER_PYTHON=str(other / "bin/python"),
                 PYTHONPATH=str(root / "unselected-modules"),
                 RETICULATE_PYTHONPATH=str(modules),
             )
@@ -883,7 +889,7 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                         client.send(
                             r=code("""
                             original <- Sys.getenv("RETICULATE_PYTHON")
-                            for (selection in c("/incompatible-python", "managed")) {
+                            for (selection in c("/incompatible-python", "managed", Sys.getenv("MCP_CONSOLE_TEST_OTHER_PYTHON"))) {
                               Sys.setenv(RETICULATE_PYTHON = selection)
                               failure <- tryCatch(reticulate::py_config(), error = conditionMessage)
                               stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
@@ -894,6 +900,22 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                         assert last_result_text(client) == "[done]", client.transcript[
                             -1
                         ]
+                    client.send(
+                        r=code("""
+                        requested <- Sys.getenv("MCP_CONSOLE_TEST_OTHER_PYTHON")
+                        failure <- tryCatch(
+                          reticulate::use_python(requested, required = TRUE),
+                          error = conditionMessage
+                        )
+                        stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
+                        # Executable aliases within the selected environment remain valid.
+                        suppressWarnings(reticulate::use_python(
+                          file.path(dirname(Sys.getenv("MCP_CONSOLE_TEST_PYTHON")), "python3"),
+                          required = TRUE
+                        ))
+                        """)
+                    )
+                    assert last_result_text(client) == "[done]", client.transcript[-1]
                     client.send(r='check_cli("peer-cli", "mcp_console_test_cli")')
                     assert (
                         last_result_text(client)
@@ -1274,6 +1296,23 @@ def test_late_r_startup_captures_package_plots(
     return records
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_system_default_packages_survive_late_r_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for python_first in (False, True):
+        records += attach_python_initialized_during_r_startup(
+            binary,
+            execution,
+            managed=False,
+            python_first=python_first,
+            system_default_packages=True,
+        )
+    return records
+
+
 def attach_python_initialized_during_r_startup(
     binary: Path,
     execution: Execution,
@@ -1281,6 +1320,7 @@ def attach_python_initialized_during_r_startup(
     managed: bool,
     python_first: bool = False,
     startup_plots: bool = False,
+    system_default_packages: bool = False,
     trigger: str = "r-cell",
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
@@ -1318,6 +1358,13 @@ def attach_python_initialized_during_r_startup(
             MCP_CONSOLE_TEST_PYTHON_PREFIX=sys.prefix,
             MCP_CONSOLE_TEST_STARTUP_PLOTS="1" if startup_plots else "0",
         )
+        if system_default_packages:
+            home = isolated_r_home(root, environment)
+            with (home / "etc/Renviron").open("a") as stream:
+                stream.write(
+                    "\nR_DEFAULT_PACKAGES=" + environment["R_DEFAULT_PACKAGES"] + "\n"
+                )
+            environment["R_DEFAULT_PACKAGES"] = "NULL"
         if managed:
             environment.pop("RETICULATE_PYTHON")
             # The startup package selects a prepared environment without
@@ -1360,6 +1407,7 @@ def attach_python_initialized_during_r_startup(
             client.send(
                 r=code("""
                 stopifnot(
+                  "mcpconsoleearlypython" %in% getOption("defaultPackages"),
                   !isTRUE(reticulate::py_config()$ephemeral),
                   identical(search()[[2L]], "tools:mcp-console"),
                   identical(find("py")[[1L]], "tools:mcp-console"),

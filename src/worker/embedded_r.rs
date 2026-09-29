@@ -219,7 +219,9 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
     }
 }
 
-pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
+pub(super) fn initialize_r(
+    r_home: &std::path::Path,
+) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
@@ -250,6 +252,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
         libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
         libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
         libr::set(libr::ptr_R_Busy, Some(r_busy));
+    }
+    // Rf_initialize_R has read the system Renviron. Defer its effective package
+    // selection before setup_Rmainloop runs the base profile and .First.sys().
+    let deferred = crate::python::defer_r_startup()?;
+    unsafe {
         libr::setup_Rmainloop();
     }
 
@@ -264,7 +271,7 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
     // records R's pending flag; attachment below retains that flag, transfers
     // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
-    Ok(())
+    Ok(deferred)
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
