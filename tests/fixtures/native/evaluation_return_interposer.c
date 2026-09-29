@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -21,7 +22,12 @@ static long (*native_syscall)(long, ...);
 
 static pid_t server_pid;
 static pthread_t server_main_thread;
-static atomic_uintptr_t waiting_mutex = 0;
+struct Waiter {
+    uintptr_t mutex;
+    struct Waiter *next;
+};
+static struct Waiter *waiters;
+static atomic_flag waiters_lock = ATOMIC_FLAG_INIT;
 static atomic_uintptr_t contended_mutex = 0;
 static atomic_bool completion_claimed = false;
 static atomic_bool paused = false;
@@ -30,6 +36,14 @@ static _Thread_local bool released = false;
 static void notify(const char *name);
 static void await_release(const char *name);
 static void select_worker_mutex(uintptr_t mutex);
+
+static void lock_waiters(void) {
+    while (atomic_flag_test_and_set(&waiters_lock)) sched_yield();
+}
+
+static void unlock_waiters(void) {
+    atomic_flag_clear(&waiters_lock);
+}
 
 __attribute__((constructor)) static void initialize(void) {
     server_main_thread = pthread_self();
@@ -76,7 +90,9 @@ static ssize_t observe_read(int descriptor, void *buffer, size_t length) {
         contains_completed(buffer, (size_t)count) &&
         !atomic_exchange(&completion_claimed, true)) {
         notify("MCP_CONSOLE_TEST_COMPLETION_STARTED");
-        select_worker_mutex(atomic_load(&waiting_mutex));
+        lock_waiters();
+        if (waiters != NULL) select_worker_mutex(waiters->mutex);
+        unlock_waiters();
         await_release("MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE");
     }
     return count;
@@ -89,20 +105,29 @@ static void select_worker_mutex(uintptr_t mutex) {
     }
 }
 
-static void observe_contention(uintptr_t mutex) {
+static void observe_contention(struct Waiter *waiter, uintptr_t mutex) {
     // The MCP driver's untimed condition-variable counter can also equal 2.
     // Worker-lock acquisition in this case belongs to blocking-pool threads.
     if (getpid() != server_pid || pthread_equal(pthread_self(), server_main_thread) ||
         access(getenv("MCP_CONSOLE_TEST_COMPLETION_ARMED"), F_OK) != 0) return;
-    // Discard completed waits: restart can briefly contend on lifecycle
-    // admission before sending cancellation and waiting for the worker.
-    uintptr_t unset = 0;
-    if (atomic_compare_exchange_strong(&waiting_mutex, &unset, mutex) &&
-        atomic_load(&completion_claimed)) select_worker_mutex(mutex);
+    // Each native wait owns its registration until it returns. A transient
+    // overlapping wait must not hide the restart's worker-lock acquisition
+    // or clear another thread's registration during its own cleanup.
+    lock_waiters();
+    waiter->mutex = mutex;
+    waiter->next = waiters;
+    waiters = waiter;
+    if (atomic_load(&completion_claimed)) select_worker_mutex(mutex);
+    unlock_waiters();
 }
 
-static void after_contention(uintptr_t mutex) {
-    atomic_compare_exchange_strong(&waiting_mutex, &mutex, 0);
+static void after_contention(struct Waiter *waiter) {
+    if (waiter->mutex == 0) return;
+    lock_waiters();
+    struct Waiter **entry = &waiters;
+    while (*entry != waiter) entry = &(*entry)->next;
+    *entry = waiter->next;
+    unlock_waiters();
 }
 
 static void await_release(const char *name) {
@@ -138,9 +163,10 @@ static void before_park(void) {
 static int observe_mutex_lock(pthread_mutex_t *mutex) {
     int result = pthread_mutex_trylock(mutex);
     if (result != EBUSY) return result;
-    observe_contention((uintptr_t)mutex);
+    struct Waiter waiter = {0};
+    observe_contention(&waiter, (uintptr_t)mutex);
     result = pthread_mutex_lock(mutex);
-    after_contention((uintptr_t)mutex);
+    after_contention(&waiter);
     return result;
 }
 
@@ -182,16 +208,17 @@ long syscall(long number, ...) {
     for (int index = 0; index < 6; ++index) slots[index] = va_arg(arguments, long);
     va_end(arguments);
     long command = number == SYS_futex ? slots[1] & FUTEX_CMD_MASK : -1;
+    struct Waiter waiter = {0};
     if (command == FUTEX_WAIT || command == FUTEX_WAIT_BITSET) {
         // Tokio's idle blocking-pool wait has a timeout; mutex waits do not.
         // A condition-variable notification counter can also equal 2, so it
         // must not claim the worker-mutex checkpoint while the pool is idle.
         if (slots[3] != 0) before_park();
-        else if (slots[2] == 2) observe_contention((uintptr_t)slots[0]);
+        else if (slots[2] == 2) observe_contention(&waiter, (uintptr_t)slots[0]);
     }
     long result = native_syscall(number, slots[0], slots[1], slots[2], slots[3], slots[4], slots[5]);
     if (command == FUTEX_WAIT || command == FUTEX_WAIT_BITSET) {
-        after_contention((uintptr_t)slots[0]);
+        after_contention(&waiter);
     }
     if (command == FUTEX_WAKE) after_unlock((uintptr_t)slots[0]);
     return result;
