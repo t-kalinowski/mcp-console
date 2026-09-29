@@ -380,7 +380,13 @@ def test_rejects_replacement_of_loaded_distribution(
                 f"Name: console-loaded\nVersion: {version}\n"
             )
             (metadata / "top_level.txt").write_text("console_loaded\n")
-            (extra / "console_loaded.py").write_text("value = object()\n")
+            (extra / "console_loaded.py").write_text(
+                # fmt: python
+                code(f"""
+                    __version__ = {version!r}
+                    value = object()
+                    """)
+            )
         with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
@@ -394,9 +400,10 @@ def test_rejects_replacement_of_loaded_distribution(
                     identity = sys.prefix, sys.exec_prefix, sys.executable, list(sys.path)
                     process_environment = dict(os.environ)
                     worker_pid = os.getpid()
+                    print(console_loaded.__version__)
                     """)
             )
-            assert last_result_text(client) == "[done]", last_result_text(client)
+            assert last_result_text(client) == "1.0\n", last_result_text(client)
             result = client.send(
                 python="cell_was_run = True",
                 requirements={"python": ["console-activation-fixture"]},
@@ -413,12 +420,22 @@ def test_rejects_replacement_of_loaded_distribution(
                     assert process_environment == dict(os.environ)
                     assert console_loaded.value is marker and os.getpid() == worker_pid
                     assert "cell_was_run" not in globals()
+                    print(console_loaded.__version__)
                     """)
             )
-            assert last_result_text(client) == "[done]", last_result_text(client)
+            assert last_result_text(client) == "1.0\n", last_result_text(client)
             client.send(control="restart")
-            client.send(python="import console_unloaded; console_unloaded.origin")
-            assert last_result_text(client) == "'initial'\n", last_result_text(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import console_loaded
+                    import console_unloaded
+
+                    assert console_unloaded.origin == "initial"
+                    print(console_loaded.__version__)
+                    """)
+            )
+            assert last_result_text(client) == "1.0\n", last_result_text(client)
             return client.finish()
 
 

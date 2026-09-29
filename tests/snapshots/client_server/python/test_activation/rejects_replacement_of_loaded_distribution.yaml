@@ -20,10 +20,12 @@ send:
     identity = sys.prefix, sys.exec_prefix, sys.executable, list(sys.path)
     process_environment = dict(os.environ)
     worker_pid = os.getpid()
+    print(console_loaded.__version__)
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        1.0
   isError: false
 ---
 send:
@@ -46,10 +48,12 @@ send:
     assert process_environment == dict(os.environ)
     assert console_loaded.value is marker and os.getpid() == worker_pid
     assert "cell_was_run" not in globals()
+    print(console_loaded.__version__)
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        1.0
   isError: false
 ---
 send:
@@ -64,10 +68,15 @@ result:
   isError: false
 ---
 send:
-  python: import console_unloaded; console_unloaded.origin
+  python: |
+    import console_loaded
+    import console_unloaded
+
+    assert console_unloaded.origin == "initial"
+    print(console_loaded.__version__)
 result:
   content:
     - type: text
       text: |
-        'initial'
+        1.0
   isError: false
