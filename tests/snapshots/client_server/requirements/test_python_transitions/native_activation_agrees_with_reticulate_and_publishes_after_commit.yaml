@@ -4,7 +4,8 @@
 send:
   python: >-
     import sys; identity = object(); identity_id = id(identity);
-    initial_executable = sys.executable
+    initial_executable = sys.executable; from pathlib import Path; _ =
+    Path('initial-python').write_text(sys.executable)
 result:
   content:
     - type: text

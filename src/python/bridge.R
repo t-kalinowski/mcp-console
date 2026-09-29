@@ -16,11 +16,13 @@ base::local(
 
     request_json <- function(
       requirements,
-      retained_requirements
+      retained_requirements,
+      initialized
     ) {
       request <- list(
         requirements = requirements,
-        retained_requirements = retained_requirements
+        retained_requirements = retained_requirements,
+        initialized = initialized
       )
       jsonlite::toJSON(
         request,
@@ -113,7 +115,8 @@ base::local(
       resolve <- function(
         packages = current_requirements()$packages,
         python_version = reticulate:::py_reqs_python_version(),
-        exclude_newer = current_requirements()$exclude_newer
+        exclude_newer = current_requirements()$exclude_newer,
+        initialized = FALSE
       ) {
         current <- current_requirements()
         requirements <- manifest(packages, python_version, exclude_newer)
@@ -126,7 +129,8 @@ base::local(
           "mcp_console_resolve_python",
           request_json(
             requirements,
-            retained_requirements
+            retained_requirements,
+            initialized
           )
         )
       }

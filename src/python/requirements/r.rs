@@ -456,6 +456,7 @@ impl Adapter {
                 &candidate.get("packages")?,
                 version,
                 &candidate.get("exclude_newer")?,
+                &Value(RObject::from(true)),
             ],
         )
     }

@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import sys
 import tempfile
 from contextlib import ExitStack
@@ -104,35 +105,51 @@ def test_owns_managed_python_transitions(
 def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        client.send(
-            python="import sys; identity = object(); identity_id = id(identity); initial_executable = sys.executable"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, record = recording_uv_environment(root)
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if execution == SANDBOXED
+            else execution.serve()
         )
-        assert last_tool_text(client) == "[done]", last_tool_text(client)
-        # fmt: r
-        r = code(r"""
-            before <- reticulate::py_config()
-            invisible(reticulate::py_require("py-yaml12"))
-            after <- reticulate::py_config()
-            stopifnot(
-              identical(after$libpython, before$libpython),
-              identical(
-                after$executable,
-                reticulate::py_eval("__import__('sys').executable")
-              ),
-              "py-yaml12" %in% reticulate::py_require()$packages
+        with McpClient(binary, serve, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import sys; identity = object(); identity_id = id(identity); initial_executable = sys.executable; from pathlib import Path; _ = Path('initial-python').write_text(sys.executable)"
             )
-            """)
-        client.send(r=r)
-        assert last_tool_text(client) == "[done]", last_tool_text(client)
-        declared = client.send(requirements={"action": "get"})["structuredContent"]
-        assert "py-yaml12" in declared["requirements"]["python"]
-        client.send(
-            python="import yaml12; (id(identity) == identity_id, sys.executable != initial_executable, yaml12.__name__)"
-        )
-        assert last_tool_text(client) == "(True, True, 'yaml12')\n"
-        return client.finish()
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
+            record.write_text("")
+            # fmt: r
+            r = code(r"""
+                before <- reticulate::py_config()
+                invisible(reticulate::py_require("py-yaml12"))
+                after <- reticulate::py_config()
+                stopifnot(
+                  identical(after$libpython, before$libpython),
+                  identical(
+                    after$executable,
+                    reticulate::py_eval("__import__('sys').executable")
+                  ),
+                  "py-yaml12" %in% reticulate::py_require()$packages
+                )
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
+            calls = [json.loads(line) for line in record.read_text().splitlines()]
+            resolution = next(call for call in calls if call[:2] == ["tool", "run"])
+            assert (
+                resolution[resolution.index("--python") + 1]
+                == (root / "initial-python").read_text()
+            ), resolution
+            assert not any(call[:2] == ["python", "list"] for call in calls), calls
+            declared = client.send(requirements={"action": "get"})["structuredContent"]
+            assert "py-yaml12" in declared["requirements"]["python"]
+            client.send(
+                python="import yaml12; (id(identity) == identity_id, sys.executable != initial_executable, yaml12.__name__)"
+            )
+            assert last_tool_text(client) == "(True, True, 'yaml12')\n"
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
