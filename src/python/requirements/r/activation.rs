@@ -125,7 +125,18 @@ impl Adapter {
             .filter(|selected| python == selected.embedding.python)
             .ok_or("Python activation has no matching inspected selection")?;
         super::super::validate_selected(&selected).map_err(|error| error.to_string())?;
-        let inspected = crate::python::probe::inspect(&selected.embedding.python)?;
+        let inspected = match crate::python::probe::inspect(&selected.embedding.python) {
+            Ok(value) => value,
+            Err(crate::python::probe::Error::Interrupted) => {
+                // Let R construct and consume its pending interrupt through the
+                // same condition-preserving boundary as the adapter callbacks.
+                let zero = harp::exec::r_sandbox(|| Value(RObject::from(0)))
+                    .map_err(super::from_r_error)?;
+                super::base_call("Sys.sleep", &[&zero])?;
+                return Err("Python probe cancelled without a pending R interrupt".into());
+            }
+            Err(error) => return Err(error.to_string().into()),
+        };
         let encoded =
             serde_json::json!({"selection": selected, "environment": inspected}).to_string();
         let encoded =

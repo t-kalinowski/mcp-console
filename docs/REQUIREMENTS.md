@@ -406,12 +406,14 @@ Live Python-version declarations use the host resolver's matching rules, includi
 
 The shared activation operation compares the candidate and retained interpreter's `libpython` strings exactly before conversion metadata or interpreter mutation.
 It also requires the running Python version and rejects replacement of a loaded distribution with a different version or an absent distribution.
+Loaded modules are matched to installed distribution files, so importing one namespace contributor does not pin its siblings.
 For a compatible candidate, it sets the candidate identity before running the environment's activation script and updates executable, multiprocessing, and child-process setup without replacing the interpreter or its objects.
 Activation replaces environment-owned site paths, including paths added by `.pth` files, while preserving user-added paths.
 Initial path bookkeeping probes the selected interpreter without replaying `site.main()` in the live interpreter.
 Startup `.pth` additions must agree between that probe and the embedded interpreter; cleanup of process-dependent startup additions is unsupported.
 Live activation tracks its actual path additions.
 Interrupting the initial bookkeeping probe preserves R and SQL state, and a later Python cell retries the unfinished handoff.
+An interrupt during a live `reticulate::py_require()` candidate probe remains an R interrupt condition.
 Compatibility and other failures before mutation leave the accepted declaration and usable worker intact.
 An interrupted activation restores Console-owned paths, prefixes, executable, and process environment, permitting another preparation attempt.
 This restoration does not undo arbitrary site-hook side effects.

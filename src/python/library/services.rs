@@ -298,7 +298,7 @@ unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject)
             unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
             return Ok(std::ptr::null_mut());
         }
-        let result = result?;
+        let result = result.map_err(|error| error.to_string())?;
         Ok(services.string(&result.to_string()))
     })
 }

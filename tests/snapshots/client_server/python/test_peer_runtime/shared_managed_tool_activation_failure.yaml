@@ -159,7 +159,8 @@ result:
 ---
 send:
   python: >-
-    assert 'identity' not in globals(); print('accepted environment retained')
+    assert 'identity' not in globals(); print('accepted environment
+    retained')
 result:
   content:
     - type: text

@@ -246,7 +246,11 @@ fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, 
     let inspected = if live {
         match super::probe::inspect(&candidate.selected.embedding.python) {
             Ok(value) => Some(value),
-            Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
+            Err(error) => {
+                return Ok(super::PreparationOutcome::Rejected {
+                    message: error.to_string(),
+                });
+            }
         }
     } else {
         None
@@ -255,8 +259,8 @@ fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, 
         Ok(projection) => projection,
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
-    resolved(candidate.clone());
     if let Some(inspected) = inspected {
+        resolved(candidate.clone());
         return match activate(&candidate, inspected, projection)? {
             ActivationOutcome::Prepared => Ok(super::PreparationOutcome::Prepared),
             ActivationOutcome::Rejected(message) => {
@@ -273,6 +277,7 @@ fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, 
     {
         return Ok(super::PreparationOutcome::Rejected { message });
     }
+    resolved(candidate);
     Ok(super::PreparationOutcome::Prepared)
 }
 
@@ -508,7 +513,7 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     }
     let inspected = match super::probe::inspect(&candidate.selected.embedding.python) {
         Ok(value) => value,
-        Err(error) => return Ok(failed(error)),
+        Err(error) => return Ok(failed(error.to_string())),
     };
     let projection = match r::project_packages(
         &candidate.selected,

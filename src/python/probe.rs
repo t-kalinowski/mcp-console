@@ -9,11 +9,28 @@ use std::time::Duration;
 
 const SOURCE: &str = include_str!("probe.py");
 
-pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, String> {
-    run(executable).map_err(|error| format!("Python environment inspection failed: {error}"))
+pub(super) enum Error {
+    Interrupted,
+    Message(String),
 }
 
-fn run(executable: &str) -> Result<serde_json::Value, String> {
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::Interrupted => "KeyboardInterrupt",
+            Self::Message(message) => message,
+        };
+        write!(formatter, "Python environment inspection failed: {message}")
+    }
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
     // Linux's restricted network policy denies socket sends, including notices.
     let (mut notices, notify) = std::io::pipe().map_err(|error| error.to_string())?;
     let (completion, completed) = UnixStream::pair().map_err(|error| error.to_string())?;
@@ -62,7 +79,7 @@ fn run(executable: &str) -> Result<serde_json::Value, String> {
         let mut wakeup = crate::worker::python_interrupt_wakeup()?;
         loop {
             if crate::worker::python_interrupt_pending() {
-                return Err("KeyboardInterrupt".to_string());
+                return Err(Error::Interrupted);
             }
             let ready =
                 crate::readiness::wait_for_io(notices.as_raw_fd(), libc::POLLIN, Some(&wakeup))
@@ -77,7 +94,7 @@ fn run(executable: &str) -> Result<serde_json::Value, String> {
                 .map_err(|error| error.to_string())?;
             if notice[0] == b'C' {
                 crate::worker::mark_shutting_down();
-                return Err("worker is shutting down".to_string());
+                return Err(Error::Message("worker is shutting down".into()));
             }
             return Ok(());
         }
@@ -86,13 +103,14 @@ fn run(executable: &str) -> Result<serde_json::Value, String> {
         && let Err(error) = child.0.kill()
         && error.raw_os_error() != Some(libc::ESRCH)
     {
-        return Err(super::environment::infrastructure(error.to_string()));
+        return Err(super::environment::infrastructure(error.to_string()).into());
     }
     // Do not reap before the WNOWAIT observer has finished.
     if !waiter.wait(Duration::from_secs(60))? {
         return Err(super::environment::infrastructure(
             "Python probe exit observer did not finish".to_string(),
-        ));
+        )
+        .into());
     }
     let status = child.0.wait().map_err(|error| error.to_string())?;
     // Both platform observers wake on peer closure; Linux deliberately ignores
@@ -109,18 +127,18 @@ fn run(executable: &str) -> Result<serde_json::Value, String> {
         .map_err(|error| error.to_string())?;
     result?;
     if !status.success() {
-        return Err(format!("{status}: {}", String::from_utf8_lossy(&output)));
+        return Err(format!("{status}: {}", String::from_utf8_lossy(&output)).into());
     }
     let marker = b"\x1eMCP_CONSOLE_ENVIRONMENT\x1e";
     let start = output
         .windows(marker.len())
         .position(|bytes| bytes == marker)
-        .ok_or("candidate omitted its environment record")?
+        .ok_or_else(|| Error::Message("candidate omitted its environment record".into()))?
         + marker.len();
     let length = output[start..]
         .iter()
         .position(|byte| *byte == 0x1f)
-        .ok_or("candidate environment record is incomplete")?;
+        .ok_or_else(|| Error::Message("candidate environment record is incomplete".into()))?;
     serde_json::from_slice(&output[start..start + length])
-        .map_err(|error| format!("invalid candidate environment: {error}"))
+        .map_err(|error| Error::Message(format!("invalid candidate environment: {error}")))
 }

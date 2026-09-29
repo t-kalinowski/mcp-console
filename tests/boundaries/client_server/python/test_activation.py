@@ -497,7 +497,9 @@ def test_allows_changes_to_unloaded_namespace_distributions(
             return client.finish()
 
 
-def cancelled_candidate_probe(binary: Path, execution: Execution, control: str) -> list:
+def cancelled_candidate_probe(
+    binary: Path, execution: Execution, control: str, *, r_transition: bool = False
+) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment = managed_environments(root)
@@ -550,21 +552,42 @@ def cancelled_candidate_probe(binary: Path, execution: Execution, control: str) 
                 )
                 client.send(python="marker = object(); marker_id = id(marker)")
                 assert last_result_text(client) == "[done]", last_result_text(client)
-                preparation = client.start_send(
-                    requirements={"python": ["console-activation-fixture"]}
-                )
+                if r_transition:
+                    client.send(r="before <- reticulate::py_require()")
+                    preparation = client.start_send(
+                        # fmt: r
+                        r=code(r"""
+                            tryCatch(
+                              reticulate::py_require("console-activation-fixture"),
+                              interrupt = function(condition) cat("caught R interrupt\n"),
+                              error = function(condition) {
+                                cat("caught R error:", conditionMessage(condition), "\n")
+                              }
+                            )
+                            stopifnot(identical(reticulate::py_require(), before))
+                            """)
+                    )
+                else:
+                    preparation = client.start_send(
+                        requirements={"python": ["console-activation-fixture"]}
+                    )
                 ready.wait("candidate probe")
                 child_pid = host_process_id(
                     int(pid_path.read_text()), client.process.pid
                 )
                 cancellation = client.start_send(control=control)
                 client.receive_many([preparation, cancellation])
-                assert preparation["result"]["isError"] is True, preparation
-                expected = (
-                    "Python preparation cancelled by restart"
-                    if control == "restart"
-                    else "KeyboardInterrupt"
+                assert preparation["result"]["isError"] is (not r_transition), (
+                    preparation
                 )
+                if r_transition:
+                    expected = "caught R interrupt\n"
+                else:
+                    expected = (
+                        "Python preparation cancelled by restart"
+                        if control == "restart"
+                        else "KeyboardInterrupt"
+                    )
                 assert preparation["result"]["content"] == [
                     {"type": "text", "text": expected}
                 ], preparation
@@ -576,10 +599,24 @@ def cancelled_candidate_probe(binary: Path, execution: Execution, control: str) 
                 )
                 assert last_result_text(client) == "True\n", last_result_text(client)
                 (candidate_site / "console-probe.pth").unlink()
-                client.send(requirements={"python": ["console-activation-fixture"]})
-                assert last_result_text(client) == "[prepared]", last_result_text(
-                    client
-                )
+                if r_transition:
+                    client.send(
+                        r='reticulate::py_require("console-activation-fixture")'
+                    )
+                    assert last_result_text(client) == "[done]", last_result_text(
+                        client
+                    )
+                    client.send(
+                        python="import console_unloaded; console_unloaded.origin"
+                    )
+                    assert last_result_text(client) == "'candidate'\n", (
+                        last_result_text(client)
+                    )
+                else:
+                    client.send(requirements={"python": ["console-activation-fixture"]})
+                    assert last_result_text(client) == "[prepared]", last_result_text(
+                        client
+                    )
                 return client.finish()
         finally:
             for checkpoint in checkpoints:
@@ -596,6 +633,70 @@ def test_cancels_candidate_probe_and_reaps_its_child(
 @executions(DIRECT, SANDBOXED)
 def test_restarts_during_candidate_probe(binary: Path, execution: Execution) -> list:
     return cancelled_candidate_probe(binary, execution, "restart")
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preserves_r_interrupt_during_candidate_probe(
+    binary: Path, execution: Execution
+) -> list:
+    return cancelled_candidate_probe(binary, execution, "interrupt", r_transition=True)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retains_previous_candidate_after_lazy_projection_failure(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            initialize_managed_client(client)
+            client.send(requirements={"python": ["console-initial-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            client.send(
+                # fmt: r
+                r=code("""
+                    before <- reticulate::py_require()
+                    worker_pid <- Sys.getpid()
+                    stopifnot(!reticulate::py_available(initialize = FALSE))
+                    lockBinding("python_requirements", reticulate:::.globals)
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            result = client.send(
+                requirements={"python": ["console-activation-fixture"]}
+            )
+            assert result["isError"] is True, result
+            assert "cannot change value of locked binding" in last_result_text(
+                client
+            ), result
+            client.send(
+                # fmt: r
+                r=code("""
+                    unlockBinding("python_requirements", reticulate:::.globals)
+                    stopifnot(
+                      !reticulate::py_available(initialize = FALSE),
+                      identical(reticulate::py_require(), before),
+                      identical(Sys.getpid(), worker_pid)
+                    )
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(python="import console_unloaded; console_unloaded.origin")
+            assert last_result_text(client) == "'initial'\n", last_result_text(client)
+            client.send(
+                # fmt: r
+                r=code("""
+                    stopifnot(
+                      identical(reticulate::py_require(), before),
+                      identical(Sys.getpid(), worker_pid)
+                    )
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(requirements={"python": ["console-activation-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
