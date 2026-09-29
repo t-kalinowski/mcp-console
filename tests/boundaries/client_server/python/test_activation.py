@@ -13,6 +13,7 @@ from support.assertions import last_result_text
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.processes import host_process_id, process_exists
 from support.suites import run_this_suite
@@ -697,6 +698,111 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             client.send(requirements={"python": ["console-activation-fixture"]})
             assert last_result_text(client) == "[prepared]", last_result_text(client)
             return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_retries_interrupted_startup_with_prepared_candidate_without_r(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        for name in ("initial", "candidate"):
+            subprocess.run(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    str(root / name / "bin/python"),
+                    "duckdb",
+                ],
+                check=True,
+                capture_output=True,
+            )
+        retain_system_bwrap(root, environment["PATH"])
+        environment["PATH"] = str(root)
+        for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
+            environment.pop(name, None)
+        arguments = ("--writable-root", str(root)) if execution == SANDBOXED else ()
+        ready = FifoCheckpoint.create(root / "ready")
+        release = FifoCheckpoint.create(root / "release")
+        try:
+            with McpClient(
+                binary, execution.serve(*arguments), environment, root
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(control="restart")
+                client.send(requirements={"python": ["console-activation-fixture"]})
+                assert last_result_text(client) == "[prepared]", last_result_text(
+                    client
+                )
+                retained = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]
+                site = next((root / "candidate/lib").glob("python*/site-packages"))
+                hook = site / "startup-probe.pth"
+                hook.write_text("import startup_probe\n")
+                (site / "startup_probe.py").write_text(
+                    # fmt: python
+                    code(f"""
+                        import os
+                        import sys
+                        from pathlib import Path
+
+                        if sys.flags.no_site:
+                            Path({str(root / "probe-pid")!r}).write_text(str(os.getpid()))
+                            with open({str(ready.path)!r}, "wb", buffering=0) as ready:
+                                ready.write(b"1")
+                            with open({str(release.path)!r}, "rb", buffering=0) as release:
+                                assert release.read(1) == b"1"
+                        else:
+                            Path({str(root / "worker-pid")!r}).write_text(str(os.getpid()))
+                        """)
+                )
+                evaluation = client.start_send(
+                    python="print('initialized')", timeout_ms=0
+                )
+                ready.wait("prepared environment startup probe")
+                child_pid = host_process_id(
+                    int((root / "probe-pid").read_text()), client.process.pid
+                )
+                client.receive(evaluation)
+                assert (
+                    last_result_text(client) == "\n[running; poll with an empty send]"
+                )
+                client.send(control="interrupt", timeout_ms=30_000)
+                assert not process_exists(child_pid), (child_pid, client.transcript[-1])
+                hook.unlink()
+                assert (
+                    client.send(requirements={"action": "get"})["structuredContent"]
+                    == retained
+                )
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        import os
+                        import console_unloaded
+                        from pathlib import Path
+
+                        assert os.getpid() == int(Path("worker-pid").read_text())
+                        print(console_unloaded.origin)
+                        """)
+                )
+                assert last_result_text(client) == "candidate\n", last_result_text(
+                    client
+                )
+                client.send(control="restart")
+                client.send(
+                    python="import console_unloaded; print(console_unloaded.origin)"
+                )
+                assert last_result_text(client) == "candidate\n", last_result_text(
+                    client
+                )
+                return client.finish()
+        finally:
+            ready.close()
+            release.close()
 
 
 @executions(DIRECT, SANDBOXED)

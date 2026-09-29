@@ -302,10 +302,11 @@ pub(super) fn initialized() -> bool {
     STATE.with(|slot| slot.borrow().live.is_some())
 }
 
-pub(super) fn discard_initial_candidate() {
+pub(super) fn interrupt_initialization() {
     STATE.with_borrow_mut(|state| {
         if state.live.is_none() {
-            state.resolved = None;
+            // CPython already uses this selection. Keep it for the retry,
+            // including candidates accepted by a prior lazy preparation.
             state.retry_initialization = true;
         }
     });
@@ -319,8 +320,8 @@ pub(crate) fn initialize(
     if STATE.with_borrow(|state| state.retry_initialization)
         && INITIAL_MANIFEST.get().and_then(Option::as_ref) != Some(&requirements)
     {
-        // An interrupted setup ended its cell without publishing the lazy
-        // declaration. Renew that discarded candidate for the running Python.
+        // The server discards unpublished candidates when a cell ends. Renew
+        // the declaration for the running Python before reporting activation.
         let mut request = requirements.clone();
         request.python_version.push(super::environment::version()?);
         let candidate = crate::worker::resolve_python(PythonResolveRequest {

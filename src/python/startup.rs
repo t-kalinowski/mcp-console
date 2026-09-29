@@ -157,7 +157,7 @@ pub(super) fn initialize_native(
     let configured = result?;
     finished?;
     if !configured && managed {
-        super::requirements::discard_initial_candidate();
+        super::requirements::interrupt_initialization();
     }
     if configured && managed && !super::requirements::initialized() {
         let manifest = super::requirements::declaration()?;

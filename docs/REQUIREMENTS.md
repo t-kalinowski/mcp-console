@@ -413,6 +413,7 @@ Initial path bookkeeping probes the selected interpreter without replaying `site
 Startup `.pth` additions must agree between that probe and the embedded interpreter; cleanup of process-dependent startup additions is unsupported.
 Live activation tracks its actual path additions.
 Interrupting the initial bookkeeping probe preserves R and SQL state, and a later Python cell retries the unfinished handoff.
+The retry retains the selected environment, including requirements prepared before the first Python cell in a worker without R.
 An interrupt during a live `reticulate::py_require()` candidate probe remains an R interrupt condition.
 Compatibility and other failures before mutation leave the accepted declaration and usable worker intact.
 An interrupted activation restores Console-owned paths, prefixes, executable, and process environment, permitting another preparation attempt.
