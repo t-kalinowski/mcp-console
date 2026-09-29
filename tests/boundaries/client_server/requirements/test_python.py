@@ -38,7 +38,9 @@ from support.suites import run_this_suite
 def test_declares_imports_and_uses_python_packages(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.send(r='reticulate::py_require("py-yaml12")')
         assert last_tool_text(client) == "[done]"
