@@ -34,9 +34,8 @@ pub(crate) enum PreparationOutcome {
 ///
 /// Every cell enters the same private evaluator through the retained CPython
 /// library. The optional reticulate adapter retains R-side discovery and
-/// attachment policy; it is absent from native sessions.
+/// attachment policy; it is absent until R is initialized.
 pub(crate) struct Runtime {
-    reticulate: Option<reticulate::Adapter>,
     next_evaluation_id: u64,
 }
 
@@ -48,29 +47,99 @@ pub(crate) enum SqlProvider {
 
 pub(crate) use platform::configure_worker_environment as configure_native_worker_environment;
 
-pub(crate) fn configure_worker_environment(
-    temporary_directory: &std::path::Path,
-) -> std::io::Result<()> {
-    platform::configure_worker_environment(temporary_directory)?;
-    reticulate::configure_worker_environment()
+pub(crate) use reticulate::{
+    configure_worker_environment as configure_r_environment, defer_r_startup, finish_r_startup,
+};
+
+thread_local! {
+    static ADAPTER: std::cell::RefCell<Option<std::rc::Rc<reticulate::Adapter>>> = const { std::cell::RefCell::new(None) };
+}
+static SELECTION: std::sync::OnceLock<crate::local_runtime::WorkerSelection> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn attach_r_adapter() -> Result<(), String> {
+    if let Some(manifest) = requirements::retained_manifest() {
+        unsafe {
+            std::env::set_var(
+                "MCP_CONSOLE_MANAGED_PYTHON",
+                serde_json::to_string(&manifest).map_err(|error| error.to_string())?,
+            )
+        };
+    }
+    let adapter = std::rc::Rc::new(reticulate::Adapter::initialize()?);
+    ADAPTER.with(|slot| *slot.borrow_mut() = Some(adapter));
+    Ok(())
+}
+
+fn adapter() -> Option<std::rc::Rc<reticulate::Adapter>> {
+    ADAPTER.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn attach_bridge() -> Result<bool, String> {
+    adapter()
+        .ok_or("R bridge is unavailable")?
+        .ensure_initialized()
+}
+
+pub(crate) fn reinstall_services() -> Result<(), String> {
+    if library::initialized_selection()?.is_some() && library::services_installed()? {
+        library::install_services()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_initialized() -> Result<bool, String> {
+    if library::runtime_configured()? {
+        return Ok(true);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(candidate) = requirements::materialized()
+    {
+        return startup::initialize_native(&candidate.selected, true);
+    }
+    let selection = SELECTION
+        .get()
+        .ok_or("Python capability is not configured")?;
+    if !crate::worker::r_initialized()
+        && let Some(python) = &selection.python
+    {
+        return startup::initialize_native(&python.selected, python.managed);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(explicit) = std::env::var_os("RETICULATE_PYTHON")
+            .filter(|value| !value.is_empty() && value != "managed")
+    {
+        let selected = match explicit_executable(&explicit)
+            .and_then(|path| crate::worker::inspect_python(&path))
+        {
+            Ok(selected) => selected,
+            Err(error) => {
+                crate::worker::emit_output(
+                    crate::worker_protocol::ConsoleChannel::Diagnostic,
+                    format!("Error: {error}\n").as_bytes(),
+                );
+                return Ok(false);
+            }
+        };
+        return startup::initialize_native(&selected, false);
+    }
+    // R declarations and selection callbacks genuinely require R. Only an
+    // unresolved compatibility selection enters this path.
+    crate::worker::ensure_r()?;
+    let adapter = adapter().ok_or("R selection adapter is unavailable")?;
+    let Some(selected) = adapter.select()? else {
+        return Ok(false);
+    };
+    startup::initialize_native(&selected, adapter.managed)
 }
 
 impl Runtime {
-    pub(crate) fn publish_initial_requirements(&self) -> Result<(), String> {
-        requirements::publish_initial_requirements()
-    }
-
-    pub(crate) fn initialize() -> Result<Self, String> {
+    pub(crate) fn new(selection: crate::local_runtime::WorkerSelection) -> Result<Self, String> {
+        requirements::configure()?;
+        SELECTION
+            .set(selection)
+            .map_err(|_| "runtime capabilities already configured")?;
         Ok(Self {
-            reticulate: Some(reticulate::Adapter::initialize()?),
-            next_evaluation_id: 1,
-        })
-    }
-
-    pub(crate) fn native(selected: &NativePython, managed: bool) -> Result<Self, String> {
-        startup::initialize_native(selected, managed)?;
-        Ok(Self {
-            reticulate: None,
             next_evaluation_id: 1,
         })
     }
@@ -78,34 +147,14 @@ impl Runtime {
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
         self.next_evaluation_id += 1;
-        if let Some(reticulate) = &mut self.reticulate
-            && !reticulate.ensure_initialized()?
-        {
+        if !ensure_initialized()? {
             return Ok(());
         }
         evaluate_embedded(source, &filename)
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.reticulate
-            .as_ref()
-            .expect("live preparation requires R")
-            .prepare(packages)
-    }
-
-    pub(crate) fn activate_native(
-        &mut self,
-        candidate: &crate::worker_protocol::NativePythonActivation,
-    ) -> Result<PreparationOutcome, String> {
-        Ok(match requirements::activate(candidate)? {
-            requirements::ActivationOutcome::Prepared => PreparationOutcome::Prepared,
-            requirements::ActivationOutcome::Rejected(message) => {
-                PreparationOutcome::Rejected { message }
-            }
-            requirements::ActivationOutcome::Failed(message) => {
-                PreparationOutcome::Failed { message }
-            }
-        })
+        requirements::prepare(packages)
     }
 }
 

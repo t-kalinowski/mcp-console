@@ -24,13 +24,16 @@ A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned 
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
 Dynamic package preparation is disabled, and Docker Quarto projections likewise execute captured cells when rendered.
 They do not reproduce the remote filesystem when rendered locally.
-With R available, each worker generation contains:
+With R available, each worker generation creates these resources when needed:
 
 - one persistent R global environment;
 - one persistent Python `__main__` namespace embedded by Console, with reticulate supplying the R bridge; and
 - one persistent in-memory DuckDB connection and catalog, used as the default SQL backend.
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
+
+Worker readiness precedes interpreter initialization.
+A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -366,17 +369,39 @@ Python cell tracebacks omit Console's private runtime frames while retaining use
 Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-When R is available, it is initialized eagerly and reticulate supplies Python interpreter selection, candidate configuration, and cross-language access.
+R and Python initialize on demand.
+An explicit or independently resolved Python selection can run while R remains uninitialized.
+Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
 Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
 Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
 Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
 Ordinary R evaluation does not initialize Python.
-R itself still starts eagerly when available; submitting Python first does not mean R starts later.
+An R cell, Python-side `r` access, or R-owned SQL initializes R.
+Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, display settings, and user redirections of `sys.stdout` and `sys.stderr`.
+Linux loader preparation happens before either interpreter starts.
+R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
+Different virtualenvs remain distinct selections even when their executables link to the same base Python.
+Deferred startup packages load within the initiating R or Python cell's graphics scope, before `tools:mcp-console` is attached at search position 2.
+Their selection includes `R_DEFAULT_PACKAGES` set by the installation's system `Renviron`.
+An unchanged `RETICULATE_PYTHON` selection retains that identity after Python changes the working directory or `PATH`.
+Late attachment preserves reticulate's `ephemeral` marker for Console-managed environments.
+Reconstructed reticulate configuration includes the running interpreter's active and base prefixes.
+
+Late R initialization is not safe while another thread accesses the native process environment.
+R's bootstrap itself reads and changes environment variables; Console's serialized interpreter thread does not serialize those operations with Python or native background threads.
+Initialize R before starting background threads that may access the native process environment.
+
 Console activates live managed environments through its retained CPython library.
 The shared Python runtime sets NumPy and pandas display width to 200 columns when they retain their library defaults.
 A different width selected by a Python startup hook is preserved, as are subsequent user changes.
 Matplotlib setup also runs through the shared runtime; bridge setup does not reapply these defaults.
+An attachment failure before reticulate publishes its configuration can be retried with the same interpreter.
+Independent Python selection errors are reported before initialization; rejecting an unsupported interpreter leaves R and the worker available.
+Shared Python setup reports Python tracebacks without requiring the bridge.
+Interrupted module or import setup can retry on the same interpreter; startup hooks that leave incompatible interpreter identity require worker replacement.
+A failing later initialization hook requires restart before further bridge use; ordinary Python objects and evaluation remain available.
+A partially initialized R runtime also requires restart.
 
 Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
 Binary buffers, native file descriptors, background threads, and fork children retain raw-stream behavior, including cached output streams and logging handlers.
@@ -440,7 +465,8 @@ Errors include the inferred distribution, the host resolver diagnostic when avai
 Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
 Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
 
-Automatic resolution runs only from the main worker process and the Python thread that configured the runtime; R-present sessions call R and reticulate there.
+Automatic resolution runs only from the main worker process and the Python thread that configured the runtime.
+Optional R declaration projection runs on that same thread.
 A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
 Imports already handled by ordinary Python finders remain available in those contexts.
 
@@ -449,14 +475,16 @@ Its missing-import error directs the user to install the distribution into that 
 
 A bare runtime also disables the import resolver and `requirements.python`.
 If ambient reticulate and Python are usable, installed distributions import normally and a missing import directs the user to install `ir` or `uv` before restarting.
-If reticulate is not installed, Python cells report that ambient adapter error directly.
+An independently selected Python does not require reticulate.
+Unresolved R-side selection or cross-language access reports a missing reticulate adapter when it is needed.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
 A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `control = "interrupt"`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 
-The two languages share reticulate's live bridge:
+The two languages share reticulate's live bridge, attached on demand.
+Python-side `r` access works without a preceding R cell:
 
 - Python reads R globals and calls R functions through `r.name`;
 - R reads and writes Python globals through `py$name`; and

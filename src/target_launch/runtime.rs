@@ -111,24 +111,30 @@ pub(crate) fn validate_result(environment: &WorkerEnvironment) -> Result<(), Str
         .native
         .as_ref()
         .ok_or("prepared runtime has no captured selections")?;
-    let python = runtime
-        .python
-        .as_ref()
-        .ok_or("prepared runtime has no Python selection")?;
-    let Python {
-        selected,
-        explicit,
-        managed,
-        duckdb_extension_directory,
-    } = python;
-    if *managed || duckdb_extension_directory.is_some() || discovery.selections.python.is_some() {
-        return Err("prepared Python cannot contain another selection or a managed cache".into());
-    }
     if runtime.r_home.as_deref() != discovery.selections.r_home.as_deref().map(Path::new) {
         return Err("prepared runtime R capability differs from its captured selection".into());
     }
     if let Some(home) = &discovery.selections.r_home {
         absolute(home)?;
+    }
+    if discovery.selections.python.is_some() {
+        return Err("prepared Python cannot contain another selection or a managed cache".into());
+    }
+    let Some(Python {
+        selected,
+        explicit,
+        managed,
+        duckdb_extension_directory,
+    }) = &runtime.python
+    else {
+        return if runtime.r_home.is_some() {
+            Ok(())
+        } else {
+            Err("prepared target has neither R nor Python".into())
+        };
+    };
+    if *managed || duckdb_extension_directory.is_some() {
+        return Err("prepared Python cannot contain another selection or a managed cache".into());
     }
     for path in [
         &selected.embedding.python,
@@ -155,7 +161,9 @@ pub(crate) fn validate_result(environment: &WorkerEnvironment) -> Result<(), Str
     Ok(())
 }
 
-fn select_python(configured: Option<&Path>) -> Result<(PathBuf, bool, &'static str), String> {
+fn select_python(
+    configured: Option<&Path>,
+) -> Result<Option<(PathBuf, bool, &'static str)>, String> {
     // Top-level python is target-workspace-relative, including a bare filename.
     // Legacy RETICULATE_PYTHON also accepts an executable name on target PATH.
     let (selected, explicit, source) = if let Some(path) = configured {
@@ -177,13 +185,15 @@ fn select_python(configured: Option<&Path>) -> Result<(PathBuf, bool, &'static s
     } else {
         // Absence alone permits the second name. A broken python3 entry remains
         // selected and must report its validation error rather than try python.
-        let selected = crate::resolver::find_path_entry("python3")
+        let Some(selected) = crate::resolver::find_path_entry("python3")
             .or_else(|| crate::resolver::find_path_entry("python"))
-            .ok_or("prepared target requires preinstalled Python 3.10 or later with a shared embedding library; no python3 or python is on workload PATH")?;
+        else {
+            return Ok(None);
+        };
         (selected, false, "PATH Python")
     };
     std::path::absolute(selected)
-        .map(|selected| (selected, explicit, source))
+        .map(|selected| Some((selected, explicit, source)))
         .map_err(|error| format!("cannot locate target Python selection: {error}"))
 }
 
@@ -206,18 +216,22 @@ fn discover(configured: Option<&Path>) -> Result<WorkerEnvironment, String> {
     } else {
         None
     };
-    let (python, explicit, source) = select_python(configured)?;
-    let selected = crate::python::inspect_native(&python, |_| Ok(()))
-        .map_err(|error| format!("prepared target {source} validation failed: {error}"))?;
-    let explicit = explicit.then(|| OsString::from(&selected.embedding.python));
+    let python = select_python(configured)?
+        .map(|(python, explicit, source)| {
+            let selected = crate::python::inspect_native(&python, |_| Ok(()))
+                .map_err(|error| format!("prepared target {source} validation failed: {error}"))?;
+            let explicit = explicit.then(|| OsString::from(&selected.embedding.python));
+            Ok::<_, String>(Python {
+                selected: Box::new(selected),
+                explicit,
+                managed: false,
+                duckdb_extension_directory: None,
+            })
+        })
+        .transpose()?;
     let native = Some(Selection {
         r_home: r_home.as_ref().map(PathBuf::from),
-        python: Some(Python {
-            selected: Box::new(selected),
-            explicit,
-            managed: false,
-            duckdb_extension_directory: None,
-        }),
+        python,
     });
     let environment = WorkerEnvironment {
         discovery: Discovery {
@@ -246,15 +260,18 @@ fn reject_probe_storage(environment: &WorkerEnvironment) -> Result<(), String> {
     let storage = std::fs::canonicalize(std::env::temp_dir())
         .map_err(|error| format!("cannot locate prepared probe storage: {error}"))?;
     let runtime = environment.native.as_ref().expect("validated selections");
-    let selected = &runtime.python.as_ref().expect("validated Python").selected;
-    let mut paths = vec![
-        &selected.embedding.python,
-        &selected.embedding.libpython,
-        &selected.prefix,
-        &selected.exec_prefix,
-        &selected.base_prefix,
-        &selected.base_exec_prefix,
-    ];
+    let mut paths = Vec::new();
+    if let Some(python) = &runtime.python {
+        let selected = &python.selected;
+        paths.extend([
+            &selected.embedding.python,
+            &selected.embedding.libpython,
+            &selected.prefix,
+            &selected.exec_prefix,
+            &selected.base_prefix,
+            &selected.base_exec_prefix,
+        ]);
+    }
     if let Some(home) = &environment.discovery.selections.r_home {
         paths.push(home);
     }

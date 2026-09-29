@@ -335,7 +335,7 @@ def python_inventory_client(
     )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["DBI"]})
-    assert last_result_text(client) == "[prepared]"
+    assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")
     if resolver_record is not None:
         resolver_record.write_text("", encoding="utf-8")
@@ -536,7 +536,8 @@ def send_and_collect_runtime_python_resolution(
             client.send(timeout_ms=30_000)
             continue
 
-        if output != "[done]" or not chunks:
+        # Empty running polls do not replace a silent cell's completion marker.
+        if output != "[done]" or not any(chunks):
             chunks.append(output)
         collected = "".join(chunks)
 

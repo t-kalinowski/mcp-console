@@ -1,11 +1,13 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 import subprocess
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -24,6 +26,28 @@ from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import send_and_collect_runtime_python_resolution
 from support.suites import run_this_suite
+
+
+@contextmanager
+def startup_client(
+    binary: Path,
+    execution: Execution,
+    source: str,
+    *,
+    selected_python: str | None = None,
+):
+    with tempfile.TemporaryDirectory() as temporary:
+        modules = Path(temporary)
+        (modules / "sitecustomize.py").write_text(
+            "import __main__\n"
+            f"exec(compile({json.dumps(source)}, '<setup checkpoint>', 'exec'), __main__.__dict__)\n"
+        )
+        environment = dict(os.environ, RETICULATE_PYTHONPATH=str(modules))
+        if selected_python is not None:
+            environment["RETICULATE_PYTHON"] = selected_python
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            yield client
 
 
 @executions(DIRECT, SANDBOXED)
@@ -446,12 +470,13 @@ def test_python_first_initializes_before_reticulate_attaches(
             client.send(
                 # fmt: r
                 r=code("""
-                    stopifnot(startup_calls == 1L)
+                    stopifnot(startup_calls == 0L)
                     stopifnot(callback_calls == 1L)
                     stopifnot(identical(
                       normalizePath(reticulate::py_config()$python),
                       expected_python
                     ))
+                    stopifnot(startup_calls == 1L)
                     reticulate::py_to_r(reticulate::py$startup_value) + 1L
                     """)
             )
@@ -611,6 +636,40 @@ def test_retries_attachment_without_reinitializing_python(
             client.send(python="startup_value + 1")
             assert last_result_text(client) == "42\n", client.transcript[-1]
             return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_partial_attachment_requires_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            python="attachment_object = object(); attachment_identity = id(attachment_object)"
+        )
+        assert last_result_text(client) == "[done]"
+        client.send(
+            r=code("""
+            options(reticulate.python.afterInitialized = function() stop("partial attachment"))
+            first <- tryCatch(reticulate::py_config(), error = conditionMessage)
+            stopifnot(identical(first, "partial attachment"))
+            options(reticulate.python.afterInitialized = NULL)
+            second <- tryCatch(reticulate::py_config(), error = conditionMessage)
+            stopifnot(identical(second, "R/Python attachment is incomplete; restart required"))
+            cat("partial attachment requires restart\\n")
+            """)
+        )
+        assert last_result_text(client) == "partial attachment requires restart\n", (
+            client.transcript[-1]
+        )
+        client.send(python="assert id(attachment_object) == attachment_identity; 42")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        client.send(control="restart")
+        client.send(
+            python="assert 'attachment_object' not in globals(); int(r['40L + 2L'])"
+        )
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -876,14 +935,9 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
-        # fmt: python
-        python = code("""
-            import importlib.util
-
-            assert importlib.util.find_spec("yaml12") is not None
-            42
-            """)
-        client.send(python=python, requirements={"python": ["py-yaml12"]})
+        # Retry the same selection. Tool materialization now supplies its own
+        # host-inspected identity and would bypass this R selection boundary.
+        client.send(python="42")
         assert last_result_text(client) == "42\n", client.transcript[-1]
         client.send(r="stopifnot(selection_serializations == 2L); 42L")
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
@@ -1021,40 +1075,39 @@ def test_preserves_setup_after_r_initialization(
 def test_retries_managed_import_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        # The import finder captures its configuring thread after module
-        # defaults. Interrupt that public threading call once, then retry.
-        # fmt: r
-        r = code(r"""
-            options(reticulate.python.afterInitialized = function() {
-              reticulate::py_run_string(paste(
-                "import numpy as np, threading",
-                "original_get_printoptions = np.get_printoptions",
-                "original_get_ident = threading.get_ident",
-                "runtime_identity = object()",
-                "runtime_identity_id = id(runtime_identity)",
-                "def configuring_thread():",
-                "    threading.get_ident = original_get_ident",
-                "    input('Managed import setup> ')",
-                "    return original_get_ident()",
-                "def configure_thread_checkpoint():",
-                "    np.get_printoptions = original_get_printoptions",
-                "    threading.get_ident = configuring_thread",
-                "    return original_get_printoptions()",
-                "np.get_printoptions = configure_thread_checkpoint",
-                sep = "\n"
-              ))
-            })
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+    # The import finder captures its configuring thread after module defaults.
+    # Interrupt that public threading call once, then retry without bootstrap.
+    source = code("""
+        import numpy as np
+        import threading
+        original_get_printoptions = np.get_printoptions
+        original_get_ident = threading.get_ident
+        runtime_identity = object()
+        runtime_identity_id = id(runtime_identity)
+        def configuring_thread():
+            threading.get_ident = original_get_ident
+            input('Managed import setup> ')
+            return original_get_ident()
+        def configure_thread_checkpoint():
+            np.get_printoptions = original_get_printoptions
+            threading.get_ident = configuring_thread
+            return original_get_printoptions()
+        np.get_printoptions = configure_thread_checkpoint
+        """)
+    with startup_client(binary, execution, source) as client:
         client.send(python="raise AssertionError('interrupted setup ran the cell')")
         assert last_result_text(client) == (
             '[input requested: "Managed import setup> "]\n[waiting for stdin]'
         ), client.transcript[-1]
         wait_for_evaluation_output(
-            client, "\n", "managed import setup interruption", control="interrupt"
+            client,
+            "Traceback (most recent call last):\n"
+            '  File "<string>", line 129, in configure\n'
+            '  File "<setup checkpoint>", line 9, in configuring_thread\n'
+            '  File "<string>", line 50, in _console_input\n'
+            "KeyboardInterrupt\n",
+            "managed import setup interruption",
+            control="interrupt",
         )
         client.send(
             python="import yaml12; assert id(runtime_identity) == runtime_identity_id; print('managed import setup retried')"
@@ -1074,44 +1127,36 @@ def test_retries_managed_import_setup_after_interrupt(
 def test_retries_matplotlib_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        # A module attribute setter blocks first-cell setup on managed input.
-        # Its public input request is the checkpoint for a real interrupt.
-        # fmt: r
-        r = code(r"""
-            options(reticulate.python.afterInitialized = function() {
-            reticulate::py_run_string(r"---(
-            import sys
-            import types
+    # A module attribute setter blocks first-cell setup on managed input.
+    # Its public input request is the checkpoint for a real interrupt.
+    source = code("""
+        import sys
+        import types
 
-            class InterruptingPyplot(types.ModuleType):
-                interrupted = False
+        class InterruptingPyplot(types.ModuleType):
+            interrupted = False
 
-                def show(self, *args):
-                    raise AssertionError("default show was not replaced")
+            def show(self, *args):
+                raise AssertionError("default show was not replaced")
 
-                def __setattr__(self, name, value):
-                    if name == "show" and not self.interrupted:
-                        self.interrupted = True
-                        input("Matplotlib setup> ")
-                    super().__setattr__(name, value)
+            def __setattr__(self, name, value):
+                if name == "show" and not self.interrupted:
+                    self.interrupted = True
+                    input("Matplotlib setup> ")
+                super().__setattr__(name, value)
 
-                def get_fignums(self):
-                    return []
+            def get_fignums(self):
+                return []
 
-                def close(self, *args):
-                    pass
+            def close(self, *args):
+                pass
 
-            InterruptingPyplot.show.__module__ = "matplotlib.pyplot"
-            sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
-            runtime_identity = object()
-            runtime_identity_id = id(runtime_identity)
-            )---")
-            })
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        InterruptingPyplot.show.__module__ = "matplotlib.pyplot"
+        sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+        runtime_identity = object()
+        runtime_identity_id = id(runtime_identity)
+        """)
+    with startup_client(binary, execution, source) as client:
         client.send(
             # fmt: python
             python=code("""
@@ -1123,7 +1168,13 @@ def test_retries_matplotlib_setup_after_interrupt(
         )
         wait_for_evaluation_output(
             client,
-            "\n",
+            "Traceback (most recent call last):\n"
+            '  File "<string>", line 838, in _mcp_console_configure_module_defaults\n'
+            '  File "<string>", line 802, in apply\n'
+            '  File "<string>", line 404, in _mcp_console_disable_matplotlib_show\n'
+            '  File "<setup checkpoint>", line 13, in __setattr__\n'
+            '  File "<string>", line 50, in _console_input\n'
+            "KeyboardInterrupt\n",
             "Matplotlib setup interruption",
             control="interrupt",
         )
@@ -1143,30 +1194,23 @@ def test_retries_matplotlib_setup_after_interrupt(
 def test_reports_matplotlib_setup_error_once(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            options(reticulate.python.afterInitialized = function() {
-              reticulate::py_run_string(
-                r"---(
-            import sys
+    source = code("""
+        import sys
 
-            class FailingPyplot:
-                def show(self, *args):
-                    pass
+        class FailingPyplot:
+            def show(self, *args):
+                pass
 
-                def __setattr__(self, name: str, value: object) -> None:
-                    raise ValueError("matplotlib setup failed")
+            def __setattr__(self, name: str, value: object) -> None:
+                sys.modules.pop("matplotlib.pyplot")
+                raise ValueError("matplotlib setup failed")
 
-            FailingPyplot.show.__module__ = "matplotlib.pyplot"
-            sys.modules["matplotlib.pyplot"] = FailingPyplot()
-            )---"
-              )
-            })
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        FailingPyplot.show.__module__ = "matplotlib.pyplot"
+        sys.modules["matplotlib.pyplot"] = FailingPyplot()
+        runtime_identity = object()
+        runtime_identity_id = id(runtime_identity)
+        """)
+    with startup_client(binary, execution, source) as client:
         client.send(
             # fmt: python
             python=code("""
@@ -1175,27 +1219,47 @@ def test_reports_matplotlib_setup_error_once(
         )
         result = client.transcript[-1]["result"]
         output = last_result_text(client)
+        assert result["isError"] is False, result
+        assert output.startswith("Traceback (most recent call last):\n"), output
+        assert output.count("ValueError: matplotlib setup failed\n") == 1, output
+        assert output.endswith("ValueError: matplotlib setup failed\n"), output
+        assert "failed setup ran the cell" not in output, output
+        client.send(python="assert id(runtime_identity) == runtime_identity_id; 42")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_rejects_startup_environment_mutation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    source = "import sys; sys.prefix = 'changed-by-startup-hook'"
+    with startup_client(
+        binary, execution, source, selected_python=sys.executable
+    ) as client:
+        client.send(python="raise AssertionError('invalid environment ran code')")
+        result = client.transcript[-1]["result"]
+        output = last_result_text(client)
         assert result["isError"] is True, result
-        setup_failure = (
-            "Error in py_eval_impl(code, convert) : \n"
-            "  ValueError: matplotlib setup failed\n"
-            "Run `reticulate::py_last_error()` for details.\n"
+        traceback = (
+            "Traceback (most recent call last):\n"
+            '  File "<string>", line 705, in _mcp_console_configure_environment\n'
+            "RuntimeError: embedded Python prefix differs from the selected environment: "
+            f"'changed-by-startup-hook' != {sys.prefix!r}\n"
         )
-        bridge_failure = "Python bridge failed during R evaluation\n"
-        worker_failure = (
+        failure = "Python environment setup failed; restart required\n"
+        lifecycle = (
             "[worker sideband read failed: worker sideband closed]\n"
             "[worker exited with status 1]\n"
             "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
+            "[starting new worker]\n[idle]"
         )
-        assert output.endswith(worker_failure), output
-        # R diagnostics and terminal worker stderr use independent transports.
-        # Check every byte and each stream's order before canonicalizing them.
-        assert_exact_interleaving(
-            output.removesuffix(worker_failure), setup_failure, bridge_failure
+        assert output.endswith(lifecycle), output
+        # The Python diagnostic and fatal stderr have independent transports.
+        assert_exact_interleaving(output[: -len(lifecycle)], traceback, failure)
+        result["content"][0]["text"] = (traceback + failure + lifecycle).replace(
+            repr(sys.prefix), "'<selected Python prefix>'"
         )
-        result["content"][0]["text"] = setup_failure + bridge_failure + worker_failure
         return client.finish()
 
 

@@ -90,4 +90,7 @@ result:
         temporary>: Permission denied (os error 13)]
   isError: true
 ---
-stderr: ""
+stderr: >
+  worker relay shutdown was requested twice; additionally cannot remove
+  worker temporary directory <worker temporary>: Permission denied (os
+  error 13)

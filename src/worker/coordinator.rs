@@ -4,7 +4,7 @@ use std::io;
 use super::core::{CommandReadiness, emit_output, take_worker_failure};
 use super::input::finish_console_stdin_operation;
 use super::r_integration::Integration;
-use super::{core, embedded_r, interrupt};
+use super::{core, interrupt};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
@@ -32,36 +32,21 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         },
     );
     interrupt::normalize_signal()?;
-    let (r, python, sql) = if !selection.r {
-        let crate::local_runtime::Python {
-            selected, managed, ..
-        } = selection
-            .python
-            .ok_or("Python worker launch has no inspected selection")?;
-        // Native sandbox launches supply runner-owned private storage. Direct
-        // launches supply a directory retained by the server's relay lifetime.
-        let temporary = std::env::var_os("TMPDIR")
-            .ok_or("Python worker launch did not supply temporary storage")?;
-        crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
-        core::initialize(reader, writer.clone())?;
-        let r = Integration::new(None)?;
-        let python = crate::python::Runtime::native(&selected, managed)?;
-        let sql = crate::sql::Bridge::native();
-        (r, python, sql)
-    } else {
-        let r_home = crate::local_runtime::r_home()?;
-        #[cfg(target_os = "linux")]
-        reexec_with_r_library_path(&r_home, &reader, &writer)?;
-        let temporary_directory = embedded_r::initialize_r(&r_home)?;
-        crate::python::configure_worker_environment(&temporary_directory)?;
-        core::initialize(reader, writer.clone())?;
-        let r = Integration::new(Some(embedded_r::Runtime::initialize()?))?;
-        let python = crate::python::Runtime::initialize()?;
-        let sql = crate::sql::Bridge::initialize()?;
-        (r, python, sql)
-    };
+    let r_home = selection.r.then(crate::local_runtime::r_home).transpose()?;
+    #[cfg(target_os = "linux")]
+    if let Some(home) = &r_home {
+        reexec_with_r_library_path(home, &reader, &writer)?;
+    }
+    // The launcher owns this directory through confirmed worker retirement.
+    // R's session tempdir is a child, never the owner of Python/SQL storage.
+    let temporary =
+        std::env::var_os("TMPDIR").ok_or("worker launch did not supply temporary storage")?;
+    crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
+    core::initialize(reader, writer.clone())?;
+    let r = Integration::new(r_home)?;
+    let python = crate::python::Runtime::new(selection)?;
+    let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;
-    python.publish_initial_requirements()?;
     let mut coordinator = Coordinator {
         writer,
         r,
@@ -141,18 +126,8 @@ impl Coordinator {
             }
             // Keep worker-owned preparation state transitions atomic. Any
             // nested host resolver registers its own interrupt target.
-            ServerMessage::PreparePython { packages, native } => {
-                let result = if let Some(candidate) = native.as_ref() {
-                    if !packages.is_empty() {
-                        return Err(io::Error::other(
-                            "native Python preparation cannot include R package declarations",
-                        )
-                        .into());
-                    }
-                    self.python.activate_native(candidate)
-                } else {
-                    self.r.prepare_python(|| self.python.prepare(packages))
-                };
+            ServerMessage::PreparePython { packages } => {
+                let result = self.r.prepare_python(|| self.python.prepare(packages));
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
@@ -161,9 +136,6 @@ impl Coordinator {
                 }
                 match result {
                     Ok(crate::python::PreparationOutcome::Prepared) => {
-                        if let Some(candidate) = native {
-                            core::publish_python_activation(candidate.requirements)?;
-                        }
                         self.writer.send(&WorkerMessage::PythonPrepared)?;
                     }
                     Ok(crate::python::PreparationOutcome::Failed { message }) => {
@@ -254,12 +226,14 @@ fn evaluate_cell(
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {
+        // Runtime startup belongs to this cell too. A late R startup begins
+        // graphics when it installs its runtime, before loading packages.
+        core::begin_cell(cell.language);
         // Python can enter R and create plots too. SQL retains its exclusion.
         let graphics = !matches!(cell.language, Language::Sql);
         if graphics {
             r.begin_graphics()?;
         }
-        core::begin_cell(cell.language);
         let result = match cell.language {
             Language::R => r.evaluate_r(cell.source),
             Language::Python => python.evaluate(&cell.source),

@@ -718,8 +718,8 @@ def _mcp_console_configure_environment(
 _mcp_console.configure_environment = _mcp_console_configure_environment
 
 
-# Startup has not announced Ready, so its diagnostics belong on the original
-# stderr transport rather than the evaluation-output sideband.
+# Setup and activation retain exceptions until their Rust caller reports them.
+# The wrapper below routes them through Console's ordered diagnostic stream.
 def _mcp_console_display_setup_exception(
     _state=_builtins.__dict__,
     _traceback=_traceback,

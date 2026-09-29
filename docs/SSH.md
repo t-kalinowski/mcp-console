@@ -108,7 +108,7 @@ When R is present but discovery finds no resolver bootstrap, Console retains the
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
 Bare and user-selected Python modes disable reticulate's implicit managed-venv installation when R is present.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
-For both R-mediated and R-free Python preparation, the accepted manifest, managed environment, and inspected launch configuration commit together at the existing preparation or activation acceptance point.
+For shared Python preparation with or without R, the accepted manifest, managed environment, and inspected launch configuration commit together at the existing preparation or activation acceptance point.
 Plain restart and crash replacement use that accepted selection.
 
 ## Trusted preparation
@@ -122,9 +122,10 @@ They carry the configured interpreter selection, and live native preparation car
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-SSH launch protocol version 6 and preparation version 5 carry independent R and Python selections and inspection operations.
+SSH launch protocol version 7 and preparation version 5 carry independent R and Python selections and inspection operations.
 An R-present payload can carry a complete inspected Python identity or leave Python selection lazy.
-Docker and Docker Sandbox also use launch version 6.
+Docker and Docker Sandbox also use launch version 7.
+Version 7 removes the separate native preparation request and carries live-interpreter status for shared tool resolution; preparation protocol version 5 is unchanged.
 Version 6 accepts Python activation-failure receipts during preparation and idle callbacks as well as cells; older servers would stop that worker.
 Launch and preparation also require a matching Console package version.
 The optional `selected_python` field constrains live managed Python preparation to the running executable, locally or over SSH.
@@ -169,7 +170,7 @@ Closing MCP input cancels discovery before readiness and active preparation duri
 The remote preparation owner observes input closure independently of blocked protocol output and cancels and reaps its resolver groups.
 
 Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.
-Direct sans-R launches use a remote private temporary directory retained until the relay retires.
+Direct launches use a remote private temporary directory retained until the relay retires, independently of interpreter initialization.
 Native sandbox launches use runner-owned private storage.
 Neither retirement path removes accepted Python environments or shared uv and DuckDB extension caches.
 Python-backed DuckDB extension preparation uses the extension-cache path captured from an absolute remote startup `HOME`; later worker changes to `HOME` or workload cache settings do not redirect preparation or loading.

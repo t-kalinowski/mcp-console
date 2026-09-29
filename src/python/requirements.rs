@@ -30,7 +30,6 @@ struct Manifest {
 
 #[derive(Default)]
 struct Requirements {
-    ready: bool,
     // The live projection is worker state, not server acceptance. The exact R
     // representation below also retains provisional (unmaterialized) values.
     live: Option<crate::worker_protocol::NativePythonActivation>,
@@ -43,6 +42,22 @@ struct Requirements {
 
 thread_local! {
     static STATE: std::cell::RefCell<Requirements> = std::cell::RefCell::new(Requirements::default());
+}
+
+static INITIAL_MANIFEST: std::sync::OnceLock<Option<PythonRequirementManifest>> =
+    std::sync::OnceLock::new();
+
+pub(super) fn configure() -> Result<(), String> {
+    let manifest = std::env::var("MCP_CONSOLE_MANAGED_PYTHON")
+        .ok()
+        .map(|value| {
+            serde_json::from_str(&value)
+                .map_err(|error| format!("invalid managed Python declaration: {error}"))
+        })
+        .transpose()?;
+    INITIAL_MANIFEST
+        .set(manifest)
+        .map_err(|_| "Python requirements already configured".into())
 }
 
 impl Requirements {
@@ -171,32 +186,6 @@ impl Requirements {
         candidate.append_history(&request.record)?;
         Ok((candidate, config))
     }
-
-    fn prepare(adapter: &Adapter, packages: Value) -> RResult<Option<String>> {
-        let snapshot = adapter.call("current_requirements", &[])?;
-        let result = (|| {
-            // Keep the public declaration boundary, including reticulate's
-            // argument conversion, package warnings, and history provenance.
-            adapter.call("declare_packages", &[&packages])?;
-            let candidate = Record::new(adapter.call("declared_requirements", &[])?)?;
-            if !adapter.call("python_initialized", &[])?.boolean()? {
-                // Explicit preparation materializes lazy declarations without
-                // initializing Python or publishing a live activation.
-                adapter.resolve(&candidate, &candidate.get("python_version")?)?;
-            }
-            Ok(())
-        })();
-        match result {
-            Ok(()) => Ok(None),
-            Err(r::Error::Message(message)) => {
-                // Restore only ordinary failures, as the former R error
-                // handler did. Interrupts retain their existing boundary.
-                adapter.call("restore_requirements", &[&snapshot])?;
-                Ok(Some(message))
-            }
-            Err(interrupt) => Err(interrupt),
-        }
-    }
 }
 
 use super::NativePython;
@@ -210,12 +199,93 @@ pub(crate) enum ActivationOutcome {
     Failed(String),
 }
 
+pub(super) fn declaration() -> Result<PythonRequirementManifest, String> {
+    if let Some(manifest) = r::declaration()? {
+        return Ok(manifest);
+    }
+    retained_manifest()
+        .ok_or_else(|| "Python preparation requires a server-managed interpreter".into())
+}
+
+pub(super) fn prepare(packages: Vec<String>) -> Result<super::PreparationOutcome, String> {
+    let mut requirements = declaration()?;
+    requirements.packages.extend(packages.iter().cloned());
+    let requirements = requirements.normalized();
+    let live = super::library::initialized_selection()?.is_some();
+    let candidate = match crate::worker::resolve_python(PythonResolveRequest {
+        requirements: requirements.clone(),
+        retained_requirements: requirements,
+        initialized: live,
+        import_resolution: None,
+    }) {
+        Ok(candidate) => candidate,
+        Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
+    };
+    if live && let Err(error) = validate_selected(&candidate.selected) {
+        return Ok(super::PreparationOutcome::Rejected {
+            message: error.to_string(),
+        });
+    }
+    let projection = match r::project_packages(&candidate.selected, &packages) {
+        Ok(projection) => projection,
+        Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
+    };
+    resolved(candidate.clone());
+    if live {
+        match activate(&candidate)? {
+            ActivationOutcome::Prepared => {}
+            ActivationOutcome::Rejected(message) => {
+                return Ok(super::PreparationOutcome::Rejected { message });
+            }
+            ActivationOutcome::Failed(message) => {
+                crate::worker::publish_python_activation_failure(candidate.requirements)?;
+                return Ok(super::PreparationOutcome::Failed { message });
+            }
+        }
+    }
+    if let Some(projection) = projection {
+        if let Err(message) = projection.commit() {
+            if live {
+                crate::worker::publish_python_activation_failure(candidate.requirements)?;
+                return Ok(super::PreparationOutcome::Failed {
+                    message: format!("{message}; restart required"),
+                });
+            }
+            return Ok(super::PreparationOutcome::Rejected { message });
+        }
+    } else if live {
+        crate::worker::publish_python_activation(candidate.requirements)?;
+    }
+    Ok(super::PreparationOutcome::Prepared)
+}
+
+pub(super) fn retained_manifest() -> Option<PythonRequirementManifest> {
+    STATE
+        .with(|slot| {
+            let state = slot.borrow();
+            state
+                .live
+                .as_ref()
+                .or(state.resolved.as_ref())
+                .map(|candidate| candidate.requirements.clone())
+        })
+        .or_else(|| INITIAL_MANIFEST.get().cloned().flatten())
+}
+
+pub(super) fn materialized() -> Option<NativePythonActivation> {
+    STATE.with(|slot| slot.borrow().resolved.clone())
+}
+
+pub(super) fn initialized() -> bool {
+    STATE.with(|slot| slot.borrow().live.is_some())
+}
+
 pub(crate) fn initialize(
     selected: &NativePython,
     requirements: PythonRequirementManifest,
 ) -> Result<(), String> {
     let requirements = requirements.normalized();
-    let ready = STATE.with(|slot| {
+    STATE.with(|slot| {
         let mut state = slot.borrow_mut();
         if state.live.is_some() {
             return Err("managed Python state is already initialized".to_string());
@@ -224,26 +294,10 @@ pub(crate) fn initialize(
             selected: selected.clone(),
             requirements: requirements.clone(),
         });
-        Ok(state.ready)
+        Ok(())
     })?;
-    if ready {
-        crate::worker::publish_python_activation(requirements)?;
-    }
-    Ok(())
-}
-
-pub(super) fn publish_initial_requirements() -> Result<(), String> {
-    // Adoption and native startup can initialize Python before Ready. Publish
-    // only after the coordinator's readiness receipt, outside the state borrow.
-    let requirements = STATE.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.ready = true;
-        state.live.as_ref().map(|live| live.requirements.clone())
-    });
-    if let Some(requirements) = requirements {
-        crate::worker::publish_python_activation(requirements)?;
-    }
-    Ok(())
+    // Runtime initialization is demand-driven, always after worker readiness.
+    crate::worker::publish_python_activation(requirements)
 }
 
 fn snapshot() -> Result<NativePythonActivation, String> {
@@ -295,6 +349,7 @@ pub(super) fn accept(requirements: PythonRequirementManifest) -> Result<(), Stri
             })
             .ok_or("Python activation has no matching inspected candidate")?
             .clone();
+        super::library::accept_configuration(&candidate.selected)?;
         state.live = Some(candidate);
         Ok(())
     })
@@ -303,6 +358,7 @@ pub(super) fn accept(requirements: PythonRequirementManifest) -> Result<(), Stri
 pub(crate) fn activate(candidate: &NativePythonActivation) -> Result<ActivationOutcome, String> {
     match activate_selected(&candidate.selected) {
         Ok(()) => {
+            super::library::accept_configuration(&candidate.selected)?;
             STATE.with(|state| state.borrow_mut().live = Some(candidate.clone()));
             Ok(ActivationOutcome::Prepared)
         }
@@ -354,6 +410,7 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     let request = PythonResolveRequest {
         requirements: requirements.clone(),
         retained_requirements: requirements.clone(),
+        initialized: true,
         import_resolution: Some(resolution.clone()),
     };
     let candidate = match crate::worker::resolve_python(request) {
@@ -366,7 +423,10 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     if let Err(error) = validate_selected(&candidate.selected) {
         return Ok(failed(error.to_string()));
     }
-    let projection = match r::project_import(&candidate.selected, &resolution.distribution) {
+    let projection = match r::project_packages(
+        &candidate.selected,
+        std::slice::from_ref(&resolution.distribution),
+    ) {
         Ok(projection) => projection,
         Err(error) => return Ok(failed(error)),
     };

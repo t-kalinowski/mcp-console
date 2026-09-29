@@ -176,15 +176,22 @@ impl Client {
                     None,
                 )?
             };
-            if let Some(python) = environment
-                .local_runtime
-                .as_mut()
-                .and_then(|runtime| runtime.python.as_mut())
-            {
-                // Once Python has a captured identity, keep it paired with the
-                // candidate environment. R-only preparation leaves selection
-                // lazy; its first Python resolver exchange supplies inspection.
-                *python.selected = self.inspect_managed_python(generation, &selected, &resolver)?;
+            if !environment.custom_worker {
+                let inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
+                let runtime = environment
+                    .local_runtime
+                    .as_mut()
+                    .expect("built-in environment retains runtime capabilities");
+                if let Some(python) = &mut runtime.python {
+                    *python.selected = inspected;
+                } else {
+                    runtime.python = Some(crate::local_runtime::Python {
+                        selected: Box::new(inspected),
+                        explicit: None,
+                        managed: true,
+                        duckdb_extension_directory: None,
+                    });
+                }
             }
             environment.python = Some(PythonEnvironment::Managed { selected, resolver });
         }

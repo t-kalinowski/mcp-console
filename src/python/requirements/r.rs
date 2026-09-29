@@ -77,28 +77,44 @@ pub extern "C-unwind" fn mcp_console_python_requirements_attach(
     unsafe { Ok(libr::R_NilValue) }
 }
 
+pub(super) fn declaration()
+-> Result<Option<crate::worker_protocol::PythonRequirementManifest>, String> {
+    let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
+        return Ok(None);
+    };
+    let json = Adapter(adapter.sexp)
+        .call("manifest_json", &[])
+        .map_err(message)?
+        .text()
+        .map_err(message)?;
+    serde_json::from_str(&json)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 pub(super) struct Projection {
     adapter: Rc<RObject>,
     value: Value,
 }
 
-pub(super) fn project_import(
+pub(super) fn project_packages(
     selected: &crate::python::NativePython,
-    distribution: &str,
+    packages: &[String],
 ) -> Result<Option<Projection>, String> {
     let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
         return Ok(None);
     };
     let encoded = serde_json::to_string(selected).map_err(|error| error.to_string())?;
-    let (encoded, distribution) = harp::exec::r_sandbox(|| {
+    let packages = serde_json::to_string(packages).map_err(|error| error.to_string())?;
+    let (encoded, packages) = harp::exec::r_sandbox(|| {
         (
             Value(RObject::from(encoded)),
-            Value(RObject::from(distribution)),
+            Value(RObject::from(packages)),
         )
     })
     .map_err(|error| error.to_string())?;
     let value = Adapter(adapter.sexp)
-        .call("project_import", &[&encoded, &distribution])
+        .call("project_packages", &[&encoded, &packages])
         .map_err(message)?;
     Ok(Some(Projection { adapter, value }))
 }
@@ -376,13 +392,6 @@ impl Value {
 }
 
 impl Record {
-    pub(super) fn new(value: Value) -> super::RResult<Self> {
-        if value.is_null() {
-            return Err("Python preparation did not produce a managed manifest".into());
-        }
-        Ok(Self(value))
-    }
-
     pub(super) fn config(value: Value) -> super::RResult<Self> {
         if value.is_null() {
             return Err("Python activation did not produce candidate configuration".into());
@@ -447,6 +456,7 @@ impl Adapter {
                 &candidate.get("packages")?,
                 version,
                 &candidate.get("exclude_newer")?,
+                &Value(RObject::from(true)),
             ],
         )
     }
@@ -503,31 +513,20 @@ pub(super) fn from_r_error(error: harp::Error) -> Error {
     })
 }
 
-// Unlike harp::register, these entry points do not suspend interrupts across
+// Unlike harp::register, this entry point does not suspend interrupts across
 // environment preparation or activation. R conversions protect themselves.
 #[ctor::ctor(unsafe)]
 fn register_transitions() {
     type CallMethod = unsafe extern "C-unwind" fn() -> *mut libc::c_void;
-    for (name, function, arity) in [
-        (
-            c"mcp_console_python_transition",
-            python_transition as *const (),
-            4,
-        ),
-        (
-            c"mcp_console_python_prepare",
-            python_prepare as *const (),
-            2,
-        ),
-    ] {
-        // SAFETY: R calls each function on its thread with the registered arity.
-        unsafe {
-            harp::routines::add(libr::R_CallMethodDef {
-                name: name.as_ptr(),
-                fun: Some(std::mem::transmute::<*const (), CallMethod>(function)),
-                numArgs: arity,
-            });
-        }
+    // SAFETY: R calls this function on its thread with four protected arguments.
+    unsafe {
+        harp::routines::add(libr::R_CallMethodDef {
+            name: c"mcp_console_python_transition".as_ptr(),
+            fun: Some(std::mem::transmute::<*const (), CallMethod>(
+                python_transition as *const (),
+            )),
+            numArgs: 4,
+        });
     }
 }
 
@@ -544,20 +543,6 @@ extern "C-unwind" fn python_transition(
         let (manifest, config) =
             Requirements::transition(&Adapter(adapter), current, request, initialized)?;
         named_list(&[("manifest", manifest.value()), ("config", &config)])
-    })
-}
-
-extern "C-unwind" fn python_prepare(packages: SEXP, adapter: SEXP) -> SEXP {
-    complete(|| {
-        let failure = Requirements::prepare(&Adapter(adapter), Value(RObject::view(packages)))?;
-        harp::exec::r_sandbox(|| match failure {
-            None => named_list(&[("kind", &Value(RObject::from("ready")))]),
-            Some(message) => named_list(&[
-                ("kind", &Value(RObject::from("failed"))),
-                ("message", &Value(RObject::from(message))),
-            ]),
-        })
-        .map_err(from_r_error)?
     })
 }
 

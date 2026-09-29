@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
+    assert_exact_interleaving,
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
@@ -24,6 +25,7 @@ from support.assertions import (
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import UNPRIVILEGED, requires
 from support.normalization import code, normalize_python_resolution_error
@@ -33,6 +35,7 @@ from support.python import write_test_wheel
 
 
 def environment(path: Path) -> dict[str, str]:
+    retain_system_bwrap(path)
     env = dict(os.environ, PATH=str(path))
     for name in (
         "R_HOME",
@@ -2150,6 +2153,13 @@ def test_cleans_temporary_storage_after_startup_failure(
             temporary = Path((root / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "startup failure deleted the environment"
+            # Python now starts on cell demand after worker readiness. The
+            # replacement is idle and has not entered the failing hook again.
+            (site / "sitecustomize.py").unlink()
+            client.send(python="print('replacement initializes on demand')")
+            assert last_result_text(client) == "replacement initializes on demand\n", (
+                client.transcript[-1]
+            )
             return client.finish()
 
 
@@ -2420,12 +2430,32 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             temporary = Path((workspace / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "failed startup removed selected environment"
-            for record in records:
-                for content in record.get("result", {}).get("content", []):
-                    if content["type"] == "text":
-                        content["text"] = content["text"].replace(
-                            str(venv), "<selected environment>"
-                        )
+            content = records[-1]["result"]["content"][0]
+            diagnostic = (
+                "Traceback (most recent call last):\n"
+                '  File "<string>", line 705, in _mcp_console_configure_environment\n'
+                "RuntimeError: embedded Python prefix differs from the selected environment: "
+                f"'changed-by-startup-hook' != {str(venv)!r}\n"
+            )
+            stderr = (
+                "Python environment setup failed; restart required\n"
+                "Python exit thread attached\n"
+            )
+            lifecycle = (
+                "[worker sideband read failed: worker sideband closed]\n"
+                "[worker exited with status 1]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n[idle]"
+            )
+            assert content["text"].endswith(lifecycle), content
+            # Sideband diagnostics and terminal stderr are independent streams.
+            # Preserve every byte and each producer's order before recording.
+            assert_exact_interleaving(
+                content["text"][: -len(lifecycle)], diagnostic, stderr
+            )
+            content["text"] = (diagnostic + stderr + lifecycle).replace(
+                str(venv), "<selected environment>"
+            )
             return records
 
 
@@ -2866,14 +2896,10 @@ def test_reports_direct_storage_retirement_failure(
                     client.stdin.close()
                     client.process.wait(timeout=15)
                     stderr = client.stderr.read()
-                    if stage == "startup failure":
-                        # Startup already delivered its retirement error over MCP.
-                        assert client.process.returncode == 0 and stderr == "", stderr
-                    else:
-                        assert client.process.returncode != 0, (stage, stderr)
-                        assert "cannot remove worker temporary directory" in stderr, (
-                            stderr
-                        )
+                    # Even startup hooks now execute after worker readiness.
+                    # Unconfirmed retirement remains a server shutdown failure.
+                    assert client.process.returncode != 0, (stage, stderr)
+                    assert "cannot remove worker temporary directory" in stderr, stderr
                     temporary = Path((workspace / "worker-temporary").read_text())
                     assert temporary.exists()
                     assert (venv / "bin/python3").exists()

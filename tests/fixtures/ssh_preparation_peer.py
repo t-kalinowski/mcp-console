@@ -58,23 +58,24 @@ discovery = {
     "managed": True,
     "selections": {"r_home": "/remote-only/R", "python": None},
 }
+python_identity = {
+    "embedding": {
+        "python": "/remote-only/python",
+        "libpython": "/remote-only/libpython",
+        "python_home": "/remote-only",
+    },
+    "prefix": "/remote-only",
+    "exec_prefix": "/remote-only",
+    "base_prefix": "/remote-only",
+    "base_exec_prefix": "/remote-only",
+}
 if mode.startswith("default-extension-"):
     discovery["selections"]["r_home"] = None
     discovery["native"] = {
         "selection": {
             "r_home": None,
             "python": {
-                "selected": {
-                    "embedding": {
-                        "python": "/remote-only/python",
-                        "libpython": "/remote-only/libpython",
-                        "python_home": "/remote-only",
-                    },
-                    "prefix": "/remote-only",
-                    "exec_prefix": "/remote-only",
-                    "base_prefix": "/remote-only",
-                    "base_exec_prefix": "/remote-only",
-                },
+                "selected": python_identity,
                 "explicit": None,
                 "managed": True,
                 "duckdb_extension_directory": "/remote-only/extensions",
@@ -116,6 +117,9 @@ while (message := read()) is not None:
         operation = request["operation"]
         if operation == "Bootstrap" or "Duckdb" in operation:
             complete(id, None)
+        elif "InspectPython" in operation:
+            assert operation["InspectPython"] == {"executable": "/remote-only/python"}
+            complete(id, python_identity)
         elif "R" in operation:
             complete(
                 id,

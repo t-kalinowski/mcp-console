@@ -9,7 +9,7 @@ Ordinary Docker retains native provider selection by default; its `external-sand
 The MCP server and recordings stay on the controller.
 Each worker generation gets a fresh Console-owned container containing both the relay and built-in worker.
 Docker image setup happens once before MCP readiness.
-Python, Console, analysis packages, optional R, and any required native companion must come from the image; this mode never prepares packages dynamically.
+Console, at least one of R or Python, analysis packages, and any required native companion must come from the image; this mode never prepares packages dynamically.
 
 ## Build an image and start a session
 
@@ -135,6 +135,9 @@ The shared prepared-target probe inspects the selected CPython executable and sh
 It returns a bounded structured runtime descriptor through the [target envelope](RELAY_PROTOCOL.md#target-launch-envelope), with diagnostics on stderr.
 The controller retains it only after compatibility checks, successful validation, and confirmed removal of the disposable probe container.
 It does not start the analysis worker or open a SQL catalog during this probe.
+When R is present and neither Python name exists on the target PATH, Console exposes R and SQL without requiring Python.
+An invalid explicit Python selection or a broken discovered executable still fails setup.
+Neither runtime is initialized by the capability probe.
 Missing analysis packages retain ordinary package or adapter errors.
 Install them in the Dockerfile and start a new server session.
 

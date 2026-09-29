@@ -219,7 +219,9 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
     }
 }
 
-pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBuf, Box<dyn Error>> {
+pub(super) fn initialize_r(
+    r_home: &std::path::Path,
+) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
@@ -250,6 +252,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
         libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
         libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
         libr::set(libr::ptr_R_Busy, Some(r_busy));
+    }
+    // Rf_initialize_R has read the system Renviron. Defer its effective package
+    // selection before setup_Rmainloop runs the base profile and .First.sys().
+    let deferred = crate::python::defer_r_startup()?;
+    unsafe {
         libr::setup_Rmainloop();
     }
 
@@ -260,8 +267,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<std::path::PathBu
     harp::routines::r_register_routines();
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
+    // Preserve R's fatal-signal diagnostics. Its bootstrap SIGINT handler only
+    // records R's pending flag; attachment below retains that flag, transfers
+    // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
-    Ok(String::try_from(harp::parse_eval_base("base::tempdir()")?)?.into())
+    Ok(deferred)
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
@@ -305,7 +315,7 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     unsafe {
         mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
     }
-    super::interrupt::initialize(super::interrupt::State {
+    super::interrupt::attach_r(super::interrupt::State {
         signal: mcp_r_record_interrupt,
         requested: interrupt_pending,
         pending: console_interrupt_pending,

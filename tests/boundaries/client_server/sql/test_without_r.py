@@ -372,6 +372,21 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
             assert last_tool_text(client) == "1.5.5\n"
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["duckdb"] == ["fts"]
+            client.send(
+                control="restart",
+                requirements={"action": "set", "python": ["six"], "duckdb": []},
+                python="sentinel = object(); original = sentinel",
+            )
+            added = client.send(
+                requirements={"python": ["duckdb==1.5.5"], "duckdb": ["fts"]},
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            assert not added.get("isError"), added
+            assert "Error:" not in last_tool_text(client), client.transcript[-1]
+            client.send(
+                python="assert sentinel is original; print('candidate prepared together')"
+            )
+            assert last_tool_text(client) == "candidate prepared together\n"
             return client.finish()[3:]
 
 

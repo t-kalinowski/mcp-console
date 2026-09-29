@@ -28,7 +28,7 @@ base::local(
         return(invisible(managed_connection))
       }
 
-      storage <- file.path(tempdir(), "mcp-console-duckdb")
+      storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
       managed_connection <<- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",

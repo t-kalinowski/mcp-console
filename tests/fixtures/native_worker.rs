@@ -152,6 +152,8 @@ fn spawn_probe_with_configuration(
             "--nocapture",
         ])
         .env("MCP_CONSOLE_NATIVE_PROBE", scenario)
+        .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "1")
+        .env_remove("MCP_CONSOLE_EXECUTION_COMPUTE")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -210,7 +212,7 @@ fn native_python_setup_runs_cells_without_r() {
     assert!(
         cells[5]
             .1
-            .contains("Automatic resolution disabled in native fixture")
+            .contains("MCP Console is using a user-selected Python environment. Automatic managed package resolution is disabled")
     );
     assert!(
         child
@@ -279,6 +281,10 @@ fn native_python_activation_preserves_runtime_without_r() {
         assert!(matches!(
             receive_python_probe(&mut reader, &mut child),
             WorkerMessage::Ready
+        ));
+        assert!(matches!(
+            receive_python_probe(&mut reader, &mut child),
+            WorkerMessage::PythonActivated { requirements } if requirements == *initial.requirements()
         ));
         loop {
             match receive_python_probe(&mut reader, &mut child) {
@@ -503,6 +509,7 @@ fn native_probe() {
         return;
     };
     let (reader, writer) = crate::sideband::connect_from_env().expect("connect sideband");
+    interrupt::normalize_signal().expect("normalize worker signal");
     core::initialize(reader, writer.clone()).expect("initialize sideband");
     let integration = Integration::new(None).expect("initialize native integration");
     writer
@@ -532,9 +539,17 @@ fn native_probe() {
             &std::env::var("TMPDIR").expect("native storage"),
         ))
         .expect("configure native worker environment");
-        let mut runtime = crate::python::Runtime::native(&initial, true)
-            .expect("initialize native Python runtime");
-        let mut sql = crate::sql::Bridge::native();
+        let mut runtime = crate::python::Runtime::new(crate::local_runtime::WorkerSelection {
+            r: false,
+            python: Some(crate::local_runtime::Python {
+                selected: Box::new(initial.clone()),
+                explicit: None,
+                managed: true,
+                duckdb_extension_directory: None,
+            }),
+        })
+        .expect("initialize native Python runtime");
+        let mut sql = crate::sql::Bridge::new();
         runtime
             .evaluate("import sys, runpy, subprocess, multiprocessing\nidentity = object()\nidentity_id = id(identity)\noriginal_executable = sys.executable")
             .expect("create persistent Python objects");
@@ -636,9 +651,7 @@ fn native_probe() {
         assert!(
             crate::python::setup_runtime(
                 std::path::Path::new(&configuration.embedding.libpython),
-                crate::python::ImportResolution::Disabled(
-                    "Automatic resolution disabled in native fixture",
-                ),
+                false,
             )
             .expect("install native Python setup")
         );
@@ -668,9 +681,7 @@ _mcp_console.configure_import_resolution = fail_reconfiguration"#,
                 assert!(
                     crate::python::setup_runtime(
                         std::path::Path::new(&configuration.embedding.libpython),
-                        crate::python::ImportResolution::Disabled(
-                            "Automatic resolution disabled in native fixture",
-                        ),
+                        false,
                     )
                     .expect("reuse completed Python setup")
                 );

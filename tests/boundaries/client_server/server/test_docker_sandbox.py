@@ -270,6 +270,11 @@ def test_runtime_discovery_uses_workload_environment(binary: Path) -> Transcript
                     {"arguments": list(arguments), "inherit_environment": inherit}
                 )
                 records.extend(transcript)
+    from boundaries.client_server.python.test_peer_runtime import (
+        exercise_prepared_r_only,
+    )
+
+    exercise_prepared_r_only(binary, "docker")
     return records
 
 

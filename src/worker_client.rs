@@ -756,6 +756,13 @@ impl Client {
         Ok(client)
     }
 
+    pub(crate) fn python_available(&self) -> bool {
+        self.0
+            .target
+            .as_ref()
+            .is_none_or(|target| target.python_available())
+    }
+
     pub(crate) fn python_only(&self) -> bool {
         self.0.python_only
     }
@@ -1913,9 +1920,10 @@ impl WorkerCallbacks {
     fn resolve_python(
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<PythonCandidate, String> {
         self.client
-            .resolve_runtime_python(self.generation.clone(), request)
+            .resolve_runtime_python(self.generation.clone(), request, duckdb_extensions)
     }
 
     fn fail_python_activation(&self) -> Result<OldGenerationCommitDisposition, String> {

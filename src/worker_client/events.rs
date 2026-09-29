@@ -71,16 +71,9 @@ enum OperationKind {
     PreparePython {
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
-        native: Option<Box<NativePreparationCandidate>>,
-        activated: bool,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     },
 }
-
-type NativePreparationCandidate = (
-    crate::resolver::ManagedPython,
-    crate::python::NativePython,
-    Option<std::collections::BTreeSet<String>>,
-);
 
 enum Route {
     Cell(Arc<Evaluation>),
@@ -202,44 +195,27 @@ impl WorkerOperationState {
         &self,
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
-        native: Option<Box<NativePreparationCandidate>>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython {
             commit,
             continue_environment_preparation,
-            native,
-            activated: false,
+            duckdb_extensions,
         })
     }
 
-    fn native_python_activation(
+    fn python_preparation_extensions(
         &self,
-        requirements: &crate::worker_protocol::PythonRequirementManifest,
-    ) -> Result<Option<NativePreparationCandidate>, String> {
-        let mut state = self.lock()?;
-        match state
-            .operation
-            .as_mut()
-            .map(|operation| &mut operation.kind)
-        {
-            Some(OperationKind::PreparePython {
-                native: Some(candidate),
-                activated,
-                ..
-            }) => {
-                let (managed, selected, duckdb_extensions) = candidate.as_ref();
-                if *activated || managed.requirements() != requirements {
-                    return Err("worker activated an unexpected native Python candidate".into());
-                }
-                *activated = true;
-                Ok(Some((
-                    managed.clone(),
-                    selected.clone(),
-                    duckdb_extensions.clone(),
-                )))
-            }
-            _ => Ok(None),
-        }
+    ) -> Result<Option<std::collections::BTreeSet<String>>, String> {
+        let state = self.lock()?;
+        Ok(
+            match state.operation.as_ref().map(|operation| &operation.kind) {
+                Some(OperationKind::PreparePython {
+                    duckdb_extensions, ..
+                }) => duckdb_extensions.clone(),
+                _ => None,
+            },
+        )
     }
 
     fn begin_preparation(
@@ -532,27 +508,10 @@ impl WorkerOperationState {
                 python_candidates.clear();
                 commit(Err(message)).map(OperationResult::RPrepared)
             }
-            (
-                OperationKind::PreparePython {
-                    commit,
-                    native,
-                    activated,
-                    ..
-                },
-                RelayEvent::PythonPrepared,
-            ) => {
-                if native.is_some() && !activated {
-                    return Err(
-                        "worker completed native Python preparation without activation".into(),
-                    );
-                }
-                let candidate = if native.is_some() {
-                    None
-                } else {
-                    python_candidates
-                        .pop()
-                        .map(|candidate| (candidate.managed, candidate.configuration))
-                };
+            (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
+                let candidate = python_candidates
+                    .pop()
+                    .map(|candidate| (candidate.managed, candidate.configuration));
                 r_candidates.clear();
                 python_candidates.clear();
                 commit(Ok(candidate)).map(OperationResult::PythonPrepared)
@@ -566,9 +525,7 @@ impl WorkerOperationState {
                 commit(Err(message)).map(OperationResult::PythonPrepared)
             }
             (
-                OperationKind::PreparePython {
-                    native: Some(_), ..
-                },
+                OperationKind::PreparePython { .. },
                 RelayEvent::PythonPreparationRejected { message },
             ) => {
                 r_candidates.clear();
@@ -1127,7 +1084,9 @@ fn handle_semantic_event(
                 })?;
             }
             let import_resolution = request.import_resolution.clone();
-            let response = match callbacks.resolve_python(request) {
+            let response = match callbacks
+                .resolve_python(request, operation.python_preparation_extensions()?)
+            {
                 Ok((managed, configuration)) => {
                     let python = managed.python().to_string_lossy().into_owned();
                     let native = Some(Box::new(crate::worker_protocol::NativePythonActivation {
@@ -1154,34 +1113,25 @@ fn handle_semantic_event(
         }
         RelayEvent::PythonActivated { requirements } => {
             let activated = requirements.clone().normalized();
-            let native = operation.native_python_activation(&activated)?;
-            let (managed, configuration, duckdb_extensions, resolution) = match native {
-                Some((managed, configuration, duckdb_extensions)) => {
-                    (Some(managed), Some(configuration), duckdb_extensions, None)
-                }
-                None => {
-                    let candidate = candidates
-                        .python
-                        .iter()
-                        .rposition(|candidate| candidate.managed.requirements() == &activated)
-                        .map(|index| candidates.python.remove(index));
-                    match candidate {
-                        Some(candidate) => (
-                            Some(candidate.managed),
-                            Some(candidate.configuration),
-                            None,
-                            candidate.import_resolution,
-                        ),
-                        None => (None, None, None, None),
-                    }
-                }
+            let candidate = candidates
+                .python
+                .iter()
+                .rposition(|candidate| candidate.managed.requirements() == &activated)
+                .map(|index| candidates.python.remove(index));
+            let (managed, configuration, resolution) = match candidate {
+                Some(candidate) => (
+                    Some(candidate.managed),
+                    Some(candidate.configuration),
+                    candidate.import_resolution,
+                ),
+                None => (None, None, None),
             };
             candidates.python.clear();
             let disposition = callbacks.activate_python(
                 requirements,
                 managed,
                 configuration,
-                duckdb_extensions,
+                operation.python_preparation_extensions()?,
             )?;
             if disposition == OldGenerationCommitDisposition::Commit
                 && let Some(resolution) = resolution

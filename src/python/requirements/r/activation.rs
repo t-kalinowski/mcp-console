@@ -80,7 +80,10 @@ pub extern "C-unwind" fn mcp_console_python_initialized(activation: SEXP) -> har
     let requirements = activation_requirements(activation)?;
     let selected = crate::python::library::selected_configuration()
         .map_err(|error| harp::anyhow!("{error}"))?;
-    super::super::initialize(&selected, requirements).map_err(|error| harp::anyhow!("{error}"))?;
+    if !super::super::initialized() {
+        super::super::initialize(&selected, requirements)
+            .map_err(|error| harp::anyhow!("{error}"))?;
+    }
     unsafe { Ok(libr::R_NilValue) }
 }
 

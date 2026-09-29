@@ -40,5 +40,32 @@ result:
   content:
     - type: text
       text: |
+        [1] 0
+  isError: false
+---
+send:
+  r: invisible(reticulate::py_config()); initialization_count
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+---
+send:
+  python: assert id(runtime_identity) == runtime_identity_id; 44
+result:
+  content:
+    - type: text
+      text: |
+        44
+  isError: false
+---
+send:
+  r: invisible(reticulate::py_config()); initialization_count
+result:
+  content:
+    - type: text
+      text: |
         [1] 1
   isError: false

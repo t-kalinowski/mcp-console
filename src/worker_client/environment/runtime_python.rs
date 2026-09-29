@@ -12,6 +12,7 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<super::super::PythonCandidate, String> {
         self.ensure_generation(&generation)?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
@@ -33,6 +34,7 @@ impl Client {
         let crate::worker_protocol::PythonResolveRequest {
             requirements,
             retained_requirements,
+            initialized,
             import_resolution,
         } = request;
         crate::python_requirement::validate_all(&requirements.packages)?;
@@ -50,6 +52,40 @@ impl Client {
                 "Python resolution and retained requirements differ outside the Python version"
                     .to_string(),
             );
+        }
+        if (initialized || self.python_only()) && import_resolution.is_none() {
+            if self.requirement_change_state(&generation)?
+                == RequirementChangeState::RestartRequired
+            {
+                return Err("requirement changes are unavailable until session restart".into());
+            }
+            if initialized {
+                RequirementDelta::calculate(
+                    &environment,
+                    Requirements {
+                        python: retained_requirements.packages.clone(),
+                        ..Default::default()
+                    },
+                )?
+                .validate_live_python_additions(&environment)?;
+            }
+            // A live tool addition resolves against the already accepted
+            // executable, just like a reached import. Do not select a newer
+            // interpreter while the worker retains the current library.
+            let (candidate, inspected) = self
+                .resolve_live_native_python(
+                    &generation,
+                    &environment,
+                    requirements,
+                    duckdb_extensions
+                        .as_ref()
+                        .unwrap_or(&environment.duckdb_extensions),
+                )
+                .map_err(|failure| failure.into_message())?;
+            return Ok((
+                candidate.with_retained_requirements(retained_requirements),
+                inspected,
+            ));
         }
         if let Some(resolution) = import_resolution.as_ref() {
             validate_python_import_resolution(resolution, &retained_requirements)?;

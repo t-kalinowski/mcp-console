@@ -60,7 +60,42 @@ def install_interrupt() -> None:
     signal.signal(signal.SIGINT, interrupt)
 
 
+# Reticulate output remapping is disabled. Install these wrappers once so
+# restoring input and interrupt hooks preserves user stream redirections.
 sys.stdout = _Output(sys.stdout, write)
 sys.stderr = _Output(sys.stderr, diagnostic)
-builtins.input = _console_input
-install_interrupt()
+
+
+def install_services() -> None:
+    builtins.input = _console_input
+    install_interrupt()
+
+
+install_services()
+
+
+class _LazyR:
+    @staticmethod
+    def _bridge() -> Any:
+        attach_r()
+        import __main__
+
+        bridge = __main__.__dict__.get("r", builtins.r)
+        if isinstance(bridge, _LazyR):
+            raise RuntimeError("reticulate did not install Python-side R access")
+        return bridge
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._bridge(), name)
+
+    def __getitem__(self, code: str) -> Any:
+        return self._bridge()[code]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._bridge(), name, value)
+
+    def __setitem__(self, name: str, value: Any) -> None:
+        self._bridge()[name] = value
+
+
+builtins.r = _LazyR()

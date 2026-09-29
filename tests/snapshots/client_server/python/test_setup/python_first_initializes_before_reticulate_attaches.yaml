@@ -63,12 +63,13 @@ result:
 ---
 send:
   r: |
-    stopifnot(startup_calls == 1L)
+    stopifnot(startup_calls == 0L)
     stopifnot(callback_calls == 1L)
     stopifnot(identical(
       normalizePath(reticulate::py_config()$python),
       expected_python
     ))
+    stopifnot(startup_calls == 1L)
     reticulate::py_to_r(reticulate::py$startup_value) + 1L
 result:
   content:

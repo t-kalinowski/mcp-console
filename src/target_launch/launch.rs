@@ -75,12 +75,6 @@ fn launch(
         )?;
     }
     let native = bootstrap.provider.needs_native_runner(bootstrap.no_sandbox);
-    let direct_native_python = !native
-        && bootstrap
-            .environment
-            .as_ref()
-            .and_then(|environment| environment.native.as_ref())
-            .is_some_and(crate::local_runtime::Selection::python_only);
     super::enter_workspace(&bootstrap.workspace)?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut policy = if !native {
@@ -163,9 +157,9 @@ fn launch(
     .map_err(|error| error.to_string())?;
     let mut output = Io::new(duplicate(1)?, None, Some(deadline))?;
     super::write_frame(&mut output, super::HELLO, &hello).map_err(|error| error.to_string())?;
-    // Direct prepared probes and native Python workers have no runner-owned
+    // Direct prepared probes and workers have no runner-owned
     // storage. The existing target launcher owns it until child retirement.
-    let mut temporary = if !native && (probe_only || direct_native_python) {
+    let mut temporary = if !native {
         Some(crate::local_runtime::TemporaryDirectory::create()?)
     } else {
         None

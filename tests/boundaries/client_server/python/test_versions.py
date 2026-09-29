@@ -853,6 +853,21 @@ def test_interrupts_python_cache_warmup_without_committing(
                         )
                         return
                     if arguments[:2] == ["-I", "-c"]:
+                        if len(arguments) == 4:
+                            # Report this selected fixture while executing the
+                            # real inspection program in isolated CPython.
+                            program = "import sys; sys.executable = sys.argv.pop(1); "
+                            os.execv(
+                                sys.executable,
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    program + arguments[2],
+                                    sys.argv[0],
+                                    arguments[3],
+                                ],
+                            )
                         preflight = Path(os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"])
                         if not preflight.exists():
                             preflight.touch()
@@ -970,6 +985,21 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                     if arguments[:2] == ["-I", "-c"]:
                         if blocked.exists():
                             Path(os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]).touch()
+                        if len(arguments) == 4:
+                            # Report this selected fixture while executing the
+                            # real inspection program in isolated CPython.
+                            program = "import sys; sys.executable = sys.argv.pop(1); "
+                            os.execv(
+                                sys.executable,
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    program + arguments[2],
+                                    sys.argv[0],
+                                    arguments[3],
+                                ],
+                            )
                         return
                     raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
 

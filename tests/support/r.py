@@ -32,6 +32,37 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
+def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
+    """Retain installed R files while isolating bootstrap settings and loader paths."""
+    original = Path(environment["R_HOME"])
+    selected = directory / "R"
+    selected.mkdir()
+    for entry in original.iterdir():
+        if entry.name not in {"bin", "etc", "lib"}:
+            (selected / entry.name).symlink_to(entry)
+    for name in ("bin", "etc", "lib"):
+        destination = selected / name
+        destination.mkdir()
+        for entry in (original / name).iterdir():
+            target = destination / entry.name
+            if name == "bin" and entry.name == "R":
+                target.write_text(
+                    entry.read_text().replace(
+                        f'R_HOME_DIR="{original}"', f'R_HOME_DIR="{selected}"', 1
+                    )
+                )
+                target.chmod(entry.stat().st_mode)
+            elif name == "etc" and entry.name == "Renviron":
+                shutil.copyfile(entry, target)
+            else:
+                target.symlink_to(entry)
+    environment["R_HOME"] = str(selected)
+    # Rscript uses RHOME to override its compiled-in installation path.
+    environment["RHOME"] = str(selected)
+    environment["PATH"] = os.pathsep.join([str(selected / "bin"), environment["PATH"]])
+    return selected
+
+
 def reference_r_error(environment: dict[str, str], source: str) -> str:
     result = subprocess.run(
         [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],

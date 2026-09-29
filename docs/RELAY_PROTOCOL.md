@@ -72,9 +72,10 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `5` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Its fields are `version` (currently `7` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
 Prepared targets accept optional `python` only for runtime probes and require `environment` for worker launch.
-Version 5 retains independent R and inspected Python selections in that handoff, including the complete Python identity when R is present.
+The handoff retains independent R and inspected Python selections, including the complete Python identity when R is present.
+Version 7 permits prepared R-only selections and uses the shared Python preparation request.
 Prepared runtime descriptors have managed flags false and no managed R/Python payloads.
 The image/template supplies its dependencies.
 SSH omits the probe-only `python` field, rejects it when supplied, and carries no prepared runtime-result frames.
@@ -163,10 +164,9 @@ The server can send these flat frames:
 - `{"kind":"prepare_r","library":"..."}` sends the unchanged live R-preparation command.
 - `{"kind":"r_resolved","library":"..."}` returns one provisional host R-resolution result.
 - `{"kind":"r_resolution_failed","failure":"host","message":"..."}` returns one host R-resolution failure; `failure` is `host`, `interrupted`, or `operation`.
-- `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live reticulate preparation.
-  The optional `native` object selects native activation in a managed session without R; that form requires `packages: []` and carries `selected` (the inspected native configuration) and `requirements` (the complete retained manifest).
+- `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit Python preparation through its common requirement owner.
 - `{"kind":"python_resolved","python":"..."}` returns one host Python-resolution result.
-  The optional `native` object carries the inspected candidate for a reached missing import in a managed sans-R session.
+  The optional `native` object carries the host-inspected candidate for shared Python preparation and reached-import activation.
 - `{"kind":"python_resolution_failed","message":"..."}` returns one host Python-resolution failure.
 - `{"kind":"python_version_resolved","version":"3.12.11"}` returns one host Python-version result.
 - `{"kind":"python_version_resolution_failed","message":"..."}` returns one host Python-version failure.
@@ -215,7 +215,7 @@ The relay can emit these flat frames:
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
 - `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching provisional Python candidate whose activation failed after mutation may have begun, during evaluation, preparation, or an idle callback.
-  Launch protocol version 6 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
+  Launch protocol version 7 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
 - `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
 - `{"kind":"python_preparation_failed","message":"..."}` completes live Python preparation with an ordinary failure.
 - `{"kind":"python_preparation_rejected","message":"..."}` rejects an explicit native candidate before mutation.
@@ -236,9 +236,9 @@ The relay can emit these flat frames:
 
 The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines runtime R resolution, failure classes, and activation ordering.
 Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
-It also defines every field of `prepare_python.native`; the relay forwards that object unchanged, as it does the optional `import_resolution` object.
-For native preparation, the server has already resolved, inspected, and approved the candidate before sending `prepare_python`.
-The worker reports a matching `python_activated` before `python_prepared`; the server commits the accepted environment and launch configuration on that activation receipt.
+The relay forwards the optional `initialized` and `import_resolution` fields unchanged.
+The worker requests the inspected candidate during preparation, reports live activation before `python_prepared`, and leaves the generation-checked commit to the server.
+An uninitialized interpreter can report materialization with `python_prepared` alone.
 The [live preparation contract](WORKER_PROTOCOL.md#live-python-preparation) defines correlation, failure handling, and restart behavior.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.

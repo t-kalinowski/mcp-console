@@ -9,6 +9,7 @@ pub(super) fn configure_prepared(
     kind: &str,
     python_only: bool,
 ) {
+    let python_available = properties.contains_key("python");
     let source = if kind == "docker" {
         "image"
     } else {
@@ -29,6 +30,16 @@ pub(super) fn configure_prepared(
             "SQL through the Console-owned DuckDB catalog",
         )
         .replace("managed DuckDB", "the Console-owned DuckDB catalog");
+    if !python_available {
+        *description = description
+            .replace("R, Python, and SQL", "R and SQL")
+            .replace(
+                "Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and ",
+                "Reuse live state when switching: ",
+            )
+            .replace("R or Python can select", "R can select")
+            .replace("`r`, `python`, or `sql` cell", "`r` or `sql` cell");
+    }
     description.push_str(&format!(
         "\n\nRuntimes were inspected inside the captured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
     ));
@@ -57,6 +68,11 @@ pub(super) fn configure_prepared(
             let text = property["description"]
                 .as_str()
                 .expect("language description");
+            let text = if python_available {
+                text.to_owned()
+            } else {
+                text.replace(" Read Python globals through py$name.", "")
+            };
             property["description"] =
                 format!("{text} Dependencies must be preinstalled in the {source}.").into();
         }
@@ -68,11 +84,17 @@ pub(super) fn configure_prepared(
                 "Python data frames require explicit registration with sql_connection().register(name, frame).",
                 "console_sql_connection(None)",
             )
-        } else {
+        } else if python_available {
             (
                 "R DBI or Python DB-API",
                 "The default catalog can query R global data frames by name; Python data frames require explicit registration with sql_connection().register(name, frame).",
                 "console_sql_connection(None) in Python or console_sql_connection(NULL) in R",
+            )
+        } else {
+            (
+                "R DBI",
+                "The default catalog can query R global data frames by name.",
+                "console_sql_connection(NULL) in R",
             )
         };
         property["description"] = format!(

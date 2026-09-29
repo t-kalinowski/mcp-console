@@ -11,14 +11,13 @@ pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSIO
 pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
-pub(crate) const IMPORT_DISABLED: &str = "automatic package installation is unavailable in Python sessions without R; install packages before starting the session";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
-    // None is an as-yet-unselected Python, not an unavailable language. R
-    // declarations and selection hints may still supply this lazy selection.
+    // In managed sessions, None leaves R declarations and selection hints lazy.
+    // In prepared targets, None records genuine Python absence after discovery.
     pub(crate) python: Option<Python>,
 }
 
