@@ -75,13 +75,16 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         for command in ("serve", "sandbox"):
             arguments = [*overrides[:2], command, *overrides[2:]]
             if command == "serve":
+                zod = Path(__file__).resolve().parents[2] / "fixtures/zod"
                 with McpClient(
                     binary,
-                    (*arguments, "--worker", "unused-worker"),
+                    (*arguments, "--worker", str(zod)),
                     current_directory=workspace,
                     environment=environment,
                 ) as client:
                     client.initialize_and_list_tools()
+                    result = client.send(r="echo configuration capture")
+                    assert not result.get("isError"), result
                     _, stderr = client.finish_with_standard_error()
                     assert stderr == "", stderr
             else:

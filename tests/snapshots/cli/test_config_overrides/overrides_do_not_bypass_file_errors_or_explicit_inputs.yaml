@@ -5,8 +5,8 @@ arguments:
   - -c
   - "sandbox={} "
 stderr: >
-  .agents/console/config.yaml: while parsing a node, did not find expected
-  node content at byte 10 line 2 column 1
+  .agents/console/config.yaml: while parsing a node, did not find expected node
+  content at byte 10 line 2 column 1
 ---
 arguments:
   - -c

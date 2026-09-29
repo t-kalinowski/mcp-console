@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.native import LOADER_VARIABLE, build_interposer
+from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
@@ -216,16 +217,33 @@ def test_preserves_native_validation_errors(binary: Path) -> Transcript:
                 ("serve",),
                 ("sandbox", "--", "/bin/echo", "workload started"),
             ):
-                result = subprocess.run(
-                    [binary, *arguments],
-                    cwd=host,
-                    env=environment,
-                    input="",
-                    capture_output=True,
-                    text=True,
-                )
-                assert result.returncode == 1 and result.stdout == "", result
-                assert capture.exists(), result.stderr
+                if arguments[0] == "serve":
+                    zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
+                    with McpClient(
+                        binary, (*arguments, "--worker", str(zod)), environment, host
+                    ) as client:
+                        client.initialize_and_list_tools()
+                        result = client.send(
+                            r="native validation must reject this cell"
+                        )
+                        assert result["isError"], result
+                        client.request("ping")
+                        _, errors = client.finish_with_standard_error()
+                else:
+                    result = subprocess.run(
+                        [binary, *arguments],
+                        cwd=host,
+                        env=environment,
+                        input="",
+                        capture_output=True,
+                        text=True,
+                    )
+                    assert result.returncode == 1 and result.stdout == "", result
+                    assert f"{CONFIG}: sandbox preflight failed" in result.stderr, (
+                        result
+                    )
+                    errors = result.stderr
+                assert capture.exists(), errors
                 payloads = [
                     json.loads(line) for line in capture.read_text().splitlines()
                 ]
@@ -266,13 +284,12 @@ def test_preserves_native_validation_errors(binary: Path) -> Transcript:
                 )
                 diagnostic = normalize(native.stderr)
                 assert diagnostic.startswith("mcp-console-sandbox: "), native
-                assert normalize(result.stderr).endswith(diagnostic), result
-                assert f"{CONFIG}: sandbox preflight failed" in result.stderr, result
+                assert normalize(errors).endswith(diagnostic), errors
                 transcript.append(
                     {
                         "settings": settings,
                         "command": arguments[0],
-                        "stderr": normalize(result.stderr),
+                        "stderr": normalize(errors),
                     }
                 )
                 capture.unlink()

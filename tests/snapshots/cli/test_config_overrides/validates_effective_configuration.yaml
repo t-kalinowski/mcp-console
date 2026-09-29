@@ -11,16 +11,16 @@ stderr: >
 ---
 override: extends=1.5
 stderr: >
-  configuration with CLI overrides: extends: invalid type: floating point
-  `1.5`, expected a string
+  configuration with CLI overrides: extends: invalid type: floating point `1.5`,
+  expected a string
 ---
 override: target.command=[far, faz]
 stderr: >
-  configuration with CLI overrides: local host targets use the launch
-  directory and built-in command; target.workspace and target.command
-  require SSH or Docker
+  configuration with CLI overrides: local host targets use the launch directory
+  and built-in command; target.workspace and target.command require SSH or
+  Docker
 ---
 override: "unknown={baz: [far, faz]}"
 stderr: >
-  configuration with CLI overrides: unknown: unknown field `unknown`,
-  expected one of `python`, `extends`, `sandbox`, `target`
+  configuration with CLI overrides: unknown: unknown field `unknown`, expected
+  one of `python`, `extends`, `sandbox`, `target`

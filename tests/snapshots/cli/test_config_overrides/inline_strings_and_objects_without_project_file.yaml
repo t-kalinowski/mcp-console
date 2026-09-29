@@ -1,8 +1,8 @@
 ---
 value: >-
   {MESSAGE: 'a, [b] = {c}: #雪', NUMBER: '42', EMPTY: '', URL:
-  https://example.com/a=b, APOSTROPHE: 'it''s', ESCAPE: "say \"go\" \\
-  end", APP.VERSION: v1}
+  https://example.com/a=b, APOSTROPHE: 'it''s', ESCAPE: "say \"go\" \\ end",
+  APP.VERSION: v1}
 environment:
   MESSAGE: "a, [b] = {c}: #雪"
   NUMBER: "42"
@@ -27,8 +27,8 @@ environment:
 ---
 value: >-
   {MESSAGE = 'a, [b] = {c}: #雪', NUMBER = '42', EMPTY = '', URL =
-  'https://example.com/a=b', APOSTROPHE = "it's", ESCAPE = "say \"go\" \\
-  end", "APP.VERSION" = 'v1',}
+  'https://example.com/a=b', APOSTROPHE = "it's", ESCAPE = "say \"go\" \\ end",
+  "APP.VERSION" = 'v1',}
 environment:
   MESSAGE: "a, [b] = {c}: #雪"
   NUMBER: "42"
