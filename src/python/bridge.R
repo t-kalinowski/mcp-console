@@ -63,6 +63,7 @@ base::local(
           pythonhome = selection$embedding$python_home,
           prefix = selection$prefix,
           exec_prefix = selection$exec_prefix,
+          base_prefix = selection$base_prefix,
           base_exec_prefix = selection$base_exec_prefix,
           base_executable = metadata$BaseExecutable,
           pythonpath = metadata$PythonPath,

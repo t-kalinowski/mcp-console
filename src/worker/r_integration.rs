@@ -56,8 +56,8 @@ fn initialize(home: &std::path::Path) -> Result<(), String> {
         runtime.begin_graphics()?;
     }
     crate::python::attach_r_adapter()?;
-    crate::sql::attach_r()?;
     crate::python::finish_r_startup(deferred)?;
+    crate::sql::attach_r()?;
     interrupt::reinstall().map_err(|error| error.to_string())?;
     crate::python::reinstall_services()?;
     Ok(())

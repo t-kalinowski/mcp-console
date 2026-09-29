@@ -12,8 +12,13 @@ result:
 send:
   r: |
     config <- reticulate::py_config()
+    sys <- reticulate::import("sys")
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+      identical(config$prefix, sys$prefix),
+      identical(config$exec_prefix, sys$exec_prefix),
+      identical(config$base_prefix, sys$base_prefix),
+      identical(config$base_exec_prefix, sys$base_exec_prefix),
       !isTRUE(config$ephemeral),
       identical(
         config$conda,
@@ -51,8 +56,13 @@ result:
 send:
   r: |
     config <- reticulate::py_config()
+    sys <- reticulate::import("sys")
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+      identical(config$prefix, sys$prefix),
+      identical(config$exec_prefix, sys$exec_prefix),
+      identical(config$base_prefix, sys$base_prefix),
+      identical(config$base_exec_prefix, sys$base_exec_prefix),
       !isTRUE(config$ephemeral),
       identical(
         config$conda,
@@ -90,8 +100,13 @@ result:
 send:
   r: |
     config <- reticulate::py_config()
+    sys <- reticulate::import("sys")
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+      identical(config$prefix, sys$prefix),
+      identical(config$exec_prefix, sys$exec_prefix),
+      identical(config$base_prefix, sys$base_prefix),
+      identical(config$base_exec_prefix, sys$base_exec_prefix),
       !isTRUE(config$ephemeral),
       identical(
         config$conda,

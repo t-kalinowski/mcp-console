@@ -56,6 +56,12 @@ CPython calls need the appropriate thread state and GIL, while saved initial thr
 Signals and environment variables are process-wide, and synchronous cross-language callbacks can re-enter both runtimes.
 Runtime handles are copied out of Rust state before interpreter calls; locks and mutable state borrows do not span those calls.
 
+Late R startup with concurrent native environment access remains unresolved.
+The current implementation temporarily changes `R_DEFAULT_PACKAGES`, and R's bootstrap also mutates the process environment before an embedder can install hooks.
+A safe replacement needs an R embedding startup interface that accepts package selection and bootstrap environment values without those mutations, followed by removal of Console's late environment writes.
+A native interposer that rejects environment writes after Python startup, combined with the existing startup-package, object-continuity, and nested-callback exercises, is the required regression boundary.
+Moving either runtime to another thread would not solve this process-wide constraint.
+
 Separate runtime threads and SQL-only operation remain future work and are not completion criteria here.
 Reticulate schedules R callbacks from Python background services onto the main thread and waits for their results.
 A future thread split needs a reentrant callback protocol, admission and cancellation rules, GIL-release boundaries, and shutdown ordering that cannot deadlock while one runtime waits on the other.

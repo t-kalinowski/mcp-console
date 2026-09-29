@@ -10,7 +10,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, wait_for_evaluation_output
+from support.assertions import (
+    assert_result_content,
+    last_result_text,
+    wait_for_evaluation_output,
+)
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -19,7 +23,7 @@ from support.normalization import code
 from support.native import build_interposer
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, R, command, requires
-from support.r import r_test_environment
+from support.r import r_test_environment, reference_plots
 from support.python import write_test_wheel
 from support.ssh import (
     SSH,
@@ -294,8 +298,13 @@ def test_late_attachment_preserves_environment_metadata(
                 client.send(
                     r=code("""
                     config <- reticulate::py_config()
+                    sys <- reticulate::import("sys")
                     stopifnot(
                       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
+                      identical(config$prefix, sys$prefix),
+                      identical(config$exec_prefix, sys$exec_prefix),
+                      identical(config$base_prefix, sys$base_prefix),
+                      identical(config$base_exec_prefix, sys$base_exec_prefix),
                       !isTRUE(config$ephemeral),
                       identical(
                         config$conda,
@@ -1172,14 +1181,53 @@ def test_late_r_startup_uses_running_python(
     )
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_late_r_startup_captures_package_plots(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for trigger in ("r-cell", "python-access"):
+        records.extend(
+            attach_python_initialized_during_r_startup(
+                binary,
+                execution,
+                managed=False,
+                python_first=True,
+                startup_plots=True,
+                trigger=trigger,
+            )
+        )
+    return records
+
+
 def attach_python_initialized_during_r_startup(
-    binary: Path, execution: Execution, *, managed: bool, python_first: bool = False
+    binary: Path,
+    execution: Execution,
+    *,
+    managed: bool,
+    python_first: bool = False,
+    startup_plots: bool = False,
+    trigger: str = "r-cell",
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         library = root / "library"
         library.mkdir()
         environment, rscript = r_test_environment()
+        expected_plots = (
+            reference_plots(
+                rscript,
+                environment,
+                "graphics::plot(1:3); graphics::plot(3:1)\n",
+                width=800 / 96,
+                height=600 / 96,
+                dpi=96,
+                pages=2,
+            )
+            if startup_plots
+            else []
+        )
         fixture = Path(__file__).resolve().parents[3] / "fixtures/early_python"
         subprocess.run(
             [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", fixture],
@@ -1195,6 +1243,7 @@ def attach_python_initialized_during_r_startup(
             RETICULATE_PYTHON=sys.executable,
             MCP_CONSOLE_TEST_PYTHON=sys.executable,
             MCP_CONSOLE_TEST_PYTHON_PREFIX=sys.prefix,
+            MCP_CONSOLE_TEST_STARTUP_PLOTS="1" if startup_plots else "0",
         )
         if managed:
             environment.pop("RETICULATE_PYTHON")
@@ -1226,7 +1275,26 @@ def attach_python_initialized_during_r_startup(
                 assert last_result_text(client) == "[done]", client.transcript[-1]
             # R-first startup adopts external CPython. With Python already live,
             # the same startup package must attach to Console's interpreter.
-            client.send(r="stopifnot(!isTRUE(reticulate::py_config()$ephemeral))")
+            if trigger == "python-access":
+                client.send(python="assert 3 < r.pi < 4")
+            else:
+                client.send(r="invisible(NULL)")
+            if startup_plots:
+                assert_result_content(client, expected_plots)
+            else:
+                assert last_result_text(client) == "[done]", client.transcript[-1]
+            # fmt: r
+            client.send(
+                r=code("""
+                stopifnot(
+                  !isTRUE(reticulate::py_config()$ephemeral),
+                  identical(search()[[2L]], "tools:mcp-console"),
+                  identical(find("py")[[1L]], "tools:mcp-console"),
+                  identical(find("sql_connection")[[1L]], "tools:mcp-console"),
+                  identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
+                )
+                """)
+            )
             assert last_result_text(client) == "[done]", client.transcript[-1]
             if python_first:
                 client.send(
@@ -1247,7 +1315,11 @@ def attach_python_initialized_during_r_startup(
                 )
                 assert last_result_text(client) == "[done]", client.transcript[-1]
             if not managed:
-                exercise_python(client, first_evaluation=3 if python_first else 1)
+                exercise_python(
+                    client,
+                    first_evaluation=(3 if python_first else 1)
+                    + int(trigger == "python-access"),
+                )
             client.send(
                 # fmt: python
                 python=code("""

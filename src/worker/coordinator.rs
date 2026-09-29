@@ -226,15 +226,14 @@ fn evaluate_cell(
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {
-        if matches!(cell.language, Language::R) {
-            super::r_integration::ensure_initialized()?;
-        }
+        // Runtime startup belongs to this cell too. A late R startup begins
+        // graphics when it installs its runtime, before loading packages.
+        core::begin_cell(cell.language);
         // Python can enter R and create plots too. SQL retains its exclusion.
         let graphics = !matches!(cell.language, Language::Sql);
         if graphics {
             r.begin_graphics()?;
         }
-        core::begin_cell(cell.language);
         let result = match cell.language {
             Language::R => r.evaluate_r(cell.source),
             Language::Python => python.evaluate(&cell.source),

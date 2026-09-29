@@ -261,7 +261,7 @@ Command readiness is separate from waiting: when no command is ready, the coordi
 Without R integration, it uses the native sideband, interrupt, and stdin-closure wait.
 R retains the native unwind boundaries for its event and interpreter operations.
 Scheduled `later` callbacks do not require another R cell: idle processing publishes their output for the next response, including Python and SQL responses.
-Cell dispatch starts graphics before marking the cell active, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
+Cell dispatch marks the cell active before starting graphics or initializing a runtime, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
 Both R and Python cells use those R graphics hooks because Python can call R and create plots; SQL retains its existing exclusion.
 Idle event processing retains its own graphics and input cleanup ordering in the R adapter.
 The launcher supplies private worker-lifetime storage before either interpreter starts.
@@ -329,11 +329,18 @@ An absent Python selection in a managed R-capable worker leaves selection lazy.
 Prepared targets instead expose their inspected capabilities: genuine Python absence permits R-only operation; a broken explicit selection is an error.
 Availability, captured identity, library initialization, shared setup completion, and bridge attachment are separate state.
 When Python is already running, R startup packages are deferred until Console installs the selection hooks.
+The initiating R or Python cell is active before runtime initialization, so deferred package plots use its graphics scope.
+Console attaches its SQL and Python tools after the startup packages, retaining search position 2 in either initialization order.
 Attachment obtains conversion metadata from the captured executable.
 The native configuration retains the `RETICULATE_PYTHON` hint present at initialization; an unchanged hint is not resolved again against a later working directory or `PATH`.
 Reconstructed reticulate configuration carries the managed environment's `ephemeral` marker.
 Conflicting later selections require restart; a completed selection callback is not replayed during attachment.
 Failed partial R initialization requires worker replacement.
+Concurrent native process-environment access during late R startup remains an unresolved safety constraint.
+`Rf_initialize_R()` processes the system Renviron, and `setup_Rmainloop()` changes `R_SESSION_TMPDIR` and library environment variables before returning control to the embedder.
+R's embedding API has no default-package parameter or callback between base-profile initialization and default-package loading; `--default-packages` is an Rscript frontend option implemented through the process environment.
+Removing Console's temporary `R_DEFAULT_PACKAGES` mutation alone would not make that bootstrap safe with foreign environment readers or writers.
+The GIL and a Rust mutex cannot serialize arbitrary native threads with these mutations.
 Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.
 When R is absent, the preparation owner resolves the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
 When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
@@ -403,7 +410,7 @@ An external startup package can select its original environment again on restart
 Native console callbacks release the GIL while blocking on worker services and are confined to the configuring worker thread.
 Background threads and fork children use their underlying streams and cannot enter R through these services.
 Bare sessions leave managed resolution disabled.
-The [peer-runtime completion notes](../design-sketches/peer-runtime-completion.md) record the completed boundaries and the separate-thread and SQL-only exclusions.
+The [peer-runtime completion notes](../design-sketches/peer-runtime-completion.md) record the implemented boundaries, unresolved environment-access constraint, and separate-thread and SQL-only exclusions.
 
 ## Worker generations
 

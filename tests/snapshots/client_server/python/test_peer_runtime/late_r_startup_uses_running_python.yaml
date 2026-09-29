@@ -8,7 +8,22 @@ result:
   isError: false
 ---
 send:
-  r: stopifnot(!isTRUE(reticulate::py_config()$ephemeral))
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      !isTRUE(reticulate::py_config()$ephemeral),
+      identical(search()[[2L]], "tools:mcp-console"),
+      identical(find("py")[[1L]], "tools:mcp-console"),
+      identical(find("sql_connection")[[1L]], "tools:mcp-console"),
+      identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
+    )
 result:
   content:
     - type: text
