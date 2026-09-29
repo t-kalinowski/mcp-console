@@ -198,3 +198,11 @@ result:
             format: uint64
             minimum: 0
             default: 60000
+---
+send:
+  python: raise AssertionError('unavailable cell ran')
+result:
+  content:
+    - type: text
+      text: "Python cells are unavailable: the target has no Python runtime"
+  isError: true

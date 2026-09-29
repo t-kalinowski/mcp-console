@@ -436,6 +436,11 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             assert "Persistent R and SQL workbench" in tool["description"]
             assert "Python" not in tool["description"]
             assert "`python`" not in tool["description"]
+            result = client.send(python="raise AssertionError('unavailable cell ran')")
+            assert result["isError"], result
+            assert last_result_text(client) == (
+                "Python cells are unavailable: the target has no Python runtime"
+            ), result
             client.send(
                 r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer"
             )

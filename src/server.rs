@@ -549,6 +549,13 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
             if self.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
                 return Err("R cells are unavailable in Python sessions without R".into());
             }
+            if !self.worker.python_available()
+                && matches!(cell.language, crate::cell::Language::Python)
+            {
+                return Err(
+                    "Python cells are unavailable: the target has no Python runtime".into(),
+                );
+            }
             return Err(format!(
                 "`{}` cells are disabled by `{LANGUAGES_ENV}`",
                 Languages::field(cell.language)

@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.assertions import last_result_text
 from support.docker_sandbox import calls, cli_peer, configure, workspace
 from support.requirements import POSIX, requires
 from support.suites import run_this_suite
@@ -88,6 +89,7 @@ def test_native_probe_projects_capabilities_without_controller_paths(
 def test_r_only_probe_projects_optional_python(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")
+        environment.pop("MCP_CONSOLE_LANGUAGES", None)
         configure(root, template=TEMPLATE)
         (root / "peer/mode").write_text("r-only-probe")
         with McpClient(binary, ("serve",), environment, root) as client:
@@ -104,6 +106,11 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
             assert "`py$name`" not in tool["description"]
             assert "Python" not in properties["r"]["description"]
             assert "Python" not in properties["sql"]["description"]
+            result = client.send(python="raise AssertionError('unavailable cell ran')")
+            assert result["isError"], result
+            assert last_result_text(client) == (
+                "Python cells are unavailable: the target has no Python runtime"
+            ), result
             client.finish()
         assert not (root / "peer/vms").exists()
         return client.transcript
