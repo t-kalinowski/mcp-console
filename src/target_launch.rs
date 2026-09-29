@@ -16,8 +16,8 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v7 uses one package-preparation request for every runtime composition and
-// permits prepared R-only targets. The host preparation protocol is unchanged.
+// v8 carries complete inspected runtime identities and separates transport
+// readiness from the built-in worker's explicit initialization milestone.
 pub(crate) const VERSION: u32 = 8;
 pub(crate) const SSH_VERSION: u32 = 8;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;

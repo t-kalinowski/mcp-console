@@ -9,7 +9,7 @@ pub(super) enum Configuration {
         python: Option<PathBuf>,
     },
     Target {
-        target: crate::settings::Target,
+        target: Box<crate::settings::Target>,
         roots: Vec<PathBuf>,
         python: Option<PathBuf>,
     },
@@ -339,14 +339,14 @@ impl Client {
             } => {
                 if matches!(target.compute, crate::settings::Compute::Host {}) {
                     ssh(
-                        crate::ssh::Session::new(target.clone(), roots.clone()),
+                        crate::ssh::Session::new(target.as_ref().clone(), roots.clone()),
                         self.0.sandbox_settings.clone(),
                         python.clone(),
                         &started,
                     )
                 } else {
                     crate::target_session::Session::setup_compute(
-                        target.clone(),
+                        target.as_ref().clone(),
                         roots.clone(),
                         &self.0.sandbox_settings,
                         self.0.no_sandbox,
@@ -371,7 +371,7 @@ impl Client {
             }
         };
         self.clear_resolver_stop_handle(generation)?;
-        let discovered = result.map_err(|error| {
+        let discovered = result.inspect_err(|error| {
             // A confirmed failure can be retried by explicit restart. An
             // unconfirmed discovery/probe must never lose its retirement block.
             if handles
@@ -388,7 +388,6 @@ impl Client {
                 .lock()
                 .expect("requirements snapshot lock") =
                 serde_json::json!({"requirements": null, "prepared": false, "status": "failed"});
-            error
         })?;
         if let Some(home) = discovered.r_home {
             self.0

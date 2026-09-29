@@ -802,10 +802,7 @@ pub async fn run(
 
     let service = async move {
         let service = server.serve(transport).await?;
-        service
-            .waiting()
-            .await
-            .map_err(|error| Box::<dyn Error>::from(error))
+        service.waiting().await.map_err(Box::<dyn Error>::from)
     };
     let (result, shutdown) = tokio::join!(service, shutdown);
     shutdown.map_err(std::io::Error::other)?;

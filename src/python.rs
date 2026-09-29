@@ -119,10 +119,9 @@ impl Runtime {
     pub(crate) fn initialize(&self) -> Result<(), String> {
         if bridge_available()?
             && let Some(adapter) = adapter()
+            && adapter.select()?.is_none()
         {
-            if adapter.select()?.is_none() {
-                return Err("Python startup selection did not complete; restart required".into());
-            }
+            return Err("Python startup selection did not complete; restart required".into());
         }
         if available() && !ensure_initialized()? {
             return Err("Python initialization did not complete; restart required".into());

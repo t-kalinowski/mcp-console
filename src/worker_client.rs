@@ -511,7 +511,7 @@ impl Client {
             no_sandbox,
             policy,
             startup::Configuration::Target {
-                target,
+                target: Box::new(target),
                 roots,
                 python,
             },
@@ -1274,11 +1274,10 @@ impl Client {
         if cell.is_none()
             && self.current_evaluation()?.is_none()
             && let Some(handle) = self.warmup_handle(&generation)?
+            && (handle.is_some() || stdin.as_ref().is_none_or(String::is_empty))
         {
             if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
-                let handle = handle
-                    .as_ref()
-                    .ok_or("worker is starting; stdin was not queued".to_string())?;
+                let handle = handle.as_ref().expect("startup input has a transport");
                 self.claim_generation(&generation, None)?;
                 handle.write_stdin(stdin)?;
             }
@@ -1288,7 +1287,7 @@ impl Client {
                 .transpose()?;
             let cut = snapshot
                 .as_ref()
-                .map_or_else(|| self.0.output.cut(), |snapshot| snapshot.cut.clone());
+                .map_or_else(|| self.0.output.cut(), |snapshot| snapshot.cut);
             let output = self.0.output.drain_through(cut);
             return Ok(
                 if snapshot.is_some_and(|snapshot| snapshot.input_requested) {
@@ -1578,6 +1577,8 @@ impl Client {
         let output = self.0.output.drain_through(snapshot.cut);
         Ok(if snapshot.input_requested {
             SendResponse::InputRequested(output)
+        } else if self.warmup_handle(generation)?.is_some() {
+            SendResponse::ReplacementStarting(output)
         } else {
             SendResponse::Idle(output)
         })

@@ -214,6 +214,30 @@ def test_initial_requirements_join_automatic_preparation(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_stdin_before_transport_readiness_joins_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="discovery") as fixture:
+        client = fixture.client
+        fixture.wait_for_resolver()
+        client.initialize_and_list_tools()
+        pending = client.start_send(stdin="early input\n")
+        # The input call must await its generation's transport while protocol
+        # requests remain available and discovery is still held at the gate.
+        client.request("ping")
+        fixture.release.release()
+        client.receive(pending)
+        assert not pending["result"]["isError"], pending
+        client.send(requirements={"action": "set", "r": []})
+        assert "restart" in last_result_text(client), client.transcript[-1]
+        client.send(r='stopifnot(readline() == "early input"); 42L')
+        output = last_tool_text(client)
+        assert output.endswith("[1] 42\n"), output
+        client.finish()
+        return [{"early_stdin_retained": True, "generation_claimed": True}]
+
+
+@executions(DIRECT, SANDBOXED)
 def test_initial_requirements_replace_unused_interpreters(
     binary: Path, execution: Execution
 ) -> Transcript:
