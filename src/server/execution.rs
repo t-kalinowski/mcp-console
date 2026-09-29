@@ -41,7 +41,7 @@ pub(super) fn configure_prepared(
             .replace("`r`, `python`, or `sql` cell", "`r` or `sql` cell");
     }
     description.push_str(&format!(
-        "\n\nRuntimes were inspected inside the captured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
+        "\n\nRuntimes are discovered inside the selected {source} during background preparation. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
     ));
     if !python_only {
         for (field, text) in [

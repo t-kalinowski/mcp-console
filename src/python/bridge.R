@@ -53,9 +53,7 @@ base::local(
 
     conversion_config <- function(selection) {
       python <- selection$embedding$python
-      connection <- textConnection(reticulate:::python_config_impl(python))
-      on.exit(close(connection), add = TRUE)
-      metadata <- read.dcf(connection, all = TRUE)
+      metadata <- selection$metadata
       root <- dirname(dirname(python))
       activate <- file.path(dirname(python), "activate_this.py")
       config <- structure(
@@ -68,17 +66,17 @@ base::local(
           exec_prefix = selection$exec_prefix,
           base_prefix = selection$base_prefix,
           base_exec_prefix = selection$base_exec_prefix,
-          base_executable = metadata$BaseExecutable,
-          pythonpath = metadata$PythonPath,
-          version_string = metadata$Version,
-          version = as.package_version(metadata$VersionNumber),
-          architecture = metadata$Architecture,
+          base_executable = metadata$base_executable,
+          pythonpath = metadata$pythonpath,
+          version_string = metadata$version,
+          version = as.package_version(metadata$version_number),
+          architecture = metadata$architecture,
           anaconda = grepl(
             "anaconda|continuum",
-            metadata$Version,
+            metadata$version,
             ignore.case = TRUE
           ),
-          conda = as.logical(metadata$IsConda),
+          conda = as.logical(metadata$conda),
           virtualenv = if (reticulate:::is_virtualenv(root)) {
             root
           } else {
@@ -86,11 +84,11 @@ base::local(
           },
           virtualenv_activate = if (file.exists(activate)) activate else "",
           python_versions = python,
-          numpy = if (!is.null(metadata$NumpyPath)) {
+          numpy = if (!is.null(metadata$numpy$path)) {
             list(
-              path = reticulate:::canonical_path(metadata$NumpyPath),
+              path = reticulate:::canonical_path(metadata$numpy$path),
               version = numeric_version(reticulate:::clean_version(
-                metadata$NumpyVersion
+                metadata$numpy$version
               ))
             )
           } else {
@@ -262,12 +260,8 @@ base::local(
       activation_config <- function(selection) {
         selection <- jsonlite::fromJSON(selection)
         python <- selection$embedding$python
-        # Inspect conversion metadata from this exact candidate only. Generic
-        # python_config() can replace libpython with the running process's
-        # library, hiding an incompatible candidate from the activation check.
-        connection <- textConnection(reticulate:::python_config_impl(python))
-        on.exit(close(connection), add = TRUE)
-        metadata <- read.dcf(connection, all = TRUE)
+        # The preparation owner captured metadata from this exact candidate.
+        metadata <- selection$metadata
         config <- globals$py_config
         config$python <- python
         config$executable <- python
@@ -276,19 +270,19 @@ base::local(
         config$prefix <- selection$prefix
         config$exec_prefix <- selection$exec_prefix
         config$base_exec_prefix <- selection$base_exec_prefix
-        config$base_executable <- metadata$BaseExecutable
-        config$pythonpath <- metadata$PythonPath
+        config$base_executable <- metadata$base_executable
+        config$pythonpath <- metadata$pythonpath
         config$virtualenv <- selection$prefix
         config$virtualenv_activate <- file.path(
           dirname(python),
           "activate_this.py"
         )
         config$python_versions <- python
-        config$numpy <- if (!is.null(metadata$NumpyPath)) {
+        config$numpy <- if (!is.null(metadata$numpy$path)) {
           list(
-            path = reticulate:::canonical_path(metadata$NumpyPath),
+            path = reticulate:::canonical_path(metadata$numpy$path),
             version = numeric_version(reticulate:::clean_version(
-              metadata$NumpyVersion
+              metadata$numpy$version
             ))
           )
         } else {
@@ -462,16 +456,33 @@ base::local(
         on_python_init,
         action = "append"
       )
-      if (reticulate:::is_python_initialized()) {
-        # The initializer has registered the already-running identity before
-        # installing these hooks. Its original onPyInit event has already run.
-        if (!is.na(managed)) {
-          requirements_adapter$initialize_requirements()
-        }
-        on_python_init()
+      invisible()
+    }
+    available <- function() {
+      as.integer(nzchar(system.file(package = "reticulate")))
+    }
+
+    resolve_startup_declaration <- function() {
+      if (is.null(requirements_adapter)) {
+        return(invisible())
+      }
+      current <- requirements_adapter$current_requirements()
+      seed <- jsonlite::fromJSON(.Call("mcp_console_python_retained_manifest"))
+      if (
+        !identical(
+          manifest(
+            current$packages,
+            current$python_version,
+            current$exclude_newer
+          ),
+          manifest(seed$packages, seed$python_version, seed$exclude_newer)
+        )
+      ) {
+        requirements_adapter$resolve()
       }
       invisible()
     }
+
     evaluate_impl <- function() {
       if (identical(source, "select")) {
         return(selected_python())

@@ -293,8 +293,10 @@ impl Preparation {
             Err(error) => {
                 // Startup has no Client to own shutdown after discovery fails.
                 // Finish the close handshake before the MCP process can exit.
-                let _ = connection.close();
-                Err(error)
+                match connection.close() {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(format!("{error}; {cleanup}")),
+                }
             }
         }
     }

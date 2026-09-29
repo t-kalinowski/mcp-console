@@ -72,10 +72,11 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `7` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Its fields are `version` (currently `8` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
 Prepared targets accept optional `python` only for runtime probes and require `environment` for worker launch.
 The handoff retains independent R and inspected Python selections, including the complete Python identity when R is present.
-Version 7 permits prepared R-only selections and uses the shared Python preparation request.
+Version 8 adds built-in initialization frames and complete host-inspected Python conversion metadata.
+It retains prepared R-only selections and shared Python preparation requests.
 Prepared runtime descriptors have managed flags false and no managed R/Python payloads.
 The image/template supplies its dependencies.
 SSH omits the probe-only `python` field, rejects it when supplied, and carries no prepared runtime-result frames.
@@ -160,6 +161,8 @@ The retirement output deadline also releases readers waiting for queue space; a 
 
 The server can send these flat frames:
 
+- `{"kind":"initialize"}` starts deterministic initialization in a built-in worker after readiness commitment.
+  Custom workers do not receive it.
 - `{"kind":"evaluate","language":"r","source":"1 + 1"}` sends the unchanged worker-sideband evaluation command.
 - `{"kind":"prepare_r","library":"..."}` sends the unchanged live R-preparation command.
 - `{"kind":"r_resolved","library":"..."}` returns one provisional host R-resolution result.
@@ -192,13 +195,17 @@ Resolver-targeted interruption does not emit a relay `interrupt` frame, but the 
 
 For inline restart, the server resolves declared requirements before it closes the old generation.
 The retiring relay receives the existing `shutdown` command and closes its worker stdin, discarding unread bytes with that generation.
-After the replacement relay reports readiness, same-call `stdin` and `evaluate` are queued only to that replacement in their normal order.
+After the replacement relay reports readiness, same-call `stdin` is queued only to that replacement.
+A built-in worker completes initialization before `evaluate` is queued.
 
 ## Relay events
 
 The relay can emit these flat frames:
 
-- `{"kind":"ready"}` reports completed worker startup.
+- `{"kind":"ready"}` reports IPC readiness.
+  After server readiness commitment, a built-in worker receives `{"kind":"initialize"}` and replies with `{"kind":"initialized"}` after deterministic runtime initialization.
+  Custom workers do not receive that command.
+  Startup callbacks and pending output are admitted after ready; evaluation waits for initialized.
 - `{"kind":"console_output","data":"..."}` forwards ordinary worker console text.
 - `{"kind":"console_diagnostic","data":"..."}` forwards diagnostic worker console text.
 - `{"kind":"image","data":"...","mime_type":"image/png"}` forwards one worker image.
@@ -215,7 +222,7 @@ The relay can emit these flat frames:
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
 - `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching provisional Python candidate whose activation failed after mutation may have begun, during evaluation, preparation, or an idle callback.
-  Launch protocol version 7 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
+  Launch protocol version 8 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
 - `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
 - `{"kind":"python_preparation_failed","message":"..."}` completes live Python preparation with an ordinary failure.
 - `{"kind":"python_preparation_rejected","message":"..."}` rejects an explicit native candidate before mutation.
@@ -245,7 +252,7 @@ The relay translates them without changing the worker-sideband framing or messag
 It does not run host resolvers, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.
 It keeps no nested-resolver wait state and applies no special queueing to these frames.
 Unknown event kinds and fields are rejected.
-Payload-free events contain exactly the shown `kind` field: `ready`, `input_received`, `input_cancelled`, `python_prepared`, `completed`, `stdout_closed`, `stderr_closed`, `worker_sideband_closed`, and `shutdown_started` reject every additional field.
+Payload-free events contain exactly the shown `kind` field: `ready`, `initialized`, `input_received`, `input_cancelled`, `python_prepared`, `completed`, `stdout_closed`, `stderr_closed`, `worker_sideband_closed`, and `shutdown_started` reject every additional field.
 Their serialized JSON remains unchanged.
 
 ## Event production and ordering

@@ -1,0 +1,28 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: preserved <- 42L; preserved
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  python: raise AssertionError('absent Python ran')
+result:
+  content:
+    - type: text
+      text: "[Python cells are unavailable: the session has no Python runtime]"
+  isError: true
+---
+send:
+  r: preserved
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,101 @@ from support.native import SHARED_LIBRARY_FLAG, build_interposer
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+def test_creates_managed_connection_without_a_send(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = None
+    for with_r in (True, False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            started = FifoCheckpoint.create(root / "sql-started")
+            release = FifoCheckpoint.create(root / "sql-release")
+            environment, rscript = r_test_environment()
+            try:
+                if with_r:
+                    library = root / "library"
+                    library.mkdir()
+                    fixture = (
+                        Path(__file__).resolve().parents[3] / "fixtures/early_python"
+                    )
+                    subprocess.run(
+                        [
+                            rscript.with_name("R"),
+                            "CMD",
+                            "INSTALL",
+                            f"--library={library}",
+                            fixture,
+                        ],
+                        env=environment,
+                        capture_output=True,
+                        check=True,
+                    )
+                    environment.update(
+                        R_LIBS=os.pathsep.join(
+                            filter(None, (str(library), environment.get("R_LIBS")))
+                        ),
+                        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsoleearlypython",
+                    )
+                else:
+                    from support.linux_sandbox import retain_system_bwrap
+
+                    native_bin = root / "bin"
+                    native_bin.mkdir()
+                    retain_system_bwrap(native_bin, environment.get("PATH"))
+                    (native_bin / "uv").symlink_to(shutil.which("uv"))
+                    environment["PATH"] = str(native_bin)
+                    for name in (
+                        "R_HOME",
+                        "R_LIBS",
+                        "R_LIBS_USER",
+                        "RETICULATE_UV",
+                        "RETICULATE_PYTHON",
+                    ):
+                        environment.pop(name, None)
+                    (root / "sitecustomize.py").write_text(
+                        code("""
+                        import duckdb
+                        import os
+                        connect = duckdb.connect
+                        def observed_connect(*args, **kwargs):
+                            connection = connect(*args, **kwargs)
+                            connection.execute("CREATE TABLE startup_catalog AS SELECT 42 AS answer")
+                            with open(os.environ["MCP_CONSOLE_TEST_SQL_STARTED"], "wb", buffering=0) as signal:
+                                signal.write(b"1")
+                            with open(os.environ["MCP_CONSOLE_TEST_SQL_RELEASE"], "rb", buffering=0) as gate:
+                                assert gate.read(1) == b"1"
+                            return connection
+                        duckdb.connect = observed_connect
+                        """)
+                    )
+                    environment["RETICULATE_PYTHONPATH"] = str(root)
+                environment.update(
+                    MCP_CONSOLE_TEST_SQL_STARTED=str(started.path),
+                    MCP_CONSOLE_TEST_SQL_RELEASE=str(release.path),
+                )
+                args = (
+                    execution.serve("--writable-root", str(root))
+                    if execution == SANDBOXED
+                    else execution.serve()
+                )
+                with McpClient(binary, args, environment, root) as client:
+                    client.initialize_and_list_tools()
+                    started.wait("actual managed connection without send", timeout=60)
+                    client.request("ping")
+                    release.release()
+                    client.send(sql="SELECT answer FROM startup_catalog")
+                    assert "42" in last_tool_text(client), client.transcript[-1]
+                    observed = client.finish()
+                    if records is None:
+                        records = observed
+            finally:
+                started.close()
+                release.close()
+    assert records is not None
+    return records
 
 
 @executions(DIRECT, SANDBOXED)
@@ -684,6 +780,7 @@ def test_interrupts_selected_python_dbapi_connection(
             python = code(r"""
                 import ctypes
                 import os
+import shutil
                 import signal
                 from pathlib import Path
 
@@ -841,6 +938,7 @@ def test_interrupts_python_dbapi_provider_probe(
             python = code("""
                 import ctypes
                 import os
+import shutil
                 import signal
                 import sys
 

@@ -221,7 +221,7 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
 
 pub(super) fn initialize_r(
     r_home: &std::path::Path,
-) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+) -> Result<Option<std::ffi::OsString>, Box<dyn Error>> {
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
@@ -255,7 +255,7 @@ pub(super) fn initialize_r(
     }
     // Rf_initialize_R has read the system Renviron. Defer its effective package
     // selection before setup_Rmainloop runs the base profile and .First.sys().
-    let deferred = crate::python::defer_r_startup()?;
+    let deferred = crate::python::defer_r_startup();
     unsafe {
         libr::setup_Rmainloop();
     }
@@ -317,7 +317,6 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     }
     super::interrupt::attach_r(super::interrupt::State {
         signal: mcp_r_record_interrupt,
-        requested: interrupt_pending,
         pending: console_interrupt_pending,
         acknowledge: acknowledge_console_interrupt,
     })?;

@@ -6,6 +6,7 @@ base::local(
     inspected <- NULL
     selection_callback <- NULL
     incomplete_attachment <- FALSE
+    captured_hint <- Sys.getenv("RETICULATE_PYTHON")
 
     same_python_selection <- function(requested, running) {
       requested <- reticulate:::normalize_python_path(requested)$path
@@ -67,29 +68,6 @@ base::local(
       if (!is.null(selected)) {
         return(selected)
       }
-      if (reticulate:::is_python_initialized()) {
-        # A startup package may have initialized Python before this adapter
-        # existed. Its running identity takes precedence over selection hints;
-        # do not rediscover an executable or rerun environment activation.
-        config <- globals$py_config
-        sys <- reticulate::import("sys", convert = TRUE)
-        inspected <<- jsonlite::toJSON(
-          list(
-            embedding = list(
-              python = sys$executable,
-              libpython = config$libpython,
-              python_home = config$pythonhome
-            ),
-            prefix = sys$prefix,
-            exec_prefix = sys$exec_prefix,
-            base_prefix = sys$base_prefix,
-            base_exec_prefix = sys$base_exec_prefix
-          ),
-          auto_unbox = TRUE
-        )
-        selected <<- config
-        return(selected)
-      }
       if (run_before_initialized) {
         # R-first calls arrive through reticulate::ensure_python_initialized(),
         # which has already invoked this callback.
@@ -100,57 +78,35 @@ base::local(
         }
       }
 
-      # Keep reticulate's discovery and its R-side selection hints in one place.
-      if (!is.null(required_module)) {
-        required_module <- strsplit(required_module, ".", fixed = TRUE)[[1L]][[
-          1L
-        ]]
-      }
-      # Preserve the call name in R's discovery error diagnostics.
-      py_discover_config <- reticulate:::py_discover_config
-      config <- local({
-        previous_options <- options(reticulate.python.initializing = TRUE)
-        on.exit(options(previous_options), add = TRUE)
-        py_discover_config(required_module, use_environment)
-      })
-      python_not_found <- function(message) {
-        hint <- paste0(
-          'See the Python "Order of Discovery" here: ',
-          'https://rstudio.github.io/reticulate/articles/versions.html#order-of-discovery.'
+      # Ordinary selection is complete on the execution host. Startup hooks
+      # may add managed declarations, but never rediscover a default interpreter.
+      state$resolve_startup_declaration()
+      inspected <<- .Call("mcp_console_planned_python")
+      identity <- jsonlite::fromJSON(inspected)
+      hint <- Sys.getenv("RETICULATE_PYTHON")
+      if (
+        !identical(hint, captured_hint) &&
+          nzchar(hint) &&
+          (hint == "managed" ||
+            !same_python_selection(hint, identity$embedding$python))
+      ) {
+        stop(
+          "Python startup selection conflicts with the launch configuration; configure python and restart",
+          call. = FALSE
         )
-        stop(paste(message, hint, sep = "\n"), call. = FALSE)
       }
-      if (is.null(config)) {
-        python_not_found(
-          "Installation of Python not found, Python bindings not loaded."
-        )
-      } else if (reticulate:::is_incompatible_arch(config)) {
-        fmt <- "Your current architecture is %s; however, this version of Python was compiled for %s."
-        message <- sprintf(
-          fmt,
-          reticulate:::current_python_arch(),
-          config$architecture
-        )
-        python_not_found(message)
-      }
-      state$check_python_version(config)
-      # Discovery retains reticulate's selection precedence and metadata.
-      # Console owns the embedding fields consumed by both native startup
-      # and reticulate's later attachment to that same interpreter.
-      inspected <<- tryCatch(
-        .Call("mcp_console_inspect_python", config$python),
-        error = function(error) {
-          class(error) <- c("console_python_inspection_error", class(error))
-          stop(error)
+      if (!nzchar(hint)) {
+        for (requested in globals$required_python_version) {
+          if (!same_python_selection(requested, identity$embedding$python)) {
+            stop(
+              "Python startup selection conflicts with the launch configuration; configure python and restart",
+              call. = FALSE
+            )
+          }
         }
-      )
-      embedding <- jsonlite::fromJSON(inspected)$embedding
-      config$python <- embedding$python
-      config$executable <- embedding$python
-      config$libpython <- embedding$libpython
-      config$pythonhome <- embedding$python_home
-      selected <<- config
-      config
+      }
+      selected <<- state$conversion_config(identity)
+      selected
     }
 
     cancel_selection <- function() {
@@ -167,18 +123,7 @@ base::local(
       pending <- is.null(selected) &&
         !reticulate::py_available(initialize = FALSE)
       on.exit(if (pending && !is.null(selected)) cancel_selection(), add = TRUE)
-      config <- tryCatch(
-        select_python(run_before_initialized = TRUE),
-        console_python_inspection_error = function(error) {
-          message("Error: ", conditionMessage(error))
-          NULL
-        }
-      )
-      # Inspection has not committed an interpreter or environment. Report
-      # its failure as cell output and leave the existing worker retryable.
-      if (is.null(config)) {
-        return("")
-      }
+      select_python(run_before_initialized = TRUE)
       result <- inspected
       pending <- FALSE
       result
@@ -275,6 +220,14 @@ base::local(
     install_python_initializer <- function(...) {
       namespace <<- asNamespace("reticulate")
       globals <<- get(".globals", envir = namespace)
+      original_python_config <- get("python_config", envir = namespace)
+      replace_binding("python_config", function(python, ...) {
+        identity <- jsonlite::fromJSON(.Call("mcp_console_planned_python"))
+        if (same_python_selection(python, identity$embedding$python)) {
+          return(state$conversion_config(identity))
+        }
+        original_python_config(python, ...)
+      })
       replace_binding("initialize_python", initialize_python)
       original_ensure_initialized <- get(
         "ensure_python_initialized",
@@ -342,18 +295,7 @@ base::local(
       # Reticulate reinstalls its interrupt handler after injecting hooks.
       replace_binding("install_interrupt_handlers", install_console_services)
 
-      if (reticulate:::is_python_initialized()) {
-        select_python()
-        invisible(.Call(
-          "mcp_console_initialize_python",
-          inspected,
-          system.file("python", package = "reticulate")
-        ))
-        finish_python_initialization()
-        install_console_services()
-      }
-      # Already-live interpreters need their retained identity registered
-      # before the bridge's eager initialization hook enters common setup.
+      # Installed before default packages can initialize reticulate.
       state$install_python_hooks()
       invisible()
     }

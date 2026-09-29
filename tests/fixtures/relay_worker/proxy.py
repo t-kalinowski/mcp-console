@@ -120,7 +120,15 @@ def proxy(
             if frame_is_shutdown and capture_stdin_close:
                 assert os.read(0, 1) == b"", "worker stdin contained data at shutdown"
                 record(capture, {"stdin": {"closed": True}})
+            if direction == "worker" and message == {"kind": "initialized"}:
+                continue
             send(destination, message)
+            if direction == "worker" and message == {"kind": "ready"}:
+                # The outer custom-worker contract remains unchanged. This
+                # fixture owns the built-in worker's private startup operation.
+                initialize = {"kind": "initialize"}
+                record(capture, {"relay": initialize})
+                send(worker[1], initialize)
             shutdown = shutdown or frame_is_shutdown
         return shutdown
 
@@ -172,6 +180,9 @@ def main() -> None:
     )
     environment = os.environ.copy()
     program = environment.pop(WORKER_ENV)
+    environment["MCP_CONSOLE_LOCAL_RUNTIME"] = environment.pop(
+        "MCP_CONSOLE_MITM_SELECTION"
+    )
     capture_stdin_close = environment.pop(CAPTURE_STDIN_CLOSE_ENV, None) == "1"
     capture_worker_sideband_close = (
         environment.pop(CAPTURE_WORKER_SIDEBAND_CLOSE_ENV, None) == "1"

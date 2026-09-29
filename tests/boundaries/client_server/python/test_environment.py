@@ -24,7 +24,8 @@ def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
     environment = os.environ.copy()
-    environment["RETICULATE_PYTHON"] = "configured-by-user"
+    environment["RETICULATE_PYTHON"] = sys.executable
+    environment["EXPECTED_PYTHON_SELECTION"] = sys.executable
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
@@ -34,7 +35,7 @@ def test_preserves_configured_python_environment(
         stopifnot(
           identical(
             Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
-            "configured-by-user"
+            Sys.getenv("EXPECTED_PYTHON_SELECTION")
           )
         )
         "configured-by-user"
@@ -94,7 +95,7 @@ def test_preserves_configured_python_environment(
           !exists("external_python_combined_side_effect", inherits = FALSE),
           identical(
             Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
-            "configured-by-user"
+            Sys.getenv("EXPECTED_PYTHON_SELECTION")
           )
         )
         42L
@@ -149,18 +150,19 @@ def test_rejects_python_older_than_3_10(
     client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
-    assert result["isError"] is False, result
+    assert result["isError"] is True, result
     output = result["content"][0]["text"]
     assert output.startswith(
-        "Error: selected Python inspection failed (exit status: 1): Traceback"
+        "[selected Python inspection failed (exit status: 1): Traceback"
     ), output
     assert output.endswith(
-        "RuntimeError: MCP Console requires Python 3.10 or later\n\n"
+        "RuntimeError: MCP Console requires Python 3.10 or later\n]"
     ), output
     assert "[worker stopped" not in output, output
-    # Inspection rejects the selection before interpreter mutation. R remains usable.
-    client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE)); 42L")
-    assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+    # Invalid explicit selection fails the plan; it never selects a different runtime.
+    client.send(r="42L")
+    assert client.transcript[-1]["result"]["isError"] is True
+    assert last_result_text(client) == output, client.transcript[-1]
     return client.finish()
 
 

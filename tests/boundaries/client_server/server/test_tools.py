@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.evidence import compact_text
 from support.previews import compact_previews
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -22,6 +23,117 @@ from support.resolvers import bare_runtime_environment
 from support.sandbox_configuration import NATIVE_PROXY
 from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
+
+
+@requires(WORKER)
+@executions(DIRECT, SANDBOXED)
+def test_protocol_is_available_during_discovery(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        started = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            program = root / "R"
+            # Block the real public discovery command, before any worker exists.
+            program.write_text(
+                f"#!{sys.executable}\n"
+                + code("""
+                    import os
+                    from pathlib import Path
+                    import sys
+
+                    assert sys.argv[1:] == ["RHOME"]
+                    root = Path(__file__).parent
+                    (root / "discovery-pid").write_text(str(os.getpid()))
+                    with (root / "discovery-started").open("wb", buffering=0) as signal:
+                        signal.write(b"1")
+                    with (root / "discovery-release").open("rb", buffering=0) as gate:
+                        assert gate.read(1) == b"1"
+                    raise AssertionError("discovery should be retired at EOF")
+                    """),
+                encoding="utf-8",
+            )
+            program.chmod(0o755)
+            environment = os.environ.copy()
+            environment.pop("R_HOME", None)
+            environment["PATH"] = str(root) + os.pathsep + environment["PATH"]
+            with McpClient(
+                binary, execution.serve(), environment, response_timeout=3
+            ) as client:
+                started.wait("automatic discovery, without an MCP request")
+                client.initialize_and_list_tools()
+                schema = client.transcript[-1]["result"]
+                client.request("tools/list")
+                assert client.transcript[-1]["result"] == schema
+                result = client.send(requirements={"action": "get"})
+                assert not result.get("isError", False), result
+                result = client.finish()
+            pid = int((root / "discovery-pid").read_text())
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError("discovery process survived MCP EOF")
+            return result[4:]
+        finally:
+            started.close()
+            release.close()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_failed_discovery_preserves_protocol_availability(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        program = root / "R"
+        counter = root / "count"
+        program.write_text(
+            f"#!{sys.executable}\n"
+            + code(f"""
+            from pathlib import Path
+            with Path({str(counter)!r}).open("a") as counter:
+                counter.write("discovered\\n")
+            raise SystemExit(22)
+            """)
+        )
+        program.chmod(0o755)
+        environment = os.environ.copy()
+        environment.pop("R_HOME", None)
+        environment["PATH"] = str(root) + os.pathsep + environment["PATH"]
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            tools = client.transcript[-1]["result"]
+            result = client.send(r="stop('failed discovery ran code')")
+            assert result["isError"], result
+            assert counter.read_text() == "discovered\n"
+            client.request("ping")
+            client.request("tools/list")
+            assert client.transcript[-1]["result"] == tools
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]
+            assert (
+                declaration["requirements"] is None
+                and declaration["status"] == "failed"
+            ), declaration
+            result = client.send(r="stop('failed discovery ran code again')")
+            assert result["isError"], result
+            assert counter.read_text() == "discovered\n", (
+                "failed discovery was retried implicitly"
+            )
+            result = client.send(
+                control="restart", r="stop('failed discovery ran code')"
+            )
+            assert result["isError"], result
+            assert counter.read_text() == "discovered\ndiscovered\n", (
+                "explicit restart must retry confirmed discovery once"
+            )
+            records = client.finish()
+            return [records[3], *records[6:]]
 
 
 @contextmanager
@@ -222,19 +334,15 @@ def _initializes_and_lists_tools(
                 "bounded table previews that abbreviate long text cells" in description
             )
             assert "attach the database read-only" in description
-            assert ("Managed defaults include SQLite" in description) == (
-                not custom and (python_managed or not (bare or python_only))
+            assert (
+                "When managed preparation is available, defaults include SQLite"
+                in description
             )
-            if custom:
-                assert (
-                    'requirements={"action":"add","duckdb":["sqlite"]}' in description
-                )
+            assert "listed language fields do not guarantee" in description
             assert (
                 "Use R for vectorized data and string operations" in description
-            ) == (not python_only)
-            assert (
-                'requirements={"action":"add","duckdb":["fts"]}' in description
-            ) == (python_managed or not (bare or python_only))
+            ) == (languages is None or "r" in languages.split(","))
+            assert 'requirements={"action":"add","duckdb":["fts"]}' in description
             if proxy:
                 assert (
                     "network subject to the launcher's proxy settings"
@@ -248,29 +356,18 @@ def _initializes_and_lists_tools(
             assert '"$ref"' not in send_schema, send["inputSchema"]
 
             if proxy or workspace_profile:
-                assert list(config.parent.iterdir()) == [config], workspace
+                assert config.is_file(), workspace
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
-                assert "r" not in send["inputSchema"]["properties"]
+                assert "r" in send["inputSchema"]["properties"]
                 assert "sql" in send["inputSchema"]["properties"]
-            if python_managed:
-                assert set(
-                    send["inputSchema"]["properties"]["requirements"]["properties"]
-                ) == {"python", "duckdb", "action", "python_version", "exclude_newer"}
-                return client.finish()
-            if bare or python_only:
-                assert send["inputSchema"]["properties"]["requirements"]["properties"][
-                    "action"
-                ]["enum"] == ["get"]
-                transcript = client.finish()
-                if ssh:
-                    transcript = json.loads(
-                        json.dumps(transcript).replace(
-                            str(Path(library).resolve()), "<ssh-test>"
-                        )
+            if ssh:
+                return json.loads(
+                    json.dumps(client.finish()).replace(
+                        str(Path(library).resolve()), "<ssh-test>"
                     )
-                return transcript
+                )
             send_requirements = send["inputSchema"]["properties"]["requirements"]
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements

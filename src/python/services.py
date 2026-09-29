@@ -74,14 +74,16 @@ def install_services() -> None:
 install_services()
 
 
-class _LazyR:
+class _RBridge:
+    """Allow startup hooks to enter the bridge on the planned R runtime."""
+
     @staticmethod
     def _bridge() -> Any:
         attach_r()
         import __main__
 
         bridge = __main__.__dict__.get("r", builtins.r)
-        if isinstance(bridge, _LazyR):
+        if isinstance(bridge, _RBridge):
             raise RuntimeError("reticulate did not install Python-side R access")
         return bridge
 
@@ -98,4 +100,4 @@ class _LazyR:
         self._bridge()[name] = value
 
 
-builtins.r = _LazyR()
+builtins.r = _RBridge()

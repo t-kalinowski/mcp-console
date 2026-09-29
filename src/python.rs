@@ -33,8 +33,8 @@ pub(crate) enum PreparationOutcome {
 /// Rust-owned Python runtime boundary.
 ///
 /// Every cell enters the same private evaluator through the retained CPython
-/// library. The optional reticulate adapter retains R-side discovery and
-/// attachment policy; it is absent until R is initialized.
+/// library. The optional reticulate adapter preserves startup declarations,
+/// hooks, conversion, and events for the same native selection.
 pub(crate) struct Runtime {
     next_evaluation_id: u64,
 }
@@ -88,52 +88,48 @@ pub(crate) fn reinstall_services() -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn bridge_available() -> Result<bool, String> {
+    if !available() {
+        return Ok(false);
+    }
+    adapter().map_or(Ok(false), |adapter| adapter.available())
+}
+
+pub(crate) fn available() -> bool {
+    SELECTION
+        .get()
+        .is_some_and(|selection| selection.python.is_some())
+}
+
 pub(crate) fn ensure_initialized() -> Result<bool, String> {
     if library::runtime_configured()? {
         return Ok(true);
     }
-    if !crate::worker::r_initialized()
-        && let Some(candidate) = requirements::materialized()
-    {
+    if let Some(candidate) = requirements::materialized() {
         return startup::initialize_native(&candidate.selected, true);
     }
-    let selection = SELECTION
+    let python = SELECTION
         .get()
-        .ok_or("Python capability is not configured")?;
-    if !crate::worker::r_initialized()
-        && let Some(python) = &selection.python
-    {
-        return startup::initialize_native(&python.selected, python.managed);
-    }
-    if !crate::worker::r_initialized()
-        && let Some(explicit) = std::env::var_os("RETICULATE_PYTHON")
-            .filter(|value| !value.is_empty() && value != "managed")
-    {
-        let selected = match explicit_executable(&explicit)
-            .and_then(|path| crate::worker::inspect_python(&path))
-        {
-            Ok(selected) => selected,
-            Err(error) => {
-                crate::worker::emit_output(
-                    crate::worker_protocol::ConsoleChannel::Diagnostic,
-                    format!("Error: {error}\n").as_bytes(),
-                );
-                return Ok(false);
-            }
-        };
-        return startup::initialize_native(&selected, false);
-    }
-    // R declarations and selection callbacks genuinely require R. Only an
-    // unresolved compatibility selection enters this path.
-    crate::worker::ensure_r()?;
-    let adapter = adapter().ok_or("R selection adapter is unavailable")?;
-    let Some(selected) = adapter.select()? else {
-        return Ok(false);
-    };
-    startup::initialize_native(&selected, adapter.managed)
+        .and_then(|selection| selection.python.as_ref())
+        .ok_or("Python is unavailable in this session")?;
+    startup::initialize_native(&python.selected, python.managed)
 }
 
 impl Runtime {
+    pub(crate) fn initialize(&self) -> Result<(), String> {
+        if bridge_available()?
+            && let Some(adapter) = adapter()
+        {
+            if adapter.select()?.is_none() {
+                return Err("Python startup selection did not complete; restart required".into());
+            }
+        }
+        if available() && !ensure_initialized()? {
+            return Err("Python initialization did not complete; restart required".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(selection: crate::local_runtime::WorkerSelection) -> Result<Self, String> {
         requirements::configure()?;
         SELECTION
@@ -147,8 +143,8 @@ impl Runtime {
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
         self.next_evaluation_id += 1;
-        if !ensure_initialized()? {
-            return Ok(());
+        if !available() {
+            return Err("Python is unavailable in this session".into());
         }
         evaluate_embedded(source, &filename)
     }
@@ -166,6 +162,10 @@ pub(crate) fn resolve_managed_import(
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
     library::evaluate(source, filename)
+}
+
+pub(crate) fn initialize_managed_sql() -> Result<(), String> {
+    library::initialize_managed_sql()
 }
 
 pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {

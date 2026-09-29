@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
     collect_running_output,
+    last_result_text,
     last_tool_text,
     wait_for_evaluation_output,
 )
@@ -31,7 +32,7 @@ from support.processes import (
 )
 from support.normalization import code
 from support.native import LOADER_VARIABLE, build_interposer
-from support.r import r_test_environment
+from support.r import r_test_environment, startup_r_package
 from support.events import Events
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
@@ -154,18 +155,137 @@ def startup_fixture(
 
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
+def test_initial_requirements_join_automatic_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = None
+    for phase in ("discovery", "preparation"):
+        with startup_fixture(binary, execution, phase=phase) as fixture:
+            client = fixture.client
+            fixture.wait_for_resolver()
+            client.initialize_and_list_tools()
+            initial = client.start_send(
+                r="stopifnot(requireNamespace('praise')); cat('initial cell ran once\\n')",
+                requirements={"r": ["praise"]},
+                timeout_ms=0,
+            )
+            client.request("ping")
+            assert "result" not in initial
+            client.send(requirements={"action": "get"})
+            fixture.release.release()
+            client.response_timeout = 600
+            client.receive(initial)
+            initial_output = initial["result"]["content"][0]["text"]
+            result = collect_running_output(
+                client,
+                "initial requirements cell",
+                initial_cuts=(initial_output.removesuffix(RUNNING),),
+                timeouts_ms=(600_000,),
+            )
+            assert "initial cell ran once\n" in "".join(result), result
+            assert "restart required" not in "".join(result), result
+            observed = client.finish()
+            if records is None:
+                records = observed
+    assert records is not None
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+def test_initial_requirements_replace_unused_interpreters(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = None
+    for phase in ("initializing", "initialized"):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            started = FifoCheckpoint.create(root / "started")
+            release = FifoCheckpoint.create(root / "release")
+            counter = root / "starts"
+            source = code(f"""
+                counter <- {json.dumps(str(counter))}
+                cat("start\\n", file = counter, append = TRUE)
+                if (length(readLines(counter)) == 1L) {{
+                  ready <- fifo({json.dumps(str(started.path))}, "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), ready)
+                  close(ready)
+                  gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+                  stopifnot(identical(readBin(gate, "raw", 1L), charToRaw("1")))
+                  close(gate)
+                }}
+                """)
+            try:
+                with startup_r_package(root, source) as environment:
+                    args = (
+                        execution.serve("--writable-root", str(root))
+                        if execution == SANDBOXED
+                        else execution.serve()
+                    )
+                    with McpClient(binary, args, environment, root) as client:
+                        client.initialize_and_list_tools()
+                        started.wait("R startup without a send", timeout=60)
+                        if phase == "initialized":
+                            release.release()
+                            deadline = time.monotonic() + 60
+                            while True:
+                                client.send()
+                                if last_tool_text(client) == "\n[idle]":
+                                    break
+                                assert time.monotonic() < deadline, client.transcript[
+                                    -1
+                                ]
+                                time.sleep(0.01)
+                        # Inspection and polling must leave the generation unclaimed.
+                        client.send(requirements={"action": "get"})
+                        client.send(
+                            r="stopifnot(requireNamespace('praise', quietly = TRUE)); marker <- get0('marker', ifnotfound = 40L) + 1L",
+                            requirements={"r": ["praise"]},
+                        )
+                        assert last_tool_text(client) == "[done]", client.transcript[-1]
+                        assert counter.read_text() == "start\nstart\n", (
+                            counter.read_text()
+                        )
+                        # Stateful admission protects the replacement from silent
+                        # destructive preparation, including same-call code.
+                        client.send(
+                            r="stop('must not run')",
+                            requirements={"action": "set", "r": []},
+                        )
+                        assert "restart" in last_result_text(client), client.transcript[
+                            -1
+                        ]
+                        client.send(r="marker + 1L")
+                        assert last_tool_text(client) == "[1] 42\n", client.transcript[
+                            -1
+                        ]
+                        assert counter.read_text() == "start\nstart\n"
+                        current = client.finish()
+                        if phase == "initializing":
+                            records = current
+            finally:
+                started.close()
+                release.close()
+    assert records is not None
+    return records
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_preserves_initialize_buffered_during_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
     with startup_fixture(binary, execution) as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
-        assert fixture.invocations() == [], "initialization started a resolver"
+        fixture.wait_for_resolver()
+        invocations = fixture.invocations()
         client.send()
-        assert last_tool_text(client) == "\n[idle]"
+        assert last_tool_text(client) == "[worker starting]", client.transcript[-1]
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
-        assert fixture.invocations() == [], "poll or invalid input started a resolver"
+        assert fixture.invocations() == invocations, (
+            "poll or invalid input duplicated discovery"
+        )
         assert not list(fixture.root.glob("sandbox-*"))
         return client.finish()
 
@@ -177,7 +297,7 @@ def test_initializes_before_uv_bootstrap_installation(
 ) -> Transcript:
     with startup_fixture(binary, execution, bootstrap="uv") as fixture:
         fixture.client.initialize_and_list_tools()
-        assert fixture.invocations() == [], "initialization started a resolver"
+        fixture.wait_for_resolver()
         return fixture.client.finish()
 
 
@@ -330,7 +450,6 @@ def test_explicit_preparation_keeps_its_wait_precondition(
             "isError": False,
         }
         fixture.wait_for_resolver_exit()
-        assert not list(fixture.root.glob("sandbox-*"))
         client.send(r="42L")
         assert last_tool_text(client) == "[1] 42\n"
         return client.finish()
@@ -343,9 +462,6 @@ def test_cancels_resolver_discovery_when_stdin_closes(
 ) -> Transcript:
     with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
-        client.initialize_and_list_tools()
-        client.send(r="42L", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
@@ -368,8 +484,6 @@ def test_cancels_default_preparation_when_stdin_closes(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
-        client.send(r="42L", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
@@ -399,6 +513,7 @@ def test_interrupts_first_use_preparation_without_running_cell(
         client.send(control="interrupt", timeout_ms=30_000)
         fixture.wait_for_resolver_exit()
         client.response_timeout = 600
+        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )

@@ -160,6 +160,15 @@ elif args[0] == "exec":
                         "exec_prefix": prefix,
                         "base_prefix": prefix,
                         "base_exec_prefix": prefix,
+                        "metadata": {
+                            "base_executable": executable,
+                            "pythonpath": prefix,
+                            "version": "3.14.0",
+                            "version_number": "3.14",
+                            "architecture": "64bit",
+                            "conda": False,
+                            "numpy": None,
+                        },
                     },
                     "explicit": None,
                     "managed": False,
@@ -208,7 +217,9 @@ elif args[0] == "exec":
         frame(2, {"kind": "ready"})
         for line in source:
             command = json.loads(line)
-            if command["kind"] == "evaluate":
+            if command["kind"] == "initialize":
+                frame(2, {"kind": "initialized"})
+            elif command["kind"] == "evaluate":
                 frame(2, {"kind": "console_output", "data": "provider peer\n"})
                 frame(2, {"kind": "completed"})
             elif command["kind"] == "shutdown":

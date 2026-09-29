@@ -5,9 +5,7 @@ send: {}
 result:
   content:
     - type: text
-      text: |-
-
-        [idle]
+      text: "[worker starting]"
   isError: false
 ---
 send:

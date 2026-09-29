@@ -11,6 +11,8 @@ An agent can choose the language and libraries that fit each step without managi
 
 Model-visible text is bounded to 8 KiB per response, with separate image limits.
 The server keeps recordings, plot artifacts, and raw cell output outside the model context; raw text retention is capped at 1 GiB per cell.
+MCP initialization and tool discovery are available immediately while one owned background task prepares the session.
+The worker initializes selected R, Python, their optional bridge, and the managed DuckDB connection before evaluating cells.
 A separate runtime process executes cells, with native sandboxing enabled by default and explicit ownership of startup, interruption, and cleanup.
 
 ## Status
@@ -24,7 +26,7 @@ When R is absent, Console uses `uv` from `PATH` to resolve its default environme
 To use a project environment instead, set `python: .venv/bin/python` in `.agents/console/config.yaml`; for SSH, that path is relative to `target.workspace` on the remote host.
 This mode never invokes uv and disables package preparation.
 These sessions support Python, SQL, input, plots, interrupts, restart, and recording.
-SQL uses a lazy in-memory DuckDB connection or a selected Python DB-API connection.
+Startup prepares a persistent in-memory DuckDB connection when DuckDB is installed or a selected Python DB-API connection.
 When Console manages Python through uv, `requirements.python` and `requirements.duckdb` prepare packages and extensions before first use or with an explicit restart.
 An idle running session can add new Python distributions and DuckDB extensions without replacing the worker or its SQL catalog.
 In managed sessions, a reached missing Python import can also prepare its inferred distribution during the cell.

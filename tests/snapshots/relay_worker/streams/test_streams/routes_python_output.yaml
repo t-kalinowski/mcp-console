@@ -3,12 +3,18 @@ worker:
   kind: ready
 ---
 relay:
+  kind: initialize
+---
+relay:
   kind: evaluate
   language: r
   source: |
     suppressWarnings(
       invisible(reticulate::py_run_string("initialized_from_r = True"))
     )
+---
+worker:
+  kind: initialized
 ---
 worker:
   kind: completed

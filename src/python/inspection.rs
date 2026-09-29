@@ -35,6 +35,26 @@ pub(crate) struct NativePython {
     pub(crate) exec_prefix: String,
     pub(crate) base_prefix: String,
     pub(crate) base_exec_prefix: String,
+    pub(crate) metadata: ConversionMetadata,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConversionMetadata {
+    base_executable: String,
+    pythonpath: String,
+    version: String,
+    version_number: String,
+    architecture: String,
+    conda: bool,
+    numpy: Option<NumpyMetadata>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NumpyMetadata {
+    path: String,
+    version: String,
 }
 
 /// Describe a selected executable without changing the calling process or
@@ -118,6 +138,7 @@ pub(crate) fn inspect_native(
         exec_prefix: description.exec_prefix,
         base_prefix: description.base_prefix,
         base_exec_prefix: description.base_exec_prefix,
+        metadata: description.metadata,
     })
 }
 
@@ -130,6 +151,7 @@ struct Description {
     exec_prefix: String,
     base_prefix: String,
     base_exec_prefix: String,
+    metadata: ConversionMetadata,
 }
 
 impl Description {

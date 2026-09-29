@@ -106,7 +106,7 @@ impl SendRequest {
     }
 }
 
-/// A cloneable handle to one lazily started worker.
+/// A cloneable handle to one owned, automatically prepared session.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
 
@@ -127,13 +127,22 @@ struct ClientInner {
     lifecycle: Mutex<LifecycleControl>,
     environment: Option<Mutex<Environment>>,
     requirements_snapshot: Mutex<serde_json::Value>,
+    capabilities: std::sync::OnceLock<Capabilities>,
+    setup: Option<startup::Configuration>,
+    discovered_r_home: std::sync::OnceLock<PathBuf>,
+    discovery_failure: std::sync::OnceLock<String>,
+    warmup: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    discovery_changed: tokio::sync::Notify,
+    local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
+    target: std::sync::OnceLock<crate::target_session::Session>,
+    recording: Mutex<Option<crate::transcript::Transcript>>,
+}
+
+struct Capabilities {
     runtime_r_requirements: Vec<String>,
     dynamic_resolution: bool,
     python_only: bool,
     python_preparation: bool,
-    local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
-    target: Option<crate::target_session::Session>,
-    recording: Mutex<Option<crate::transcript::Transcript>>,
 }
 
 #[derive(Clone)]
@@ -384,149 +393,40 @@ impl Client {
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
     ) -> Result<Self, String> {
-        #[cfg(unix)]
-        return startup::with_input_owner(|on_started| {
-            Self::builtin_with(no_sandbox, sandbox_settings, python, on_started)
-        });
-        #[cfg(not(unix))]
-        Self::builtin_with(no_sandbox, sandbox_settings, python, &|_| Ok(()))
+        Self::with_startup(
+            no_sandbox,
+            sandbox_settings,
+            startup::Configuration::Local { python },
+        )
     }
 
-    fn builtin_with(
+    fn with_startup(
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        python: Option<PathBuf>,
-        on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+        setup: startup::Configuration,
     ) -> Result<Self, String> {
-        #[cfg(not(unix))]
-        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
-        let configured_python = python
-            .map(PathBuf::into_os_string)
-            .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
-        let program = std::env::current_exe()
-            .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        let local_runtime;
-        let local_preparation;
-        #[cfg(unix)]
-        let (r, duckdb_extensions, python, r_resolver) =
-            if !crate::local_runtime::Selection::r_is_present() {
-                let (preparation, discovery) =
-                    crate::resolver::preparation::Preparation::open_local(
-                        crate::resolver::preparation::Mode::PythonOnly,
-                        on_started,
-                    )?;
-                let resolver = crate::resolver::execution::PythonConfiguration::Local {
-                    preparation: preparation.clone(),
-                    has_uv: discovery
-                        .local_has_uv
-                        .ok_or("local Python discovery has no uv result")?,
-                };
-                let selected = crate::local_runtime::Selection::python(
-                    configured_python.clone(),
-                    &resolver,
-                    on_started,
-                )
-                .and_then(|(selection, managed)| {
-                    let extensions = selection.prepare_default_duckdb_extensions(
-                        managed.as_ref(),
-                        &resolver,
-                        on_started,
-                    )?;
-                    Ok((selection, managed, extensions))
-                });
-                let (selection, managed, extensions) = match selected {
-                    Ok(selection) => selection,
-                    Err(error) => {
-                        preparation
-                            .close()
-                            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
-                        return Err(error);
-                    }
-                };
-                local_runtime = Some(selection);
-                local_preparation = Some(preparation);
-                let python = Some(match managed {
-                    Some(selected) => PythonEnvironment::Managed { selected, resolver },
-                    None => PythonEnvironment::bare(configured_python),
-                });
-                (None, extensions, python, RResolver::Disabled)
-            } else {
-                let (preparation, discovery) =
-                    crate::resolver::preparation::Preparation::open_local(
-                        crate::resolver::preparation::Mode::R,
-                        on_started,
-                    )?;
-                use std::os::unix::ffi::OsStringExt;
-                let home = PathBuf::from(OsString::from_vec(
-                    discovery
-                        .local_r_home_bytes
-                        .ok_or("local R discovery has no R home")?,
-                ));
-                local_runtime = Some(crate::local_runtime::Selection {
-                    r_home: Some(home),
-                    python: None,
-                });
-                local_preparation = Some(preparation.clone());
-                if discovery.managed {
-                    (
-                        None,
-                        Default::default(),
-                        None,
-                        RResolver::Pending(BuiltinSetup {
-                            bootstrap: crate::resolver::execution::Bootstrap::Local(
-                                preparation.clone(),
-                            ),
-                            python_resolver:
-                                crate::resolver::execution::PythonConfiguration::Local {
-                                    preparation,
-                                    has_uv: discovery
-                                        .local_has_uv
-                                        .ok_or("local R discovery has no uv result")?,
-                                },
-                            configured_python,
-                        }),
-                    )
-                } else {
-                    (
-                        None,
-                        Default::default(),
-                        Some(PythonEnvironment::bare(configured_python)),
-                        RResolver::Disabled,
-                    )
-                }
-            };
-        #[cfg(not(unix))]
-        let local_preparation = None;
-        #[cfg(not(unix))]
-        let (r, duckdb_extensions, python, r_resolver) = (
-            Option::<crate::resolver::ManagedR>::None,
-            Default::default(),
-            Some(PythonEnvironment::builtin(
-                configured_python,
-                python_resolver,
-                None,
-                on_started,
-            )?),
-            RResolver::Discover,
-        );
         let mut client = Self::with_arguments(
-            program,
+            std::env::current_exe().map_err(|error| error.to_string())?,
             vec![OsString::from("worker")],
             None,
             no_sandbox,
             sandbox_settings,
             Some(Environment {
-                local_runtime,
+                local_runtime: None,
                 custom_worker: false,
-                duckdb_extensions,
+                duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
-                python,
-                r,
-                r_resolver,
+                python: None,
+                r: None,
+                r_resolver: RResolver::Disabled,
             }),
         );
         let inner = Arc::get_mut(&mut client.0).expect("new client");
-        inner.local_preparation = Mutex::new(local_preparation);
+        inner.setup = Some(setup);
+        inner.capabilities = std::sync::OnceLock::new();
+        inner.requirements_snapshot = Mutex::new(serde_json::json!({
+            "requirements": null, "prepared": false, "status": "discovering",
+        }));
         Ok(client)
     }
 
@@ -574,21 +474,28 @@ impl Client {
                     .map(Environment::inspection)
                     .unwrap_or(serde_json::Value::Null),
             ),
-            runtime_r_requirements: environment
-                .as_ref()
-                .map(|env| {
-                    env.runtime_r_requirements()
-                        .iter()
-                        .map(|s| (*s).into())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            capabilities: std::sync::OnceLock::from(Capabilities {
+                runtime_r_requirements: environment
+                    .as_ref()
+                    .map(|env| {
+                        env.runtime_r_requirements()
+                            .iter()
+                            .map(|s| (*s).into())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                dynamic_resolution,
+                python_only,
+                python_preparation,
+            }),
             environment: environment.map(Mutex::new),
-            dynamic_resolution,
-            python_only,
-            python_preparation,
+            setup: None,
+            discovered_r_home: std::sync::OnceLock::new(),
+            discovery_failure: std::sync::OnceLock::new(),
+            warmup: Mutex::new(None),
+            discovery_changed: tokio::sync::Notify::new(),
             local_preparation: Mutex::new(None),
-            target: None,
+            target: std::sync::OnceLock::new(),
             recording: Mutex::new(None),
         }))
     }
@@ -600,52 +507,36 @@ impl Client {
         policy: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
     ) -> Result<Self, String> {
-        if matches!(target.compute, crate::settings::Compute::Host {}) {
-            return Self::ssh(
-                crate::ssh::Session::new(target, roots),
-                no_sandbox,
-                policy,
-                python,
-            );
-        }
-        let session = startup::with_input_owner(|started| {
-            crate::target_session::Session::setup_compute(
-                target,
-                roots,
-                &policy,
-                no_sandbox,
-                python.as_deref(),
-                started,
-            )
-        })?;
-        let mut client = Self::with_arguments(
-            std::env::current_exe().map_err(|error| error.to_string())?,
-            Vec::new(),
-            None,
+        Self::with_startup(
             no_sandbox,
             policy,
-            Some(Environment {
-                local_runtime: None,
-                custom_worker: false,
-                duckdb_extensions: Default::default(),
-                duckdb_r_targets: Vec::new(),
-                python: Some(PythonEnvironment::bare(None)),
-                r: None,
-                r_resolver: RResolver::Disabled,
-            }),
-        );
-        let inner = Arc::get_mut(&mut client.0).expect("new client");
-        inner.python_only = session.python_only();
-        inner.target = Some(session);
-        Ok(client)
+            startup::Configuration::Target {
+                target,
+                roots,
+                python,
+            },
+        )
     }
 
     pub(crate) fn record_with(&self, transcript: crate::transcript::Transcript) {
         *self.0.recording.lock().expect("recording lock") = Some(transcript);
     }
 
+    pub(crate) fn known_preparation(&self) -> (Option<bool>, Option<bool>) {
+        (
+            self.0
+                .capabilities
+                .get()
+                .map(|value| value.dynamic_resolution),
+            self.0
+                .capabilities
+                .get()
+                .map(|value| value.python_preparation),
+        )
+    }
+
     pub(crate) fn target_metadata(&self) -> Option<serde_json::Value> {
-        let target = self.0.target.as_ref()?;
+        let target = self.0.target.get()?;
         let mut metadata = target.metadata();
         let provider = target.provider();
         metadata["provider"] = serde_json::json!(provider);
@@ -653,143 +544,44 @@ impl Client {
         Some(metadata)
     }
 
-    pub(crate) fn ssh(
-        mut session: crate::ssh::Session,
-        no_sandbox: bool,
-        policy: crate::settings::SandboxSettings,
-        configured_python: Option<PathBuf>,
-    ) -> Result<Self, String> {
-        #[cfg(unix)]
-        let (discovery, duckdb_extensions) = startup::with_input_owner(|started| {
-            let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
-            let extensions = if let Some(native) = &discovery.native {
-                native.selection.prepare_default_duckdb_extensions(
-                    native.python.as_ref(),
-                    &crate::resolver::execution::PythonConfiguration::Ssh(
-                        session
-                            .preparation
-                            .as_ref()
-                            .expect("remote preparation")
-                            .clone(),
-                    ),
-                    started,
-                )?
-            } else {
-                Default::default()
-            };
-            Ok((discovery, extensions))
-        })
-        .map_err(|error| {
-            // No Client owns shutdown if startup fails after discovery.
-            if let Some(preparation) = &session.preparation
-                && let Err(cleanup) = preparation.close()
-            {
-                return format!("{error}; {cleanup}");
-            }
-            error
-        })?;
-        #[cfg(not(unix))]
-        let discovery = session.discover(&policy, configured_python.as_deref(), &|_| Ok(()))?;
-        #[cfg(not(unix))]
-        let duckdb_extensions = Default::default();
-        let preparation = session
-            .preparation
-            .as_ref()
-            .expect("remote discovery opened preparation")
-            .clone();
-        let r_selection =
-            discovery
-                .selections
-                .r_home
-                .as_ref()
-                .map(|home| crate::local_runtime::Selection {
-                    r_home: Some(PathBuf::from(home)),
-                    python: None,
-                });
-        let selected_python = discovery.selections.python.map(OsString::from);
-        let (r_resolver, python, local_runtime) = if let Some(native) = discovery.native {
-            let resolver =
-                crate::resolver::execution::PythonConfiguration::Ssh(preparation.clone());
-            let python = match native.python {
-                Some(selected) => PythonEnvironment::Managed { selected, resolver },
-                None => PythonEnvironment::bare(selected_python),
-            };
-            (RResolver::Disabled, Some(python), Some(native.selection))
-        } else if discovery.managed {
-            (
-                RResolver::Pending(BuiltinSetup {
-                    bootstrap: crate::resolver::execution::Bootstrap::Ssh(preparation.clone()),
-                    python_resolver: crate::resolver::execution::PythonConfiguration::Ssh(
-                        preparation,
-                    ),
-                    configured_python: selected_python,
-                }),
-                None,
-                r_selection,
-            )
-        } else {
-            (
-                RResolver::Disabled,
-                Some(PythonEnvironment::bare(selected_python)),
-                r_selection,
-            )
-        };
-        let mut client = Self::with_arguments(
-            std::env::current_exe().map_err(|error| error.to_string())?,
-            Vec::new(),
-            None,
-            no_sandbox,
-            policy,
-            Some(Environment {
-                local_runtime,
-                custom_worker: false,
-                duckdb_extensions,
-                duckdb_r_targets: Vec::new(),
-                python,
-                r: None,
-                r_resolver,
-            }),
-        );
-        Arc::get_mut(&mut client.0)
-            .expect("new client has one owner")
-            .target = Some(crate::target_session::Session::Ssh(session));
-        Ok(client)
-    }
-
     pub(crate) fn python_available(&self) -> bool {
         self.0
             .target
-            .as_ref()
+            .get()
             .is_none_or(|target| target.python_available())
     }
 
     pub(crate) fn python_only(&self) -> bool {
-        self.0.python_only
+        self.0
+            .capabilities
+            .get()
+            .is_some_and(|capabilities| capabilities.python_only)
     }
 
     pub(crate) fn python_preparation(&self) -> bool {
-        self.0.python_preparation
+        self.0
+            .capabilities
+            .get()
+            .is_some_and(|capabilities| capabilities.python_preparation)
     }
 
     pub(crate) fn dynamic_resolution(&self) -> bool {
-        self.0.dynamic_resolution
-    }
-
-    pub(crate) fn has_default_duckdb_extension(&self, extension: &str) -> bool {
-        self.0.environment.as_ref().is_some_and(|environment| {
-            environment
-                .lock()
-                .expect("environment lock")
-                .startup_declaration()
-                .duckdb
-                .iter()
-                .any(|name| name == extension)
-        })
+        self.0
+            .capabilities
+            .get()
+            .is_some_and(|capabilities| capabilities.dynamic_resolution)
     }
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
-        if let Some(target) = &self.0.target
+        // Validate shape and values without waiting for execution-host work.
+        request.validate(true)?;
+        // Explicit preparation is outside the evaluation wait budget. Inspection
+        // bypasses this path and reads only the published declaration.
+        if request.requirements.is_some() {
+            self.wait_discovered().await?;
+        }
+        if let Some(target) = self.0.target.get()
             && !target.is_ssh()
             && request.requirements.is_some()
         {
@@ -824,6 +616,12 @@ impl Client {
             }
         }
         request.validate(self.dynamic_resolution() || self.python_preparation())?;
+        if request.control.is_none()
+            && request.requirements.is_some()
+            && let Some(control) = self.begin_speculative_send()?
+        {
+            return self.send_initial_requirements(request, control).await;
+        }
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
         }
@@ -868,6 +666,78 @@ impl Client {
         )
     }
 
+    async fn send_initial_requirements(
+        &self,
+        request: SendRequest,
+        control: ControlledSendAdmission,
+    ) -> Result<Response, String> {
+        let timeout = request.timeout;
+        let client = self.clone();
+        let admission = tokio::task::spawn_blocking(move || {
+            let SendRequest {
+                cell,
+                stdin,
+                requirements,
+                transcript,
+                call_id,
+                ..
+            } = request;
+            let unchanged = {
+                let environment = client
+                    .0
+                    .environment
+                    .as_ref()
+                    .expect("built-in environment")
+                    .lock()
+                    .map_err(|_| "worker environment lock poisoned")?;
+                environment::RequirementDelta::calculate(
+                    &environment,
+                    requirements.as_ref().expect("initial requirements").clone(),
+                )?
+                .is_empty()
+            };
+            let standalone = cell.is_none();
+            let mut result = if unchanged {
+                let _operation = client.admit_controlled_operation();
+                match cell {
+                    Some(cell) => {
+                        let mut prelude = None;
+                        let (evaluation, wait_claim) = client.start_evaluation_admitted(
+                            cell,
+                            stdin,
+                            control.generation(),
+                            transcript,
+                            call_id,
+                            Some(&control),
+                            &mut prelude,
+                        )?;
+                        ControlledEvaluation::Started(evaluation, wait_claim)
+                    }
+                    None => ControlledEvaluation::Returned(Response::default()),
+                }
+            } else {
+                client.restart_and_start_evaluation(
+                    &control,
+                    cell,
+                    stdin,
+                    requirements,
+                    transcript,
+                    call_id,
+                )?
+            };
+            if standalone
+                && let ControlledEvaluation::Returned(response) = &mut result
+                && !response.is_error()
+            {
+                response.push_notice("prepared");
+            }
+            Ok::<_, String>(result)
+        })
+        .await
+        .map_err(|error| format!("initial preparation task failed: {error}"))??;
+        Ok(Self::wait_controlled(admission, timeout).await)
+    }
+
     async fn send_controlled(
         &self,
         control: SendControl,
@@ -892,7 +762,11 @@ impl Client {
                 )));
             }
         };
-        Ok(match admission {
+        Ok(Self::wait_controlled(admission, timeout).await)
+    }
+
+    async fn wait_controlled(admission: ControlledEvaluation, timeout: Duration) -> Response {
+        match admission {
             ControlledEvaluation::Started(evaluation, wait_claim) => {
                 match evaluation.wait(wait_claim, timeout).await {
                     Ok(wait) => output::render_response(send_response_from_wait(wait)),
@@ -919,7 +793,7 @@ impl Client {
                 Ok(wait) => output::render_response(send_response_from_wait(wait)),
                 Err(error) => output::direct_failure(error),
             },
-        })
+        }
     }
 
     fn control_and_start_evaluation(
@@ -1199,7 +1073,9 @@ impl Client {
         let Some(cell) = cell else {
             let response = restart.response;
             if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
-                if let Err(failure) = self.write_idle_stdin_blocking(stdin, generation.clone()) {
+                if let Err(failure) =
+                    self.write_idle_stdin_blocking(stdin, generation.clone(), Some(control))
+                {
                     return Ok(self.return_controlled_failure(response, failure));
                 }
                 return Ok(self.return_controlled_response(output::render_response(
@@ -1253,7 +1129,7 @@ impl Client {
                 .submit_stdin(stdin)
                 .map_err(ControlledStdinFailure::ActiveEvaluation)
         } else {
-            self.write_idle_stdin_blocking(stdin, generation.clone())
+            self.write_idle_stdin_blocking(stdin, generation.clone(), Some(control))
                 .map_err(ControlledStdinFailure::IdleWorker)
         }
     }
@@ -1392,6 +1268,33 @@ impl Client {
         let operation = self.admit_operation()?;
         let generation = self.admit()?;
         let preparation = self.admit_send()?;
+        if cell.is_none()
+            && self.current_evaluation()?.is_none()
+            && let Some(handle) = self.warmup_handle(&generation)?
+        {
+            if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
+                let handle = handle
+                    .as_ref()
+                    .ok_or("worker is starting; stdin was not queued".to_string())?;
+                self.claim_generation(&generation, None)?;
+                handle.write_stdin(stdin)?;
+            }
+            let snapshot = handle
+                .as_ref()
+                .map(|handle| handle.idle_response_snapshot(&self.0.output))
+                .transpose()?;
+            let cut = snapshot
+                .as_ref()
+                .map_or_else(|| self.0.output.cut(), |snapshot| snapshot.cut.clone());
+            let output = self.0.output.drain_through(cut);
+            return Ok(
+                if snapshot.is_some_and(|snapshot| snapshot.input_requested) {
+                    SendResponse::InputRequested(output)
+                } else {
+                    SendResponse::ReplacementStarting(output)
+                },
+            );
+        }
         let (evaluation, wait_claim) = match cell {
             Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
             None => match self.current_evaluation()? {
@@ -1497,11 +1400,15 @@ impl Client {
                 .submit_stdin(stdin)
                 .expect("a new evaluation must accept initial stdin");
         }
+        self.claim_generation(&generation, control)?;
         *active = Some(ActiveEvaluation {
             generation: generation.clone(),
             evaluation: evaluation.clone(),
         });
         drop(active);
+        if let Some(Some(handle)) = self.warmup_handle(&generation)? {
+            handle.observe_startup(&evaluation)?;
+        }
 
         let client = self.clone();
         let evaluator = evaluation.clone();
@@ -1591,16 +1498,20 @@ impl Client {
             return Ok(());
         }
         let client = self.clone();
-        tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin, generation))
-            .await
-            .map_err(|error| SendFailure::from(format!("worker stdin task failed: {error}")))?
+        tokio::task::spawn_blocking(move || {
+            client.write_idle_stdin_blocking(stdin, generation, None)
+        })
+        .await
+        .map_err(|error| SendFailure::from(format!("worker stdin task failed: {error}")))?
     }
 
     fn write_idle_stdin_blocking(
         &self,
         stdin: String,
         generation: WorkerGeneration,
+        control: Option<&ControlledSendAdmission>,
     ) -> Result<(), SendFailure> {
+        self.claim_generation(&generation, control)?;
         self.with_worker(&generation, |worker| {
             worker.write_stdin(stdin).map_err(SendFailure::from)
         })
@@ -1626,6 +1537,18 @@ impl Client {
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
         self.ensure_generation(generation)?;
+        if !matches!(*worker, WorkerState::Running(_)) {
+            let lifecycle = self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            if let Some(error) = &lifecycle.startup_failure {
+                let mut output = self.0.output.take();
+                output.push_tool_error(error);
+                return Ok(SendResponse::Failed(output));
+            }
+        }
         let snapshot = match &mut *worker {
             WorkerState::Running(running) => running.idle_response_snapshot(&self.0.output)?,
             WorkerState::Initial | WorkerState::Stopped => IdleResponseSnapshot {
@@ -1715,6 +1638,58 @@ impl Client {
         let WorkerState::Running(running) = worker else {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
+        if let Err(message) = running.wait_initialization() {
+            let mut lifecycle = self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+            if lifecycle.generation.is(&generation) {
+                lifecycle.startup_failure.get_or_insert_with(|| {
+                    format!("runtime initialization failed: {message}; restart required")
+                });
+            }
+            drop(lifecycle);
+            let mut failure = SendFailure::from(message);
+            match self.stop_failed_worker(worker, &generation) {
+                Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
+                    failure = failure.worker_outcome(outcome).worker_stopped();
+                }
+                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => {}
+                Err(error) => {
+                    failure = error.attach_to(failure);
+                }
+            }
+            return Err(failure);
+        }
+        // The stable schema can advertise an undiscovered capability. Reject
+        // unavailable code without sending it to (or retiring) a healthy peer.
+        if let Some(environment) = &self.0.environment {
+            let environment = environment
+                .lock()
+                .map_err(|_| "worker environment lock poisoned".to_string())?;
+            if !environment.custom_worker {
+                let runtime = environment.local_runtime.as_ref();
+                match cell.language {
+                    crate::cell::Language::R if self.python_only() => {
+                        return Err("R cells are unavailable in Python sessions without R"
+                            .to_string()
+                            .into());
+                    }
+                    crate::cell::Language::Python
+                        if runtime.is_some_and(|runtime| runtime.python.is_none())
+                            || !self.python_available() =>
+                    {
+                        return Err(
+                            "Python cells are unavailable: the session has no Python runtime"
+                                .to_string()
+                                .into(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
         let result = running
             .evaluate(cell, evaluation.clone(), capture_idle_prelude)
             .map_err(|message| evaluation.classify_failure(message));
@@ -1750,6 +1725,14 @@ impl Client {
                 }
                 failure
             });
+        // Callbacks use the released environment snapshot. Startup prompts
+        // still route through this evaluation's new generation endpoint.
+        let replacement = replacement.and_then(|()| match worker {
+            WorkerState::Running(running) => {
+                running.wait_initialization().map_err(SendFailure::from)
+            }
+            _ => Err("replacement worker is unavailable".to_string().into()),
+        });
         // A delivered replacement result must admit the next preparation.
         drop(replacement_startup);
         evaluation.finish_replacement(replacement);
@@ -1811,6 +1794,25 @@ impl Client {
     ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
+            self.ensure_startup(&generation)?;
+            if let Some(error) = &self
+                .0
+                .lifecycle
+                .lock()
+                .map_err(|_| "worker lifecycle lock poisoned".to_string())?
+                .startup_failure
+            {
+                return Err(error.clone().into());
+            }
+            let _startup = self.reserve_worker_startup(&generation)?;
+            if self.0.setup.is_some() {
+                self.0
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?
+                    .warming = true;
+            }
+            self.discover(&generation)?;
             #[cfg(unix)]
             if let Some(preparation) = &*self
                 .0
@@ -1846,6 +1848,50 @@ impl Client {
                 **environment = prepared;
                 self.publish_requirements(environment);
             }
+            if let Some(environment) = environment.as_mut()
+                && environment.local_runtime.is_none()
+                && self.0.discovered_r_home.get().is_some()
+            {
+                let explicit = match environment.python.as_ref() {
+                    Some(PythonEnvironment::UserSelected(python)) => Some(python.clone()),
+                    _ => None,
+                };
+                let preparation = self
+                    .0
+                    .local_preparation
+                    .lock()
+                    .map_err(|_| "local preparation lock poisoned".to_string())?
+                    .clone()
+                    .or_else(|| {
+                        self.0
+                            .target
+                            .get()
+                            .and_then(crate::target_session::Session::ssh_preparation)
+                            .cloned()
+                    })
+                    .ok_or("runtime selection has no preparation owner".to_string())?;
+                let selected: Result<Option<crate::python::NativePython>, String> = preparation
+                    .call(
+                        crate::resolver::preparation::Operation::SelectPython {
+                            configured: explicit.clone().map(PathBuf::from),
+                        },
+                        |handle| self.register_resolver_stop_handle(&generation, handle),
+                    );
+                self.clear_resolver_stop_handle(&generation)?;
+                self.ensure_startup(&generation)?;
+                environment.local_runtime = Some(crate::local_runtime::Selection {
+                    r_home: self.0.discovered_r_home.get().cloned(),
+                    python: selected?.map(|selected| crate::local_runtime::Python {
+                        selected: Box::new(selected),
+                        explicit,
+                        managed: false,
+                        duckdb_extension_directory: None,
+                    }),
+                });
+            }
+            let snapshot = environment.as_deref().cloned();
+            drop(environment);
+            let environment = snapshot;
             let python = environment
                 .as_ref()
                 .and_then(|environment| environment.python.as_ref());
@@ -1853,7 +1899,7 @@ impl Client {
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
             let spec = WorkerSpec {
-                target: self.0.target.as_ref(),
+                target: self.0.target.get(),
                 local_runtime: environment
                     .as_ref()
                     .and_then(|environment| environment.local_runtime.as_ref()),
@@ -1875,22 +1921,75 @@ impl Client {
                     .output
                     .push_notice_line(output::WORKER_STARTING_NOTICE);
             }
-            let running =
-                self.0
-                    .runtime
-                    .spawn(spec, self.0.output.clone(), on_started, on_ready)?;
-            if let Some(environment) = environment.as_mut() {
-                // An external `--worker` must apply its first managed R layer before
-                // loading DuckDB; arbitrary preloaded namespaces are not tracked.
-                environment.duckdb_r_targets = environment.r.iter().cloned().collect();
+            let initialized_generation = spec.callbacks.generation.clone();
+            *worker = WorkerState::Running(self.0.runtime.spawn(
+                spec,
+                self.0.output.clone(),
+                on_started,
+                on_ready,
+            )?);
+            let WorkerState::Running(running) = worker else {
+                unreachable!()
+            };
+            if let Some(accepted) = &self.0.environment {
+                let mut accepted = accepted
+                    .lock()
+                    .map_err(|_| "worker environment lock poisoned".to_string())?;
+                let lifecycle = self
+                    .0
+                    .lifecycle
+                    .lock()
+                    .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
+                lifecycle.ensure_startup(&initialized_generation)?;
+                accepted.duckdb_r_targets = environment
+                    .as_ref()
+                    .and_then(|environment| environment.r.clone())
+                    .into_iter()
+                    .collect();
             }
-            *worker = WorkerState::Running(running);
+            if environment
+                .as_ref()
+                .is_some_and(|environment| !environment.custom_worker)
+            {
+                running.initialize()?;
+                if let Some(active) = self.current_evaluation()?
+                    && active.generation.is(&initialized_generation)
+                {
+                    running
+                        .shutdown_handle()
+                        .observe_startup(&active.evaluation)?;
+                }
+            }
         }
         Ok(())
     }
 }
 
 impl WorkerCallbacks {
+    fn initialization_failed(&self, error: &str) {
+        if let Ok(mut lifecycle) = self.client.0.lifecycle.lock()
+            && lifecycle.generation.is(&self.generation)
+        {
+            lifecycle.startup_failure.get_or_insert_with(|| {
+                format!("runtime initialization failed: {error}; restart required")
+            });
+            lifecycle.warming = false;
+        }
+    }
+
+    fn initialized(&self) -> Result<(), String> {
+        let mut lifecycle = self
+            .client
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        if lifecycle.generation.is(&self.generation) {
+            lifecycle.warming = false;
+        }
+        Ok(())
+    }
+
     fn resolve_r(
         &self,
         packages: Vec<String>,

@@ -161,7 +161,8 @@ R discovery and CPython inspection use the same prepared-runtime implementation 
 Discovered R needs a loadable shared library; explicit or discovered broken R reports its own error.
 Genuine R absence selects native Python/SQL without constructing reticulate or R DBI.
 CPython must provide a loadable matching shared embedding library and satisfy Python 3.10 or later.
-When R is present and neither Python name exists on the target PATH, Console exposes R and SQL without requiring Python.
+When R is present and neither Python name exists on the target PATH, the launch plan selects R without requiring Python.
+The initial schema stays configuration-derived and runtime validation reports Python unavailability.
 An invalid explicit Python selection or a broken discovered executable still fails setup.
 Neither runtime is initialized by the capability probe.
 Explicit `R_HOME` and `RETICULATE_PYTHON` are VM paths.

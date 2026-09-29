@@ -107,6 +107,15 @@ def preparation_environment(root: Path, *, with_r: bool = False) -> dict[str, st
     description = {
         "executable": str(root / "invalid-python"),
         "libpython": str(root / "missing-libpython"),
+        "metadata": {
+            "base_executable": sys.executable,
+            "pythonpath": "",
+            "version": sys.version.replace("\n", " "),
+            "version_number": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "architecture": "64bit",
+            "conda": False,
+            "numpy": None,
+        },
     }
     description.update(
         {

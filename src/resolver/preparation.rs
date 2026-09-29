@@ -18,7 +18,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(unix))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -99,6 +99,9 @@ pub(crate) enum Operation {
         constraints: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         r: Option<ManagedR>,
+    },
+    SelectPython {
+        configured: Option<std::path::PathBuf>,
     },
     InspectPython {
         executable: std::path::PathBuf,

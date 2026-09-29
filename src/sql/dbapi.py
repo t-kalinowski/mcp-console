@@ -324,6 +324,14 @@ def _ensure_managed_connection():
     return _managed_connection
 
 
+def initialize_managed_connection():
+    import importlib.util
+
+    # Check genuine absence without entering managed missing-import resolution.
+    if importlib.util.find_spec("duckdb") is not None:
+        _runtime.without_automatic_resolution(_ensure_managed_connection)
+
+
 def _select_native_connection():
     global _connection
 

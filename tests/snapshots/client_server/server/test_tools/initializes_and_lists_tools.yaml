@@ -37,9 +37,9 @@ result:
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is
-        built in. Managed defaults include SQLite; attach the database read-only
-        with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare
-        additional extensions with
+        built in. When managed preparation is available, defaults include
+        SQLite; attach the database read-only with `ATTACH 'path' AS name (TYPE
+        sqlite, READ_ONLY)`. Prepare additional extensions with
         `requirements={"action":"add","duckdb":["fts"]}`. SQL results include
         bounded table previews that abbreviate long text cells; return focused
         queries and summaries for inspection.
@@ -80,6 +80,15 @@ result:
         explicitly allowed by the launcher. Dependency resolution, when
         available, runs outside the sandbox and may execute installation or
         build code; use only trusted dependencies.
+
+
+        The session prepares automatically in the background. Runtime
+        capabilities are discovered on the execution host; the listed language
+        fields do not guarantee that an interpreter is installed. R/Python
+        sharing requires both runtimes and their bridge. Managed DuckDB requires
+        its provider packages. Each operation validates the session's actual
+        capabilities. Requirements inspection reports the known declaration and
+        preparation status, not an installed-package inventory.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -140,8 +149,8 @@ result:
               - "null"
           sql:
             description: |-
-              One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
-              active by default and keeps a persistent catalog. A result with columns returns a bounded
+              One complete SQL cell evaluated through the active connection. When its provider is installed,
+              managed DuckDB is initialized during startup and keeps a persistent catalog. A result with columns returns a bounded
               preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
               state, and a DuckDB table or view with the same name takes precedence. A user-selected R
               connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
@@ -175,9 +184,10 @@ result:
               action=get returns a read-only snapshot, including Python constraints and separate runtime
               infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
               manifest is in structuredContent.requirements even when it exceeds the text preview limit.
+              During discovery, unknown requirements are null; this is not an installed-package inventory.
               action=add is the default; action=set replaces the whole declaration without injecting defaults;
-              action=reset restores startup defaults. Changed replacements require control="restart" with a
-              live worker. Empty set means no optional requirements; bare {} is invalid.
+              action=reset restores startup defaults. Before user code or nonempty input is admitted, an
+              unused warm worker can be replaced automatically. Later replacements require control="restart". Empty set means no optional requirements; bare {} is invalid.
               Requirements alone perform standalone preparation. With one cell, they are preconditions of
               that cell. With `control = "restart"`, they are part of the restart transaction, with or
               without a cell. Only add can accompany interrupt, and only when a cell follows.
@@ -290,8 +300,8 @@ result:
               when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
               background work, then poll with an empty `send`.
 
-              Defaults to 60,000 milliseconds. The wait starts after cell dispatch or attachment to an active
-              evaluation and includes one automatic worker replacement attempt. It does not cancel resolution
+              Defaults to 60,000 milliseconds. The wait starts when a cell is admitted or a call attaches to
+              its evaluation, including pending background startup and one automatic replacement attempt. It does not cancel resolution
               or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
               before dispatch and may make the complete call take longer. This value does not limit standalone
               preparation. Automatic R and Python import

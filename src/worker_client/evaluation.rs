@@ -342,7 +342,7 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if state.stdin.is_some() {
-            return Err("worker stdin was already attached to this evaluation".to_string());
+            return Ok(());
         }
         if !state.pending_stdin.is_empty() {
             writer.send(std::mem::take(&mut state.pending_stdin))?;
@@ -373,6 +373,17 @@ impl Evaluation {
                     .transcript
                     .persist_decoded_image(self.call_id, &bytes, mime_type))
             })
+    }
+
+    /// Startup prompts share output ownership, without becoming a user cell.
+    pub(super) fn startup_input(&self, requested: bool) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned")?;
+        state.input_report_at = requested.then(Instant::now);
+        self.changed.notify_one();
+        Ok(())
     }
 
     pub(super) fn input_requested(&self, prompt: String) -> Result<(), String> {
@@ -493,6 +504,8 @@ impl Evaluation {
         self.finish_cell_output();
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
+        state.stdin = None;
+        state.pending_stdin.clear();
         self.changed.notify_one();
     }
 

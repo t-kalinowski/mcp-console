@@ -3,6 +3,9 @@ worker:
   kind: ready
 ---
 relay:
+  kind: initialize
+---
+relay:
   kind: evaluate
   language: r
   source: |
@@ -12,6 +15,9 @@ relay:
       c("/dev/null", "/dev/null"),
       editor = Sys.which("true")
     )
+---
+worker:
+  kind: initialized
 ---
 worker:
   kind: console_output

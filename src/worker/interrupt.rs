@@ -9,8 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 // mixed runtime, R supplies the state so nested calls share one acknowledgment.
 pub(super) struct State {
     pub signal: unsafe extern "C" fn(),
-    // Recorded SIGINT, including while an interpreter defers its delivery.
-    pub requested: fn() -> bool,
     pub pending: fn() -> bool,
     pub acknowledge: fn() -> bool,
 }
@@ -93,12 +91,6 @@ pub(super) fn initialize_native() -> io::Result<()> {
         .set(super::input::initialize_interrupt_wakeup()?)
         .map_err(|_| io::Error::other("signal wakeup already initialized"))?;
     reinstall()
-}
-
-fn requested() -> bool {
-    R_STATE
-        .get()
-        .map_or_else(native_pending, |state| (state.requested)())
 }
 
 #[cfg(target_os = "macos")]
@@ -265,53 +257,4 @@ pub(crate) fn install_python_interrupt(
         ));
     }
     Ok(())
-}
-
-pub(crate) fn check_python_selection_interrupt() -> Result<(), String> {
-    if requested() {
-        Err("Python inspection interrupted".into())
-    } else {
-        Ok(())
-    }
-}
-
-/// Connect inspection cancellation to the worker's existing SIGINT wakeup.
-/// ResolverProcess continues to own termination, output collection and reaping.
-pub(crate) fn inspect_python(
-    executable: &std::path::Path,
-) -> Result<crate::python::NativePython, String> {
-    super::input::drain_interrupt_wakeup().map_err(|error| error.to_string())?;
-    let (finished, completion) = io::pipe().map_err(|error| error.to_string())?;
-    std::thread::scope(|scope| {
-        let mut watcher = None;
-        let result = crate::python::inspect_native(executable, |handle| {
-            // Draining stale wakeups must not hide a queued request just
-            // because the calling R callback currently defers interrupts.
-            if requested() {
-                return Err("Python inspection interrupted".to_string());
-            }
-            watcher = Some(scope.spawn(move || {
-                match crate::readiness::wait_for_io(
-                    super::input::interrupt_wakeup_fd(),
-                    libc::POLLIN,
-                    Some(&finished),
-                ) {
-                    Ok(ready) if ready.stream => handle.stop(),
-                    Ok(_) => Ok(()),
-                    Err(error) => {
-                        let _ = handle.stop();
-                        Err(error.to_string())
-                    }
-                }
-            }));
-            Ok(())
-        });
-        drop(completion);
-        if let Some(watcher) = watcher {
-            watcher
-                .join()
-                .map_err(|_| "Python inspection interrupt watcher panicked")??;
-        }
-        result
-    })
 }

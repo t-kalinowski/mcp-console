@@ -221,7 +221,7 @@ impl Response {
         self.preview.is_empty()
     }
 
-    fn is_error(&self) -> bool {
+    pub(super) fn is_error(&self) -> bool {
         self.is_error
     }
 

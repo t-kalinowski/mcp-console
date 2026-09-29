@@ -1,6 +1,16 @@
 ---
 send:
   requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
     action: get
 result:
   content:
@@ -12,7 +22,8 @@ result:
             "python": [
               "numpy",
               "pandas",
-              "duckdb"
+              "duckdb",
+              "py-yaml12"
             ],
             "duckdb": [
               "sqlite"
@@ -33,6 +44,7 @@ result:
         - numpy
         - pandas
         - duckdb
+        - py-yaml12
       duckdb:
         - sqlite
       python_version: []
@@ -41,16 +53,6 @@ result:
     runtime_requirements:
       r: []
       python: []
-  isError: false
----
-send:
-  requirements:
-    python:
-      - py-yaml12
-result:
-  content:
-    - type: text
-      text: "[prepared]"
   isError: false
 ---
 send:
@@ -75,11 +77,11 @@ send:
         sys.base_exec_prefix,
     ]
     program = "import sys, json; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix]))"
-    assert (
-        json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))
-        == expected
+    child_identity = json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))
+    assert child_identity == expected, (child_identity, expected)
+    assert os.environ["VIRTUAL_ENV"] == sys.prefix, (
+        os.environ["VIRTUAL_ENV"], sys.prefix
     )
-    assert os.environ["VIRTUAL_ENV"] == sys.prefix
     print("managed identity and child environment agree")
 result:
   content:
@@ -118,7 +120,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [idle]
+        [worker starting]
   isError: false
 ---
 send:

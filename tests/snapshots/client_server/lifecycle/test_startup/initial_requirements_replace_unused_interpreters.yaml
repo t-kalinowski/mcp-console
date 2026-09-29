@@ -1,0 +1,116 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  r: >-
+    stopifnot(requireNamespace('praise', quietly = TRUE)); marker <-
+    get0('marker', ifnotfound = 40L) + 1L
+  requirements:
+    r:
+      - praise
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: stop('must not run')
+  requirements:
+    action: set
+    r: []
+result:
+  content:
+    - type: text
+      text: >-
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
+  isError: true
+---
+send:
+  r: marker + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false

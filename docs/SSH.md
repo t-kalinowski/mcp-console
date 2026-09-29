@@ -21,7 +21,7 @@ target:
 ```
 
 Then run `mcp-console serve` from the local project.
-Before advertising MCP tools, Console connects to `analysis-host`, checks protocol compatibility and the remote directory, and discovers that host's resolver capability.
+During owned background warmup, after making MCP initialization and tool discovery available, Console connects to `analysis-host`, checks protocol compatibility and the remote directory, and discovers that host's resolver capability.
 This does not install analysis packages or start a worker.
 The first operation that needs an environment prepares the managed defaults there; worker launch then validates the sandbox and starts the relay and worker in `/srv/projects/analysis`.
 `extends` is optional: omitting it preserves Console's restricted policy with host reads and private temporary writes.
@@ -92,7 +92,7 @@ With R present, managed preparation retains the existing reticulate and SQL adap
 An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available.
 
 When R is absent, Console starts the native Python and SQL runtime.
-With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB, and the remote host prepares the default SQLite extension before MCP readiness; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
+With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB, and the remote host prepares the default SQLite extension during background warmup; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
 The native worker uses its Python and DB-API adapters without starting R, reticulate, or R DBI.
 An explicit `python` path bypasses uv and uses packages, DuckDB, and custom DB-API connections already available in that environment.
 R cells and R requirements are unavailable.
@@ -104,7 +104,7 @@ R libraries and Python executables are validated on the remote host; their paths
 Other workload settings retain their existing meaning.
 In particular, configuring a workload cache does not relocate trusted preparation caches.
 
-When R is present but discovery finds no resolver bootstrap, Console retains the bare-runtime model: the schema exposes only `requirements.action="get"`, automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
+When R is present but discovery finds no resolver bootstrap, Console retains the bare-runtime model: the stable initial schema retains conditional preparation prose, authoritative operation validation rejects preparation, and automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
 Bare and user-selected Python modes disable reticulate's implicit managed-venv installation when R is present.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.
@@ -122,16 +122,11 @@ They carry the configured interpreter selection, and live native preparation car
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-SSH launch protocol version 7 and preparation version 5 carry independent R and Python selections and inspection operations.
-An R-present payload can carry a complete inspected Python identity or leave Python selection lazy.
-Docker and Docker Sandbox also use launch version 7.
-Version 7 removes the separate native preparation request and carries live-interpreter status for shared tool resolution; preparation protocol version 5 is unchanged.
-Version 6 accepts Python activation-failure receipts during preparation and idle callbacks as well as cells; older servers would stop that worker.
-Launch and preparation also require a matching Console package version.
-The optional `selected_python` field constrains live managed Python preparation to the running executable, locally or over SSH.
-Older peers fail compatibility checks before MCP readiness or worker startup.
-Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
-Python resolution retains the existing treatment of `UV_OFFLINE` and `UV_NO_CACHE`.
+SSH launch protocol version 8 and preparation version 6 carry complete runtime selections, conversion metadata, and the built-in initialize/initialized milestone.
+An absent Python selection means genuine absence; pending discovery never crosses into a worker.
+Docker and Docker Sandbox use launch version 8 too.
+Older peers fail compatibility checks during warmup before worker launch or environment commit; MCP initialization and tool discovery remain responsive and later operations report the failure.
+
 Sans-R preparation selects remote uv from startup `PATH` and ignores `RETICULATE_UV`; R-present selection retains its existing behavior.
 
 The local server owns admitted operations, requirement merging, candidate and retained environments, activation receipts, and worker generations.

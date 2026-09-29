@@ -178,10 +178,12 @@ impl Client {
             };
             if !environment.custom_worker {
                 let inspected = self.inspect_managed_python(generation, &selected, &resolver)?;
-                let runtime = environment
-                    .local_runtime
-                    .as_mut()
-                    .expect("built-in environment retains runtime capabilities");
+                let runtime = environment.local_runtime.get_or_insert_with(|| {
+                    crate::local_runtime::Selection {
+                        r_home: self.0.discovered_r_home.get().cloned(),
+                        python: None,
+                    }
+                });
                 if let Some(python) = &mut runtime.python {
                     *python.selected = inspected;
                 } else {
@@ -231,18 +233,18 @@ impl Client {
             })?
             .managed_parts()
             .map_err(EnvironmentResolutionFailure::Operation)?;
-        let running = match environment
+        let running = environment
             .local_runtime
             .as_ref()
             .and_then(|runtime| runtime.python.as_ref())
-        {
-            Some(crate::local_runtime::Python { selected, .. }) => selected.as_ref().clone(),
-            // R startup can initialize Python before Console's resolver hook
-            // supplies a launch identity. Inspect the accepted executable on
-            // its execution host; the worker also checks its actual live
-            // library before mutating an adopted interpreter.
-            None => self.inspect_managed_python(generation, current, resolver)?,
-        };
+            .ok_or_else(|| {
+                EnvironmentResolutionFailure::Operation(
+                    "managed Python has no accepted launch identity".into(),
+                )
+            })?
+            .selected
+            .as_ref()
+            .clone();
         let candidate = self.resolve_managed_python_host(
             generation,
             requirements,
@@ -312,7 +314,15 @@ impl Client {
         let retained = requirements.clone();
         let requirements = requirements
             .into_iter()
-            .chain(self.0.runtime_r_requirements.iter().cloned())
+            .chain(
+                self.0
+                    .capabilities
+                    .get()
+                    .expect("discovered capabilities")
+                    .runtime_r_requirements
+                    .iter()
+                    .cloned(),
+            )
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -351,7 +361,7 @@ impl Client {
                 configuration.resolve_r(requirements, on_started)
             }
             super::super::RResolver::Disabled => {
-                let message = if let Some(session) = &self.0.target
+                let message = if let Some(session) = self.0.target.get()
                     && !session.is_ssh()
                 {
                     format!(
@@ -425,7 +435,7 @@ impl Client {
             let preparation = local.as_ref().or_else(|| {
                 self.0
                     .target
-                    .as_ref()
+                    .get()
                     .and_then(crate::target_session::Session::ssh_preparation)
             });
             let result = crate::resolver::execution::resolve_duckdb_extensions(

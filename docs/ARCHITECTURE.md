@@ -76,7 +76,7 @@ It reports operation completion only after its resolver groups retire.
 The local server retains requirements, candidates, and activation decisions; remote execution never enters controller runtime discovery or resolver processes.
 See [SSH execution](SSH.md) for configuration and prerequisites.
 
-For a Docker target, the controller resolves an immutable image once and probes a disposable container before MCP readiness.
+For a Docker target, the controller resolves an immutable image once and probes a disposable container during owned background warmup.
 Every generation then follows:
 
 ```text
@@ -93,7 +93,7 @@ Image setup is separate from generation lifetime and does not reread a build con
 See [Docker execution](DOCKER.md).
 
 For `compute.kind: docker_sandbox`, `sandbox.provider` resolves to `compute` independently of the user's `no_sandbox` flag.
-The controller captures a prepared digest-qualified template and probes it in a disposable owned VM before MCP readiness:
+The controller captures a prepared digest-qualified template and probes it in a disposable owned VM during owned background warmup:
 
 ```text
 controller MCP server → local ownership helper → sbx create / exec -i
@@ -116,8 +116,9 @@ Both prepared providers use `target_launch/runtime.rs` for runtime discovery and
 The disposable probe runs under target workload environment and policy and returns a bounded typed worker-environment frame after CPython inspection or R validation.
 It starts no analysis worker or SQL connection and invokes no preparation session or dependency resolver.
 The controller accepts that frame after compatible negotiation, successful validation, and provider-confirmed probe retirement, then retains one immutable descriptor beside the image/template identity.
-Runtime capabilities determine the MCP language schema and recordings; target paths never enter controller runtime validation or library loading.
-Sans-R generations use the existing native CPython evaluator and lazy Python DB-API SQL connection.
+The initial MCP schema uses configured language filters and prepared-target restrictions, with conditional capability prose.
+Discovered capabilities validate operations and update recordings; target paths never enter controller runtime validation or library loading.
+Sans-R generations use the common native CPython evaluator and initialize their managed Python DB-API DuckDB connection during worker startup when DuckDB is installed.
 Native Docker supplies runner-owned storage where enabled; direct Docker and SBX use private storage retained by the existing target launcher through relay retirement.
 Spill files and stored secrets live there; preinstalled extension caches and shared paths keep their provider ownership.
 
@@ -254,14 +255,14 @@ R and reticulate attachment reinstall Console services after their hooks.
 These shared services neither access R globals directly nor evaluate R code.
 The `worker::embedded_r` adapter supplies the mixed runtime's interrupt-state callbacks and owns R initialization, interrupt checks and deferral, native error boundaries, event handling, graphics, and R console callbacks.
 Its REPL latch distinguishes submitted R source from interactive input; shared cell state identifies the enclosing language.
-R initializes on demand from an R cell, Python-side R access, an R-owned SQL operation, or unresolved R-side Python selection.
+The built-in initialization operation starts selected R before selected Python, attaches the optional bridge, and opens the managed SQL connection before admitting cells.
 R capability selects the default managed SQL provider independently of initialization and bridge attachment.
 
 Command readiness is separate from waiting: when no command is ready, the coordinator uses R's event-aware wait and services its idle callbacks before waiting again.
 Without R integration, it uses the native sideband, interrupt, and stdin-closure wait.
 R retains the native unwind boundaries for its event and interpreter operations.
 Scheduled `later` callbacks do not require another R cell: idle processing publishes their output for the next response, including Python and SQL responses.
-Cell dispatch marks the cell active before starting graphics or initializing a runtime, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
+Cell dispatch marks the cell active before starting graphics, clears the active cell after evaluation, finalizes graphics even after an evaluation error, then finishes managed input before the final idle turn and completion.
 Both R and Python cells use those R graphics hooks because Python can call R and create plots; SQL retains its existing exclusion.
 Idle event processing retains its own graphics and input cleanup ordering in the R adapter.
 The launcher supplies private worker-lifetime storage before either interpreter starts.
@@ -271,7 +272,7 @@ Direct and sandbox launches retain their existing retirement owners.
 The coordinator and both interpreters use the same owning thread.
 R's `setup_Rmainloop()` installs R services; it is not the outer Console command loop.
 R stack setup, protected objects, event servicing, and the C-owned unwind boundaries remain on that thread.
-CPython entry points acquire the GIL and its retained initial thread state is restored for process exit; initialization and external adoption remain distinct ownership states.
+CPython entry points acquire the GIL and its retained initial thread state is restored for process exit; Console is the sole CPython initialization owner; external adoption is unsupported.
 No library mutex or requirement-state borrow spans interpreter execution, startup hooks, or reentrant callbacks.
 The signal handler only marks native state and wakes descriptors; it never enters R or Python.
 Reticulate's event service schedules main-thread pending calls and protects R event processing with `R_ToplevelExec()`.
@@ -286,103 +287,56 @@ Parser warnings remain owned by the native REPL; validation does not mutate warn
 The helper returns `NULL` for valid source or the parser's diagnostic string for rejected source.
 The worker writes that diagnostic directly to the console without invoking `options(error)` or replacing `.Traceback`; parser errors do not propagate to R's top level.
 On Linux, loader preparation re-executes before either interpreter initializes, with the captured `R_HOME/lib` first in `LD_LIBRARY_PATH`, preserving inherited library paths and its sideband endpoint.
-Late R initialization never re-executes a worker with live Python state.
 This lets native R packages resolve R's shared libraries even when that R installation is absent from the system linker cache.
 Its language adapters provide persistent Python and SQL within that worker process.
 The SQL router uses a DBI provider in embedded R or a DB-API provider in CPython.
-The R provider owns a managed DuckDB connection by default and can retain a user-selected DBI connection; the Python provider retains user-selected DB-API connections and, without R, a lazy worker-owned DuckDB connection without converting objects or result rows through Rust or R.
+The R provider owns the managed DuckDB connection when R is selected; otherwise the Python DB-API provider owns it.
+Startup opens the actual connection, including its persistent catalog.
+An absent optional DBI or DuckDB installation in a bare or prepared environment leaves the peer interpreters usable and gives SQL an availability diagnostic.
+Installed-provider initialization errors remain failures.
+User-selected DBI and DB-API connections and managed restoration retain their existing owners.
 Its private R environment bridge conditionally wraps `base::library` and runs R's unchanged `base::loadNamespace` body in a private lexical environment that intercepts its retry restart; it applies accepted managed libraries and reports activation outcomes.
-The reticulate adapter retains discovery, selection precedence, and R-side hints.
-Console captures a complete `NativePython` identity: executable spelling, embedding library, Python home, and all four prefixes.
-Managed selections and prepared targets are inspected by the execution-host preparation owner; a fresh reticulate compatibility selection is inspected in an owned worker child.
-Both paths use the same inspection program and bootstrap contract.
-Inspection requires CPython 3.10 or later and checks the library's runtime build and ABI; the selected executable's spelling is preserved, including virtualenv paths.
-The selected installation must remain stable through inspection and initialization; concurrent replacement is unsupported.
-A private result file separates configuration from startup output, and the existing resolver lifecycle owns child output, cancellation, and reaping.
-The worker's existing interrupt wakeup cancels inspection without committing an interpreter or changing retained requirements, and a failed inspection permits retry in the same worker.
-Console supplies the inspected embedding fields to both native initialization and reticulate's subsequent attachment; cached or already initialized selections are not inspected again.
-Reticulate supplies conversion metadata and selection hints, but no longer configures the generic Python environment.
-`python::startup` applies `PATH`, `VIRTUAL_ENV`, and the effective `PYTHONPATH` before CPython executes startup hooks; Linux child library paths are derived from the inspected prefixes.
-Console sets CPython's program name to the selected executable so its normal path initialization can find the installation and `pyvenv.cfg`.
-It leaves PythonHome unset because that override can bypass virtualenv discovery; it does not replay an activation script during bridge attachment.
-Shared setup validates the observed prefixes, explicitly sets `sys.executable` to the selected spelling, updates an already-imported multiprocessing module's executable, and installs the working-directory import entry.
-The process PATH also lets R's `system()` and `system2()` find package entry points installed in the selected Python environment.
-Reticulate adds its bridge module directory without applying a second generic environment configuration or changing CPython's prefixes and base executable.
-The Rust Python facade loads and retains that file-backed `libpython`, initializes CPython without holding its library-state lock through interpreter code, or attaches its handle if CPython was already initialized.
-The Python facade retains an optional reticulate adapter after R initializes.
-That adapter owns unresolved R selection and bridge attachment; `python::startup` provides bootstrap and shared setup operations without depending on the R adapter.
-The retained CPython library owns interpreter lifetime and shared setup completion, so interrupted setup can resume without replacing the interpreter.
-Environment identity validation is a prerequisite: if startup hooks leave incompatible prefixes or environment setup fails, Console retires the worker instead of retrying that partial initialization.
-If an R startup package initializes reticulate before the adapter is installed, Console captures that interpreter's live executable and prefixes together with reticulate's loaded-library configuration.
-It registers this identity before installing bridge hooks, preserves external interpreter ownership, and enters common setup without rerunning environment activation.
-Ordinary Python cells enter common bootstrap and the private evaluator directly through CPython.
-An explicit or independently materialized selection does not initialize R or attach reticulate.
-If R is already initialized, unresolved R declarations and selection callbacks keep their compatibility precedence.
-Reticulate attaches only when an operation needs interoperability.
-Common setup installs Console's stream, input, interrupt, and plot services, private evaluator, and SQL adapter, then configures automatic import resolution through the retained CPython interface.
-Reticulate attachment reasserts the same services after reticulate installs its hooks.
-The same setup accepts a managed import policy or a disabled reason independently of R.
-Python initialization, common setup completion, and bridge attachment have separate completion state.
-Runtime availability is captured on the execution host at session startup and passed through internal launch configuration to each worker.
-`local_runtime::Selection` retains an optional R home and an independently optional inspected Python selection, including managed local and SSH environments and prepared Docker/SBX targets with both runtimes.
-An absent Python selection in a managed R-capable worker leaves selection lazy.
-Prepared targets instead expose their inspected capabilities: genuine Python absence permits R-only operation; a broken explicit selection is an error.
-Availability, captured identity, library initialization, shared setup completion, and bridge attachment are separate state.
-When Python is already running, R startup packages are deferred until Console installs the selection hooks.
-The initiating R or Python cell is active before runtime initialization, so deferred package plots use its graphics scope.
-Console attaches its SQL and Python tools after the startup packages, retaining search position 2 in either initialization order.
-Attachment obtains conversion metadata from the captured executable.
-The native configuration retains the `RETICULATE_PYTHON` hint present at initialization; an unchanged hint is not resolved again against a later working directory or `PATH`.
-Reconstructed reticulate configuration carries the managed environment's `ephemeral` marker.
-Conflicting later selections require restart; a completed selection callback is not replayed during attachment.
-Failed partial R initialization requires worker replacement.
-Concurrent native process-environment access during late R startup remains an unresolved safety constraint.
-`Rf_initialize_R()` processes the system Renviron, and `setup_Rmainloop()` changes `R_SESSION_TMPDIR` and library environment variables before returning control to the embedder.
-R's embedding API has no default-package parameter or callback between base-profile initialization and default-package loading; `--default-packages` is an Rscript frontend option implemented through the process environment.
-Removing Console's temporary `R_DEFAULT_PACKAGES` mutation alone would not make that bootstrap safe with foreign environment readers or writers.
-The GIL and a Rust mutex cannot serialize arbitrary native threads with these mutations.
-Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.
-When R is absent, the preparation owner resolves the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
-When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
-Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
-The Python DB-API adapter uses that directory when captured and otherwise leaves DuckDB's default, while keeping spill and stored secrets in the worker's private temporary directory.
-Without either selection or uv, startup reports an error rather than searching PATH for Python.
-The execution-host preparation owner inspects the selected executable before MCP readiness and each candidate before retirement or live activation.
-The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
-The same coordinator constructs an absent R integration, native Python runtime, and SQL router without an R DBI backend.
-Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.
-Python setup failures retain their tracebacks on the ordered console diagnostic channel; every coordinator return restores the Python thread before extension-library exit destructors.
-The native runner owns sandbox temporary storage; direct relay lifetimes own a private directory and retire it after the worker, including failed startup.
-Neither lifetime owns resolver cache removal.
-The retained library state records each completed installation step and marks setup configured only after environment, module defaults, and managed or disabled import policy succeed, so an incomplete setup can retry without initializing the interpreter again.
-The native requirement owner calls Console's Python activation helper through that retained library; the helper runs the selected environment's activation script and completes process-environment setup.
-The shared Python module loader applies NumPy, pandas, and Matplotlib defaults once, preserving existing nondefault widths and subsequent user overrides.
-Applying defaults to modules loaded by startup hooks is a retryable setup step after the evaluator is installed; an interrupt preserves the running interpreter and its objects.
-The R setup entry point preserves the caller's interrupt context while Python hooks run and protects R conversions separately.
-Reticulate attachment does not rerun these module defaults.
-The native calls preserve the caller's R interrupt state while Python runs.
-Failed setup retains the original Python exception and traceback.
-Python demand reports it on the console diagnostic channel; an R call preserves reticulate's R condition and interrupt conversion.
-Console also installs native callbacks for Python input, text output, diagnostics, and plot publication.
-Managed Python input shares the worker's length-aware stdin buffer with R; R's console callback retains its boolean success contract.
-The worker's native signal handler wakes blocked input and marks interrupts for both runtimes.
-Python acknowledgment respects R's suspended-interrupt state and clears accepted interrupts so nested calls do not deliver them twice.
-Reticulate's event polling remains active.
 
-Reticulate is required for R-side selection compatibility, object conversion, and cross-language integration.
-The Python-side `r` proxy initializes R and attaches the bridge on its first actual use; unrelated Python cells do neither.
-Reached imports use the same native managed-requirement callback with and without R.
-Console owns initialization of the selected interpreter and tracks completion of its private runtime setup in the retained library state.
-Python use from either language reaches that native owner before reticulate attaches.
-A failed or interrupted selection has not applied generic process-environment changes.
-Once CPython is running, attachment errors retain the selected environment and completed setup steps.
-Attachment can retry before reticulate publishes its configuration; retry uses the existing interpreter.
-Failure in a later initialization hook marks attachment incomplete and requires worker replacement because those hooks may have arbitrary partial effects.
-Ordinary Python remains usable.
-Neither path rolls back interpreter initialization.
-`RETICULATE_PYTHONPATH`, when supplied, selects the common startup `PYTHONPATH` for both the interpreter and its children.
-R's already-initialized interoperability marker remains a bridge input.
-RStudio-only loader symlink manipulation and Windows Qt plugin setup are not part of Console's embedding path.
+The execution-host preparation owner supplies a complete `local_runtime::Selection` for each launch: optional R home and optional inspected Python, its managed/explicit policy, and extension storage.
+Python absence means genuine absence; incomplete discovery stays in the startup owner.
+A provisionable managed Python remains selected even without a PATH interpreter.
+Invalid explicit selections fail discovery rather than changing runtime composition.
+`NativePython` retains executable spelling, embedding library, Python home, all four prefixes, and conversion metadata.
+Inspection uses a private result file, requires CPython 3.10 or later, and checks the runtime build and ABI.
+Selected installations must remain stable through inspection and initialization.
+Remote paths remain opaque on the controller.
+`python::startup` applies PATH, VIRTUAL_ENV, and effective PYTHONPATH before CPython hooks.
+Console sets CPython's program name to the selected executable and leaves PythonHome unset so virtualenv discovery works.
+Shared setup validates the observed identity, configures child-process selection, and installs the same evaluator, services, module defaults, SQL adapter, and import owner with and without R.
+
+The optional reticulate adapter preserves supported startup declarations and hooks.
+Console installs it before R default packages can enter reticulate: it temporarily defers default packages across `setup_Rmainloop()`, restores the captured setting, then loads them in the explicit startup graphics/output scope.
+Tool bindings attach afterward at search position 2.
+A reentrant package hook uses the same native Python owner and planned identity.
+Compatible hints are accepted; conflicting selections require launch configuration or a requirements/restart transaction.
+Reticulate attaches conversion and event services to Console's interpreter and does not discover, inspect, activate, or bootstrap a second default interpreter.
+Captured conversion metadata avoids replaying Python startup hooks in a metadata subprocess.
+The bridge reasserts Console stream/input/interrupt services after reticulate hooks.
+Setup steps and attachment have reentrancy guards and once-only completion state.
+A failed startup is retained for explicit recovery; ordinary evaluation never retries partial initialization.
+CPython's initial thread state is restored on every coordinator exit.
+The Python `r` proxy accesses the already initialized bridge and reports unavailable capability when R or reticulate is absent.
+Reached imports and live activation use the shared native requirement owner in either composition.
+
+R bootstrap still mutates the native process environment.
+`Rf_initialize_R()` reads system Renviron and `setup_Rmainloop()` changes R_SESSION_TMPDIR and library variables.
+Deferring default packages also changes R_DEFAULT_PACKAGES.
+The eager sequence prevents user cells from starting threads before R bootstrap, but does not make concurrent native environment access safe: neither the GIL nor a Rust mutex coordinates arbitrary native threads.
+Embedding/startup hooks must respect this constraint.
+The launcher owns temporary storage before either interpreter starts; R's session directory cannot remove Python caches or SQL storage.
+Sans-R managed startup captures an absolute HOME for the shared DuckDB extension cache and prepares the SQLite extension on the execution host.
+Explicit Python bypasses uv.
+Missing selection and missing uv fail startup instead of silently choosing PATH Python.
+`RETICULATE_PYTHONPATH` selects the common startup PYTHONPATH for the interpreter and its children.
+Console preserves module defaults, redirected streams, nested calls, interrupts, R default packages, and the interoperability marker.
+Startup output and plots use pending output ownership without a fabricated user cell; native callbacks release the GIL while blocking on worker services.
+Background threads and fork children keep their underlying streams and cannot enter R through those services.
+
 `src/python/requirements.rs` retains the worker's live normalized declaration and inspected identity, the last resolved candidate, and provisional R declaration values.
 This replaces the separate `native.rs` store and reticulate adapter's resolved-selection slot.
 These values describe worker state; only the server can accept an environment for a generation and retain it for replacement.
@@ -390,23 +344,17 @@ The R adapter preserves field presence and ordering, NA values, string bytes and
 R declarations retain reticulate's argument validation, warnings, live version/package checks, conditions, and add-only restrictions.
 Reached imports resolve and activate through the common owner, projecting R metadata before mutation and publishing it after success when the adapter exists.
 The host-inspected identity supplies the candidate library and prefixes.
-Reticulate's exact-executable inspection supplies only additional conversion metadata; generic `python_config()` discovery is not used for activation.
+Execution-host inspection supplies conversion metadata too; bridge attachment and activation never run a metadata subprocess.
 Compatibility rejection precedes conversion metadata and interpreter mutation.
 An unsafe activation failure marks the generation restart-required even when reported through an R condition.
 A successfully published activation remains accepted when the subsequent import or cell fails.
 Idle tool preparation uses the same worker request and native owner with or without R.
 The former host-supplied native preparation variant and reticulate-driven preparation implementation are removed.
 The owner resolves a candidate, projects optional R metadata, mutates only an initialized interpreter, and publishes acceptance through existing generation checks.
-Lazy declarations and snapshot restoration do not publish activation.
-Successful pre-initialization preparation materializes the declaration and commits its inspected launch identity through the existing preparation receipt.
-The live interpreter pin is resolver input, separate from retained user version constraints.
-R activation retains a transient matching key until reticulate accepts its configuration and writes the declaration; initial interpreter setup publishes through its own hook without that key.
-The initial hook records the running inspected identity directly, including R-side selections that did not require a managed resolver candidate.
-If a startup package already initialized reticulate, adapter installation records its managed state after registering that running identity and before common setup, without waiting for another initialization event.
-Worker readiness precedes interpreter initialization.
-Initial Python requirements publish directly through the common owner when Python starts; the former deferred pre-readiness publication path is removed.
-If adoption bypassed the resolver hook, the first reached import inspects the accepted executable on its execution host before preparing a candidate; the worker still checks that candidate against its actual retained library before mutation.
-An external startup package can select its original environment again on restart; accepted declarations survive, but adoption does not replay activation into that already-running interpreter.
+Startup declarations can materialize a candidate before CPython loads; successful initialization publishes it through the common owner after readiness commitment.
+The live interpreter pin is resolver input, separate from retained user constraints.
+R activation retains a transient matching key until reticulate accepts its configuration and writes the declaration.
+All commits retain generation checks; no external-interpreter adoption path remains.
 Native console callbacks release the GIL while blocking on worker services and are confined to the configuring worker thread.
 Background threads and fork children use their underlying streams and cannot enter R through these services.
 Bare sessions leave managed resolution disabled.
@@ -434,22 +382,35 @@ The server reports the failed operation and does not replay its cell or stdin ag
 
 ### Server and worker startup
 
-For a local host target, the built-in server opens the host resolver command, which captures a stable resolver configuration and detects its capability without installing an environment.
-The Python configuration captures an explicit `RETICULATE_UV` selection or `uv` on `PATH` independently of R discovery.
-R bootstrap prefers `ir` on `PATH`, otherwise selects `uv` on `PATH` or an explicit `uv` path, and can obtain `uv` from reticulate when only `ir` or an ambient R installation is available.
-It retains the selected bootstrap as pending setup and accepts MCP input before invoking it or resolving the default R, DuckDB, and managed Python environments.
-An operation that first needs an environment resolves the defaults through the normal generation-owned resolver lifecycle and commits the complete candidate only after all preparation succeeds.
-With directly available `uv`, local Python preparation runs before R library preparation and does not require a managed R library; reticulate bootstrap remains the R-backed fallback when direct `uv` is unavailable.
-For an ordinary cell, this happens after evaluation admission, so the client can poll or interrupt preparation.
-Explicit requirements remain preconditions of evaluation.
-Default-add requests combine additions with pending defaults; set/reset calculate a whole-declaration candidate using the same environment owner and resolver transaction.
-Retained R requirements describe the declaration separately from necessary R bridge and SQL infrastructure.
-Managed Python already carries its logical manifest, including an empty package list.
-A separate read-only projection is published at generation-checked environment commits.
-Inspection reads that short-lived snapshot lock without acquiring the environment lock held during resolution.
-If no resolver bootstrap is available, it accepts MCP input with an empty retained environment and a fixed bare capability that disables later dynamic resolution.
-The worker itself starts lazily when an operation first needs it; preparing retained requirements can happen without launching a worker.
-An explicit restart starts its replacement eagerly, including when the session had not started a worker before.
+`ConsoleServer::new` captures configuration, the stable tool schema, recording, and a session handle without running discovery or preparation.
+`run` installs transport/EOF ownership before starting exactly one owned blocking warmup task.
+The current-thread Tokio runtime remains available for MCP initialization, tools/list, ping, inspection, cancellation, and input closure.
+No tool request triggers or duplicates warmup.
+Warmup discovers on the selected execution host, prepares the retained declaration, and uses the same generation-owned launch path as evaluation and replacement.
+Observers join the existing work.
+The initial requirement snapshot is `requirements: null`, `prepared: false`, `status: discovering`; discovery failure changes status to failed.
+Later snapshots contain only the committed declaration, never a candidate or installed-package inventory.
+Inspection uses its own short-held lock rather than the environment mutex held during resolution.
+
+Transport readiness, runtime initialization, and stateful admission are distinct.
+Worker `ready` commits IPC readiness first.
+The server takes an owned environment snapshot and releases the environment lock before spawning/waiting; it sends built-in `initialize` only after readiness commitment.
+Semantic resolver, output, graphics, and input callbacks are now admitted.
+The worker sends `initialized` after R, Python, optional bridge, and managed SQL initialization.
+The environment lock is never held across that initialization wait.
+Generation-checked callback commits retain environment-before-lifecycle lock order.
+Custom workers keep their original ready/evaluate contract and receive no initialization command.
+The lifecycle tracks warming, a retained startup failure, and whether stateful work has claimed the generation.
+Code and nonempty interactive input claim atomically with admission; inspection and polling do not.
+An unused speculative worker can be safely discarded for changed initial requirements: resolve a complete candidate, commit the declaration, retire the old generation, and launch its replacement.
+Failed candidate resolution preserves the accepted environment and worker.
+Once claimed, ordinary live-environment restrictions prohibit hidden destructive restart.
+Warmup does not occupy the public active-cell slot.
+An early code call occupies that slot exactly once and waits for initialization, with timeout/poll semantics covering that wait.
+Startup input is routed independently of the blocked initialization and can satisfy its hook.
+Startup failure is retained without automatic hook retries; explicit restart is the recovery path after confirmed retirement.
+EOF invalidates the generation, cancels discovery/resolvers and worker startup, confirms resource retirement, closes preparation, and joins the owned warmup even when no MCP initialization or send completed.
+Unconfirmed preparation or provider retirement prevents another launch.
 
 For each worker start, the server first constructs the relay target independently of sandboxing.
 The built-in target is the current executable's `worker-relay` command followed by the worker command line; a configured relay is followed directly by the same worker command line.
@@ -459,7 +420,7 @@ Docker Sandbox compute enforcement uses the direct relay command inside the VM a
 It applies the retained environment and configures piped input and output plus inherited error in either mode.
 In sandboxed mode, the frontend execs the runner with that environment and those streams; the runner establishes native enforcement and descendant observation before releasing the relay.
 The relay creates the worker sideband and standard streams, launches the worker, and forwards its startup events.
-The server admits the worker only after the required readiness exchange succeeds.
+The server commits transport readiness after the readiness exchange; built-in evaluations additionally await runtime initialization.
 If sandbox setup fails before relay readiness, the launcher writes the detailed infrastructure error to inherited standard error and exits; the server reports a stable relay-startup failure from the closed transport.
 
 ### Selected-target sessions and timing

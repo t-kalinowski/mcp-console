@@ -296,7 +296,7 @@ pub(crate) fn initialize(
         });
         Ok(())
     })?;
-    // Runtime initialization is demand-driven, always after worker readiness.
+    // Built-in initialization runs after transport readiness is committed.
     crate::worker::publish_python_activation(requirements)
 }
 

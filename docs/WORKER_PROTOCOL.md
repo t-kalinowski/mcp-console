@@ -96,7 +96,7 @@ Every message uses `kind` as its variant tag.
 Unknown message kinds, unknown fields, invalid UTF-8, malformed JSON, and fields of the wrong type are protocol violations.
 Nested request and manifest objects also reject unknown fields.
 
-`shutdown`, `ready`, `input_received`, `input_cancelled`, `python_prepared`, and `completed` are payload-free: their frames contain exactly `kind` and reject every additional field.
+`shutdown`, `initialize`, `initialized`, `ready`, `input_received`, `input_cancelled`, `python_prepared`, and `completed` are payload-free: their frames contain exactly `kind` and reject every additional field.
 
 Each sideband direction preserves frame order.
 There is no ordering guarantee between the two directions.
@@ -133,24 +133,26 @@ In particular, raw output written before a `completed` or preparation-result fra
 
 ### Server to worker
 
-| Frame                                                             | Required meaning                                                                          |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `{"kind":"evaluate","language":"r","source":"..."}`               | Evaluate one complete source string. `language` is `r`, `python`, or `sql`.               |
-| `{"kind":"prepare_r","library":"..."}`                            | Apply this resolved R library to the live R search path.                                  |
-| `{"kind":"r_resolved","library":"..."}`                           | Return the provisional library selected for the current `resolve_r` request.              |
-| `{"kind":"r_resolution_failed","failure":"host","message":"..."}` | Fail the current `resolve_r` request. `failure` is `host`, `interrupted`, or `operation`. |
-| `{"kind":"prepare_python","packages":["py-yaml12"]}`              | Prepare Python requirements through the common worker control path.                       |
-| `{"kind":"python_resolved","python":"..."}`                       | Return the interpreter path selected for the current `resolve_python` request.            |
-| `{"kind":"python_resolution_failed","message":"..."}`             | Return an ordinary failure for the current `resolve_python` request.                      |
-| `{"kind":"python_version_resolved","version":"3.12.11"}`          | Return the version selected for the current `resolve_python_version` request.             |
-| `{"kind":"python_version_resolution_failed","message":"..."}`     | Return an ordinary failure for the current version request.                               |
-| `{"kind":"shutdown"}`                                             | Exit without a sideband reply.                                                            |
+| Frame                                                             | Required meaning                                                                                                         |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `{"kind":"initialize"}`                                           | Initialize the built-in runtime plan after transport readiness is committed. Custom workers do not receive this command. |
+| `{"kind":"evaluate","language":"r","source":"..."}`               | Evaluate one complete source string. `language` is `r`, `python`, or `sql`.                                              |
+| `{"kind":"prepare_r","library":"..."}`                            | Apply this resolved R library to the live R search path.                                                                 |
+| `{"kind":"r_resolved","library":"..."}`                           | Return the provisional library selected for the current `resolve_r` request.                                             |
+| `{"kind":"r_resolution_failed","failure":"host","message":"..."}` | Fail the current `resolve_r` request. `failure` is `host`, `interrupted`, or `operation`.                                |
+| `{"kind":"prepare_python","packages":["py-yaml12"]}`              | Prepare Python requirements through the common worker control path.                                                      |
+| `{"kind":"python_resolved","python":"..."}`                       | Return the interpreter path selected for the current `resolve_python` request.                                           |
+| `{"kind":"python_resolution_failed","message":"..."}`             | Return an ordinary failure for the current `resolve_python` request.                                                     |
+| `{"kind":"python_version_resolved","version":"3.12.11"}`          | Return the version selected for the current `resolve_python_version` request.                                            |
+| `{"kind":"python_version_resolution_failed","message":"..."}`     | Return an ordinary failure for the current version request.                                                              |
+| `{"kind":"shutdown"}`                                             | Exit without a sideband reply.                                                                                           |
 
 ### Worker to server
 
 | Frame                                                                                                                                          | Required meaning                                                               |
 | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `{"kind":"ready"}`                                                                                                                             | Startup is complete.                                                           |
+| `{"kind":"ready"}`                                                                                                                             | IPC is ready; built-in runtime initialization follows.                         |
+| `{"kind":"initialized"}`                                                                                                                       | Complete built-in runtime initialization. Evaluation may now begin.            |
 | `{"kind":"console_output","data":"..."}`                                                                                                       | Publish ordinary console text.                                                 |
 | `{"kind":"console_diagnostic","data":"..."}`                                                                                                   | Publish diagnostic console text.                                               |
 | `{"kind":"image","data":"...","mime_type":"image/png"}`                                                                                        | Publish one base64-encoded image.                                              |
@@ -230,7 +232,14 @@ Startup text may use fd 1 or fd 2, but no semantic worker frame may precede `rea
 A second `ready` is a protocol violation.
 
 For the built-in worker, readiness confirms process services and command admission; it does not imply that R or Python has initialized.
-Interpreter startup runs on demand after readiness, so a fatal startup-hook failure follows ordinary worker-generation failure and replacement handling.
+After the server commits this readiness, it sends `{"kind":"initialize"}` to a built-in worker only.
+The worker initializes selected R, Python through its native owner, the optional reticulate bridge, and the managed SQL connection.
+It responds with `{"kind":"initialized"}` exactly once on success.
+Evaluations wait for that milestone.
+Startup can publish normal semantic output, plots, resolver callbacks, and input requests because transport readiness is already committed.
+Custom workers retain their original ready/evaluate contract: they need not implement either new built-in frame.
+Initialization does not occupy a user cell and never emits `completed`.
+A failure is retained for explicit restart after confirmed retirement; no queued cell is replayed.
 
 ### Evaluation
 
@@ -499,7 +508,7 @@ See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the cor
 
 The common worker import callback and optional R declaration projection use the existing `ResolvePython`, `PythonActivated`, and `PythonActivationFailed` exchanges.
 A candidate remains provisional until the current generation accepts its activation; a later import or cell error does not retract acceptance.
-The shared-import refactor leaves wire fields unchanged.
-Launch protocol version 7 uses shared preparation requests and the optional `resolve_python.request.initialized` field.
-It retains activation-failure receipts in preparation and idle contexts; preparation protocol version 5 is unchanged.
+The startup refactor adds the built-in-only initialize/initialized exchange after transport readiness.
+Launch protocol version 8 uses shared preparation requests and the optional `resolve_python.request.initialized` field.
+It retains activation-failure receipts in preparation and idle contexts; preparation protocol version 6 carries captured conversion metadata and host Python selection.
 R `.Call` registration changes are internal to the worker and its compiled-in bridge, not a remote protocol surface.

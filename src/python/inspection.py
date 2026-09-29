@@ -2,12 +2,15 @@
 
 import ctypes
 import json
+import importlib.metadata
+import os
+import struct
 import sys
 import sysconfig
 from pathlib import Path
 
 
-def describe() -> dict[str, str]:
+def describe() -> dict[str, object]:
     if sys.implementation.name != "cpython":
         raise RuntimeError("native embedding requires CPython")
 
@@ -84,7 +87,28 @@ def describe() -> dict[str, str]:
                 f"selected Python embedding library is missing {symbol}: {library}"
             ) from error
 
+    # Conversion metadata belongs to the same inspected identity. Do not run
+    # another interpreter in the worker or import optional packages to obtain it.
+    try:
+        distribution = importlib.metadata.distribution("numpy")
+    except importlib.metadata.PackageNotFoundError:
+        numpy = None
+    else:
+        numpy = {
+            "path": str(distribution.locate_file("numpy")),
+            "version": distribution.version,
+        }
+
     return {
+        "metadata": {
+            "base_executable": sys._base_executable,
+            "pythonpath": os.pathsep.join(sys.path),
+            "version": sys.version.replace("\n", " "),
+            "version_number": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "architecture": f"{struct.calcsize('P') * 8}bit",
+            "conda": (Path(sys.prefix) / "conda-meta").is_dir(),
+            "numpy": numpy,
+        },
         "executable": sys.executable,
         "libpython": str(library),
         "prefix": sys.prefix,

@@ -21,10 +21,14 @@ pub(super) enum Event<'a> {
     SessionStarted {
         session: &'a str,
         working_directory: &'a str,
-        dynamic_resolution: bool,
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        python_preparation: bool,
+        dynamic_resolution: Option<bool>,
+        python_preparation: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<&'a Value>,
+    },
+    EnvironmentDiscovered {
+        dynamic_resolution: bool,
+        python_preparation: bool,
         target: Option<&'a Value>,
     },
     TargetGeneration {

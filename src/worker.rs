@@ -25,10 +25,7 @@ pub(crate) use core::{
 #[cfg(unix)]
 pub(crate) use input::{PythonInput, read_python_input};
 #[cfg(unix)]
-pub(crate) use interrupt::{
-    acknowledge_python_interrupt, check_python_selection_interrupt, inspect_python,
-    install_python_interrupt,
-};
+pub(crate) use interrupt::{acknowledge_python_interrupt, install_python_interrupt};
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,7 +37,4 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(unix)]
-pub(crate) use r_integration::{
-    available as r_available, ensure_bridge, ensure_initialized as ensure_r,
-    initialized as r_initialized,
-};
+pub(crate) use r_integration::{available as r_available, ensure_bridge};

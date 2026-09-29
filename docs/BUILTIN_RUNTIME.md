@@ -24,7 +24,7 @@ A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned 
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
 Dynamic package preparation is disabled, and Docker Quarto projections likewise execute captured cells when rendered.
 They do not reproduce the remote filesystem when rendered locally.
-With R available, each worker generation creates these resources when needed:
+Each worker generation initializes its selected runtimes eagerly and creates the available resources:
 
 - one persistent R global environment;
 - one persistent Python `__main__` namespace embedded by Console, with reticulate supplying the R bridge; and
@@ -32,8 +32,20 @@ With R available, each worker generation creates these resources when needed:
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
 
-Worker readiness precedes interpreter initialization.
-A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
+MCP initialization and initial tool discovery do not wait for runtime discovery, dependency preparation, target provisioning, or interpreter startup.
+One session-owned warmup starts automatically with the server, before any `send`.
+The initial schema is stable and conditional: configured language filters and prepared-target restrictions are known immediately; actual capability is validated when an operation reaches the session.
+Within the worker, transport readiness precedes the explicit initialization operation.
+That operation initializes R, Python through the common native owner, the optional reticulate bridge, and the actual managed DuckDB connection, in that order, omitting genuinely absent runtimes.
+The first cell joins this work or uses the completed worker; it never starts a parallel initialization.
+Before code or interactive input is accepted, warm capacity is speculative.
+Initial requirements can replace it safely without an explicit restart.
+Inspection and polling do not claim state.
+After stateful admission, live-environment rules preserve objects and connections and changes that require replacement need explicit restart.
+Startup output, prompts, and plots are pending session output and can be collected by later send/poll calls.
+They are not a user cell.
+A startup failure leaves MCP available, retains diagnostics, and requires explicit restart after confirmed cleanup; it does not repeatedly rerun a failing hook.
+Unconfirmed retirement blocks replacement.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -123,7 +135,7 @@ Workspace modules and packages are importable without `PYTHONPATH`; the working-
 The executable directory is not added to the import path.
 The worker has private temporary storage, retired after startup failure, restart, and shutdown.
 With an absolute `HOME` at server startup, the managed DuckDB connection reads the captured shared version-and-platform extension cache; it keeps spill and stored-secret files in private worker storage.
-Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
+Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension during background warmup.
 If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
 Retirement does not delete resolver caches or the retained environment.
 
@@ -146,7 +158,9 @@ These targets retain one runtime selection with the immutable image/template ide
 Private worker storage holds SQL spill files and stored secrets, while preinstalled extension caches retain the target's usual location.
 See the [Docker](DOCKER.md#prepared-python-without-r) and [SBX](DOCKER_SANDBOX.md#prepared-python-without-r) examples.
 
-SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection that opens on the first SQL cell or `sql_connection()` call.
+SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection opened during initialization when DuckDB is installed.
+Missing optional DuckDB leaves Python available and reports an SQL capability error.
+Connection creation does not run a synthetic SQL cell.
 Python-only cells do not open it.
 `sql_connection()` returns the connection currently selected for SQL cells, including a user-owned DB-API connection selected with `console_sql_connection(connection)`.
 `console_sql_connection(None)` restores the same managed DuckDB connection and catalog without closing the user-owned connection.
@@ -369,39 +383,32 @@ Python cell tracebacks omit Console's private runtime frames while retaining use
 Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R and Python initialize on demand.
-An explicit or independently resolved Python selection can run while R remains uninitialized.
-Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
-Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
+R and Python initialize before evaluation, in that order when both are selected.
+Console uses one inspected Python identity, native bootstrap, evaluator, and requirement owner with and without R.
+Reticulate supplies conversion and event integration after native Python initialization.
 Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
-Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
-`RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
-Ordinary R evaluation does not initialize Python.
-An R cell, Python-side `r` access, or R-owned SQL initializes R.
-Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, display settings, and user redirections of `sys.stdout` and `sys.stderr`.
-Linux loader preparation happens before either interpreter starts.
-R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
-Different virtualenvs remain distinct selections even when their executables link to the same base Python.
-Deferred startup packages load within the initiating R or Python cell's graphics scope, before `tools:mcp-console` is attached at search position 2.
-Their selection includes `R_DEFAULT_PACKAGES` set by the installation's system `Renviron`.
-An unchanged `RETICULATE_PYTHON` selection retains that identity after Python changes the working directory or `PATH`.
-Late attachment preserves reticulate's `ephemeral` marker for Console-managed environments.
-Reconstructed reticulate configuration includes the running interpreter's active and base prefixes.
+Console applies the environment before Python hooks; bridge attachment does not replay activation or metadata subprocesses.
+`RETICULATE_PYTHONPATH`, when set, overrides PYTHONPATH for Python and its children.
+Linux loader preparation occurs before either interpreter exists.
+Supported R startup declarations and reticulate hooks run inside initialization, before loading Python through its common owner.
+Conflicting interpreter hints fail with a configuration/restart diagnostic.
+A first R cell can no longer select a different interpreter before Python starts; use launch configuration or an explicit requirements/restart transaction.
+R default packages include settings from system Renviron.
+Console defers their loading until its adapter is installed, preserves their hooks and plots through the startup output/graphics scope, and attaches tools:mcp-console afterward at search position 2.
+Reticulate metadata retains active/base prefixes and the managed environment's ephemeral marker.
+Reentrant startup hooks reach the same owner and do not initialize Python twice.
+R bootstrap changes the native process environment.
+Eager ordering keeps user cells from starting threads before R, but arbitrary native environment access during R startup remains unsafe.
+A GIL or Rust mutex does not coordinate external native threads.
 
-Late R initialization is not safe while another thread accesses the native process environment.
-R's bootstrap itself reads and changes environment variables; Console's serialized interpreter thread does not serialize those operations with Python or native background threads.
-Initialize R before starting background threads that may access the native process environment.
-
-Console activates live managed environments through its retained CPython library.
-The shared Python runtime sets NumPy and pandas display width to 200 columns when they retain their library defaults.
-A different width selected by a Python startup hook is preserved, as are subsequent user changes.
-Matplotlib setup also runs through the shared runtime; bridge setup does not reapply these defaults.
-An attachment failure before reticulate publishes its configuration can be retried with the same interpreter.
-Independent Python selection errors are reported before initialization; rejecting an unsupported interpreter leaves R and the worker available.
-Shared Python setup reports Python tracebacks without requiring the bridge.
-Interrupted module or import setup can retry on the same interpreter; startup hooks that leave incompatible interpreter identity require worker replacement.
-A failing later initialization hook requires restart before further bridge use; ordinary Python objects and evaluation remain available.
-A partially initialized R runtime also requires restart.
+Console activates live managed environments through its retained CPython library without replacing objects or selected connections.
+Shared module defaults set NumPy and pandas display width to 200 only when they retain library defaults.
+Existing startup-hook overrides and later user changes survive; Matplotlib setup and bridge attachment do not repeat defaults.
+Redirected streams and nested R/Python calls retain their existing behavior.
+Invalid explicitly selected installations fail startup rather than silently dropping a runtime.
+Missing optional bridge or DuckDB packages do not disable working peer interpreters or trigger unauthorized installation.
+Failed selected-runtime or installed-provider initialization retains its original diagnostic and requires explicit restart.
+It is not retried by a later code call.
 
 Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
 Binary buffers, native file descriptors, background threads, and fork children retain raw-stream behavior, including cached output streams and logging handlers.
@@ -483,7 +490,7 @@ A short wait can therefore return `[running; poll with an empty send]`; poll wit
 
 ## R and Python interoperability
 
-The two languages share reticulate's live bridge, attached on demand.
+The two languages share reticulate's live bridge, attached during initialization when installed.
 Python-side `r` access works without a preceding R cell:
 
 - Python reads R globals and calls R functions through `r.name`;
@@ -620,8 +627,9 @@ An ordinary automatic Python failure becomes an actionable `ModuleNotFoundError`
 [Requirements and environments](REQUIREMENTS.md) describes the request-specific effects.
 Worker, relay, and protocol failures are MCP tool errors and may stop and replace the worker.
 
-If initial lazy startup for a code-bearing `send` fails before the worker reaches `ready`, the call reports startup failure details without worker-loss or replacement notices, and its cell is not replayed.
-A later code-bearing `send` makes a fresh startup attempt for only its new cell; the server does not add replacement notices.
+Initial warmup failure is retained and reported by the next relevant operation.
+Pending output is delivered once; subsequent operations report the retained failure without replaying startup or the queued cell.
+Use explicit restart to retry after confirmed cleanup.
 
 When an established worker fails during a cell, the server does not run that cell again.
 The failing `send` retains available output and failure details, adds `[worker stopped: in-memory state lost]`, and starts one automatic replacement attempt.
@@ -636,7 +644,8 @@ The response then:
 The original `send` remains an MCP tool error even when it ends in `[idle]`; that notice means only that later cells can run in a fresh worker.
 After `[worker starting]`, poll with `send` without code or stdin until the replacement reaches `[idle]` or reports startup failure.
 Do not submit another cell while replacement startup is still active.
-The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
+If the bounded replacement attempt fails initialization, that failure is retained too.
+Explicit restart is required before submitting another cell.
 
 Small outputs retain their text and text/image ordering.
 Each complete tool result has an 8 KiB rendered UTF-8 text budget, including omission markers, preparation diagnostics, input prompts, errors, and lifecycle notices.

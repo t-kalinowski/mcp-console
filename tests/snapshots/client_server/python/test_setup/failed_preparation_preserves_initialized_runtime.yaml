@@ -1,0 +1,58 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: startup_marker <- 41L; cat(reticulate::py_config()$python)
+result:
+  content:
+    - type: text
+      text: <running Python>
+  isError: false
+---
+send:
+  python: raise AssertionError('failed preparation ran the cell')
+  requirements:
+    python:
+      - more-itertools<1,>=10
+result:
+  content:
+    - type: text
+      text: |-
+        managed Python resolution failed:
+        resolver input:
+        {
+          "python": "<running Python>",
+          "packages": [
+            "numpy",
+            "pandas",
+            "more-itertools<1,>=10"
+          ]
+        }
+        uv output:
+        × No solution found when resolving tool dependencies:
+          ╰─▶ you require more-itertools<1 and more-itertools>=10, which are
+              incompatible
+  isError: true
+---
+send:
+  r: |
+    stopifnot(reticulate::py_available(initialize = FALSE))
+    startup_marker + 1L
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  python: r.startup_marker + 1
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false

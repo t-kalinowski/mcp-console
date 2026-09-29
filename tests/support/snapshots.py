@@ -227,7 +227,12 @@ def check_recording(
         reference = root / initialization_reference
         references = [
             reference,
-            *sorted(reference.parent.glob(f"{reference.stem}.*.yaml")),
+            reference.with_suffix(".direct.yaml"),
+            *sorted(
+                path
+                for path in reference.parent.glob(f"{reference.stem}.*.yaml")
+                if path != reference.with_suffix(".direct.yaml")
+            ),
         ]
         if execution is not None:
             references = [

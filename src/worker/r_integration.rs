@@ -50,10 +50,7 @@ fn initialize(home: &std::path::Path) -> Result<(), String> {
     crate::python::configure_r_environment().map_err(|error| error.to_string())?;
     let runtime = Rc::new(embedded_r::Runtime::initialize().map_err(|error| error.to_string())?);
     RUNTIME.with(|slot| *slot.borrow_mut() = Some(runtime.clone()));
-    if core::cell_language().is_some_and(|language| !matches!(language, crate::cell::Language::Sql))
-    {
-        runtime.begin_graphics()?;
-    }
+    runtime.begin_graphics()?;
     crate::python::attach_r_adapter()?;
     crate::python::finish_r_startup(deferred)?;
     crate::sql::attach_r()?;
@@ -63,11 +60,13 @@ fn initialize(home: &std::path::Path) -> Result<(), String> {
 }
 
 pub(crate) fn ensure_bridge() -> Result<(), String> {
-    ensure_initialized()?;
+    if !initialized() {
+        return Err("R is unavailable in this session".into());
+    }
     if crate::python::attach_bridge()? {
         Ok(())
     } else {
-        Err("R/Python attachment did not complete; retry the operation".into())
+        Err("R/Python attachment did not complete; restart required".into())
     }
 }
 
@@ -137,21 +136,17 @@ impl Integration {
     }
 
     pub(super) fn evaluate_r(&self, source: String) -> Result<(), String> {
-        ensure_initialized()?;
-        runtime().unwrap().evaluate(source)
+        runtime()
+            .ok_or("R is unavailable in this session")?
+            .evaluate(source)
     }
 
     pub(super) fn prepare_r(
         &self,
         library: &str,
     ) -> Result<crate::r_environment::PreparationOutcome, String> {
-        if !initialized() {
-            // Library preparation must not initialize an unused interpreter.
-            unsafe { std::env::set_var("R_LIBS", library) };
-            return Ok(crate::r_environment::PreparationOutcome::Prepared {
-                library: library.into(),
-            });
-        }
-        runtime().unwrap().prepare(library)
+        runtime()
+            .ok_or("R is unavailable in this session")?
+            .prepare(library)
     }
 }

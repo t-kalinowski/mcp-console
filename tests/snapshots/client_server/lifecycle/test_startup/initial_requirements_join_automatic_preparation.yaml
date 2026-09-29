@@ -1,0 +1,109 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: stopifnot(requireNamespace('praise')); cat('initial cell ran once\n')
+  requirements:
+    r:
+      - praise
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |-
+        Loading required namespace: praise
+        initial cell ran once
+        [done]
+  isError: false

@@ -33,6 +33,8 @@ pub(super) struct WorkerEventDispatcher {
 }
 
 struct OperationState {
+    initialization: Option<bool>,
+    startup_evaluation: std::sync::Weak<Evaluation>,
     operation: Option<Operation>,
     failure: Option<String>,
     relay_exit_caused_failure: bool,
@@ -45,6 +47,7 @@ struct OperationState {
 struct OperationStateCell {
     state: Mutex<OperationState>,
     runtime_r_reply: Condvar,
+    initialization_changed: Condvar,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,9 +115,72 @@ pub(super) enum OperationResult {
 }
 
 impl WorkerOperationState {
+    pub(super) fn begin_initialization(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        state.ensure_available()?;
+        if state.initialization.is_some() {
+            return Err("worker initialization already started".into());
+        }
+        state.initialization = Some(false);
+        Ok(())
+    }
+
+    pub(super) fn wait_initialization(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        while state.initialization == Some(false) && state.failure.is_none() && !state.retiring {
+            state = self
+                .0
+                .initialization_changed
+                .wait(state)
+                .map_err(|_| "worker initialization lock poisoned")?;
+        }
+        if let Some(error) = &state.failure {
+            return Err(error.clone());
+        }
+        if state.retiring {
+            return Err("worker is retiring".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn observe_startup(
+        &self,
+        evaluation: &Arc<Evaluation>,
+        stdin: super::platform::StdinSender,
+    ) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.initialization == Some(true) {
+            return Ok(());
+        }
+        evaluation.attach_writer(stdin)?;
+        state.startup_evaluation = Arc::downgrade(evaluation);
+        if state.idle_input.is_some() {
+            evaluation.startup_input(true)?;
+        }
+        Ok(())
+    }
+
+    fn initializing(&self) -> bool {
+        self.lock()
+            .is_ok_and(|state| state.initialization == Some(false))
+    }
+
+    fn initialized(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.initialization != Some(false) {
+            return Err("unexpected worker initialization completion".into());
+        }
+        state.initialization = Some(true);
+        state.startup_evaluation = Default::default();
+        self.0.initialization_changed.notify_all();
+        Ok(())
+    }
+
     pub(super) fn new() -> Self {
         Self(Arc::new(OperationStateCell {
             state: Mutex::new(OperationState {
+                initialization: None,
+                startup_evaluation: Default::default(),
                 operation: None,
                 failure: None,
                 relay_exit_caused_failure: false,
@@ -124,6 +190,7 @@ impl WorkerOperationState {
                 retiring: false,
             }),
             runtime_r_reply: Condvar::new(),
+            initialization_changed: Condvar::new(),
         }))
     }
 
@@ -135,6 +202,11 @@ impl WorkerOperationState {
 
         let mut state = self.lock().map_err(Infrastructure)?;
         state.ensure_available().map_err(Infrastructure)?;
+        if state.initialization == Some(false) {
+            return Err(Busy(
+                "worker is initializing; finish startup before preparing requirements".into(),
+            ));
+        }
         if state.runtime_r_callback.is_some() {
             return Err(Busy(
                 "requirements were not prepared because an idle runtime R callback owns environment changes"
@@ -269,6 +341,7 @@ impl WorkerOperationState {
                 // failure into launcher-recovery evidence.
                 state.relay_exit_caused_failure = relay_exit;
             }
+            self.0.initialization_changed.notify_all();
             state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
             state.operation.take()
@@ -285,6 +358,7 @@ impl WorkerOperationState {
                 return;
             };
             state.retiring = true;
+            self.0.initialization_changed.notify_all();
             state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
             state
@@ -424,6 +498,9 @@ impl WorkerOperationState {
                 }
                 state.idle_input = Some(rendered.clone());
                 output.push_notice_line(format!("input requested: {rendered}"));
+                if let Some(evaluation) = state.startup_evaluation.upgrade() {
+                    evaluation.startup_input(true)?;
+                }
                 Ok(())
             }
         }
@@ -440,6 +517,9 @@ impl WorkerOperationState {
                 state.idle_input.take().ok_or_else(|| {
                     "worker reported received input without requesting it".to_string()
                 })?;
+                if let Some(evaluation) = state.startup_evaluation.upgrade() {
+                    evaluation.startup_input(false)?;
+                }
                 Ok(())
             }
         }
@@ -701,6 +781,7 @@ fn dispatch_worker_events(
                 if process_outcome.is_some() {
                     fail_dispatch(
                         &operation,
+                        &callbacks,
                         &mut startup,
                         &interrupts,
                         "worker relay sent an event after worker outcome".to_string(),
@@ -765,6 +846,7 @@ fn dispatch_worker_events(
                             if !intentional_shutdown && !semantic_failure && !retiring {
                                 fail_dispatch(
                                     &operation,
+                                    &callbacks,
                                     &mut startup,
                                     &interrupts,
                                     "worker sideband read failed: worker sideband closed"
@@ -802,7 +884,13 @@ fn dispatch_worker_events(
                             if retiring {
                                 retirement_failure.get_or_insert(message);
                             } else {
-                                fail_dispatch(&operation, &mut startup, &interrupts, message);
+                                fail_dispatch(
+                                    &operation,
+                                    &callbacks,
+                                    &mut startup,
+                                    &interrupts,
+                                    message,
+                                );
                                 semantic_failure = true;
                             }
                             Ok(())
@@ -854,14 +942,14 @@ fn dispatch_worker_events(
                 };
                 if let Err(error) = result {
                     candidates.clear();
-                    fail_dispatch(&operation, &mut startup, &interrupts, error);
+                    fail_dispatch(&operation, &callbacks, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
             }
             WorkerEvent::TransportFailure(error) => {
                 if !retiring {
                     candidates.clear();
-                    fail_dispatch(&operation, &mut startup, &interrupts, error);
+                    fail_dispatch(&operation, &callbacks, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
             }
@@ -891,7 +979,13 @@ fn dispatch_worker_events(
                     } else {
                         "worker relay stdout closed before retirement completed"
                     };
-                    fail_relay_exit(&operation, &mut startup, &interrupts, error.to_string());
+                    fail_relay_exit(
+                        &operation,
+                        &callbacks,
+                        &mut startup,
+                        &interrupts,
+                        error.to_string(),
+                    );
                     semantic_failure = true;
                 }
                 if retiring || semantic_failure || !intentional_shutdown {
@@ -910,6 +1004,7 @@ fn dispatch_worker_events(
     if !relay_closed && !retiring {
         fail_dispatch(
             &operation,
+            &callbacks,
             &mut startup,
             &interrupts,
             "worker event queue closed".to_string(),
@@ -923,6 +1018,7 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
+            | RelayEvent::Initialized
             | RelayEvent::InputRequested { .. }
             | RelayEvent::InputReceived
             | RelayEvent::InputCancelled
@@ -938,6 +1034,7 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
 
 fn fail_dispatch(
     operation: &WorkerOperationState,
+    callbacks: &WorkerCallbacks,
     startup: &mut Option<mpsc::SyncSender<Result<(), String>>>,
     interrupts: &super::platform::InterruptRequests,
     error: String,
@@ -945,18 +1042,25 @@ fn fail_dispatch(
     if let Some(startup) = startup.take() {
         let _ = startup.send(Err(error.clone()));
     }
+    if operation.initializing() {
+        callbacks.initialization_failed(&error);
+    }
     interrupts.fail(error.clone());
     operation.fail(error);
 }
 
 fn fail_relay_exit(
     operation: &WorkerOperationState,
+    callbacks: &WorkerCallbacks,
     startup: &mut Option<mpsc::SyncSender<Result<(), String>>>,
     interrupts: &super::platform::InterruptRequests,
     error: String,
 ) {
     if let Some(startup) = startup.take() {
         let _ = startup.send(Err(error.clone()));
+    }
+    if operation.initializing() {
+        callbacks.initialization_failed(&error);
     }
     interrupts.fail(error.clone());
     operation.fail_from_relay_exit(error);
@@ -983,6 +1087,10 @@ fn handle_semantic_event(
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
     match event {
+        RelayEvent::Initialized => {
+            operation.initialized()?;
+            callbacks.initialized()
+        }
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
             Route::Preparation | Route::Idle => {

@@ -31,9 +31,13 @@ For Docker Sandbox compute enforcement, describe the owned microVM, explicit sha
 Do not label it unsandboxed host execution or imply native policy equivalence, protected metadata within writable shares, or a frozen inherited policy.
 Describe controller recording paths separately from VM files; shared paths can expose controller records to the worker.
 
-For prepared Docker and SBX targets, derive available languages from target runtime discovery.
-Sans-R descriptions expose Python and enabled SQL, omit R, and describe the Console-owned SQL catalog without calling the environment managed.
-R-only descriptions expose R and SQL and omit Python cell instructions, cross-language access, and Python package guidance from both tool and field prose.
+The initial schema depends only on cheap configuration, including explicit language filters and known prepared-target restrictions.
+It never waits for target/runtime discovery or changes with warmup timing.
+Describe language, bridge, SQL, and managed preparation availability conditionally.
+Missing discovery does not prove absence; authoritative capability validation occurs when the operation reaches the session.
+Do not require clients to refresh an incomplete tool list.
+For prepared Docker and SBX targets, expose only requirements inspection and explain preinstalled environments.
+R-only and sans-R composition is validated after discovery without changing the initial language fields.
 Dependencies and extensions must come from the captured image/template; missing imports do not install packages.
 `requirements.action="get"` reports the retained declaration, not an inventory of preinstalled distributions.
 Describe rebuilding the image/template and starting a new server session separately from a plain worker restart that retains the interpreter and resets state.

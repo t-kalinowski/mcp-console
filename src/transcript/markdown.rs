@@ -118,6 +118,33 @@ impl QuartoWriter {
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
         let changed = match event {
             Event::SessionStarted { .. } => true,
+            Event::EnvironmentDiscovered {
+                dynamic_resolution,
+                python_preparation,
+                target,
+            } => {
+                self.dynamic_resolution = *dynamic_resolution;
+                self.r_requirements = if *dynamic_resolution {
+                    crate::worker_client::DEFAULT_R_REQUIREMENTS
+                        .iter()
+                        .map(|s| (*s).to_string())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                self.python_requirements = if *python_preparation {
+                    crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
+                } else if *dynamic_resolution {
+                    crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
+                } else {
+                    &[]
+                }
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect();
+                self.target = target.cloned();
+                true
+            }
             Event::PythonEnvironmentAccepted { packages } => {
                 self.python_requirements = packages.to_vec();
                 true
@@ -393,6 +420,17 @@ impl ProjectionWriter {
 
 fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), String> {
     match &envelope.event {
+        Event::EnvironmentDiscovered {
+            dynamic_resolution,
+            python_preparation,
+            target,
+        } => {
+            document.push_str("## Runtime discovery\n\n");
+            push_json(
+                document,
+                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "target": target }),
+            )
+        }
         Event::PythonEnvironmentAccepted { packages } => {
             document.push_str("## Accepted Python environment\n\n");
             push_json(document, &json!({ "packages": packages }))

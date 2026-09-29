@@ -1,0 +1,18 @@
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": null,
+          "prepared": false,
+          "status": "discovering"
+        }
+  structuredContent:
+    requirements: ~
+    prepared: false
+    status: discovering
+  isError: false

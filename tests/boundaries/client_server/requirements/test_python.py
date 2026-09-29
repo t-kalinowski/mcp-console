@@ -21,7 +21,7 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
 from support.processes import process_group_exists, stop_process_group
-from support.r import r_test_environment
+from support.r import r_test_environment, startup_declarations_client
 from support.events import Events
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, requires
@@ -100,10 +100,7 @@ def test_prepares_initial_python_requirements(
 def test_preserves_python_requirement_values(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
+    startup = code(r"""
         initial <- reticulate::py_require()
         stopifnot(
           identical(class(initial), "python_requirements"),
@@ -142,11 +139,7 @@ def test_preserves_python_requirement_values(
         detached$history[[1L]]$packages <- "changed"
         invisible(gc())
         stopifnot(identical(reticulate::py_require(), expected))
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    # fmt: r
-    r = code(r"""
+
         error <- tryCatch(
           reticulate::py_require(exclude_newer = "2026-02-01"),
           error = conditionMessage
@@ -190,13 +183,16 @@ def test_preserves_python_requirement_values(
           !reticulate::py_available(initialize = FALSE)
         )
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    return client.finish()
+    with startup_declarations_client(binary, execution, startup) as client:
+        client.send(
+            r="stopifnot(startup_checks_complete, reticulate::py_available(initialize = FALSE))"
+        )
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
+        return [{"startup_r": startup}, *client.finish()[3:]]
 
 
 @executions(DIRECT, SANDBOXED)
-def test_materializes_lazy_python_requirements_without_initializing(
+def test_retains_initialized_python_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -205,7 +201,7 @@ def test_materializes_lazy_python_requirements_without_initializing(
     r = code(r"""
         worker_pid <- Sys.getpid()
         reticulate::py_require("py-yaml12")
-        stopifnot(!reticulate::py_available(initialize = FALSE))
+        stopifnot(reticulate::py_available(initialize = FALSE))
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
@@ -215,7 +211,7 @@ def test_materializes_lazy_python_requirements_without_initializing(
     r = code(r"""
         stopifnot(
           identical(Sys.getpid(), worker_pid),
-          !reticulate::py_available(initialize = FALSE),
+          reticulate::py_available(initialize = FALSE),
           "py-yaml12" %in% reticulate::py_require()$packages
         )
         """)
@@ -223,12 +219,12 @@ def test_materializes_lazy_python_requirements_without_initializing(
     assert last_tool_text(client) == "[done]"
     client.send(control="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
     )
     # fmt: r
     r = code(r"""
         stopifnot(
-          !reticulate::py_available(initialize = FALSE),
+          reticulate::py_available(initialize = FALSE),
           "py-yaml12" %in% reticulate::py_require()$packages
         )
         """)
@@ -980,7 +976,7 @@ def test_layers_python_requirements_declared_by_r_packages(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_does_not_retain_package_requirements_before_python_initializes(
+def test_retains_package_requirements_after_eager_initialization(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -1017,8 +1013,8 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         client.send(r=r)
         assert last_tool_text(client) == "[done]"
 
-        # A lazy declaration is worker-owned until Python initializes or an
-        # explicit preparation materializes it.
+        # A successful package declaration activates immediately and survives
+        # worker loss through the shared requirement owner.
         # fmt: r
         r = code(r"""
             tools::pskill(Sys.getpid(), signal = 9L)
@@ -1041,7 +1037,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
             """)
         client.send(r=r)
         output = last_tool_text(client)
-        assert output == "[1] FALSE\n", repr(output)
+        assert output == "[1] TRUE\n", repr(output)
         return client.finish()
 
 

@@ -1,0 +1,46 @@
+---
+send:
+  r: stop('failed discovery ran code')
+result:
+  content:
+    - type: text
+      text: "[worker R home discovery failed with exit status: 22: ]"
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": null,
+          "prepared": false,
+          "status": "failed"
+        }
+  structuredContent:
+    requirements: ~
+    prepared: false
+    status: failed
+  isError: false
+---
+send:
+  r: stop('failed discovery ran code again')
+result:
+  content:
+    - type: text
+      text: "[worker R home discovery failed with exit status: 22: ]"
+  isError: true
+---
+send:
+  control: restart
+  r: stop('failed discovery ran code')
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [worker R home discovery failed with exit status: 22: ]
+        session restart did not complete; cell was not run
+  isError: true

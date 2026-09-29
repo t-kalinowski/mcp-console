@@ -13,6 +13,7 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.r import startup_declarations_client
 from support.records import Transcript
 from support.resolvers import (
     checkpoint_uv_environment,
@@ -26,37 +27,33 @@ from support.suites import run_this_suite
 def test_owns_managed_python_transitions(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        # Instrument the old planner, then exercise only public declarations,
-        # explicit preparation, and automatic imports through the console.
-        # fmt: r
-        r = code(r"""
-            namespace <- asNamespace("reticulate")
-            invisible(suppressMessages(base::trace(
-              "py_reqs_plan",
-              tracer = quote(stop("reticulate calculated the transition")),
-              print = FALSE,
-              where = namespace
-            )))
-            reticulate::py_require(c("numpy", "unused", "numpy"), action = "set")
-            reticulate::py_require("unused", action = "remove")
-            reticulate::py_require(python_version = ">=3.10, <4")
-            reticulate::py_require(exclude_newer = "2026-01-01")
-            reticulate::py_require(exclude_newer = NA_character_, action = "remove")
-            declared <- reticulate::py_require()
-            stopifnot(
-              identical(declared$packages, "numpy"),
-              identical(declared$python_version, c(">=3.10", "<4")),
-              identical(declared["exclude_newer"], list(exclude_newer = NULL)),
-              !reticulate::py_available(initialize = FALSE)
-            )
-            """)
-        client.send(r=r)
-        assert last_tool_text(client) == "[done]", last_tool_text(client)
+    startup = code(r"""
+        namespace <- asNamespace("reticulate")
+        invisible(suppressMessages(base::trace(
+          "py_reqs_plan",
+          tracer = quote(stop("reticulate calculated the transition")),
+          print = FALSE,
+          where = namespace
+        )))
+        reticulate::py_require(c("numpy", "unused", "numpy"), action = "set")
+        reticulate::py_require("unused", action = "remove")
+        reticulate::py_require(python_version = ">=3.10, <4")
+        reticulate::py_require(exclude_newer = "2026-01-01")
+        reticulate::py_require(exclude_newer = NA_character_, action = "remove")
+        declared <- reticulate::py_require()
+        stopifnot(
+          identical(declared$packages, "numpy"),
+          identical(declared$python_version, c(">=3.10", "<4")),
+          identical(declared["exclude_newer"], list(exclude_newer = NULL)),
+          !reticulate::py_available(initialize = FALSE)
+        )
+        """)
+    with startup_declarations_client(binary, execution, startup) as client:
+        client.send(r="stopifnot(startup_checks_complete)")
+        assert last_tool_text(client) == "[done]", client.transcript[-1]
         client.send(requirements={"python": ["numpy"]})
         assert last_tool_text(client) == "[prepared]"
-        client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")
+        client.send(r="stopifnot(reticulate::py_available(initialize = FALSE))")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(python="import yaml12; yaml12.__name__")
         assert last_tool_text(client) == (
@@ -161,20 +158,20 @@ def test_preserves_preparation_restoration_and_live_noops(
         environment, record = recording_uv_environment(
             directory, fail_requirement="py-yaml12"
         )
-        with McpClient(binary, execution.serve(), environment) as client:
-            client.initialize_and_list_tools()
-            # fmt: r
-            r = code(r"""
-                reticulate::py_require(
-                  "numpy",
-                  python_version = ">=3.10, <4",
-                  action = "set"
-                )
-                before <- reticulate::py_require()
-                stopifnot(!reticulate::py_available(initialize = FALSE))
-                """)
-            client.send(r=r)
-            assert last_tool_text(client) == "[done]", last_tool_text(client)
+        startup = code(r"""
+            reticulate::py_require(
+              "numpy",
+              python_version = ">=3.10, <4",
+              action = "set"
+            )
+            before <- reticulate::py_require()
+            stopifnot(!reticulate::py_available(initialize = FALSE))
+            """)
+        with startup_declarations_client(
+            binary, execution, startup, environment
+        ) as client:
+            client.send(r="stopifnot(startup_checks_complete)")
+            assert last_tool_text(client) == "[done]", client.transcript[-1]
             failed = client.send(requirements={"python": ["py-yaml12"]})
             assert failed["isError"] is True, failed
             error = failed["content"][0]["text"]
@@ -183,7 +180,7 @@ def test_preserves_preparation_restoration_and_live_noops(
             r = code(r"""
                 stopifnot(
                   identical(reticulate::py_require(), before),
-                  !reticulate::py_available(initialize = FALSE)
+                  reticulate::py_available(initialize = FALSE)
                 )
                 """)
             client.send(r=r)
@@ -355,7 +352,7 @@ def test_preserves_activation_interrupt_conditions(
             before <- reticulate::py_require()
             namespace <- asNamespace("reticulate")
             invisible(suppressMessages(base::trace(
-              "python_config_impl",
+              "clean_version",
               tracer = quote(stop(structure(
                 list(message = "activation interrupted", call = NULL),
                 class = c("interrupt", "condition")

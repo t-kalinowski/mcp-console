@@ -3,6 +3,9 @@ worker:
   kind: ready
 ---
 relay:
+  kind: initialize
+---
+relay:
   kind: evaluate
   language: r
   source: |
@@ -10,6 +13,9 @@ relay:
     stopifnot(nzchar(python))
     reticulate::use_python(python, required = TRUE)
     suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
+---
+worker:
+  kind: initialized
 ---
 worker:
   kind: completed

@@ -9,6 +9,7 @@ use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 struct Coordinator {
+    initialized: bool,
     writer: crate::sideband::Writer,
     r: Integration,
     python: crate::python::Runtime,
@@ -25,12 +26,8 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
 
 fn run_session() -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
-        crate::local_runtime::WorkerSelection {
-            r: true,
-            python: None,
-        },
-    );
+    let selection = crate::local_runtime::Selection::from_environment()?
+        .ok_or("worker launch did not supply a complete runtime selection")?;
     interrupt::normalize_signal()?;
     let r_home = selection.r.then(crate::local_runtime::r_home).transpose()?;
     #[cfg(target_os = "linux")]
@@ -48,6 +45,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;
     let mut coordinator = Coordinator {
+        initialized: false,
         writer,
         r,
         python,
@@ -106,7 +104,39 @@ impl Coordinator {
         }
 
         match message {
+            ServerMessage::Initialize => {
+                if self.initialized {
+                    return Err(io::Error::other("runtime initialization already completed").into());
+                }
+                // Startup owns graphics and managed input without a user cell.
+                // R opens this scope before loading its default packages.
+                let result = (|| {
+                    if crate::worker::r_available() {
+                        super::r_integration::ensure_initialized()?;
+                    }
+                    self.python.initialize()?;
+                    if crate::worker::r_available() && crate::python::bridge_available()? {
+                        super::r_integration::ensure_bridge()?;
+                    }
+                    self.sql.initialize()?;
+                    Ok::<(), String>(())
+                })();
+                self.r.finish_graphics()?;
+                finish_console_stdin_operation()?;
+                result.map_err(io::Error::other)?;
+                if core::is_shutting_down() {
+                    return Ok(false);
+                }
+                if let Some(message) = take_worker_failure() {
+                    return Err(io::Error::other(message).into());
+                }
+                self.initialized = true;
+                self.writer.send(&WorkerMessage::Initialized)?;
+            }
             ServerMessage::Evaluate { language, source } => {
+                if !self.initialized {
+                    return Err(io::Error::other("runtime initialization has not completed").into());
+                }
                 self.r.check_interrupts();
                 let result = evaluate_cell(
                     Cell { language, source },
@@ -226,8 +256,6 @@ fn evaluate_cell(
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {
-        // Runtime startup belongs to this cell too. A late R startup begins
-        // graphics when it installs its runtime, before loading packages.
         core::begin_cell(cell.language);
         // Python can enter R and create plots too. SQL retains its exclusion.
         let graphics = !matches!(cell.language, Language::Sql);

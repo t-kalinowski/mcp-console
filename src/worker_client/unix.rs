@@ -716,6 +716,18 @@ fn collected_errors(errors: Vec<String>) -> Result<(), String> {
 }
 
 impl Worker {
+    pub(super) fn initialize(&mut self) -> Result<(), SendFailure> {
+        self.operation.begin_initialization()?;
+        self.relay
+            .commands
+            .send(RelayCommand::Initialize)
+            .map_err(|error| self.startup_failure(error))
+    }
+
+    pub(super) fn wait_initialization(&self) -> Result<(), String> {
+        self.operation.wait_initialization()
+    }
+
     pub(super) fn reserve_environment_preparation(
         &self,
     ) -> Result<
@@ -1161,6 +1173,29 @@ impl ShutdownAcceptance {
 }
 
 impl WorkerShutdownHandle {
+    pub(super) fn wait_initialization(&self) -> Result<(), String> {
+        self.operation.wait_initialization()
+    }
+
+    pub(super) fn observe_startup(
+        &self,
+        evaluation: &Arc<super::Evaluation>,
+    ) -> Result<(), String> {
+        self.operation
+            .observe_startup(evaluation, StdinSender(self.commands.clone()))
+    }
+
+    pub(super) fn idle_response_snapshot(
+        &self,
+        output: &super::OutputTape,
+    ) -> Result<super::IdleResponseSnapshot, String> {
+        self.operation.idle_response_snapshot(output)
+    }
+
+    pub(super) fn write_stdin(&self, stdin: String) -> Result<(), String> {
+        StdinSender(self.commands.clone()).send(stdin)
+    }
+
     pub(super) fn interrupt(&self) -> Result<(), String> {
         self.interrupts.request(&self.commands)
     }

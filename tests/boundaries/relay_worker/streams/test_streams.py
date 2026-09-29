@@ -143,7 +143,7 @@ thread log
         == "thread stderr\nthread log\n"
     )
     assert all(
-        event["worker"]["kind"] in {"ready", "completed"}
+        event["worker"]["kind"] in {"ready", "initialized", "completed"}
         for event in transcript
         if "worker" in event
     )
@@ -283,7 +283,8 @@ parent log
     assert "".join(event.get("stderr", "") for event in transcript) == stderr
     worker = [event["worker"] for event in transcript if "worker" in event]
     assert all(
-        event["kind"] in {"ready", "completed", "console_output", "console_diagnostic"}
+        event["kind"]
+        in {"ready", "initialized", "completed", "console_output", "console_diagnostic"}
         for event in worker
     ), worker
     for kind, expected in (

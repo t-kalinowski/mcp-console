@@ -13,7 +13,6 @@ static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecD
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static CELL_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
-
 pub(super) fn begin_cell(language: Language) {
     *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = Some(language);
 }
@@ -203,7 +202,7 @@ fn resolve_python_candidate(
             mark_shutting_down();
             Err("worker is shutting down".to_string())
         }
-        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+        ServerMessage::Initialize | ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
             "worker received an evaluation while resolving Python".to_string(),
         )),
         ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
@@ -260,7 +259,8 @@ pub(crate) fn resolve_r(
         | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
             "worker received a Python resolver response while resolving R".to_string(),
         )),
-        ServerMessage::Evaluate { .. }
+        ServerMessage::Initialize
+        | ServerMessage::Evaluate { .. }
         | ServerMessage::PreparePython { .. }
         | ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
             "worker received an operation while resolving R".to_string(),
@@ -287,7 +287,7 @@ pub(crate) fn resolve_python_version(
             mark_shutting_down();
             Err("worker is shutting down".to_string())
         }
-        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+        ServerMessage::Initialize | ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
             "worker received an evaluation while resolving a Python version".to_string(),
         )),
         ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
@@ -315,7 +315,8 @@ fn receive_resolver_message() -> Result<ServerMessage, String> {
     loop {
         let message = receive_server_message()?;
         match message {
-            ServerMessage::Evaluate { .. }
+            ServerMessage::Initialize
+            | ServerMessage::Evaluate { .. }
             | ServerMessage::PreparePython { .. }
             | ServerMessage::PrepareR { .. } => queue_server_message(message)?,
             _ => return Ok(message),

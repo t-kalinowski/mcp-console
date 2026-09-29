@@ -26,7 +26,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 5, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
     preparation_frame(
         {
             "Completed": {
@@ -42,8 +42,15 @@ if "Open" in bootstrap:
             }
         }
     )
-    length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
-    assert json.loads(sys.stdin.buffer.read(length)) == "Close"
+    while True:
+        length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
+        command = json.loads(sys.stdin.buffer.read(length))
+        if command == "Close":
+            break
+        assert "Control" in command, command
+        preparation_frame(
+            {"Controlled": {"id": command["Control"]["id"], "result": {"Ok": False}}}
+        )
     preparation_frame("Closed")
     sys.exit(0)
 with log.open("a") as output:
@@ -56,7 +63,7 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(1, {"version": 999 if mode == "incompatible" else 7, "build": bootstrap["build"]})
+frame(1, {"version": 999 if mode == "incompatible" else 8, "build": bootstrap["build"]})
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
@@ -64,7 +71,9 @@ for line in sys.stdin.buffer:
     command = json.loads(line)
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
-    if command["kind"] == "evaluate":
+    if command["kind"] == "initialize":
+        frame(2, {"kind": "initialized"})
+    elif command["kind"] == "evaluate":
         if mode == "lost":
             sys.exit(255)
         if mode == "resolver":

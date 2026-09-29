@@ -752,8 +752,13 @@ def _mcp_console_configure_native_child_environment(
     configuration: str,
     _json=_json,
     _os=_os,
+    _sys=_sys,
 ) -> None:
     expected = _json.loads(configuration)
+    # activate_this.py updates prefix, but does not update exec_prefix. Keep
+    # the complete inspected virtualenv identity in sync with child Python.
+    for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
+        setattr(_sys, name, expected[name])
     executable = expected["embedding"]["python"]
     directory = _os.path.dirname(executable)
     inherited = _os.environ.get("PATH", "")

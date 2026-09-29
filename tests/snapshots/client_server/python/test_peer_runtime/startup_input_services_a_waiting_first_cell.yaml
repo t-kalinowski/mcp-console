@@ -1,0 +1,21 @@
+---
+send:
+  stdin: |
+    answer
+result:
+  content:
+    - type: text
+      text: |
+        startup received: answer
+        [output produced while idle]
+        first cell ran
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false

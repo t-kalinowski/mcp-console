@@ -762,6 +762,15 @@ mod platform {
                             }
                         };
                         match command {
+                            RelayCommand::Initialize => {
+                                if sideband
+                                    .send(SidebandWrite::Message(ServerMessage::Initialize))
+                                    .is_err()
+                                {
+                                    failures.report("worker sideband writer stopped".to_string());
+                                    return;
+                                }
+                            }
                             RelayCommand::Evaluate { language, source } => {
                                 if sideband
                                     .send(SidebandWrite::Message(ServerMessage::Evaluate {

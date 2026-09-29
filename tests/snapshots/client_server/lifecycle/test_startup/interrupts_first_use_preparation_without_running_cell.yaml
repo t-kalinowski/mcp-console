@@ -18,8 +18,18 @@ send:
 result:
   content:
     - type: text
-      text: "[R package resolution failed with exit status: 130: ]"
+      text: "[worker startup interrupted]"
   isError: true
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [worker starting]
+  isError: false
 ---
 send:
   r: exists("startup_cell_ran", inherits = FALSE)

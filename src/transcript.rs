@@ -30,8 +30,8 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
-    dynamic_resolution: bool,
-    python_preparation: bool,
+    dynamic_resolution: Option<bool>,
+    python_preparation: Option<bool>,
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
@@ -65,13 +65,18 @@ pub(crate) struct Artifact {
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(std::env::current_dir(), dynamic_resolution, false, None)
+        Self::with_target(
+            std::env::current_dir(),
+            Some(dynamic_resolution),
+            Some(false),
+            None,
+        )
     }
 
     pub(crate) fn with_target(
         working_directory: std::io::Result<PathBuf>,
-        dynamic_resolution: bool,
-        python_preparation: bool,
+        dynamic_resolution: Option<bool>,
+        python_preparation: Option<bool>,
         target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
@@ -113,6 +118,27 @@ impl Transcript {
                 Event::TargetGeneration {
                     container_id,
                     sandbox,
+                },
+                Utc::now(),
+            )
+        });
+    }
+
+    pub(crate) fn environment_discovered(
+        &self,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        target: Option<serde_json::Value>,
+    ) {
+        self.update(|state| {
+            state.dynamic_resolution = Some(dynamic_resolution);
+            state.python_preparation = Some(python_preparation);
+            state.target = target.clone();
+            state.materialize()?.append(
+                Event::EnvironmentDiscovered {
+                    dynamic_resolution,
+                    python_preparation,
+                    target: target.as_ref(),
                 },
                 Utc::now(),
             )
@@ -285,8 +311,8 @@ impl TranscriptState {
 impl ActiveTranscript {
     fn create(
         working_directory: &Path,
-        dynamic_resolution: bool,
-        python_preparation: bool,
+        dynamic_resolution: Option<bool>,
+        python_preparation: Option<bool>,
         target: Option<&serde_json::Value>,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
@@ -370,8 +396,8 @@ impl ActiveTranscript {
                 markdown,
                 quarto_path,
                 working_directory,
-                dynamic_resolution,
-                python_preparation,
+                dynamic_resolution.unwrap_or(false),
+                python_preparation.unwrap_or(false),
                 target,
             ))
         })();

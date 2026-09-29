@@ -114,7 +114,6 @@ struct PythonApi {
 enum Interpreter {
     Uninitialized,
     Initializing,
-    External,
     // PyEval_SaveThread's main-thread state, retained until process exit.
     RustOwned { saved_thread: Option<usize> },
 }
@@ -164,17 +163,14 @@ pub(super) fn initialized_selection() -> Result<Option<super::NativePython>, Str
         .lock()
         .map_err(|_| "Python shared library state is unavailable")?;
     Ok(slot.as_ref().and_then(|library| {
-        matches!(
-            library.interpreter,
-            Interpreter::RustOwned { .. } | Interpreter::External
-        )
-        .then(|| {
-            library
-                .configuration
-                .as_ref()
-                .map(|config| config.selected.clone())
-        })
-        .flatten()
+        matches!(library.interpreter, Interpreter::RustOwned { .. })
+            .then(|| {
+                library
+                    .configuration
+                    .as_ref()
+                    .map(|config| config.selected.clone())
+            })
+            .flatten()
     }))
 }
 
@@ -210,16 +206,13 @@ pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String>
         // SAFETY: The resolved function has no preconditions.
         if unsafe { (library.api.is_initialized)() } != 0 {
             if library.interpreter == Interpreter::Uninitialized {
-                library.interpreter = Interpreter::External;
+                return Err("Python was initialized outside Console's runtime owner".into());
             }
             library.ensure_configuration(selected)?;
             return Ok(matches!(library.interpreter, Interpreter::RustOwned { .. }));
         }
         match library.interpreter {
             Interpreter::Uninitialized => {}
-            Interpreter::External => {
-                return Err("externally owned Python interpreter was finalized".to_string());
-            }
             Interpreter::RustOwned { .. } => {
                 return Err("Rust-owned Python interpreter was finalized".to_string());
             }
@@ -597,6 +590,10 @@ pub(super) fn use_r_sql() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
 }
 
+pub(super) fn initialize_managed_sql() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"initialize_managed_connection"))
+}
+
 pub(super) fn configure_native_sql() -> Result<(), String> {
     api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"enable_native"))
 }
@@ -633,8 +630,7 @@ pub(super) fn finish_initialization() -> Result<(), String> {
             Interpreter::Initializing => {
                 return Err("Python interpreter initialization is incomplete".to_string());
             }
-            Interpreter::External
-            | Interpreter::RustOwned {
+            Interpreter::RustOwned {
                 saved_thread: Some(_),
             } => return Ok(()),
             Interpreter::RustOwned { saved_thread: None } => {}
@@ -701,9 +697,8 @@ fn ensure_loaded(path: &Path) -> Result<(), String> {
 
 impl LoadedLibrary {
     fn open(path: PathBuf) -> Result<Self, String> {
-        // SAFETY: The selected path comes from reticulate's interpreter
-        // discovery. Global, eager loading exposes the CPython API before
-        // either runtime initializes the interpreter.
+        // SAFETY: The path was inspected by the execution-host preparation
+        // owner. Global loading exposes the API before native initialization.
         let flags = libc::RTLD_NOW | libc::RTLD_GLOBAL;
         let library = unsafe { libloading::os::unix::Library::open(Some(path.as_os_str()), flags) }
             .map_err(|error| {
@@ -720,7 +715,7 @@ impl LoadedLibrary {
         let interpreter = if unsafe { (api.is_initialized)() } == 0 {
             Interpreter::Uninitialized
         } else {
-            Interpreter::External
+            return Err("Python was initialized outside Console's runtime owner".into());
         };
         Ok(Self {
             path,
@@ -749,18 +744,14 @@ impl LoadedLibrary {
             return Err("cannot attach to Python before it is initialized".to_string());
         }
         if self.interpreter == Interpreter::Uninitialized {
-            self.interpreter = Interpreter::External;
+            return Err("Python was initialized outside Console's runtime owner".into());
         }
         Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }))
     }
 
     fn ensure_configuration(&mut self, selected: &super::NativePython) -> Result<(), String> {
         let Some(configuration) = self.configuration.as_ref() else {
-            // Retain the observed identity when attaching to an interpreter
-            // initialized before Console installed its startup adapter. Its
-            // environment and thread-state ownership are already established.
-            self.configuration = Some(Configuration::new(selected)?);
-            return Ok(());
+            return Err("Python has no Console-owned selection".into());
         };
         if &configuration.selected == selected {
             return Ok(());

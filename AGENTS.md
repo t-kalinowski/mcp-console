@@ -247,10 +247,16 @@ Keep these invariants intact:
   Common Python module hooks and reached-import resolution do not use an R callback.
   Idle tool preparation, reached imports, and R declarations share the Console requirement and activation owner; the R adapter retains declaration representation and conditions.
   The Python facade retains the optional adapter after R initialization; it owns attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
-  Both interpreters initialize on demand on the same serialized thread.
-  An explicit or host-resolved Python selection starts without R; unresolved R-side selection hints require R.
-  R cells, Python-side R access, and R-owned SQL initialize R.
-  Late bridge attachment uses the running Python identity and preserves its state.
+  Normal startup initializes selected R, Python, the optional bridge, and the actual managed SQL connection in that order on the same serialized thread.
+  Configuration-only MCP construction and stable conditional schema precede owned background discovery and preparation.
+  Recording and cancellation ownership must be installed before warmup starts.
+  Transport Ready/commit precedes built-in Initialize/Initialized; environment snapshots release callback-needed locks before waiting.
+  Custom workers retain the original contract.
+  Code and interactive input claim a generation atomically with admission.
+  Unused warm capacity can be replaced for initial requirements; polling and inspection do not claim it.
+  Failed startup is retained for explicit recovery after confirmed cleanup.
+  Complete launch plans distinguish genuinely absent Python from pending discovery.
+  Reticulate startup hooks use the authoritative native selection, and conversion metadata is captured on the execution host without worker subprocess inspection.
   Sans-R defaults require uv on the startup PATH and an absolute HOME for the shared DuckDB extension cache; top-level `python` selects an existing environment without invoking uv.
   Managed R-backed and sans-R sessions prepare SQLite as a default DuckDB extension on the execution host; exact declaration replacements can remove it, and reset restores it.
   Managed environments support explicit prestart/restart preparation, idle Python and DuckDB additions, and resolution at reached missing Python imports through shared native activation, with the accepted manifest and launch configuration committed together.

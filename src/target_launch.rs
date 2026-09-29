@@ -18,8 +18,8 @@ pub(crate) mod transfer;
 
 // v7 uses one package-preparation request for every runtime composition and
 // permits prepared R-only targets. The host preparation protocol is unchanged.
-pub(crate) const VERSION: u32 = 7;
-pub(crate) const SSH_VERSION: u32 = 7;
+pub(crate) const VERSION: u32 = 8;
+pub(crate) const SSH_VERSION: u32 = 8;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;

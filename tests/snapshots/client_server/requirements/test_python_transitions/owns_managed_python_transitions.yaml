@@ -2,26 +2,7 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: |
-    namespace <- asNamespace("reticulate")
-    invisible(suppressMessages(base::trace(
-      "py_reqs_plan",
-      tracer = quote(stop("reticulate calculated the transition")),
-      print = FALSE,
-      where = namespace
-    )))
-    reticulate::py_require(c("numpy", "unused", "numpy"), action = "set")
-    reticulate::py_require("unused", action = "remove")
-    reticulate::py_require(python_version = ">=3.10, <4")
-    reticulate::py_require(exclude_newer = "2026-01-01")
-    reticulate::py_require(exclude_newer = NA_character_, action = "remove")
-    declared <- reticulate::py_require()
-    stopifnot(
-      identical(declared$packages, "numpy"),
-      identical(declared$python_version, c(">=3.10", "<4")),
-      identical(declared["exclude_newer"], list(exclude_newer = NULL)),
-      !reticulate::py_available(initialize = FALSE)
-    )
+  r: stopifnot(startup_checks_complete)
 result:
   content:
     - type: text
@@ -39,7 +20,7 @@ result:
   isError: false
 ---
 send:
-  r: stopifnot(!reticulate::py_available(initialize = FALSE))
+  r: stopifnot(reticulate::py_available(initialize = FALSE))
 result:
   content:
     - type: text

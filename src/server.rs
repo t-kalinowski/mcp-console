@@ -1,5 +1,4 @@
 mod execution;
-mod python_only;
 use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -140,8 +139,8 @@ struct SendArguments {
     /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
     /// polling or stdin-only calls.
     python: Option<String>,
-    /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
-    /// active by default and keeps a persistent catalog. A result with columns returns a bounded
+    /// One complete SQL cell evaluated through the active connection. When its provider is installed,
+    /// managed DuckDB is initialized during startup and keeps a persistent catalog. A result with columns returns a bounded
     /// preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
     /// state, and a DuckDB table or view with the same name takes precedence. A user-selected R
     /// connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
@@ -166,9 +165,10 @@ struct SendArguments {
     /// action=get returns a read-only snapshot, including Python constraints and separate runtime
     /// infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
     /// manifest is in structuredContent.requirements even when it exceeds the text preview limit.
+    /// During discovery, unknown requirements are null; this is not an installed-package inventory.
     /// action=add is the default; action=set replaces the whole declaration without injecting defaults;
-    /// action=reset restores startup defaults. Changed replacements require control="restart" with a
-    /// live worker. Empty set means no optional requirements; bare {} is invalid.
+    /// action=reset restores startup defaults. Before user code or nonempty input is admitted, an
+    /// unused warm worker can be replaced automatically. Later replacements require control="restart". Empty set means no optional requirements; bare {} is invalid.
     /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
     /// that cell. With `control = "restart"`, they are part of the restart transaction, with or
     /// without a cell. Only add can accompany interrupt, and only when a cell follows.
@@ -201,8 +201,8 @@ struct SendArguments {
     /// when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
     /// background work, then poll with an empty `send`.
     ///
-    /// Defaults to 60,000 milliseconds. The wait starts after cell dispatch or attachment to an active
-    /// evaluation and includes one automatic worker replacement attempt. It does not cancel resolution
+    /// Defaults to 60,000 milliseconds. The wait starts when a cell is admitted or a call attaches to
+    /// its evaluation, including pending background startup and one automatic replacement attempt. It does not cancel resolution
     /// or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
     /// before dispatch and may make the complete call take longer. This value does not limit standalone
     /// preparation. Automatic R and Python import
@@ -305,6 +305,23 @@ impl ConsoleServer {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
         let policy = sandbox_settings.clone();
+        // Public metadata describes configured placement, not a discovery result.
+        let metadata = target.as_ref().map(|(target, _)| {
+            let mut value = serde_json::to_value(target).expect("target configuration");
+            value["provider"] =
+                if matches!(target.compute, crate::settings::Compute::DockerSandbox(_)) {
+                    "compute"
+                } else {
+                    "native"
+                }
+                .into();
+            value
+        });
+        let prepared = metadata
+            .as_ref()
+            .and_then(|target| target.pointer("/compute/kind"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|kind| matches!(*kind, "docker" | "docker_sandbox"));
         let worker = if let Some((target, roots)) = target {
             crate::worker_client::Client::target(
                 target,
@@ -326,35 +343,16 @@ impl ConsoleServer {
                 }
             }
         };
-        let languages = Languages {
-            r: languages.r && !worker.python_only(),
-            python: languages.python && worker.python_available(),
-            ..languages
-        };
-        let target = worker.target_metadata();
-        let dynamic_resolution = worker.dynamic_resolution();
+        let (dynamic_resolution, python_preparation) = worker.known_preparation();
         let transcript = crate::transcript::Transcript::with_target(
             recording_directory,
             dynamic_resolution,
-            worker.python_preparation(),
-            target.clone(),
+            python_preparation,
+            metadata.clone(),
         );
         worker.record_with(transcript.clone());
-        let security = execution::description(&policy, no_sandbox, target.as_ref());
-        let tool_router = Self::configured_tool_router(
-            languages,
-            &worker,
-            &security,
-            target
-                .as_ref()
-                .and_then(|target| target.pointer("/transport/kind"))
-                .and_then(serde_json::Value::as_str)
-                == Some("ssh"),
-            target
-                .as_ref()
-                .and_then(|target| target.pointer("/compute/kind"))
-                .and_then(serde_json::Value::as_str),
-        );
+        let security = execution::description(&policy, no_sandbox, metadata.as_ref());
+        let tool_router = Self::configured_tool_router(languages, &security, prepared);
         Ok(Self {
             worker,
             transcript,
@@ -366,14 +364,10 @@ impl ConsoleServer {
 
     fn configured_tool_router(
         languages: Languages,
-        worker: &crate::worker_client::Client,
         security: &str,
-        remote: bool,
         prepared: Option<&str>,
     ) -> ToolRouter<Self> {
-        let dynamic_resolution = worker.dynamic_resolution();
-        let python_only = worker.python_only();
-        let python_preparation = worker.python_preparation();
+        let dynamic_resolution = prepared.is_none();
         let mut router = Self::tool_router();
         let send = router
             .map
@@ -430,15 +424,7 @@ impl ConsoleServer {
                 properties.shift_remove(field);
             }
         }
-        if python_only {
-            python_only::configure(
-                description,
-                properties,
-                python_preparation,
-                languages.sql,
-                remote,
-            );
-        }
+        description.push_str("\n\nThe session prepares automatically in the background. Runtime capabilities are discovered on the execution host; the listed language fields do not guarantee that an interpreter is installed. R/Python sharing requires both runtimes and their bridge. Managed DuckDB requires its provider packages. Each operation validates the session's actual capabilities. Requirements inspection reports the known declaration and preparation status, not an installed-package inventory.");
         let mut guidance = String::new();
         if languages.sql {
             guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");
@@ -464,12 +450,9 @@ impl ConsoleServer {
         guidance.truncate(guidance.trim_end().len());
         if languages.sql {
             guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
-            if dynamic_resolution || python_preparation {
-                if worker.has_default_duckdb_extension("sqlite") {
-                    guidance.push_str("Managed defaults include SQLite; ");
-                } else {
-                    guidance.push_str(r#"Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}` before use; "#);
-                }
+            if dynamic_resolution {
+                guidance
+                    .push_str("When managed preparation is available, defaults include SQLite; ");
                 guidance.push_str(r#"attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
             } else {
                 guidance.push_str("For SQLite, use a preinstalled sqlite extension and attach the database read-only. ");
@@ -482,9 +465,9 @@ impl ConsoleServer {
             1,
         );
         if let Some(kind @ ("docker" | "docker_sandbox")) = prepared {
-            execution::configure_prepared(description, properties, kind, python_only);
+            execution::configure_prepared(description, properties, kind, false);
         }
-        if !dynamic_resolution && !python_preparation {
+        if !dynamic_resolution {
             let requirements = properties
                 .get_mut("requirements")
                 .expect("requirements schema");
@@ -803,7 +786,7 @@ pub async fn run(
         tokio::io::stdout(),
         server.deliveries.clone(),
     );
-    let service = server.serve(transport).await?;
+    worker.warmup().map_err(std::io::Error::other)?;
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
             .await
@@ -817,7 +800,14 @@ pub async fn run(
         Ok::<(), String>(())
     };
 
-    let (result, shutdown) = tokio::join!(service.waiting(), shutdown);
+    let service = async move {
+        let service = server.serve(transport).await?;
+        service
+            .waiting()
+            .await
+            .map_err(|error| Box::<dyn Error>::from(error))
+    };
+    let (result, shutdown) = tokio::join!(service, shutdown);
     shutdown.map_err(std::io::Error::other)?;
     result?;
     Ok(())

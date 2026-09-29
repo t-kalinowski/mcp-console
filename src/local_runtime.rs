@@ -16,8 +16,8 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
-    // In managed sessions, None leaves R declarations and selection hints lazy.
-    // In prepared targets, None records genuine Python absence after discovery.
+    // Only complete selections cross the worker boundary. None means absent.
+    // The startup owner retains incomplete discovery and preparation separately.
     pub(crate) python: Option<Python>,
 }
 
