@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -22,6 +23,10 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
 from support.records import Transcript
+from support.resolvers import (
+    checkpoint_uv_environment,
+    send_and_collect_runtime_python_resolution,
+)
 from support.requirements import NATIVE_FIXTURES, R, command, requires
 from support.r import r_test_environment, reference_plots
 from support.python import write_test_wheel
@@ -955,7 +960,7 @@ def test_r_does_not_initialize_python(binary: Path, execution: Execution) -> Tra
 def test_remote_managed_identity_survives_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory).resolve()
         local, remote = root / "controller", root / "remote"
         local.mkdir()
@@ -977,15 +982,33 @@ def test_remote_managed_identity_survives_restart(
                 "UV_CACHE_DIR",
             }
         }
+        resolver_environment, started, release = checkpoint_uv_environment(
+            remote, "numpy"
+        )
+        resources.callback(started.close)
+        resources.callback(release.close)
+        environment.update(
+            (name, value)
+            for name, value in resolver_environment.items()
+            if name == "RETICULATE_UV" or name.startswith("MCP_CONSOLE_TEST_")
+        )
         configure(local, remote, remote_command(remote, binary, environment))
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
             with McpClient(binary, execution.serve(), controller, local) as client:
                 client.initialize_and_list_tools()
                 client.send(
-                    python="import sys; peer_object = object(); peer_id = id(peer_object)"
+                    python="import sys; peer_object = object(); peer_id = id(peer_object)",
+                    timeout_ms=0,
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
+                assert last_result_text(client) == (
+                    "\n[running; poll with an empty send]"
+                ), client.transcript[-1]
+                # Hold resolution until the running response is observed, then
+                # collect completion through the ordinary public polling path.
+                release.release()
+                assert send_and_collect_runtime_python_resolution(client) == "[done]"
+                started.wait("remote managed Python resolver")
                 client.send(requirements={"python": ["py-yaml12"]})
                 assert not client.transcript[-1]["result"].get("isError"), (
                     client.transcript[-1]

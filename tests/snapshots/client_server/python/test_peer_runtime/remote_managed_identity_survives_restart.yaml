@@ -1,6 +1,16 @@
 ---
 send:
   python: import sys; peer_object = object(); peer_id = id(peer_object)
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send: {}
 result:
   content:
     - type: text
