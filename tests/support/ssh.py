@@ -30,6 +30,19 @@ SSH = Requirement(
 CONFIG = ".agents/console/config.yaml"
 
 
+def r_worker_environment(r_home: str) -> dict:
+    """Explicit R-only launch plan for raw launcher protocol cases."""
+    return {
+        "discovery": {
+            "managed": False,
+            "selections": {"r_home": r_home, "python": None},
+        },
+        "r": None,
+        "python": None,
+        "native": {"r_home": r_home, "python": None},
+    }
+
+
 def bootstrap(
     binary: Path, workspace: Path, *, policy=None, no_sandbox=False, **values
 ) -> bytes:

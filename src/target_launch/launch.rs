@@ -113,12 +113,7 @@ fn launch(
     } else if let Some(environment) = &bootstrap.environment {
         environment.configure(&mut command)?;
     } else {
-        // Private launch-only callers select a bare runtime explicitly.
-        command
-            .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "0")
-            .env("RETICULATE_USE_MANAGED_VENV", "no")
-            .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
-            .env_remove("MCP_CONSOLE_PREINSTALLED");
+        return Err("SSH worker launch requires a complete runtime environment".into());
     }
     command.env_remove(crate::settings::ENVIRONMENT);
     crate::settings::preserve_environment(&mut policy, command.get_envs())?;

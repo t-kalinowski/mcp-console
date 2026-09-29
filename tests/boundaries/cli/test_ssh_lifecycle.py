@@ -2,7 +2,6 @@
 
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -12,11 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.checkpoints import FifoCheckpoint
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import capture_process_identity, host_process_id, live_processes
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import SANDBOX, WORKER, requires
-from support.ssh import bootstrap, read_frame
+from support.requirements import NATIVE_FIXTURES, SANDBOX, WORKER, requires
+from support.ssh import bootstrap, r_worker_environment, read_frame
 from support.suites import run_this_suite
 
 
@@ -46,25 +46,18 @@ def _connection_closed(
             },
         }
         if before_ready:
-            # Gate the installed-R discovery command before the worker can send
-            # Ready. R itself starts with --vanilla and does not load profiles.
+            # Discovery belongs to preparation. Gate the selected worker before
+            # its transport Ready instead, retaining the actual launcher owner.
             gate = root / "hold"
             os.mkfifo(gate)
-            r = root / "R"
-            r.write_text(
-                code(r"""
-                    #!/bin/sh
-                    printf '%s\n' "$PPID" "$TMPDIR" > STATE
-                    printf 1 > CHECKPOINT
-                    exec /bin/cat GATE
-                    """)
-                .replace("STATE", shlex.quote(str(state)))
-                .replace("CHECKPOINT", shlex.quote(str(checkpoint.path)))
-                .replace("GATE", shlex.quote(str(gate)))
+            policy["environment"].update(
+                {
+                    LOADER_VARIABLE: str(build_interposer(root, "worker_startup")),
+                    "MCP_CONSOLE_TEST_WORKER_STATE": str(state),
+                    "MCP_CONSOLE_TEST_WORKER_STARTED": str(checkpoint.path),
+                    "MCP_CONSOLE_TEST_WORKER_RELEASE": str(gate),
+                }
             )
-            r.chmod(0o755)
-            policy["inherit_environment"] = False
-            policy["environment"] = {"PATH": str(root)}
         read_fd, write_fd = os.pipe()
         os.set_blocking(write_fd, False)
         process = subprocess.Popen(
@@ -77,7 +70,13 @@ def _connection_closed(
         reader = os.fdopen(read_fd, "rb", buffering=0)
         try:
             process.stdin.write(
-                bootstrap(binary, root, policy=policy, no_sandbox=not sandbox)
+                bootstrap(
+                    binary,
+                    root,
+                    policy=policy,
+                    no_sandbox=not sandbox,
+                    environment=r_worker_environment(environment["R_HOME"]),
+                )
             )
             process.stdin.flush()
             hello = read_frame(reader)
@@ -91,7 +90,8 @@ def _connection_closed(
                     except BlockingIOError:
                         break
                 process.stdin.write(
-                    json.dumps(
+                    b'{"kind":"initialize"}\n'
+                    + json.dumps(
                         {
                             "kind": "evaluate",
                             "language": "r",
@@ -133,7 +133,7 @@ def _connection_closed(
             checkpoint.close()
 
 
-@requires(WORKER, SANDBOX)
+@requires(WORKER, SANDBOX, NATIVE_FIXTURES)
 def test_connection_closure_before_readiness(binary: Path) -> Transcript:
     return _connection_closed(binary, before_ready=True)
 

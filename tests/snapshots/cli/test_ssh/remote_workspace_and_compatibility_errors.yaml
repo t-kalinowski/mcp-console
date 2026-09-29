@@ -22,6 +22,9 @@ error: >
   protocol 8, Console incompatible-build
 ---
 error: |
+  SSH worker launch requires a complete runtime environment
+---
+error: |
   worker bootstrap has no complete runtime selection
 ---
 error: |

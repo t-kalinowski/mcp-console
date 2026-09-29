@@ -2,7 +2,8 @@
 
 `mcp-console serve` can keep the MCP server and recordings local while running its relay and built-in worker on one existing SSH host.
 The host needs a compatible Console build, a supported native sandbox environment, and an existing workspace.
-The host needs a working R installation, `uv` (or another supported resolver bootstrap), and system libraries and build tools required by the requested packages.
+The host needs a working R installation, a selected CPython environment, or `uv` to provision Python when R is absent.
+Managed preparation also needs the applicable resolver bootstrap and system libraries and build tools required by the requested packages.
 Console prepares its managed R, Python, and DuckDB environments there.
 It does not install R or synchronize files.
 
@@ -104,7 +105,8 @@ R libraries and Python executables are validated on the remote host; their paths
 Other workload settings retain their existing meaning.
 In particular, configuring a workload cache does not relocate trusted preparation caches.
 
-When R is present but discovery finds no resolver bootstrap, Console retains the bare-runtime model: the stable initial schema retains conditional preparation prose, authoritative operation validation rejects preparation, and automatic resolution is disabled, and available preinstalled packages and adapters can still be used.
+When R is present but discovery finds no resolver bootstrap, Console retains the bare-runtime model: the stable initial schema retains conditional preparation prose, authoritative operation validation rejects preparation, and automatic resolution is disabled.
+Available preinstalled packages and adapters can still be used.
 A selected bootstrap that fails later reports an error; it does not change the schema, select a different bootstrap, or run a controller resolver.
 Bare and user-selected Python modes disable reticulate's implicit managed-venv installation when R is present.
 Managed Python uses the existing server callbacks and retained manifest; the worker stays offline and does not install its own environment.

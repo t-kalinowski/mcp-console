@@ -59,7 +59,7 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
                     assert last_tool_text(client).endswith(
                         "[starting new worker]\n[worker starting]"
                     ), last_tool_text(client)
-                # Inspect the retained manifest before activating Python; automatic
+                # Inspect the retained manifest before using Python; automatic
                 # resolution must not mask a lost generation environment.
                 client.send(
                     # fmt: r
