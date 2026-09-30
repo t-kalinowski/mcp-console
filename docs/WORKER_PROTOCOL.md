@@ -344,14 +344,14 @@ worker -> server  {"kind":"python_prepared"}
 ```
 
 `python_prepared` is payload-free.
-Before Python initialization it may report successful manifest materialization without a live `python_activated` event.
-After initialization, any new resolved environment that the worker activates must be reported with `python_activated` before `python_prepared`.
+Built-in preparation begins only after runtime initialization.
+Any new resolved environment that the worker activates must be reported with `python_activated` before `python_prepared`.
 
 The server resolves and inspects the complete candidate on its execution host.
 For an initialized interpreter it uses the accepted executable, checks library compatibility, and prepares applicable retained DuckDB extensions, including additions owned by that same server preparation operation.
 The worker validates the inspected candidate, projects optional R declaration metadata, activates through the common operation, and publishes before reporting preparation complete.
 The server matches activation to a provisional candidate in the current generation and retains its manifest and inspected launch configuration.
-Before interpreter initialization, `python_prepared` instead commits the last materialized candidate without an activation event.
+`python_prepared` completes the operation; it never commits an unactivated candidate.
 Plain restart and crash replacement use the accepted configuration; a later cell failure does not undo activation.
 
 An activation exception retains its original Python diagnostics and produces `python_preparation_failed`; the server requires restart before further requirement changes and withholds same-call input and code.
@@ -377,8 +377,8 @@ A post-mutation activation failure sends `python_activation_failed` for the matc
 This receipt is valid during evaluation, explicit preparation, or an idle runtime declaration; it does not by itself stop the worker.
 A later missing-module or language error does not undo that accepted environment.
 
-An explicit pre-initialization preparation may instead materialize the last resolved candidate and finish with `python_prepared` without activation.
-Other unmatched candidates are discarded when the enclosing operation ends.
+Startup declarations can materialize a candidate before CPython loads and publish `python_activated` after the common owner initializes it.
+Unmatched candidates are discarded when the enclosing operation ends.
 
 Managed Python is unavailable to custom workers.
 A custom worker must not send `python_activated`; doing so is a protocol failure.

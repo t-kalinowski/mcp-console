@@ -186,11 +186,8 @@ type RPreparationCommit =
 
 type PythonCandidate = (crate::resolver::ManagedPython, crate::python::NativePython);
 
-type PythonPreparationCommit = Box<
-    dyn FnOnce(Result<Option<PythonCandidate>, String>) -> Result<PreparationOutcome, String>
-        + Send
-        + 'static,
->;
+type PythonPreparationCommit =
+    Box<dyn FnOnce(Result<(), String>) -> Result<PreparationOutcome, String> + Send + 'static>;
 
 enum PreparationOutcome {
     Completed(Result<(), String>),

@@ -223,7 +223,7 @@ The relay can emit these flat frames:
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
 - `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching provisional Python candidate whose activation failed after mutation may have begun, during evaluation, preparation, or an idle callback.
   Launch protocol version 8 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
-- `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
+- `{"kind":"python_prepared"}` returns the initialized worker's explicit Python-preparation success result.
 - `{"kind":"python_preparation_failed","message":"..."}` completes live Python preparation with an ordinary failure.
 - `{"kind":"python_preparation_rejected","message":"..."}` rejects an explicit native candidate before mutation.
 - `{"kind":"completed"}` completes an evaluation.
@@ -245,7 +245,7 @@ The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines ru
 Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
 The relay forwards the optional `initialized` and `import_resolution` fields unchanged.
 The worker requests the inspected candidate during preparation, reports live activation before `python_prepared`, and leaves the generation-checked commit to the server.
-An uninitialized interpreter can report materialization with `python_prepared` alone.
+The completion receipt never commits an unactivated candidate; startup declarations publish activation after the common Python owner initializes their candidate.
 The [live preparation contract](WORKER_PROTOCOL.md#live-python-preparation) defines correlation, failure handling, and restart behavior.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.

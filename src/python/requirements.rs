@@ -211,17 +211,16 @@ pub(super) fn prepare(packages: Vec<String>) -> Result<super::PreparationOutcome
     let mut requirements = declaration()?;
     requirements.packages.extend(packages.iter().cloned());
     let requirements = requirements.normalized();
-    let live = super::library::initialized_selection()?.is_some();
     let candidate = match crate::worker::resolve_python(PythonResolveRequest {
         requirements: requirements.clone(),
         retained_requirements: requirements,
-        initialized: live,
+        initialized: true,
         import_resolution: None,
     }) {
         Ok(candidate) => candidate,
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
-    if live && let Err(error) = validate_selected(&candidate.selected) {
+    if let Err(error) = validate_selected(&candidate.selected) {
         return Ok(super::PreparationOutcome::Rejected {
             message: error.to_string(),
         });
@@ -231,29 +230,24 @@ pub(super) fn prepare(packages: Vec<String>) -> Result<super::PreparationOutcome
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
     resolved(candidate.clone());
-    if live {
-        match activate(&candidate)? {
-            ActivationOutcome::Prepared => {}
-            ActivationOutcome::Rejected(message) => {
-                return Ok(super::PreparationOutcome::Rejected { message });
-            }
-            ActivationOutcome::Failed(message) => {
-                crate::worker::publish_python_activation_failure(candidate.requirements)?;
-                return Ok(super::PreparationOutcome::Failed { message });
-            }
+    match activate(&candidate)? {
+        ActivationOutcome::Prepared => {}
+        ActivationOutcome::Rejected(message) => {
+            return Ok(super::PreparationOutcome::Rejected { message });
+        }
+        ActivationOutcome::Failed(message) => {
+            crate::worker::publish_python_activation_failure(candidate.requirements)?;
+            return Ok(super::PreparationOutcome::Failed { message });
         }
     }
     if let Some(projection) = projection {
         if let Err(message) = projection.commit() {
-            if live {
-                crate::worker::publish_python_activation_failure(candidate.requirements)?;
-                return Ok(super::PreparationOutcome::Failed {
-                    message: format!("{message}; restart required"),
-                });
-            }
-            return Ok(super::PreparationOutcome::Rejected { message });
+            crate::worker::publish_python_activation_failure(candidate.requirements)?;
+            return Ok(super::PreparationOutcome::Failed {
+                message: format!("{message}; restart required"),
+            });
         }
-    } else if live {
+    } else {
         crate::worker::publish_python_activation(candidate.requirements)?;
     }
     Ok(super::PreparationOutcome::Prepared)

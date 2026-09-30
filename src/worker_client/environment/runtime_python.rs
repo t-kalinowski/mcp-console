@@ -233,29 +233,6 @@ impl Client {
         )
     }
 
-    pub(super) fn commit_runtime_python(
-        &self,
-        generation: WorkerGeneration,
-        managed: crate::resolver::ManagedPython,
-        configuration: crate::python::NativePython,
-    ) -> Result<OldGenerationCommitDisposition, String> {
-        let environment = self
-            .0
-            .environment
-            .as_ref()
-            .ok_or_else(|| "managed Python requirements are unavailable".to_string())?;
-        let mut environment = environment
-            .lock()
-            .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.commit_locked_runtime_python(
-            &generation,
-            &mut environment,
-            managed,
-            Some(configuration),
-            None,
-        )
-    }
-
     fn commit_locked_runtime_python(
         &self,
         generation: &WorkerGeneration,

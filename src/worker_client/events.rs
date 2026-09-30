@@ -589,12 +589,9 @@ impl WorkerOperationState {
                 commit(Err(message)).map(OperationResult::RPrepared)
             }
             (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
-                let candidate = python_candidates
-                    .pop()
-                    .map(|candidate| (candidate.managed, candidate.configuration));
                 r_candidates.clear();
                 python_candidates.clear();
-                commit(Ok(candidate)).map(OperationResult::PythonPrepared)
+                commit(Ok(())).map(OperationResult::PythonPrepared)
             }
             (
                 OperationKind::PreparePython { commit, .. },

@@ -385,8 +385,8 @@ impl Client {
                 duckdb_extensions.clone()
             };
             let commit = Box::new(move |result| {
-                let managed = match result {
-                    Ok(managed) => managed,
+                match result {
+                    Ok(()) => {}
                     Err(error) => {
                         let error = if client.requirement_change_state(&commit_generation)?
                             == RequirementChangeState::RestartRequired
@@ -397,18 +397,9 @@ impl Client {
                         };
                         return Ok(PreparationOutcome::Completed(Err(error)));
                     }
-                };
+                }
                 if client.old_generation_commit_disposition(&commit_generation)?
                     == OldGenerationCommitDisposition::DiscardForReplacement
-                {
-                    return Ok(PreparationOutcome::DiscardedByReplacement);
-                }
-                if let Some((managed, configuration)) = managed
-                    && client.commit_runtime_python(
-                        commit_generation.clone(),
-                        managed,
-                        configuration,
-                    )? == OldGenerationCommitDisposition::DiscardForReplacement
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
