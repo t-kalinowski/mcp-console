@@ -367,6 +367,8 @@ def test_detected_transport_loss_blocks_preparation_and_replacement(binary):
 @requires(SSH, WORKER, PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
     with gated_session(binary) as (client, remote, started, release, exits, identities):
+        discovered = client.send(requirements={"action": "get"})
+        assert not discovered.get("isError"), discovered
         blocked = FifoCheckpoint.create(remote / "stdout-blocked")
         interposer = build_interposer(remote, "relay_stdout_backpressure")
         prefix = remote / "remote-console"
