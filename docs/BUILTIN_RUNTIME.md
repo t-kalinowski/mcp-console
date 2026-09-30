@@ -375,6 +375,8 @@ Unresolved R-side selection callbacks and declarations require R; reticulate oth
 Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
 Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
 Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
+Console-owned Python runs executable `.pth` files and `sitecustomize` after connecting managed input and interrupts.
+Interrupted startup hooks can retry in the same interpreter, and completed site processing is not repeated during later setup retries or R attachment.
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
 Ordinary R evaluation does not initialize Python.
 An R cell, Python-side `r` access, or R-owned SQL initializes R.

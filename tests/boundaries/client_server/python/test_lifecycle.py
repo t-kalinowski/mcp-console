@@ -539,7 +539,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
             client.send(python="42")
             assert last_result_text(client) == (
                 '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
-            )
+            ), last_result_text(client)
 
             client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]

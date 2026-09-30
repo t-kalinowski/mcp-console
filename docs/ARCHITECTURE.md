@@ -319,7 +319,14 @@ Ordinary Python cells enter common bootstrap and the private evaluator directly 
 An explicit or independently materialized selection does not initialize R or attach reticulate.
 If R is already initialized, unresolved R declarations and selection callbacks keep their compatibility precedence.
 Reticulate attaches only when an operation needs interoperability.
-Common setup installs Console's stream, input, interrupt, and plot services, private evaluator, and SQL adapter, then configures automatic import resolution through the retained CPython interface.
+Common setup installs Console's stream, input, interrupt, and plot services before processing executable `.pth` files and `sitecustomize` in a Console-owned interpreter.
+Site processing restores normal Python flags before running hooks, so child interpreters can load installed packages.
+Successful site processing is retained across later setup retries; interrupted hooks can retry in the same interpreter with managed input and interrupts connected.
+Externally initialized interpreters keep their completed site processing.
+The private evaluator is installed after site processing, including an interrupted attempt so it can report the retained exception.
+Startup customizations precede the evaluator's module defaults.
+Common setup then installs the SQL adapter and configures automatic import resolution through the retained CPython interface.
+An interruption during SQL adapter installation remains a retryable setup result.
 Reticulate attachment reasserts the same services after reticulate installs its hooks.
 The same setup accepts a managed import policy or a disabled reason independently of R.
 Python initialization, common setup completion, and bridge attachment have separate completion state.

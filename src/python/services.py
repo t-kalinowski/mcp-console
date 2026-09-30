@@ -99,3 +99,11 @@ class _LazyR:
 
 
 builtins.r = _LazyR()
+
+
+# Import while no_site is set, keeping site processing explicit and retryable.
+import site as _site
+
+
+def initialize_site() -> None:
+    _site.main()

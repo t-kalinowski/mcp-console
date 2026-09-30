@@ -47,6 +47,6 @@ impl Bridge {
     }
 }
 
-pub(crate) fn install_python_runtime() -> Result<(), String> {
+pub(crate) fn install_python_runtime() -> Result<bool, String> {
     py_dbapi::install_runtime()
 }

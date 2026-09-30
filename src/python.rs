@@ -170,7 +170,7 @@ pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), Stri
     library::evaluate(source, filename)
 }
 
-pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {
+pub(crate) fn install_sql_runtime(source: &str) -> Result<bool, String> {
     library::install_sql_runtime(source)
 }
 
