@@ -1,5 +1,6 @@
 import base64
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -148,13 +149,13 @@ def wait_for_idle_output(
 
 def wait_for_evaluation_output(
     client: McpClient,
-    expected: str,
+    expected: str | Callable[[str], bool],
     description: str,
     *,
     expected_error: bool = False,
     completion_timeout_seconds: float = 3,
     **send_arguments: Any,
-) -> None:
+) -> str:
     """Accumulate exact output until the expected state; retain the submitted call."""
     deadline = time.monotonic() + completion_timeout_seconds
     poll_start = len(client.transcript)
@@ -169,7 +170,7 @@ def wait_for_evaluation_output(
         if output.endswith(running):
             assert result.get("isError") is not True, result
             collected += output.removesuffix(running)
-            if collected + running == expected:
+            if isinstance(expected, str) and collected + running == expected:
                 collected += running
                 break
         elif output.endswith(waiting):
@@ -179,15 +180,20 @@ def wait_for_evaluation_output(
             if output != "\n" + waiting:
                 collected += output.removesuffix(waiting)
             waiting_output = collected + ("" if collected.endswith("\n") else "\n")
-            if waiting_output + waiting == expected:
+            if isinstance(expected, str) and waiting_output + waiting == expected:
                 collected = waiting_output + waiting
                 break
         else:
             if output != "[done]" or not collected:
                 collected += output
-            assert collected == expected, repr(collected)
+            assert (
+                collected == expected
+                if isinstance(expected, str)
+                else expected(collected)
+            ), repr(collected)
             break
-        assert expected.startswith(collected), repr(collected)
+        if isinstance(expected, str):
+            assert expected.startswith(collected), repr(collected)
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"{description} did not complete"
         result = client.send(timeout_ms=max(1, int(remaining * 1_000)))
@@ -198,6 +204,7 @@ def wait_for_evaluation_output(
     submitted = calls[0]
     submitted["result"] = calls[-1]["result"]
     client.transcript[poll_start:] = [submitted]
+    return collected
 
 
 def collect_running_output(
