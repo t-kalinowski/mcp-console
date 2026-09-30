@@ -866,30 +866,41 @@ def test_does_not_retain_stale_python_materialization(
     client.send(r="invisible(reticulate::py_config())")
     assert last_tool_text(client) == "[done]"
 
-    # Make explicit preparation resolve the unchanged environment before its
-    # real activation. The first candidate is materialized but never activated.
+    # Resolve an unchanged candidate while explicit preparation has resolved
+    # its real addition. Only the exact activated manifest may be retained.
     # fmt: r
     r = code(r"""
-        namespace <- asNamespace("reticulate")
-        original_py_require <- get("py_require", envir = namespace)
-        injected <- FALSE
-        replacement <- function(...) {
-          if (!injected) {
-            injected <<- TRUE
-            requirements <- original_py_require()
-            invisible(get("uv_get_or_create_env", envir = namespace)(
-              requirements$packages,
-              requirements$python_version,
-              requirements$exclude_newer
-            ))
-          }
-          original_py_require(...)
+        resolve_unchanged <- function() {
+          current <- reticulate::py_require()
+          manifest <- list(
+            packages = I(current$packages),
+            python_version = I(if (is.null(current$python_version)) character() else current$python_version),
+            exclude_newer = current$exclude_newer
+          )
+          request <- jsonlite::toJSON(list(
+            requirements = manifest, retained_requirements = manifest
+          ), auto_unbox = TRUE, null = "null")
+          invisible(.Call("mcp_console_resolve_python", request))
         }
-        unlockBinding("py_require", namespace)
-        assign("py_require", replacement, envir = namespace)
-        lockBinding("py_require", namespace)
         """)
     client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: python
+    python = code("""
+        import _mcp_console_environment as environment
+
+        original_check = environment._check_compatible
+
+
+        def check_after_materialization(candidate):
+            environment._check_compatible = original_check
+            r.resolve_unchanged()
+            original_check(candidate)
+
+
+        environment._check_compatible = check_after_materialization
+        """)
+    client.send(python=python)
     assert last_tool_text(client) == "[done]"
 
     client.send(

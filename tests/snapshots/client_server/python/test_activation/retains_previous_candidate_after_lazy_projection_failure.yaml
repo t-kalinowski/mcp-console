@@ -1,0 +1,88 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    reticulate::py_require(character(), action = "set")
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-initial-fixture
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: |
+    before <- reticulate::py_require()
+    worker_pid <- Sys.getpid()
+    stopifnot(!reticulate::py_available(initialize = FALSE))
+    lockBinding("python_requirements", reticulate:::.globals)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: cannot change value of locked binding for 'python_requirements'
+  isError: true
+---
+send:
+  r: |
+    unlockBinding("python_requirements", reticulate:::.globals)
+    stopifnot(
+      !reticulate::py_available(initialize = FALSE),
+      identical(reticulate::py_require(), before),
+      identical(Sys.getpid(), worker_pid)
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: import console_unloaded; console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'initial'
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      identical(reticulate::py_require(), before),
+      identical(Sys.getpid(), worker_pid)
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false

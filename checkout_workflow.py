@@ -88,14 +88,29 @@ def cache_directory() -> Path:
 
 
 def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
-    def deliver(number: int) -> None:
+    def deliver(number: int) -> bool:
         try:
             if owns_group:
                 os.killpg(process.pid, number)
             else:
                 os.kill(process.pid, number)
         except ProcessLookupError:
-            pass
+            return False
+        except PermissionError:
+            if not owns_group:
+                raise
+            # macOS can deny signaling a group containing only zombies.
+            # Confirm that no live member remains; other denials still fail.
+            members = subprocess.check_output(
+                ["/bin/ps", "-eo", "pgid=,stat="], text=True, timeout=5
+            )
+            if any(
+                int(group) == process.pid and not state.startswith("Z")
+                for group, state in (line.split() for line in members.splitlines())
+            ):
+                raise
+            return False
+        return True
 
     deadline = time.monotonic() + 5
     deliver(signal.SIGTERM)
@@ -104,9 +119,7 @@ def stop_phase(process: subprocess.Popen, *, owns_group: bool) -> None:
     except subprocess.TimeoutExpired:
         pass
     if owns_group:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
+        if not deliver(0):
             return
         # Group membership has no portable wait primitive once the leader exits.
         # Give remaining members the rest of the grace period without polling.

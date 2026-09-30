@@ -1,4 +1,6 @@
+mod environment;
 mod inspection;
+mod probe;
 mod requirements;
 mod reticulate;
 mod startup;

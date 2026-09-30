@@ -1,0 +1,179 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python: []
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  requirements:
+    action: set
+    r:
+      - DBI
+      - arrow
+      - duckdb
+      - nanoarrow
+      - reticulate
+      - tidyverse
+    python: []
+    duckdb:
+      - icu
+      - json
+      - sqlite
+    python_version: []
+    exclude_newer: ~
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import signal
+    import _mcp_console_services as services
+
+    original_publish = services.publish_python_activation
+
+
+    def interrupted_publish(activation):
+        signal.raise_signal(signal.SIGINT)
+        original_publish(activation)
+
+
+    services.publish_python_activation = interrupted_publish
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    tryCatch(
+      {
+        suspendInterrupts({
+          reticulate::py_require("console-activation-fixture")
+          cat("activation returned\n")
+        })
+        Sys.sleep(0) # Check R interrupts while the handler is installed.
+      },
+      interrupt = function(condition) cat("R accepted deferred interrupt\n")
+    )
+result:
+  content:
+    - type: text
+      text: |
+        activation returned
+        R accepted deferred interrupt
+  isError: false
+---
+send:
+  python: import console_unloaded; console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [worker starting]
+  isError: false
+---
+send:
+  python: import console_unloaded; console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false

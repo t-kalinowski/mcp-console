@@ -403,15 +403,29 @@ Supported startup declarations may materialize a candidate during the initializa
 Once Python is live, resolution pins the accepted executable and activation preserves its objects.
 R declarations preserve argument conversion, package warnings, history, live version and package checks, and R conditions.
 Their candidate library and prefixes come from the host-inspected identity.
-Execution-host inspection captures conversion metadata; worker attachment never runs another Python metadata subprocess.
+Execution-host inspection captures initial conversion metadata; bridge attachment never runs another metadata subprocess.
+Live activation probes the already selected candidate inside the worker for site paths, installed distribution versions, and refreshed conversion metadata, without discovery or package resolution.
+Live Python-version declarations use the host resolver's matching rules, including prerelease, epoch, and local-version identity.
 
 The shared activation operation compares the candidate and retained interpreter's `libpython` strings exactly before conversion metadata or interpreter mutation.
-For a compatible candidate, it runs the environment's activation script and updates executable, multiprocessing, and child-process setup without replacing the interpreter or its objects.
+It also requires the running Python version and rejects replacement of a loaded distribution with a different version or an absent distribution.
+Loaded modules are matched to installed distribution files, so importing one namespace contributor does not pin its siblings.
+For a compatible candidate, it sets the candidate identity before running the environment's activation script and updates executable, multiprocessing, and child-process setup without replacing the interpreter or its objects.
+Activation replaces environment-owned site paths, including paths added by `.pth` files, while preserving user-added paths.
+Initial path bookkeeping probes the selected interpreter without replaying `site.main()` in the live interpreter.
+Startup `.pth` additions must agree between that probe and the embedded interpreter; cleanup of process-dependent startup additions is unsupported.
+Live activation tracks its actual path additions.
+The initial bookkeeping probe runs during background initialization, before SQL connection creation and user cells.
+An interruption retains a startup failure; explicit restart uses the accepted declaration and a fresh worker.
+An interrupt during a live `reticulate::py_require()` candidate probe or site activation remains an R interrupt condition.
 Compatibility and other failures before mutation leave the accepted declaration and usable worker intact.
-An activation exception or other unsafe failure marks the generation restart-required; this also applies to failures surfaced through an R condition.
+An interrupted activation restores Console-owned paths, prefixes, executable, and process environment, permitting another preparation attempt.
+This restoration does not undo arbitrary site-hook side effects.
+Other activation exceptions or unsafe failures retain the existing restart requirement, including failures surfaced through an R condition.
 The R adapter preserves the original Python exception and traceback through reticulate's condition boundary.
 Only successful activation and process setup can publish the complete manifest to the server.
-For an R declaration, the adapter records pending activation, then reticulate accepts the configuration and writes the binding that publishes `PythonActivated`.
+Publication and the local commit defer interrupt delivery; an interrupt delivered after successful publication leaves the committed environment retained.
+The same transaction commits an R declaration's configuration and presentation metadata through the binding that publishes `PythonActivated`.
 
 The server retains a Python environment and its host-inspected launch identity when the worker publishes its complete normalized manifest.
 The R adapter publishes through the existing active binding after committing its presentation metadata.
@@ -427,7 +441,7 @@ An exact retained requirement is a no-op.
 A different requirement for an already-declared distribution needs `control="restart"` and `action="set"`; the distribution name comes from the same PEP 508 parser used for request validation.
 This add-only rule does not promise that arbitrary package upgrades can be switched in a running interpreter.
 It compares requirement declarations, not installed versions: resolving a new distribution can select different versions of existing or transitive dependencies.
-Live preparation neither locks those versions nor unloads already-imported modules.
+Live preparation rejects candidates that change a loaded distribution's version; it does not unload already-imported modules or lock unloaded dependency versions.
 Use explicit restart for upgrades or dependency changes that need fresh imports.
 The host resolves the complete candidate through the hidden resolver using the running environment's executable, then inspects the candidate and compares its `libpython` with the worker's active configuration.
 The host prepares the complete retained DuckDB extension set, including additions from the same request, against the candidate before activation.
@@ -437,7 +451,7 @@ For an automatic import, the importing cell stays suspended while the server pre
 Its `PythonActivated` report commits the manifest, native launch configuration, and any new extension declaration together before a same-call cell begins.
 Python objects, the managed DuckDB catalog, and the selected SQL connection remain in the worker; a later cell error does not discard an accepted activation.
 Validation, resolution, inspection, and compatibility failures leave the current worker and accepted environment intact.
-An activation exception retains its Python traceback and withholds same-call code and input; further requirement changes require restart because activation-script side effects cannot be rolled back.
+An activation exception retains its Python traceback and withholds same-call code and input; except for a successfully restored interruption, further requirement changes require restart because arbitrary activation-script side effects cannot be rolled back.
 The worker is not restarted automatically.
 
 An ordinary Python preparation failure restores the prior reticulate manifest, discards unaccepted candidates, and leaves the worker usable.

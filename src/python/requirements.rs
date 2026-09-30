@@ -38,6 +38,12 @@ struct Requirements {
     // A transient matching key for an environment already activated by
     // Console, not a second independently mutable requirement manifest.
     pending_activation: Option<Manifest>,
+    activation: Option<PendingActivation>,
+}
+
+struct PendingActivation {
+    candidate: crate::worker_protocol::NativePythonActivation,
+    projection: Option<r::Projection>,
 }
 
 thread_local! {
@@ -173,6 +179,7 @@ impl Requirements {
                 }
             }
         }
+        candidate.append_history(&request.record)?;
         let config = if activate {
             // No state borrow survives a compatibility check, resolver, or
             // activation callback. The interpreter pin is resolver input only.
@@ -183,7 +190,6 @@ impl Requirements {
         } else {
             Value::null()
         };
-        candidate.append_history(&request.record)?;
         Ok((candidate, config))
     }
 }
@@ -195,6 +201,7 @@ use crate::worker_protocol::{
 
 pub(crate) enum ActivationOutcome {
     Prepared,
+    Interrupted,
     Rejected(String),
     Failed(String),
 }
@@ -208,6 +215,16 @@ pub(super) fn declaration() -> Result<PythonRequirementManifest, String> {
 }
 
 pub(super) fn prepare(packages: Vec<String>) -> Result<super::PreparationOutcome, String> {
+    let result = prepare_packages(packages);
+    if crate::worker::acknowledge_python_interrupt() {
+        return Ok(super::PreparationOutcome::Rejected {
+            message: "KeyboardInterrupt".into(),
+        });
+    }
+    result
+}
+
+fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, String> {
     let mut requirements = declaration()?;
     requirements.packages.extend(packages.iter().cloned());
     let requirements = requirements.normalized();
@@ -225,32 +242,30 @@ pub(super) fn prepare(packages: Vec<String>) -> Result<super::PreparationOutcome
             message: error.to_string(),
         });
     }
-    let projection = match r::project_packages(&candidate.selected, &packages) {
+    let inspected = match super::probe::inspect(&candidate.selected.embedding.python) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(super::PreparationOutcome::Rejected {
+                message: error.to_string(),
+            });
+        }
+    };
+    let projection = match r::project_packages(&candidate.selected, &packages, Some(&inspected)) {
         Ok(projection) => projection,
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
     resolved(candidate.clone());
-    match activate(&candidate)? {
-        ActivationOutcome::Prepared => {}
-        ActivationOutcome::Rejected(message) => {
-            return Ok(super::PreparationOutcome::Rejected { message });
-        }
+    match activate(&candidate, inspected, projection)? {
+        ActivationOutcome::Prepared => Ok(super::PreparationOutcome::Prepared),
+        ActivationOutcome::Interrupted => Ok(super::PreparationOutcome::Rejected {
+            message: "KeyboardInterrupt".into(),
+        }),
+        ActivationOutcome::Rejected(message) => Ok(super::PreparationOutcome::Rejected { message }),
         ActivationOutcome::Failed(message) => {
-            crate::worker::publish_python_activation_failure(candidate.requirements)?;
-            return Ok(super::PreparationOutcome::Failed { message });
+            super::library::display_activation_exception()?;
+            Ok(super::PreparationOutcome::Failed { message })
         }
     }
-    if let Some(projection) = projection {
-        if let Err(message) = projection.commit() {
-            crate::worker::publish_python_activation_failure(candidate.requirements)?;
-            return Ok(super::PreparationOutcome::Failed {
-                message: format!("{message}; restart required"),
-            });
-        }
-    } else {
-        crate::worker::publish_python_activation(candidate.requirements)?;
-    }
-    Ok(super::PreparationOutcome::Prepared)
 }
 
 pub(super) fn retained_manifest() -> Option<PythonRequirementManifest> {
@@ -314,13 +329,6 @@ pub(super) fn resolved_selection() -> Option<NativePython> {
     })
 }
 
-pub(super) fn activation_failed() -> Result<(), String> {
-    let candidate = STATE
-        .with(|state| state.borrow().resolved.clone())
-        .ok_or("Python activation has no resolved candidate")?;
-    crate::worker::publish_python_activation_failure(candidate.requirements)
-}
-
 pub(super) fn validate_selected(candidate: &NativePython) -> Result<(), ActivationFailure> {
     let running =
         super::library::selected_configuration().map_err(ActivationFailure::BeforeMutation)?;
@@ -349,26 +357,72 @@ pub(super) fn accept(requirements: PythonRequirementManifest) -> Result<(), Stri
     })
 }
 
-pub(crate) fn activate(candidate: &NativePythonActivation) -> Result<ActivationOutcome, String> {
-    match activate_selected(&candidate.selected) {
-        Ok(()) => {
-            super::library::accept_configuration(&candidate.selected)?;
-            STATE.with(|state| state.borrow_mut().live = Some(candidate.clone()));
-            Ok(ActivationOutcome::Prepared)
+fn activate(
+    candidate: &NativePythonActivation,
+    inspected: serde_json::Value,
+    projection: Option<r::Projection>,
+) -> Result<ActivationOutcome, String> {
+    STATE.with_borrow_mut(|state| {
+        assert!(
+            state.activation.is_none(),
+            "Python activation already pending"
+        );
+        state.activation = Some(PendingActivation {
+            candidate: candidate.clone(),
+            projection,
+        });
+    });
+    let result = super::environment::prepare(inspected, &candidate.requirements);
+    let previous = STATE.with_borrow_mut(|state| state.activation.take());
+    drop(previous);
+    Ok(match result? {
+        None => ActivationOutcome::Interrupted,
+        Some(super::PreparationOutcome::Prepared) => ActivationOutcome::Prepared,
+        Some(super::PreparationOutcome::Rejected { message }) => {
+            ActivationOutcome::Rejected(message)
         }
-        Err(
-            error @ (ActivationFailure::Incompatible { .. } | ActivationFailure::BeforeMutation(_)),
-        ) => Ok(ActivationOutcome::Rejected(error.to_string())),
-        Err(ActivationFailure::PythonException) => {
-            super::library::display_activation_exception()?;
-            Ok(ActivationOutcome::Failed(
-                "Python activation failed; restart required".into(),
-            ))
+        Some(super::PreparationOutcome::Failed { message }) => {
+            crate::worker::publish_python_activation_failure(candidate.requirements.clone())?;
+            ActivationOutcome::Failed(message)
         }
-        Err(error) => Ok(ActivationOutcome::Failed(format!(
-            "{error}; Python activation failed; restart required"
-        ))),
+    })
+}
+
+pub(super) fn activate_pending_selection() -> Result<(), ActivationFailure> {
+    let selected = STATE.with_borrow(|state| {
+        state
+            .activation
+            .as_ref()
+            .expect("Python activation pending")
+            .candidate
+            .selected
+            .clone()
+    });
+    activate_selected(&selected)
+}
+
+pub(super) fn publish_activation(activation: super::environment::Activation) -> Result<(), String> {
+    let pending = STATE
+        .with_borrow_mut(|state| state.activation.take())
+        .ok_or("Python activation has no pending candidate")?;
+    if pending.candidate.requirements != activation.manifest {
+        return Err(super::environment::infrastructure(
+            "Python activation does not match its pending manifest".into(),
+        ));
     }
+    // A nested inspection may have materialized another candidate. Publication
+    // belongs to the exact candidate whose interpreter activation is pending.
+    resolved(pending.candidate);
+    if let Some(projection) = pending.projection {
+        projection
+            .commit(Some(&activation.environment))
+            .map_err(super::environment::infrastructure)?;
+    } else {
+        accept(activation.manifest.clone()).map_err(super::environment::infrastructure)?;
+        crate::worker::publish_python_activation(activation.manifest)?;
+    }
+    super::environment::accept(activation.environment);
+    Ok(())
 }
 
 /// Mutate only the live interpreter. The caller commits its declaration and
@@ -417,31 +471,25 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     if let Err(error) = validate_selected(&candidate.selected) {
         return Ok(failed(error.to_string()));
     }
+    let inspected = match super::probe::inspect(&candidate.selected.embedding.python) {
+        Ok(value) => value,
+        Err(error) => return Ok(failed(error.to_string())),
+    };
     let projection = match r::project_packages(
         &candidate.selected,
         std::slice::from_ref(&resolution.distribution),
+        Some(&inspected),
     ) {
         Ok(projection) => projection,
         Err(error) => return Ok(failed(error)),
     };
     resolved(candidate.clone());
-    match activate(&candidate)? {
-        ActivationOutcome::Prepared => {
-            if let Some(projection) = projection {
-                if let Err(error) = projection.commit() {
-                    crate::worker::publish_python_activation_failure(candidate.requirements)?;
-                    return Ok(failed(format!(
-                        "{error}; Python activation failed; restart required"
-                    )));
-                }
-            } else {
-                crate::worker::publish_python_activation(candidate.requirements)?;
-            }
-            Ok(ready())
-        }
+    match activate(&candidate, inspected, projection)? {
+        ActivationOutcome::Prepared => Ok(ready()),
+        ActivationOutcome::Interrupted => Ok(failed("KeyboardInterrupt".into())),
         ActivationOutcome::Rejected(error) => Ok(failed(error)),
         ActivationOutcome::Failed(error) => {
-            crate::worker::publish_python_activation_failure(candidate.requirements)?;
+            super::library::display_activation_exception()?;
             Ok(failed(error))
         }
     }

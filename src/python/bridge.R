@@ -217,24 +217,26 @@ base::local(
       }
       check_version <- function(request) {
         current_version <- reticulate::py_version(patch = TRUE)
-        for (check in reticulate:::as_version_constraint_checkers(
-          request$python_version
-        )) {
-          if (!isTRUE(check(current_version))) {
-            stop(paste0(
-              "Python version requirements cannot be changed after Python has ",
-              "been initialized.\n",
-              "* Python version request: '",
-              paste(request$python_version, collapse = ","),
-              "'",
-              if (request$env_is_package) {
-                paste0(" (from package:", request$requested_from, ")")
-              },
-              "\n* Python version initialized: '",
-              current_version,
-              "'"
-            ))
-          }
+        if (
+          !.Call(
+            "mcp_console_python_version_matches",
+            as.character(current_version),
+            request$python_version
+          )
+        ) {
+          stop(paste0(
+            "Python version requirements cannot be changed after Python has ",
+            "been initialized.\n",
+            "* Python version request: '",
+            paste(request$python_version, collapse = ","),
+            "'",
+            if (request$env_is_package) {
+              paste0(" (from package:", request$requested_from, ")")
+            },
+            "\n* Python version initialized: '",
+            current_version,
+            "'"
+          ))
         }
         invisible()
       }
@@ -258,10 +260,10 @@ base::local(
         invisible()
       }
       activation_config <- function(selection) {
-        selection <- jsonlite::fromJSON(selection)
+        inspected <- jsonlite::fromJSON(selection)
+        selection <- inspected$selection
+        metadata <- inspected$environment
         python <- selection$embedding$python
-        # The preparation owner captured metadata from this exact candidate.
-        metadata <- selection$metadata
         config <- globals$py_config
         config$python <- python
         config$executable <- python
@@ -278,9 +280,9 @@ base::local(
           "activate_this.py"
         )
         config$python_versions <- python
-        config$numpy <- if (!is.null(metadata$numpy$path)) {
+        config$numpy <- if (!is.null(metadata$numpy)) {
           list(
-            path = reticulate:::canonical_path(metadata$numpy$path),
+            path = metadata$numpy$path,
             version = numeric_version(reticulate:::clean_version(
               metadata$numpy$version
             ))
@@ -295,7 +297,12 @@ base::local(
         config$available <- TRUE
         config
       }
+      current_config <- function() globals$py_config
       raise_python_setup_error <- function() check_python_setup(FALSE)
+      raise_python_interrupt <- function() {
+        # Python already consumed the pending signal; preserve its R condition.
+        stop(structure(list(), class = c("interrupt", "condition")))
+      }
       record_activation <- function(requirements) {
         .Call(
           "mcp_console_python_activation_record",
@@ -359,8 +366,12 @@ base::local(
           config = if (initialized) activation_config(selection) else NULL
         )
       }
-      commit_import <- function(projection) {
+      commit_import <- function(projection, environment = NULL) {
         if (!is.null(projection$config)) {
+          if (!is.null(environment)) {
+            active <- jsonlite::fromJSON(environment)
+            projection$config$pythonpath <- active$pythonpath
+          }
           record_activation(projection$manifest)
           if (reticulate:::is_python_initialized()) {
             globals$py_config <- available_config(projection$config)
@@ -475,7 +486,11 @@ base::local(
             current$python_version,
             current$exclude_newer
           ),
-          manifest(seed$packages, seed$python_version, seed$exclude_newer)
+          manifest(
+            unlist(seed$packages, use.names = FALSE),
+            unlist(seed$python_version, use.names = FALSE),
+            seed$exclude_newer
+          )
         )
       ) {
         requirements_adapter$resolve()

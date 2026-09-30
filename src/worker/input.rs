@@ -293,3 +293,11 @@ pub(crate) fn read_python_input(prompt: &str) -> Result<PythonInput, String> {
     })()
     .inspect_err(|error| core::record_worker_failure(error.clone()))
 }
+
+pub(crate) fn python_interrupt_wakeup() -> Result<io::PipeReader, String> {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .try_clone()
+        .map_err(|error| error.to_string())
+}

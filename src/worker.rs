@@ -18,14 +18,17 @@ mod r_integration;
 pub(crate) use coordinator::run;
 #[cfg(unix)]
 pub(crate) use core::{
-    emit_output, publish_plot, publish_python_activation, publish_python_activation_failure,
-    publish_r_activation, publish_r_activation_failure, resolve_python, resolve_python_version,
-    resolve_r,
+    emit_output, is_shutting_down, mark_shutting_down, publish_plot, publish_python_activation,
+    publish_python_activation_failure, publish_r_activation, publish_r_activation_failure,
+    record_worker_failure, resolve_python, resolve_python_version, resolve_r,
 };
 #[cfg(unix)]
-pub(crate) use input::{PythonInput, read_python_input};
+pub(crate) use input::{PythonInput, python_interrupt_wakeup, read_python_input};
 #[cfg(unix)]
-pub(crate) use interrupt::{acknowledge_python_interrupt, install_python_interrupt};
+pub(crate) use interrupt::{
+    acknowledge_python_interrupt, begin_python_commit, finish_python_commit,
+    install_python_interrupt, pending as python_interrupt_pending,
+};
 
 #[cfg(not(unix))]
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {

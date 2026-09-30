@@ -106,19 +106,6 @@ impl Integration {
         }
     }
 
-    pub(super) fn prepare_python<T>(
-        &self,
-        operation: impl FnOnce() -> Result<T, String>,
-    ) -> Result<T, String> {
-        if initialized() {
-            embedded_r::defer_interrupts(operation, embedded_r::discard_interrupts)
-        } else {
-            let result = operation();
-            interrupt::acknowledge_python_interrupt();
-            result
-        }
-    }
-
     pub(super) fn begin_graphics(&self) -> Result<(), String> {
         if let Some(r) = runtime() {
             r.begin_graphics()

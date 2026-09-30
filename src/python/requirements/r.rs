@@ -100,11 +100,12 @@ pub(super) struct Projection {
 pub(super) fn project_packages(
     selected: &crate::python::NativePython,
     packages: &[String],
+    inspected: Option<&serde_json::Value>,
 ) -> Result<Option<Projection>, String> {
     let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
         return Ok(None);
     };
-    let encoded = serde_json::to_string(selected).map_err(|error| error.to_string())?;
+    let encoded = serde_json::json!({"selection": selected, "environment": inspected}).to_string();
     let packages = serde_json::to_string(packages).map_err(|error| error.to_string())?;
     let (encoded, packages) = harp::exec::r_sandbox(|| {
         (
@@ -120,9 +121,13 @@ pub(super) fn project_packages(
 }
 
 impl Projection {
-    pub(super) fn commit(self) -> Result<(), String> {
+    pub(super) fn commit(self, environment: Option<&serde_json::Value>) -> Result<(), String> {
+        let environment = harp::exec::r_sandbox(|| {
+            environment.map_or_else(Value::null, |value| Value(RObject::from(value.to_string())))
+        })
+        .map_err(|error| error.to_string())?;
         Adapter(self.adapter.sexp)
-            .call("commit_import", &[&self.value])
+            .call("commit_import", &[&self.value, &environment])
             .map(|_| ())
             .map_err(message)
     }
@@ -566,4 +571,27 @@ fn complete(operation: impl FnOnce() -> super::RResult<Value>) -> SEXP {
         Ok(value) | Err(Error::Interrupt(value)) => Ok(value.0.sexp),
         Err(Error::Message(message)) => Err(message),
     })
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_version_matches(
+    version: SEXP,
+    constraints: SEXP,
+) -> harp::Result<SEXP> {
+    let version: String = RObject::view(version).try_into()?;
+    let constraints: Vec<String> = RObject::view(constraints).try_into()?;
+    crate::python_requirement::validate_version_constraints(&constraints)
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    let parsed = version
+        .parse::<pep508_rs::pep440_rs::Version>()
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    let matches = constraints
+        .iter()
+        .flat_map(|constraint| constraint.split(','))
+        .all(|clause| {
+            crate::python_requirement::VersionConstraint::parse(clause.trim())
+                .matches(&parsed, &version)
+        });
+    Ok(RObject::from(matches).sexp)
 }

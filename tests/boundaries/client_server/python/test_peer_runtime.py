@@ -1493,7 +1493,7 @@ def attach_python_initialized_during_r_startup(
     system_default_packages: bool = False,
     trigger: str = "r-cell",
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as checkpoints:
         root = Path(directory)
         library = root / "library"
         library.mkdir()
@@ -1535,13 +1535,32 @@ def attach_python_initialized_during_r_startup(
                     "\nR_DEFAULT_PACKAGES=" + environment["R_DEFAULT_PACKAGES"] + "\n"
                 )
             environment["R_DEFAULT_PACKAGES"] = "NULL"
+            ready = FifoCheckpoint.create(root / "startup-ready")
+            release = FifoCheckpoint.create(root / "startup-release")
+            checkpoints.callback(ready.close)
+            checkpoints.callback(release.close)
+            environment["MCP_CONSOLE_TEST_STARTUP_READY"] = str(ready.path)
+            environment["MCP_CONSOLE_TEST_STARTUP_RELEASE"] = str(release.path)
         if managed:
             environment.pop("RETICULATE_PYTHON")
             # R startup hooks use the managed launch selection and common
             # native bootstrap; later imports retain the same requirement owner.
             version = "==" + ".".join(map(str, sys.version_info[:3]))
-        with McpClient(binary, execution.serve(), environment, root) as client:
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if system_default_packages and execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
+            if system_default_packages:
+                # Warmup owns startup even without a send. Keep the package
+                # checkpoint introduced with activation cancellation coverage.
+                try:
+                    ready.wait("R startup package", timeout=client.response_timeout)
+                    client.request("ping")
+                finally:
+                    release.release()
             if managed:
                 client.send(requirements={"python_version": [version]})
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]

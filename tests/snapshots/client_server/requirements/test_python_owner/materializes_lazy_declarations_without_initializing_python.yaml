@@ -1,0 +1,64 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    reticulate::py_require("humanize")
+    reticulate::py_require("humanize", action = "remove")
+    reticulate::py_require("py-yaml12")
+    reticulate::py_require(python_version = ">=3.10")
+    reticulate::py_require(python_version = ">=3.10", action = "remove")
+    reticulate::py_require(exclude_newer = "2026-09-01")
+    reticulate::py_require(exclude_newer = NA, action = "set")
+    stopifnot(!reticulate::py_available(initialize = FALSE))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - packaging
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: reticulate::py_available(initialize = FALSE)
+result:
+  content:
+    - type: text
+      text: |
+        [1] FALSE
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: |
+    requirements <- reticulate::py_require()
+    stopifnot(
+      all(c("py-yaml12", "packaging") %in% requirements$packages),
+      !"humanize" %in% requirements$packages,
+      is.null(requirements$python_version),
+      is.null(requirements$exclude_newer),
+      !reticulate::py_available(initialize = FALSE)
+    )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

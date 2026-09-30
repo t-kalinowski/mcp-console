@@ -1,0 +1,151 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python: []
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  requirements:
+    action: set
+    r:
+      - DBI
+      - arrow
+      - duckdb
+      - nanoarrow
+      - reticulate
+      - tidyverse
+    python: []
+    duckdb:
+      - icu
+      - json
+      - sqlite
+    python_version: []
+    exclude_newer: ~
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import importlib.util
+    import sys
+
+    original_prefix = sys.prefix
+    original_paths = {path for path in sys.path if path.startswith(original_prefix)}
+    sys.path.insert(0, "user-added-path")
+    importlib.util.find_spec("console_retired") is not None
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import console_unloaded
+
+    assert "user-added-path" in sys.path
+    assert not original_paths.intersection(sys.path)
+    assert importlib.util.find_spec("console_retired") is None
+    console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false

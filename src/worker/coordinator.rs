@@ -123,10 +123,10 @@ impl Coordinator {
                 })();
                 self.r.finish_graphics()?;
                 finish_console_stdin_operation()?;
-                result.map_err(io::Error::other)?;
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
+                result.map_err(io::Error::other)?;
                 if let Some(message) = take_worker_failure() {
                     return Err(io::Error::other(message).into());
                 }
@@ -154,10 +154,10 @@ impl Coordinator {
                 }
                 self.writer.send(&WorkerMessage::Completed)?;
             }
-            // Keep worker-owned preparation state transitions atomic. Any
-            // nested host resolver registers its own interrupt target.
+            // Resolution, inspection, and site hooks remain interruptible;
+            // the native owner defers interrupts only around publication.
             ServerMessage::PreparePython { packages } => {
-                let result = self.r.prepare_python(|| self.python.prepare(packages));
+                let result = self.python.prepare(packages);
                 if core::is_shutting_down() {
                     return Ok(false);
                 }

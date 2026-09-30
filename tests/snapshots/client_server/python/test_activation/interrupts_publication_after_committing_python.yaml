@@ -1,0 +1,176 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+      python: []
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  requirements:
+    action: set
+    r:
+      - DBI
+      - arrow
+      - duckdb
+      - nanoarrow
+      - reticulate
+      - tidyverse
+    python: []
+    duckdb:
+      - icu
+      - json
+      - sqlite
+    python_version: []
+    exclude_newer: ~
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: |
+    import signal
+    import sys
+
+    old_prefix = sys.prefix
+    marker = object()
+    marker_id = id(marker)
+
+
+    def interrupt_publication(frame, event, function):
+        if (
+            event == "c_call"
+            and getattr(function, "__name__", None) == "publish_python_activation"
+        ):
+            sys.setprofile(None)
+            assert sys.prefix != old_prefix
+            signal.raise_signal(signal.SIGINT)
+
+
+    sys.setprofile(interrupt_publication)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - console-activation-fixture
+result:
+  content:
+    - type: text
+      text: KeyboardInterrupt
+  isError: true
+---
+send:
+  python: sys.prefix != old_prefix, id(marker) == marker_id
+result:
+  content:
+    - type: text
+      text: |
+        (True, True)
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [worker starting]
+  isError: false
+---
+send:
+  python: import console_unloaded; console_unloaded.origin
+result:
+  content:
+    - type: text
+      text: |
+        'candidate'
+  isError: false

@@ -317,7 +317,8 @@ Tool bindings attach afterward at search position 2.
 A reentrant package hook uses the same native Python owner and planned identity.
 Compatible hints are accepted; conflicting selections require launch configuration or a requirements/restart transaction.
 Reticulate attaches conversion and event services to Console's interpreter and does not discover, inspect, activate, or bootstrap a second default interpreter.
-Captured conversion metadata avoids replaying Python startup hooks in a metadata subprocess.
+Captured conversion metadata avoids another inspection solely for bridge attachment.
+Managed startup separately probes site-path ownership in a disposable child, as described below.
 The bridge reasserts Console stream/input/interrupt services after reticulate hooks.
 Setup steps and attachment have reentrancy guards and once-only completion state.
 A failed startup is retained for explicit recovery; ordinary evaluation never retries partial initialization.
@@ -346,16 +347,23 @@ The R adapter preserves field presence and ordering, NA values, string bytes and
 R declarations retain reticulate's argument validation, warnings, live version/package checks, conditions, and add-only restrictions.
 Reached imports resolve and activate through the common owner, projecting R metadata before mutation and publishing it after success when the adapter exists.
 The host-inspected identity supplies the candidate library and prefixes.
-Execution-host inspection supplies conversion metadata too; bridge attachment and activation never run a metadata subprocess.
-Compatibility rejection precedes conversion metadata and interpreter mutation.
+Execution-host inspection supplies the initial conversion metadata, so bridge attachment does not run a metadata subprocess.
+Live activation probes that already selected candidate inside the worker for site paths, installed distribution versions, and refreshed conversion metadata; it never discovers an interpreter or resolves packages there.
+Library compatibility rejection precedes conversion metadata and interpreter mutation.
+The environment adapter rejects incompatible loaded distribution versions, replaces environment-owned paths while preserving user paths, and sets candidate identity before running site hooks.
+Its transaction restores Console-owned paths, prefixes, executable, and process environment after interrupted activation.
+Publication and the local commit defer interrupts, preserving an environment accepted before an interrupt is delivered.
+The native requirement owner retains the exact pending candidate and optional R projection across this transaction.
 An unsafe activation failure marks the generation restart-required even when reported through an R condition.
 A successfully published activation remains accepted when the subsequent import or cell fails.
 Idle tool preparation uses the same worker request and native owner with or without R.
 The former host-supplied native preparation variant and reticulate-driven preparation implementation are removed.
 The owner resolves a candidate, projects optional R metadata, mutates only an initialized interpreter, and publishes acceptance through existing generation checks.
 Startup declarations can materialize a candidate before CPython loads; successful initialization publishes it through the common owner after readiness commitment.
-The live interpreter pin is resolver input, separate from retained user constraints.
-R activation retains a transient matching key until reticulate accepts its configuration and writes the declaration.
+The live interpreter pin is resolver input, separate from retained user version constraints.
+R activation commits its prepared configuration and declaration through the active binding inside the publication transaction; initial interpreter setup publishes through its own hook without that transient matching key.
+Initial managed setup records site-path ownership through a cancellable probe of its selected executable.
+Startup failure or interruption requires explicit restart; it never resumes partial initialization in a later cell.
 All commits retain generation checks; no external-interpreter adoption path remains.
 Native console callbacks release the GIL while blocking on worker services and are confined to the configuring worker thread.
 Background threads and fork children use their underlying streams and cannot enter R through these services.

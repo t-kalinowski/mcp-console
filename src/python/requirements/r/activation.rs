@@ -125,37 +125,41 @@ impl Adapter {
             .filter(|selected| python == selected.embedding.python)
             .ok_or("Python activation has no matching inspected selection")?;
         super::super::validate_selected(&selected).map_err(|error| error.to_string())?;
-        let encoded = serde_json::to_string(&selected).map_err(|error| error.to_string())?;
+        let inspected = match crate::python::probe::inspect(&selected.embedding.python) {
+            Ok(value) => value,
+            Err(crate::python::probe::Error::Interrupted) => {
+                // Let R construct and consume its pending interrupt through the
+                // same condition-preserving boundary as the adapter callbacks.
+                let zero = harp::exec::r_sandbox(|| Value(RObject::from(0)))
+                    .map_err(super::from_r_error)?;
+                super::base_call("Sys.sleep", &[&zero])?;
+                return Err("Python probe cancelled without a pending R interrupt".into());
+            }
+            Err(error) => return Err(error.to_string().into()),
+        };
+        let encoded =
+            serde_json::json!({"selection": selected, "environment": inspected}).to_string();
         let encoded =
             harp::exec::r_sandbox(|| Value(RObject::from(encoded))).map_err(super::from_r_error)?;
         let config = Record::config(self.call("activation_config", &[&encoded])?)?;
-        match super::super::activate_selected(&selected) {
-            Ok(()) => {}
-            Err(crate::python::ActivationFailure::PythonException) => {
-                super::super::activation_failed()?;
-                // CPython retained the original exception and traceback. Let
-                // reticulate translate it through the existing condition and
-                // interrupt boundary; do not print it in the native operation.
+        let config = self.call("available_config", &[config.value()])?;
+        let projection = super::Projection {
+            adapter: Rc::new(RObject::view(self.0).clone()),
+            value: super::named_list(&[("manifest", candidate.value()), ("config", &config)])?,
+        };
+        let activation = super::super::STATE
+            .with_borrow(|state| state.resolved.clone())
+            .ok_or("Python activation has no resolved candidate")?;
+        match super::super::activate(&activation, inspected, Some(projection))? {
+            super::super::ActivationOutcome::Prepared => self.call("current_config", &[]),
+            super::super::ActivationOutcome::Interrupted => {
+                self.call("raise_python_interrupt", &[])
+            }
+            super::super::ActivationOutcome::Rejected(message) => Err(message.into()),
+            super::super::ActivationOutcome::Failed(_) => {
                 self.call("raise_python_setup_error", &[])?;
-                return Err("Python activation failed without an exception".into());
-            }
-            Err(error) => {
-                if matches!(error, crate::python::ActivationFailure::Infrastructure(_)) {
-                    super::super::activation_failed()?;
-                }
-                return Err(error.to_string().into());
+                Err("Python activation failed without an exception".into())
             }
         }
-        let result = (|| {
-            let config = self.call("available_config", &[config.value()])?;
-            // The active-binding write publishes only after reticulate accepts
-            // this returned config. A failed projection cannot undo activation.
-            self.call("record_activation", &[candidate.value()])?;
-            Ok(config)
-        })();
-        if result.is_err() {
-            super::super::activation_failed()?;
-        }
-        result
     }
 }

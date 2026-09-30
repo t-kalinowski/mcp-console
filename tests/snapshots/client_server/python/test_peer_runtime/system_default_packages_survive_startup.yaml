@@ -1,4 +1,8 @@
 ---
+input:
+  method: ping
+result: {}
+---
 send:
   r: invisible(NULL)
 result:
@@ -138,6 +142,10 @@ result:
       text: |
         [1] TRUE
   isError: false
+---
+input:
+  method: ping
+result: {}
 ---
 send:
   python: before_r = object(); before_r_identity = id(before_r)
