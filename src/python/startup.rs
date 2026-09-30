@@ -84,8 +84,11 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !super::library::services_installed()? {
         install_services(libpython)?;
     }
+    let site_initialized = super::library::initialize_site()?;
+    // Startup customizations precede evaluator defaults. Install the evaluator
+    // even after an interrupted hook so it can report the retained exception.
     super::library::install_runtime(super::RUNTIME_SOURCE)?;
-    if !super::library::initialize_site()? {
+    if !site_initialized {
         return Ok(false);
     }
     if !crate::sql::install_python_runtime()? {

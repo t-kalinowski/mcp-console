@@ -6,7 +6,6 @@ import builtins
 import json
 import os
 import signal
-import site as _site
 import sys
 import threading
 from typing import Any, Callable, TextIO
@@ -75,11 +74,6 @@ def install_services() -> None:
 install_services()
 
 
-def initialize_site() -> None:
-    # Imported while no_site was set, so site processing starts only here.
-    _site.main()
-
-
 class _LazyR:
     @staticmethod
     def _bridge() -> Any:
@@ -105,3 +99,11 @@ class _LazyR:
 
 
 builtins.r = _LazyR()
+
+
+# Import while no_site is set, keeping site processing explicit and retryable.
+import site as _site
+
+
+def initialize_site() -> None:
+    _site.main()
