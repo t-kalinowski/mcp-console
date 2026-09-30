@@ -13,6 +13,17 @@ result:
   isError: false
 ---
 send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
   r: |
     before_config <- reticulate::py_config()
     before_requirements <- reticulate::py_require()

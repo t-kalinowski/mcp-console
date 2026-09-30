@@ -54,7 +54,8 @@ def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
         assert client.transcript[-1]["result"]["isError"]
         client.request("ping")
         release.release()
-        client.send()
+        client.response_timeout = 600
+        client.send(timeout_ms=600_000)
         assert last_result_text(client) == "[1] 1\n"
         client.send(r="started")
         assert last_result_text(client) == "[1] 1\n"

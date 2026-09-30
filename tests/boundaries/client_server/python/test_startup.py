@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.requirements import FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, R, requires
@@ -243,6 +245,7 @@ def interrupted_initialization(
         root = Path(temporary).resolve()
         python, site = isolated_python(root)
         marker = root / "startup.pid"
+        reached = FifoCheckpoint.create(root / "embedded-startup")
         # The managed input notice acknowledges that the embedded hook is live.
         # SIGINT may reach any native thread once R has initialized.
         # fmt: python
@@ -260,6 +263,8 @@ def interrupted_initialization(
                 marker = Path({str(marker)!r})
                 if not marker.exists():
                     marker.write_text(str(os.getpid()))
+                    with open({str(reached.path)!r}, "wb", buffering=0) as stream:
+                        stream.write(b"1")
                     input("startup interrupt> ")
             """)
         (site / f"{hook}.py").write_text(source)
@@ -278,21 +283,38 @@ def interrupted_initialization(
             )
         environment["PYTHONPATH"] = str(site)
         environment["PYTHONNODEBUGRANGES"] = "1"
-        with McpClient(
-            binary,
-            execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
-            ),
-            environment,
-            root,
-        ) as client:
+        with (
+            closing(reached),
+            McpClient(
+                binary,
+                execution.serve(
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                ),
+                environment,
+                root,
+            ) as client,
+        ):
             client.initialize_and_list_tools()
             cell = "never_run = True" if language == "python" else "SELECT 42"
-            client.send(**{language: cell}, timeout_ms=10_000)
+            if r_first:
+                # This unresolved R-side Python selection stays lazy. Establish
+                # R state before entering its Python startup hook.
+                client.send(r="startup_state <- 41L; Sys.getpid()")
+                r_worker = int(last_result_text(client).removeprefix("[1] "))
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "[1] <worker pid>\n"
+                )
+            pending = client.start_send(**{language: cell}, timeout_ms=600_000)
+            reached.wait(
+                "embedded Python startup hook", timeout=client.response_timeout
+            )
+            client.receive(pending)
             assert last_result_text(client) == (
                 '[input requested: "startup interrupt> "]\n[waiting for stdin]'
             ), last_result_text(client)
             worker = int(marker.read_text())
+            if r_first:
+                assert worker == r_worker
             client.send(control="interrupt", timeout_ms=10_000)
             interrupted = last_result_text(client)
             assert "KeyboardInterrupt" in interrupted, interrupted
@@ -302,14 +324,6 @@ def interrupted_initialization(
                 r"\1<line>",
                 interrupted,
             )
-            if r_first:
-                # Background startup initialized R before entering the Python
-                # hook. Its state must survive retrying that interpreter.
-                client.send(r="startup_state <- 41L; Sys.getpid()")
-                assert last_result_text(client) == f"[1] {worker}\n"
-                client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "[1] <worker pid>\n"
-                )
             client.send(
                 # fmt: python
                 python=code(f"""

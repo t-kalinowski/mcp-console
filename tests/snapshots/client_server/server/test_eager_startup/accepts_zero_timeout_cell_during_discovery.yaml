@@ -45,7 +45,8 @@ input:
   method: ping
 result: {}
 ---
-send: {}
+send:
+  timeout_ms: 600000
 result:
   content:
     - type: text

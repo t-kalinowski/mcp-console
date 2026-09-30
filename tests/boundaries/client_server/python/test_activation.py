@@ -129,6 +129,9 @@ def initialize_managed_client(client: McpClient) -> None:
             """),
     )
     assert last_result_text(client) == "[done]", last_result_text(client)
+    # The declaration may have selected the initial candidate during discovery.
+    # A replacement deterministically starts with lazy Python initialization.
+    client.send(control="restart")
 
 
 def write_distribution(root: Path, name: str, module: str, version: str) -> None:
