@@ -165,6 +165,8 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
+                client.startup_error()
+                client.stdin.close()
                 assert client.stdout.read(timeout=15) == ""
                 errors = client.stderr.read(timeout=15)
                 assert client.process.wait(timeout=5) != 0

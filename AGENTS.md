@@ -68,6 +68,9 @@ Docker uses image packages with dynamic preparation disabled, even if resolvers 
 Docker and SBX share prepared-runtime discovery and configuration in `src/target_launch/runtime.rs`.
 Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and use its R/native-Python capabilities for operation validation and recording.
 Construct MCP tool presentation only from captured launch configuration; discovered runtime availability must not remove language fields.
+Run runtime discovery and initial preparation once in the background so MCP initialization, tool discovery, and pings remain responsive.
+Await the retained result before handling `send`; cancellation of one waiting call must not cancel shared preparation.
+The MCP connection owns startup cancellation and joins the existing resolver/provider retirement protocol on closure or failed handshake.
 Prepared targets select preinstalled CPython when R is genuinely absent, support target-relative `python`, never enter dependency preparation, and retain target paths as opaque controller metadata.
 Direct compute launches provide private Python storage through the existing target launcher; extension caches and shared paths retain their provider ownership.
 Docker Sandbox selects compute enforcement by default; explicit `sandbox.provider: compute` documents that selection.
@@ -224,13 +227,14 @@ Keep these invariants intact:
 
 ### Protocols, relay, and worker orchestration
 
+- `src/server/startup.rs` — shared background runtime preparation and connection-owned cancellation; MCP discovery does not wait for it.
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
-- `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup and the compute ownership helpers.
+- `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup, Python probes, and compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
 - `src/worker_client/output.rs`, `src/worker_client/output/{tape,preview,terminal}.rs` — canonical response composition, streaming output cuts, bounded 8 KiB text previews, independent image admission, raw-file receipts, and progress projection.
-- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
+- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and shared Unix relay transport.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.

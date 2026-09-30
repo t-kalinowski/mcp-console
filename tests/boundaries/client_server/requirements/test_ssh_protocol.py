@@ -160,6 +160,8 @@ def test_default_extension_failure_closes_preparation(
                 with McpClient(
                     binary, ("serve", "--no-sandbox"), environment, root
                 ) as client:
+                    client.startup_error()
+                    client.stdin.close()
                     assert client.process.wait(timeout=15) != 0
                     assert not client.stdout.read()
                     errors = client.stderr.read()
@@ -175,7 +177,7 @@ def test_default_extension_failure_closes_preparation(
 
 
 @requires(SSH)
-def test_incompatible_preparation_peer_fails_before_mcp_ready(binary):
+def test_incompatible_preparation_peer_fails_before_worker_startup(binary):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
@@ -189,6 +191,8 @@ def test_incompatible_preparation_peer_fails_before_mcp_ready(binary):
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
+                client.startup_error()
+                client.stdin.close()
                 assert client.process.wait(timeout=12) != 0
                 assert not client.stdout.read()
                 errors = client.stderr.read()

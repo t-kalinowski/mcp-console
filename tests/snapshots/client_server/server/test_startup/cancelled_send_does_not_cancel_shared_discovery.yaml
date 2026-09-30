@@ -1,0 +1,28 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: stop('cancelled request must not execute')
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: 3
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  r: stop('failed discovery must not execute')
+result:
+  content:
+    - type: text
+      text: >-
+        worker R home discovery failed with exit status: 17: fixture R discovery
+        failed
+  isError: true
+---
+stderr: >
+  worker R home discovery failed with exit status: 17: fixture R discovery
+  failed

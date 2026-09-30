@@ -598,6 +598,8 @@ def rejected_probes(binary: Path, provider: str) -> list:
         with prepared(
             binary, provider, python=selected, workload=workload, setup=setup
         ) as (client, root):
+            client.startup_error()
+            client.stdin.close()
             assert client.stdout.read(timeout=40) == ""
             errors = client.stderr.read(timeout=40)
             assert expected in errors, errors
@@ -606,7 +608,7 @@ def rejected_probes(binary: Path, provider: str) -> list:
             records.append(
                 {
                     "mode": mode,
-                    "rejected_before_mcp_readiness": True,
+                    "rejected_before_worker_startup": True,
                     "owned_probe_retired": True,
                 }
             )

@@ -185,7 +185,7 @@ fn run_server(
     let result = runtime.block_on(server::run(
         worker, relay, no_sandbox, settings, target, python,
     ));
-    // `server::run` has already joined service and worker shutdown. Tokio's
+    // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.
     // The process exits immediately after this function returns.
