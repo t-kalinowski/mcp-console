@@ -547,13 +547,13 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                 return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
             }
         };
-        if let Some(cell) = cell.as_ref() {
-            if !self.languages.enables(cell.language) {
-                return Err(format!(
-                    "`{}` cells are disabled by `{LANGUAGES_ENV}`",
-                    Languages::field(cell.language)
-                ));
-            }
+        if let Some(cell) = cell.as_ref()
+            && !self.languages.enables(cell.language)
+        {
+            return Err(format!(
+                "`{}` cells are disabled by `{LANGUAGES_ENV}`",
+                Languages::field(cell.language)
+            ));
         }
         if let Some(requirements) = &requirements {
             use crate::worker_client::RequirementsAction::{Get, Reset};

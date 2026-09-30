@@ -56,10 +56,10 @@ impl Startup {
                     initialize_worker.configure(prepared.worker);
                     recording.configure(prepared.transcript);
                     initialize_worker.record_with(recording);
-                    if let Some(languages) = languages {
-                        if let Err(error) = initialize_worker.prewarm(languages) {
-                            initialize_worker.report_warmup_failure(&generation, error);
-                        }
+                    if let Some(languages) = languages
+                        && let Err(error) = initialize_worker.prewarm(languages)
+                    {
+                        initialize_worker.report_warmup_failure(&generation, error);
                     }
                     drop(startup);
                     Ok(())

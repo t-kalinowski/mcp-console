@@ -485,13 +485,11 @@ impl WorkerOperationState {
                 })?;
                 if let Some(OperationKind::Initialize(client)) =
                     state.operation.as_ref().map(|operation| &operation.kind)
-                {
-                    if let Some(active) = client
+                    && let Some(active) = client
                         .current_evaluation()?
                         .filter(|active| active.inherits_startup)
-                    {
-                        active.evaluation.input_received()?;
-                    }
+                {
+                    active.evaluation.input_received()?;
                 }
                 Ok(())
             }
