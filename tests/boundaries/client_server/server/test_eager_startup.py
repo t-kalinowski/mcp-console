@@ -440,5 +440,47 @@ def test_failed_discovery_discards_pending_recording(binary: Path) -> Transcript
             return [{"failed_send_count": 1024, "result": failure}, {"stderr": stderr}]
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(R, PROCESS_EVENTS, command("ir"), command("uv"))
+def test_interrupt_stdin_preserves_used_default(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        site = Path(directory)
+        (site / "sitecustomize.py").write_text(
+            code("""
+            import os
+            import sys
+
+            if sys.argv[0] != "-c" and os.environ.get(
+                "R_SESSION_INITIALIZED", ""
+            ).startswith(f"PID={os.getpid()}:"):
+                input("warmup> ")
+            """)
+        )
+        with startup_fixture(
+            binary,
+            execution,
+            phase="none",
+            server_environment={
+                "PYTHONPATH": str(site),
+                "RETICULATE_PYTHONPATH": str(site),
+            },
+        ) as fixture:
+            client = fixture.client
+            client.response_timeout = 600
+            client.initialize_and_list_tools()
+            client.send(timeout_ms=600_000)
+            assert last_result_text(client) == (
+                '[input requested: "warmup> "]\n[waiting for stdin]'
+            ), last_result_text(client)
+            client.send(control="interrupt", stdin="retained input\n", timeout_ms=0)
+            assert not client.send(requirements={"action": "get"})["isError"]
+            changed = client.send(requirements={"action": "set"})
+            assert changed["isError"] is True, changed
+            assert "explicit restart" in str(changed), changed
+            return client.finish()[-1:]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)
