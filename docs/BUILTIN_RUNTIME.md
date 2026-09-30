@@ -43,6 +43,10 @@ Language errors do not reset the worker, and changes made before an error remain
 Restart, worker replacement, or server exit discards all in-memory state.
 Prepared requirements are server-owned and survive restart as described in [Requirements and environments](REQUIREMENTS.md).
 
+R's `commandArgs()[1]` identifies the selected installation's launcher, `file.path(R.home("bin"), "R")`, so it can start R subprocesses using that installation's configured default architecture.
+The remaining arguments describe Console's interactive R session; `commandArgs(TRUE)` initially has no user arguments.
+The worker supplies the selected installation's `R_HOME`, `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` for R subprocesses and preserves the caller's `R_ARCH` selection.
+
 Only one cell can run at a time.
 Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.
 A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
@@ -379,6 +383,9 @@ An explicit or independently resolved Python selection can run while R remains u
 Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
 Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
 Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
+Python starts with interactive `sys.argv == [""]` and `sys.orig_argv == [sys.executable]` before startup hooks run.
+Later cells and R attachment preserve user changes to those argument arrays.
+Children launched through `sys.executable` retain Python's ordinary command, module, script, and stdin argument semantics.
 Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
 Console-owned Python runs executable `.pth` files and `sitecustomize` after connecting managed input and interrupts.
 Interrupted startup hooks can retry in the same interpreter, and completed site processing is not repeated during later setup retries or R attachment.

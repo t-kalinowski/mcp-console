@@ -21,11 +21,7 @@ result:
   content:
     - type: text
       text: |
-        Error in `dbConnect()`:
-        ! IO Error: Cannot open file "<workspace>/knowledge.ragnar.duckdb": Operation not permitted
-        ℹ Context: rapi_startup
-        ℹ Error type: IO
-        Run `rlang::last_trace()` to see where the error occurred.
+        Cannot create knowledge.ragnar.duckdb: Operation not permitted
   isError: false
 ---
 send:
