@@ -130,6 +130,8 @@ def test_default_package_imports_do_not_prepare_optional_dependencies(
         environment, record = managed_environment(Path(temporary))
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
+            # Background preparation must finish before recording resolver calls.
+            client.send(python="pass")
             before = uv_tool_run_requirements(record)
             client.send(
                 # fmt: python
@@ -141,7 +143,10 @@ def test_default_package_imports_do_not_prepare_optional_dependencies(
                     """),
             )
             assert last_result_text(client) == "(3, 3)\n", last_result_text(client)
-            assert uv_tool_run_requirements(record) == before
+            assert uv_tool_run_requirements(record) == before, (
+                before,
+                uv_tool_run_requirements(record),
+            )
             return client.finish()
 
 

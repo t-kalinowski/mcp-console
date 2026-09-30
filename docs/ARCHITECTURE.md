@@ -591,7 +591,8 @@ Ordinary resolver and activation errors leave an otherwise healthy worker availa
 
 Automatic Python resolution is also a callback from an active built-in worker.
 The private finder runs only after Python's existing import finders have failed, so available standard-library, local, and installed modules do not enter this path.
-It also yields without a callback for optional-dependency misses reached while the default NumPy or pandas package is initializing, so importing those available defaults does not change the managed environment.
+It also yields without a callback for missing imports reached while an installed distribution is initializing, using current distribution metadata to recognize its import roots.
+This preserves ordinary optional-dependency handling; later calls and local modules without distribution metadata remain eligible for automatic resolution.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
 
 The Python finder calls the shared native requirement owner, which forms an additive request from its retained manifest.

@@ -4,6 +4,18 @@ import zipfile
 from pathlib import Path
 
 
+def runtime_source_line(statement: str) -> int:
+    """Keep public setup tracebacks exact when embedded source moves."""
+    source = (Path(__file__).resolve().parents[2] / "src/python/runtime.py").read_text()
+    matches = [
+        line
+        for line, text in enumerate(source.splitlines(), 1)
+        if text.strip() == statement
+    ]
+    assert len(matches) == 1, statement
+    return matches[0]
+
+
 def write_test_wheel(
     root: Path, name: str, module_source: str | None, *, command: str | None = None
 ) -> Path:

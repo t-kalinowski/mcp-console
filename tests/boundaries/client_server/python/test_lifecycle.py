@@ -19,6 +19,7 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.native import SHARED_LIBRARY_FLAG
+from support.python import runtime_source_line
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
@@ -508,6 +509,8 @@ def test_retries_python_runtime_initialization_after_interrupt(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    configuration_line = runtime_source_line("_defaults.apply(name)")
+    numpy_line = runtime_source_line('if module.get_printoptions()["linewidth"] == 75:')
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
@@ -547,8 +550,8 @@ def test_retries_python_runtime_initialization_after_interrupt(
             output = last_result_text(client)
             assert output == (
                 "Traceback (most recent call last):\n"
-                '  File "<string>", line 838, in _mcp_console_configure_module_defaults\n'
-                '  File "<string>", line 796, in apply\n'
+                f'  File "<string>", line {configuration_line}, in _mcp_console_configure_module_defaults\n'
+                f'  File "<string>", line {numpy_line}, in apply\n'
                 '  File "<runtime setup checkpoint>", line 9, in configuration_checkpoint\n'
                 '  File "<string>", line 50, in _console_input\n'
                 "KeyboardInterrupt\n"
