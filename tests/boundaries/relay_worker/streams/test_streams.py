@@ -205,13 +205,14 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
         logger.addHandler(handler)
 
 
-        def reject_r_callback(frame, event, function):
+        def reject_runtime_callback(frame, event, function):
             if (
                 os.getpid() != worker_pid
                 and event == "c_call"
-                and getattr(function, "__module__", None) == "rpycall"
+                and getattr(function, "__module__", None)
+                in {"rpycall", "_mcp_console_services"}
             ):
-                raise AssertionError("fork child called back into R")
+                raise AssertionError("fork child called back into Console or R")
 
 
         def run_child(action):
@@ -219,7 +220,7 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             # Only this known CPython diagnostic is filtered, only around fork.
             # The automatic-resolution lifecycle test records it in full.
             previous_profile = sys.getprofile()
-            sys.setprofile(reject_r_callback)
+            sys.setprofile(reject_runtime_callback)
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
