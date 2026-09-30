@@ -19,6 +19,8 @@ def test_round_trips_python_requirement_attributes_and_copies(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # Exercise lazy declarations before Python initializes in a replacement.
+    client.send(control="restart")
     # fmt: r
     r = code(r"""
         initial <- reticulate::py_require()

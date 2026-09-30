@@ -2,6 +2,17 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
   r: |
     reticulate::py_require("humanize")
     reticulate::py_require("humanize", action = "remove")

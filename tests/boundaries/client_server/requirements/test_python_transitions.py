@@ -32,6 +32,8 @@ def test_owns_managed_python_transitions(
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
+        # Replacement generations retain lazy language initialization.
+        client.send(control="restart")
         # Instrument the old planner, then exercise only public declarations,
         # explicit preparation, and automatic imports through the console.
         # fmt: r
@@ -167,6 +169,7 @@ def test_preserves_preparation_restoration_and_live_noops(
         )
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
+            client.send(control="restart")
             # fmt: r
             r = code(r"""
                 reticulate::py_require(
