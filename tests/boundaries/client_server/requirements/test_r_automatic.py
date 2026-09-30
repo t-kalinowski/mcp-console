@@ -407,8 +407,14 @@ def test_retains_automatic_r_package_after_error_and_restart(
             stopifnot(is.function(fortunes::fortune))
             stop("after activation")
             """)
-        client.send(r=r)
-        assert "Error: after activation" in last_result_text(client)
+        wait_for_evaluation_output(
+            client,
+            "Error: after activation\n",
+            "automatic R package error",
+            completion_timeout_seconds=client.response_timeout,
+            r=r,
+            timeout_ms=0,
+        )
         assert len(ir_run_records(record)) == baseline + 1
 
         client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
