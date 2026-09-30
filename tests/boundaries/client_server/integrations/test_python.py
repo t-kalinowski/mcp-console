@@ -52,7 +52,7 @@ def test_clients_inspect_and_replace_requirements(
         # by the runtime requirements suites.
         library = root / "prepared-r-library"
         library.mkdir()
-        environment.update(fake_ir_environment(root, [library, library]))
+        environment.update(fake_ir_environment(root, [library] * 4))
         environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         settings = {
@@ -62,7 +62,7 @@ def test_clients_inspect_and_replace_requirements(
         }
         with MCPConsole(**settings) as console:
             startup = json.loads(console.send(requirements={"action": "get"}))
-            assert startup["prepared"] is False
+            assert startup["prepared"] is True
             console.send(
                 requirements={
                     "action": "set",
@@ -80,7 +80,7 @@ def test_clients_inspect_and_replace_requirements(
         async def asynchronous() -> None:
             async with AsyncMCPConsole(**settings) as console:
                 startup = json.loads(await console.send(requirements={"action": "get"}))
-                assert startup["prepared"] is False
+                assert startup["prepared"] is True
                 await console.send(requirements={"action": "set"})
                 selected = json.loads(
                     await console.send(requirements={"action": "get"})
@@ -89,7 +89,7 @@ def test_clients_inspect_and_replace_requirements(
                 results.append({"async": selected})
 
         asyncio.run(asynchronous())
-        assert (root / "ir-counter").read_text() == "2"
+        assert (root / "ir-counter").read_text() == "4"
     return results
 
 

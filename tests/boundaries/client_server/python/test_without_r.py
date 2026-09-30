@@ -435,12 +435,19 @@ def test_ignores_unrelated_non_utf8_environment(
         env[os.fsdecode(b"UNRELATED_STARTUP_NAME_\xff")] = "unused"
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
-            # Exercise preparation independently of the native worker launcher's
-            # existing requirement that its inherited environment be UTF-8.
+            # Preparation accepts unrelated non-UTF-8 values. Eager native
+            # launch still enforces its existing UTF-8 environment requirement.
             result = client.send(requirements={"python": ["py-yaml12"]})
             assert not result["isError"], result
             assert last_result_text(client) == "[prepared]"
-            return client.finish()[3:]
+            transcript, stderr = client.finish_with_standard_error()
+            if execution == SANDBOXED:
+                assert stderr == (
+                    "mcp-console-sandbox: environment key must be UTF-8\n"
+                ), stderr
+            else:
+                assert stderr == "", stderr
+            return transcript[3:]
 
 
 @executions(DIRECT, SANDBOXED)

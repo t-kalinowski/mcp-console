@@ -91,6 +91,16 @@ result:
         Execution halted]
   isError: true
 ---
+send:
+  r: stop("retry cell must not run")
+result:
+  content:
+    - type: text
+      text: |-
+        [reticulate `uv` resolution failed with exit status: 1: Error: fixture ambient reticulate bootstrap failed
+        Execution halted]
+  isError: true
+---
 input:
   method: tools/list
 result:

@@ -11,24 +11,57 @@ An empty `stdin` string contributes no bytes; the table refers to nonempty input
 
 ## Server readiness
 
-After launch configuration and applicable local native-policy validation, MCP initialization, tool discovery, and pings can complete while runtime discovery and initial environment preparation run in the background.
+After launch configuration and applicable local native-policy validation, MCP initialization, tool discovery, and pings can complete while runtime discovery, initial environment preparation, and default worker startup run in the background.
 The tool schema and descriptions come from captured configuration and do not change when that work finishes.
 An advertised language is not proof that its runtime is installed.
 
-Every `send`, including requirement inspection and control-only calls, waits for the same initial preparation result.
-This wait precedes the operation ordering below and is outside `timeout_ms`.
-A waiting call does not start a worker, enqueue its stdin, or evaluate its cell.
-MCP cancellation discards that call without cancelling shared preparation; the client may submit another call.
-Closing the MCP connection cancels preparation and waits for its existing ownership and retirement protocol.
+One startup owner prepares the default environment, launches its worker, and initializes the enabled runtimes supported by that environment.
+Bare R environments without managed adapters retain demand-driven R initialization; explicitly selected Python can still initialize independently.
+Uninspected R-side Python selection hints remain lazy; they are not treated as proof that Python is available.
+Custom workers retain their existing lazy launch contract.
+Startup and all early cells share the ordinary generation, admission, evaluation, and retirement machinery.
 
-A failed initial preparation is retained: subsequent `send` calls report the same failure rather than retrying setup, and tool discovery remains available.
+A structurally valid early cell occupies the existing evaluation slot immediately, including a cell with explicit requirements.
+Its observation deadline starts when the call enters the server and includes waiting for shared startup.
+Expiry returns `[running; poll with an empty send]`; `timeout_ms=0` requests immediate observation.
+The accepted cell continues in the background and is executed at most once.
+Collect it with an empty `send`; a second cell is rejected until the first completion has been delivered.
+An empty poll without an accepted cell waits for startup within its budget and returns `[worker starting]` if it expires.
+Requirement inspection likewise returns `[worker starting]` without a manifest until discovery and startup settle.
+
+Early code-free stdin is buffered for the current generation and delivered once when its worker is registered.
+Startup hooks use the ordinary input notices, stdin delivery, and polling path.
+Restart discards old-generation buffered input.
+A standalone requirements call that exhausts its budget before readiness returns `[worker starting]` without accepting a preparation; submit that declaration again after startup.
+An interrupt can signal startup before a process is registered and between resolver phases.
+A restart after discovery uses the existing retirement and replacement protocol, including while initialization is active.
+Before discovery completes, a control requiring configuration can exhaust its budget without applying control; a bundled cell is explicitly reported as not run.
+
+MCP cancellation before cell admission leaves no accepted cell.
+After admission, cancellation releases only that call's response wait: the cell remains accepted, including before execution begins, and continues through ordinary empty polling.
+Cancellation after execution begins likewise leaves the evaluation and its effects active.
+A cancelled request may have crossed admission before its caller observed cancellation; an empty poll discovers the retained state safely.
+Neither cancellation nor timeout cancels shared startup.
+Closing the MCP connection cancels discovery, preparation, worker launch, and initialization, then joins the existing ownership and retirement protocol.
+
+A failed runtime discovery is retained: subsequent `send` calls report the same failure rather than retrying setup, and tool discovery remains available.
 Correct the execution-host setup and start a new MCP server session to retry.
-Once preparation succeeds, the ordinary worker-startup and restart rules below apply.
+Default environment and worker startup failures retain the ordinary later-cell retry boundary; they do not trigger a new retry loop.
+An interrupted Python startup hook reports its output without running the accepted cell; a later cell can retry unfinished initialization in the same interpreter.
+
+Explicit early requirements are prepared before the accepted cell or its bundled stdin reaches execution.
+If the declaration is already admitted when discovery finishes, the startup owner uses it to select the initial candidate before preparing defaults.
+Declarations arriving after default preparation begins use the same preparation transaction after shared startup settles.
+An unchanged declaration reuses the default candidate.
+A changed replacement can retire an unused prewarmed candidate after successful resolution, without requiring an explicit restart merely because it was prewarmed.
+Once user code or stdin has reached the worker, the ordinary live-change and explicit-restart rules apply.
+Resolution failure preserves the committed environment and candidate; uncertain retirement blocks replacement.
 
 ## Validation before actions
 
 Request decoding and structural checks precede interruption, preparation, stdin enqueue, and evaluation.
-These checks reject incompatible `get` fields, payloads with `reset`, replacement actions with interrupt, unknown fields, wrong field types, multiple code fields, disabled languages, unavailable requirements, standalone preparation with nonempty stdin, and interrupt plus requirements without a cell.
+These checks reject incompatible `get` fields, payloads with `reset`, replacement actions with interrupt, unknown fields, wrong field types, multiple code fields, disabled languages, standalone preparation with nonempty stdin, and interrupt plus requirements without a cell.
+Checks requiring discovered runtime capabilities complete before execution and requirement preparation; an early accepted cell can report such a validation error through its ordinary polling result.
 
 [SSH targets](SSH.md) discover capability on the execution host in the same background preparation phase.
 Managed targets use the preparation ordering below; bare targets allow only `requirements.action="get"` at execution and reject supplied preparation before control, stdin, or evaluation side effects.
@@ -53,14 +86,15 @@ Requirement compatibility and resolver errors can arise later during preparation
 
 ## Operations
 
-`timeout_ms` defaults to 60,000 milliseconds and limits observation of an evaluation, not the duration of the whole call.
-It starts when evaluation observation begins after admission, or when a poll attaches to an evaluation.
-Explicit preparation and control finish before this wait, as shown below.
+`timeout_ms` defaults to 60,000 milliseconds and provides one observation deadline measured from call entry.
+Shared initial startup consumes this budget; evaluation does not receive a fresh timeout after readiness.
+Explicit preparation after startup and inline control still finish before observation, as shown below, and can extend the complete call beyond the deadline.
 It does not cancel evaluation, worker startup, or resolution.
 SSH discovery and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
 Remote dependency preparation has no setup deadline; an interrupt or cancellation targets that operation's remote resolver processes.
 An automatic replacement attempt after worker failure shares the same evaluation wait.
-The table assumes the session admits the operation; a conflicting operation or generation change can reject it before the remaining steps.
+The table describes operation order after shared initial startup settles; early accepted cells follow the readiness rules above.
+A conflicting operation or generation change can reject admission before the remaining steps.
 
 | Call                                                          | Order after structural checks                                                                                                                                                                                                                        | Generation receiving stdin                                                    | What can remain after failure                                                                                                                                                                                                                           | When `timeout_ms` applies                                                                                                                          |
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -73,11 +107,12 @@ The table assumes the session admits the operation; a conflicting operation or g
 | Stdin without code or control                                 | Queue input and observe the active evaluation, or start an initial/stopped worker if needed, queue input, and collect idle output.                                                                                                                   | The generation accepting the input.                                           | Queued bytes can be consumed even if subsequent observation fails.                                                                                                                                                                                      | From attachment to an active evaluation. With no evaluation, startup and input submission have no `timeout_ms` deadline.                           |
 
 The preparation rows describe `add`, the default action.
-For `set` and `reset`, a changed declaration with a live worker requires explicit restart and is rejected before resolution or mutation otherwise.
+For `set` and `reset`, a changed declaration with a live worker that has accepted user execution requires explicit restart and is rejected before resolution or mutation otherwise.
+An unused prewarmed default candidate instead permits resolution followed by confirmed retirement and replacement.
 Without a live worker, standalone replacement resolves and retains the complete candidate without starting a worker.
 Omitted `set` fields are empty; `reset` restores startup defaults.
 An unchanged replacement skips preparation, while an explicit restart still takes effect.
-`get` waits for initial runtime discovery, then bypasses evaluation and preparation admission, reads the committed snapshot, and returns without starting a worker or collecting output.
+`get` waits for initial startup within its observation budget, then bypasses evaluation and preparation admission, reads the committed snapshot, and returns without collecting output.
 It rejects code, stdin, control, and requirement payloads.
 See [requirements actions](REQUIREMENTS.md#inspecting-and-replacing-requirements).
 
@@ -101,10 +136,11 @@ The [live preparation rules](REQUIREMENTS.md#live-r-preparation) describe these 
 
 A wait that ends with `[running; poll with an empty send]` leaves the operation active.
 Poll with another empty `send`; do not resubmit its code.
-The built-in server prepares its initial environment on first use through these same operations.
-For an ordinary first cell, the evaluation wait includes default environment preparation and worker startup.
-Explicit requirements and restart finish initial preparation before any following evaluation wait.
-Idle stdin awaits preparation, startup, and input submission without a `timeout_ms` deadline; see [retained environments](REQUIREMENTS.md#retained-environments).
+The built-in server prepares its initial environment and worker in the background through these same operations.
+An early accepted cell's observation budget includes shared startup and any deferred explicit preparation before execution.
+After initial readiness, explicit requirements and restart finish before observing a following cell with the remaining budget.
+Code-free stdin during initial startup uses the bounded readiness wait above; starting an initial or stopped worker afterward retains the existing unbounded input-submission step.
+See [retained environments](REQUIREMENTS.md#retained-environments).
 
 ## Output and retained files
 

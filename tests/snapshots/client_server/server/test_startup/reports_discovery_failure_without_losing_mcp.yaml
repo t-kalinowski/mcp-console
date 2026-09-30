@@ -7,8 +7,8 @@ result:
   content:
     - type: text
       text: >-
-        worker R home discovery failed with exit status: 17: fixture R discovery
-        failed
+        [worker R home discovery failed with exit status: 17: fixture R
+        discovery failed]
   isError: true
 ---
 input:
@@ -21,8 +21,8 @@ result:
   content:
     - type: text
       text: >-
-        worker R home discovery failed with exit status: 17: fixture R discovery
-        failed
+        [worker R home discovery failed with exit status: 17: fixture R
+        discovery failed]
   isError: true
 ---
 input:
@@ -309,8 +309,8 @@ result:
               when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
               background work, then poll with an empty `send`.
 
-              Defaults to 60,000 milliseconds. The wait starts after cell dispatch or attachment to an active
-              evaluation and includes one automatic worker replacement attempt. It does not cancel resolution
+              Defaults to 60,000 milliseconds. One deadline starts at call entry and includes initial
+              background startup, evaluation observation, and one automatic worker replacement attempt. It does not cancel resolution
               or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
               before dispatch and may make the complete call take longer. This value does not limit standalone
               preparation. Automatic R and Python import

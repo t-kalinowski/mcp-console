@@ -7,6 +7,7 @@ result:
   content:
     - type: text
       text: |-
+        [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
   isError: false

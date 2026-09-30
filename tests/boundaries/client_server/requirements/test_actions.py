@@ -44,7 +44,7 @@ def test_empty_declaration_and_round_trip(
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     startup = inspect(client)
-    assert startup["prepared"] is False
+    assert startup["prepared"] is True
     assert startup["requirements"]["python"] == ["numpy", "pandas"]
     assert "tidyverse" in startup["requirements"]["r"]
     assert "yyjsonr" in startup["requirements"]["r"]

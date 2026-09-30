@@ -159,13 +159,17 @@ def test_preserves_initialize_buffered_during_startup(
 ) -> Transcript:
     with startup_fixture(binary, execution) as fixture:
         client = fixture.client
+        fixture.wait_for_resolver()
+        invocations = fixture.invocations()
         client.initialize_and_list_tools()
-        assert fixture.invocations() == [], "initialization started a resolver"
-        client.send()
-        assert last_tool_text(client) == "\n[idle]"
+        client.request("ping")
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == "[worker starting]"
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
-        assert fixture.invocations() == [], "poll or invalid input started a resolver"
+        assert fixture.invocations() == invocations, (
+            "poll or invalid input duplicated startup"
+        )
         assert not list(fixture.root.glob("sandbox-*"))
         return client.finish()
 
@@ -176,8 +180,9 @@ def test_initializes_before_uv_bootstrap_installation(
     binary: Path, execution: Execution
 ) -> Transcript:
     with startup_fixture(binary, execution, bootstrap="uv") as fixture:
+        fixture.wait_for_resolver()
         fixture.client.initialize_and_list_tools()
-        assert fixture.invocations() == [], "initialization started a resolver"
+        fixture.client.request("ping")
         return fixture.client.finish()
 
 
@@ -317,7 +322,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
-        preparation = client.start_send(requirements={"r": ["DBI"]}, timeout_ms=0)
+        preparation = client.start_send(requirements={"r": ["DBI"]})
         fixture.wait_for_resolver()
         client.request("ping")
         assert "result" not in preparation, (
@@ -332,7 +337,6 @@ def test_explicit_preparation_keeps_its_wait_precondition(
             "isError": False,
         }
         fixture.wait_for_resolver_exit()
-        assert not list(fixture.root.glob("sandbox-*"))
         client.send(r="42L")
         assert last_tool_text(client) == "[1] 42\n"
         return client.finish()

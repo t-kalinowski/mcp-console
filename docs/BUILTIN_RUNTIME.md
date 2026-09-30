@@ -24,7 +24,7 @@ A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned 
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
 Dynamic package preparation is disabled, and Docker Quarto projections likewise execute captured cells when rendered.
 They do not reproduce the remote filesystem when rendered locally.
-With R available, each worker generation creates these resources when needed:
+With R available, each worker generation owns these resources:
 
 - one persistent R global environment;
 - one persistent Python `__main__` namespace embedded by Console, with reticulate supplying the R bridge; and
@@ -32,8 +32,11 @@ With R available, each worker generation creates these resources when needed:
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
 
-Worker readiness precedes interpreter initialization.
-A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
+The default worker starts in the background at server launch, including applicable interpreter and SQL-service initialization.
+Disabled languages and unsupported bare adapters are not initialized by prewarming.
+MCP initialization, discovery, and pings proceed independently; early cells and polls use their observation budget while startup continues.
+See [server readiness](SEND_OPERATIONS.md#server-readiness) for acceptance, input, cancellation, requirements changes, and startup failure behavior.
+Failed private-storage retirement blocks replacement and remains an error at server shutdown.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -371,7 +374,7 @@ Python cell tracebacks omit Console's private runtime frames while retaining use
 Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R and Python initialize on demand.
+Default startup initializes applicable enabled runtimes; remaining runtimes and replacement generations initialize on demand.
 An explicit or independently resolved Python selection can run while R remains uninitialized.
 Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
 Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
@@ -380,7 +383,7 @@ Console applies the environment before Python startup hooks run; reticulate atta
 Console-owned Python runs executable `.pth` files and `sitecustomize` after connecting managed input and interrupts.
 Interrupted startup hooks can retry in the same interpreter, and completed site processing is not repeated during later setup retries or R attachment.
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
-Ordinary R evaluation does not initialize Python.
+Ordinary R evaluation does not itself initialize Python, which may already have been initialized by background startup.
 An R cell, Python-side `r` access, or R-owned SQL initializes R.
 Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, display settings, and user redirections of `sys.stdout` and `sys.stderr`.
 Linux loader preparation happens before either interpreter starts.

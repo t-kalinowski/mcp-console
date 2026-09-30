@@ -119,13 +119,14 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
 
 def initialize_managed_client(client: McpClient) -> None:
     client.initialize_and_list_tools()
-    # Match the manifest to these standard-library and fixture-module environments
-    # before startup; they do not provide the normal NumPy/pandas seed.
+    # Match the manifest to these standard-library and fixture-module environments.
+    # Replace the unused default candidate before executing its first R cell.
     client.send(
+        requirements={"action": "set"},
         # fmt: r
         r=code("""
             reticulate::py_require(character(), action = "set")
-            """)
+            """),
     )
     assert last_result_text(client) == "[done]", last_result_text(client)
 

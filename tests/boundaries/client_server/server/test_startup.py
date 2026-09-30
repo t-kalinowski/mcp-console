@@ -195,10 +195,12 @@ def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transc
     with gated_discovery(binary) as (client, release):
         client.initialize_and_list_tools()
         pending = client.start_send(r="stop('cancelled request must not execute')")
+        client.send(r="stop('another cell must not execute')", timeout_ms=0)
+        assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
         release.release()
-        result = client.send(r="stop('failed discovery must not execute')")
+        result = client.send()
         assert result["isError"], result
         assert "fixture R discovery failed" in str(result), result
         transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
@@ -229,7 +231,9 @@ def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript
 
 
 @requires(R)
-def test_cancelled_cell_is_not_replayed_after_discovery(binary: Path) -> Transcript:
+def test_cancelled_wait_preserves_admitted_cell_after_discovery(
+    binary: Path,
+) -> Transcript:
     environment, _ = r_test_environment()
     with gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
         client,
@@ -237,11 +241,15 @@ def test_cancelled_cell_is_not_replayed_after_discovery(binary: Path) -> Transcr
     ):
         client.initialize_and_list_tools()
         pending = client.start_send(r="cancelled_cell_ran <- TRUE")
+        client.send(r="stop('another cell must not execute')", timeout_ms=0)
+        assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
         release.release()
+        client.send()
+        assert last_result_text(client) == "[done]"
         client.send(r='exists("cancelled_cell_ran", inherits = FALSE)')
-        assert last_result_text(client) == "[1] FALSE\n", last_result_text(client)
+        assert last_result_text(client) == "[1] TRUE\n", last_result_text(client)
         return client.finish()
 
 

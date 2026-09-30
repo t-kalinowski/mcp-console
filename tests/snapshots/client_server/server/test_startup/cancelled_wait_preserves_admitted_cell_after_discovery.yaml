@@ -2,7 +2,7 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
 ---
 send:
-  r: stop('cancelled request must not execute')
+  r: cancelled_cell_ran <- TRUE
 ---
 send:
   r: stop('another cell must not execute')
@@ -26,11 +26,14 @@ send: {}
 result:
   content:
     - type: text
-      text: >-
-        [worker R home discovery failed with exit status: 17: fixture R
-        discovery failed]
-  isError: true
+      text: "[done]"
+  isError: false
 ---
-stderr: >
-  worker R home discovery failed with exit status: 17: fixture R discovery
-  failed
+send:
+  r: exists("cancelled_cell_ran", inherits = FALSE)
+result:
+  content:
+    - type: text
+      text: |
+        [1] TRUE
+  isError: false

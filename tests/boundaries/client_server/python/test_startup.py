@@ -243,7 +243,6 @@ def interrupted_initialization(
         root = Path(temporary).resolve()
         python, site = isolated_python(root)
         marker = root / "startup.pid"
-        worker_identity = root / "worker.pid"
         # The managed input notice acknowledges that the embedded hook is live.
         # SIGINT may reach any native thread once R has initialized.
         # fmt: python
@@ -255,7 +254,7 @@ def interrupted_initialization(
 
             if sys.argv[0] != "-c" and (
                 {not r_first!r}
-                or os.getpid() == int(Path({str(worker_identity)!r}).read_text())
+                or os.environ.get("R_SESSION_INITIALIZED", "").startswith(f"PID={{os.getpid()}}:")
             ):
                 builtins.startup_attempts = getattr(builtins, "startup_attempts", 0) + 1
                 marker = Path({str(marker)!r})
@@ -288,15 +287,6 @@ def interrupted_initialization(
             root,
         ) as client:
             client.initialize_and_list_tools()
-            if r_first:
-                # Reticulate may inspect Python through a script before embedding.
-                # Identify the worker through the public R cell, not probe argv.
-                client.send(r="startup_state <- 41L; Sys.getpid()")
-                identity = last_result_text(client).removeprefix("[1] ").strip()
-                worker_identity.write_text(str(int(identity)))
-                client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "[1] <worker pid>\n"
-                )
             cell = "never_run = True" if language == "python" else "SELECT 42"
             client.send(**{language: cell}, timeout_ms=10_000)
             assert last_result_text(client) == (
@@ -312,6 +302,14 @@ def interrupted_initialization(
                 r"\1<line>",
                 interrupted,
             )
+            if r_first:
+                # Background startup initialized R before entering the Python
+                # hook. Its state must survive retrying that interpreter.
+                client.send(r="startup_state <- 41L; Sys.getpid()")
+                assert last_result_text(client) == f"[1] {worker}\n"
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "[1] <worker pid>\n"
+                )
             client.send(
                 # fmt: python
                 python=code(f"""

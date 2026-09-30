@@ -76,6 +76,7 @@ def before_resolver_spawn(
                 "MCP_CONSOLE_TEST_SPAWN_RELEASE": str(release.path),
             }
         )
+        (root / "armed").touch()
         client = resources.enter_context(
             McpClient(
                 Path(sys.executable),
@@ -86,7 +87,6 @@ def before_resolver_spawn(
         )
         try:
             client.initialize_and_list_tools()
-            (root / "armed").touch()
             yield client, started, release, root
         finally:
             # Release the resolver fork before transport teardown, even when an
@@ -169,7 +169,8 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         release,
         root,
     ):
-        stdin = client.start_send(stdin="old input\n", timeout_ms=0)
+        client.send(stdin="old input\n", timeout_ms=0)
+        assert last_tool_text(client) == "[worker starting]"
         started.wait("stdin startup has not spawned its first resolver")
         assert not (root / "resolver.jsonl").exists()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
@@ -179,8 +180,6 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
-        client.receive(stdin)
-        assert stdin["result"]["isError"] is True, stdin
         client.send(timeout_ms=600_000)
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
