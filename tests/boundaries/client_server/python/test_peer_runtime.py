@@ -297,9 +297,12 @@ def exercise_peer_state(client: McpClient, trigger: str = "python-access") -> No
         redirected_stderr = io.StringIO()
         sys.stdout, sys.stderr = redirected_stdout, redirected_stderr
         """)
-    client.send(python=source)
-    assert last_result_text(client) == "Both peer runtimes initialized\n", (
-        client.transcript[-1]
+    wait_for_evaluation_output(
+        client,
+        "Both peer runtimes initialized\n",
+        "first cell after peer startup",
+        completion_timeout_seconds=client.response_timeout,
+        python=source,
     )
     if trigger == "r-cell":
         client.send(
@@ -413,7 +416,11 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
                 client.initialize_and_list_tools()
                 # Create the startup-hook fixture on its execution host, then
                 # start the generation whose in-memory continuity is exercised.
-                client.send(
+                wait_for_evaluation_output(
+                    client,
+                    "[done]",
+                    "execution-host startup fixture creation",
+                    completion_timeout_seconds=client.response_timeout,
                     python=code("""
                     import os
                     from pathlib import Path
@@ -422,9 +429,8 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
                     _ = (hooks / "sitecustomize.py").write_text(
                         "import builtins\\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\\n"
                     )
-                    """)
+                    """),
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
                 client.send(control="restart")
                 exercise_peer_state(client)
                 records.extend(client.finish()[3:])
