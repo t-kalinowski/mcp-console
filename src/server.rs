@@ -593,7 +593,15 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                         &delivery,
                     ));
                 }
-                runtime.worker.ready().await?;
+                if let Err(error) = runtime.worker.ready().await {
+                    return Ok(response_to_tool_result(
+                        crate::worker_client::Response::tool_error(error),
+                        &call,
+                        &runtime.transcript,
+                        &self.deliveries,
+                        &delivery,
+                    ));
+                }
                 let snapshot = runtime.worker.inspect_requirements();
                 let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");
                 let text = if json.len() <= 8 * 1024 {

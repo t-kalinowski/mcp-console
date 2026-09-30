@@ -161,6 +161,15 @@ impl Transcript {
         });
     }
 
+    pub(crate) fn abandon_pending(&self) {
+        let (mut state, _) = self.lock();
+        if state.pending_calls.is_some() {
+            // Startup already reports this failure. No recording metadata will
+            // arrive, so release early records and disable subsequent recording.
+            state.disable("runtime startup failed before recording metadata".into());
+        }
+    }
+
     pub(crate) fn requirements_selected(
         &self,
         call_id: Option<u64>,
@@ -379,6 +388,7 @@ impl TranscriptState {
             return false;
         }
         self.active = None;
+        self.pending_calls = None;
         self.failure = Some(error);
         true
     }

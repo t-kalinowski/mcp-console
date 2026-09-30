@@ -39,6 +39,7 @@ impl Startup {
         let control = Arc::clone(&cancellation);
         let worker = runtime.worker.clone();
         let recording = runtime.transcript.clone();
+        let task_recording = recording.clone();
         let initialize_worker = worker.clone();
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
@@ -54,8 +55,8 @@ impl Startup {
                         initialize_worker.register_resolver_stop_handle(&generation, resolver)
                     })?;
                     initialize_worker.configure(prepared.worker);
-                    recording.configure(prepared.transcript);
-                    initialize_worker.record_with(recording);
+                    task_recording.configure(prepared.transcript);
+                    initialize_worker.record_with(task_recording);
                     if let Some(languages) = languages
                         && let Err(error) = initialize_worker.prewarm(languages)
                     {
@@ -68,6 +69,9 @@ impl Startup {
             .await
             .map_err(|error| format!("runtime preparation task failed: {error}"))
             .and_then(|result| result);
+            if result.is_err() {
+                recording.abandon_pending();
+            }
             worker.finish_startup(result);
         });
         Self {
