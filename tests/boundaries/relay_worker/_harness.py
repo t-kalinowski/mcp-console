@@ -1,7 +1,5 @@
 import os
 import json
-import subprocess
-import tomllib
 import sys
 import tempfile
 import time
@@ -15,6 +13,7 @@ from support.capture import read_jsonl, read_jsonl_path
 from support.client import McpClient
 from support.execution import Execution
 from support.r import r_test_environment
+from support.resolvers import inspect_selected_python
 from support.records import ToolResult, Transcript
 
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
@@ -37,58 +36,12 @@ class RelayWorkerClient:
         self._temporary = tempfile.TemporaryDirectory()
         root = Path(self._temporary.name)
         environment, _ = r_test_environment()
-        with (Path(__file__).resolve().parents[3] / "Cargo.toml").open("rb") as stream:
-            build = tomllib.load(stream)["package"]["version"]
-        messages = [
-            {
-                "Open": {
-                    "version": 6,
-                    "build": build,
-                    "workspace": "",
-                    "selections": {"r_home": None, "python": None},
-                    "mode": "Custom",
-                }
-            },
-            {
-                "Run": {
-                    "id": 1,
-                    "operation": {"InspectPython": {"executable": sys.executable}},
-                }
-            },
-            "Close",
-        ]
-        with subprocess.Popen(
-            [binary, "resolve"],
-            env=environment,
-            text=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ) as resolver:
-            assert resolver.stdin is not None and resolver.stdout is not None
-
-            def send(message):
-                resolver.stdin.write(json.dumps(message) + "\n")
-                resolver.stdin.flush()
-
-            send(messages[0])
-            assert json.loads(resolver.stdout.readline()) == {
-                "Hello": {"version": 6, "build": build}
-            }
-            discovery = json.loads(resolver.stdout.readline())["Completed"]
-            assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
-            send(messages[1])
-            inspected = json.loads(resolver.stdout.readline())["Completed"]
-            assert inspected["confirmed"] and "Ok" in inspected["result"], inspected
-            send("Close")
-            assert json.loads(resolver.stdout.readline()) == "Closed"
-            resolver.stdin.close()
-            assert resolver.wait(timeout=10) == 0
+        inspected = inspect_selected_python(binary, Path(sys.executable), environment)
         environment["MCP_CONSOLE_MITM_SELECTION"] = json.dumps(
             {
                 "r": True,
                 "python": {
-                    "selected": inspected["result"]["Ok"],
+                    "selected": inspected,
                     "explicit": None,
                     "managed": False,
                     "duckdb_extension_directory": None,

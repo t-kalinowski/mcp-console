@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.custom.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
   python: |
@@ -13,7 +13,7 @@ result:
   content:
     - type: text
       text: |
-        <sandbox root> <relay pid> <worker pid> <descendant pid>
+        <sandbox root> <proxy pid> <worker pid> <descendant pid>
         <sandbox temp>
   isError: false
 transcript_normalization:
@@ -46,7 +46,7 @@ result:
   content:
     - type: text
       text: |
-        <sandbox root> <relay pid> <worker pid> <descendant pid>
+        <sandbox root> <proxy pid> <worker pid> <descendant pid>
         <sandbox temp>
   isError: false
 transcript_normalization:

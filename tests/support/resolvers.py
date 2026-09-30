@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 from support.assertions import last_result_text
@@ -16,6 +17,59 @@ from support.r import r_test_environment
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
+
+
+def inspect_selected_python(
+    binary: Path, executable: Path, environment: dict[str, str]
+) -> dict:
+    """Obtain a complete fixture launch identity through trusted preparation."""
+    with (FIXTURES.parents[1] / "Cargo.toml").open("rb") as stream:
+        build = tomllib.load(stream)["package"]["version"]
+    with subprocess.Popen(
+        [binary, "resolve"],
+        env=environment,
+        text=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    ) as resolver:
+        assert resolver.stdin is not None and resolver.stdout is not None
+
+        def send(message):
+            resolver.stdin.write(json.dumps(message) + "\n")
+            resolver.stdin.flush()
+
+        send(
+            {
+                "Open": {
+                    "version": 6,
+                    "build": build,
+                    "workspace": "",
+                    "selections": {"r_home": None, "python": None},
+                    "mode": "Custom",
+                }
+            }
+        )
+        assert json.loads(resolver.stdout.readline()) == {
+            "Hello": {"version": 6, "build": build}
+        }
+        discovery = json.loads(resolver.stdout.readline())["Completed"]
+        assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
+        send(
+            {
+                "Run": {
+                    "id": 1,
+                    "operation": {"InspectPython": {"executable": str(executable)}},
+                }
+            }
+        )
+        inspected = json.loads(resolver.stdout.readline())["Completed"]
+        assert inspected["confirmed"] and "Ok" in inspected["result"], inspected
+        send("Close")
+        assert json.loads(resolver.stdout.readline()) == "Closed"
+        resolver.stdin.close()
+        assert resolver.wait(timeout=10) == 0
+    return inspected["result"]["Ok"]
 
 
 def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:

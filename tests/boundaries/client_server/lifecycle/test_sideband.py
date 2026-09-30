@@ -1,6 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
-import os
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -10,8 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.r import r_test_environment
 from support.records import Transcript
-from support.resolvers import resolve_managed_python
+from support.resolvers import inspect_selected_python, resolve_managed_python
 from support.suites import run_this_suite
 
 
@@ -20,7 +21,7 @@ def test_worker_adopts_both_pipes_and_isolates_fork_and_exec(
     binary: Path, execution: Execution
 ) -> Transcript:
     wrapper = Path(__file__).resolve().parents[3] / "fixtures" / "sideband_worker"
-    environment = os.environ.copy()
+    environment, _ = r_test_environment()
     environment["MCP_CONSOLE_TEST_WORKER_BINARY"] = str(binary)
     environment["MCP_CONSOLE_TEST_CLOSED_PROBE"] = str(
         wrapper.with_name("sideband_closed.py")
@@ -30,13 +31,28 @@ def test_worker_adopts_both_pipes_and_isolates_fork_and_exec(
         environment["RETICULATE_PYTHON"] = str(
             resolve_managed_python(binary, execution, Path(temporary))
         )
+    environment["MCP_CONSOLE_MITM_SELECTION"] = json.dumps(
+        {
+            "r": True,
+            "python": {
+                "selected": inspect_selected_python(
+                    binary, Path(environment["RETICULATE_PYTHON"]), environment
+                ),
+                "explicit": None,
+                "managed": False,
+                "duckdb_extension_directory": None,
+            },
+        }
+    )
+    environment["MCP_CONSOLE_MITM_WORKER"] = str(wrapper)
+    proxy = wrapper.with_name("relay_worker") / "proxy.py"
     # The custom launcher owns the built-in worker's storage until it exits.
     # A sandbox runner replaces TMPDIR with its own private lifetime directory.
     with (
         tempfile.TemporaryDirectory() as storage,
         McpClient(
             binary,
-            execution.serve("--worker", str(wrapper)),
+            execution.serve("--worker", str(proxy)),
             dict(environment, TMPDIR=storage),
         ) as client,
     ):
