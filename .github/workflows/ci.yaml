@@ -162,6 +162,9 @@ jobs:
             ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
+      - name: Validate restored R library links
+        run: python3 scripts/prune-r-cache "$RUNNER_TEMP/mcp-console-r-cache"
+
       - name: Restore Cargo downloads
         id: cargo-downloads
         uses: actions/cache/restore@v6
