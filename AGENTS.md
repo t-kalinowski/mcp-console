@@ -255,7 +255,8 @@ Keep these invariants intact:
   Common Python module hooks and reached-import resolution do not use an R callback.
   Idle tool preparation, reached imports, and R declarations share the Console requirement and activation owner; the R adapter retains declaration representation and conditions.
   The Python facade retains the optional adapter after R initialization; it owns attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
-  Both interpreters initialize on demand on the same serialized thread.
+  Applicable enabled runtimes in the default environment initialize during background startup on the same serialized thread.
+  Remaining runtimes and replacement generations initialize on demand.
   An explicit or host-resolved Python selection starts without R; unresolved R-side selection hints require R.
   R cells, Python-side R access, and R-owned SQL initialize R.
   Late bridge attachment uses the running Python identity and preserves its state.

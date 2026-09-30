@@ -107,7 +107,9 @@ pub(crate) fn ensure_initialized() -> Result<bool, String> {
     {
         return startup::initialize_native(&python.selected, python.managed);
     }
-    if !crate::worker::r_initialized()
+    // An explicit unmanaged selection has the same inspection and bootstrap
+    // owner whether R was initialized by prewarming or by a prior cell.
+    if adapter().is_none_or(|adapter| !adapter.managed)
         && let Some(explicit) = std::env::var_os("RETICULATE_PYTHON")
             .filter(|value| !value.is_empty() && value != "managed")
     {
