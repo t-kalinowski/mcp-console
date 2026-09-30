@@ -416,6 +416,8 @@ def test_restart_replaces_first_use_cell_and_stdin(
         contended = FifoCheckpoint.create(root / "contended")
         completion_started = FifoCheckpoint.create(root / "completion-started")
         cancel_release = FifoCheckpoint.create(root / "cancel-release")
+        unlock_observed = FifoCheckpoint.create(root / "unlock-observed")
+        observe_release = FifoCheckpoint.create(root / "observe-release")
         unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
@@ -423,6 +425,8 @@ def test_restart_replaces_first_use_cell_and_stdin(
             contended,
             completion_started,
             cancel_release,
+            unlock_observed,
+            observe_release,
             unlocked,
             release,
             parked,
@@ -437,6 +441,8 @@ def test_restart_replaces_first_use_cell_and_stdin(
             "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(completion_started.path),
             "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
             "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
+            "MCP_CONSOLE_TEST_COMPLETION_UNLOCK_OBSERVED": str(unlock_observed.path),
+            "MCP_CONSOLE_TEST_COMPLETION_OBSERVE_RELEASE": str(observe_release.path),
             "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
             "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(release.path),
             "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(parked.path),
@@ -448,6 +454,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
         )
         resources.callback(release.release)
         resources.callback(cancel_release.release)
+        resources.callback(observe_release.release)
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
@@ -475,7 +482,9 @@ def test_restart_replaces_first_use_cell_and_stdin(
             "restart replied before the old evaluation released the worker lock"
         )
         cancel_release.release()
-        unlocked.wait("old evaluation released the worker lock")
+        unlock_observed.wait("old evaluation released the worker lock")
+        # Keep the old thread before its unlock observer so the replacement
+        # acquires and releases the same mutex first. It must not be parked.
         client.receive(replacement)
         assert last_tool_text(client) == code("""
             [active evaluation stopped by session restart request]
@@ -483,6 +492,8 @@ def test_restart_replaces_first_use_cell_and_stdin(
             [input requested: ""]
             [waiting for stdin]
             """).removesuffix("\n")
+        observe_release.release()
+        unlocked.wait("old evaluation reached its unlock observer")
         wait_for_evaluation_output(
             client,
             "replacement only\n[done]",

@@ -142,9 +142,17 @@ static void await_release(const char *name) {
     close(descriptor);
 }
 
-static void after_unlock(uintptr_t mutex) {
-    if (getpid() != server_pid ||
-        mutex != atomic_load(&contended_mutex) || atomic_exchange(&paused, true)) return;
+static bool before_unlock(uintptr_t mutex) {
+    // Claim the old owner before the native unlock wakes its replacement.
+    // Claiming afterward can park the replacement at its own unlock instead.
+    return getpid() == server_pid && mutex == atomic_load(&contended_mutex) &&
+        !atomic_exchange(&paused, true);
+}
+
+static void after_unlock(bool observe) {
+    if (!observe) return;
+    notify("MCP_CONSOLE_TEST_COMPLETION_UNLOCK_OBSERVED");
+    await_release("MCP_CONSOLE_TEST_COMPLETION_OBSERVE_RELEASE");
     notify("MCP_CONSOLE_TEST_COMPLETION_UNLOCKED");
     await_release("MCP_CONSOLE_TEST_COMPLETION_RELEASE");
     released = true;
@@ -171,8 +179,9 @@ static int observe_mutex_lock(pthread_mutex_t *mutex) {
 }
 
 static int observe_mutex_unlock(pthread_mutex_t *mutex) {
+    bool observe = before_unlock((uintptr_t)mutex);
     int result = pthread_mutex_unlock(mutex);
-    if (result == 0) after_unlock((uintptr_t)mutex);
+    if (result == 0) after_unlock(observe);
     return result;
 }
 
@@ -216,11 +225,12 @@ long syscall(long number, ...) {
         if (slots[3] != 0) before_park();
         else if (slots[2] == 2) observe_contention(&waiter, (uintptr_t)slots[0]);
     }
+    bool observe = command == FUTEX_WAKE && before_unlock((uintptr_t)slots[0]);
     long result = native_syscall(number, slots[0], slots[1], slots[2], slots[3], slots[4], slots[5]);
     if (command == FUTEX_WAIT || command == FUTEX_WAIT_BITSET) {
         after_contention(&waiter);
     }
-    if (command == FUTEX_WAKE) after_unlock((uintptr_t)slots[0]);
+    if (command == FUTEX_WAKE) after_unlock(observe);
     return result;
 }
 #endif
