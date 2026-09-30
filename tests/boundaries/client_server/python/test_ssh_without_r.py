@@ -187,6 +187,9 @@ def test_managed_sql_first_and_live_python(
 @requires(SSH)
 def test_remote_missing_uv_does_not_select_path_python(binary: Path) -> Transcript:
     with ssh_session(binary, DIRECT, with_uv=False) as (client, _, _):
+        error = client.startup_error()
+        assert "Python sessions without R require `uv` on PATH" in error, error
+        client.stdin.close()
         assert client.process.wait(timeout=15) != 0
         assert not client.stdout.read()
         errors = client.stderr.read()

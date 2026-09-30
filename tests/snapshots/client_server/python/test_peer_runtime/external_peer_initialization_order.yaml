@@ -1,5 +1,15 @@
 ---
 send:
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
   python: |
     import os
     from pathlib import Path
@@ -123,6 +133,16 @@ result:
   content:
     - type: text
       text: "[done]"
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: "[prepared]"
   isError: false
 ---
 send:
