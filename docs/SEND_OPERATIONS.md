@@ -43,8 +43,8 @@ Requirement compatibility and resolver errors can arise later during preparation
 It starts when evaluation observation begins after admission, or when a poll attaches to an evaluation.
 Explicit preparation and control finish before this wait, as shown below.
 It does not cancel evaluation, worker startup, or resolution.
-SSH discovery and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
-Remote dependency preparation has no setup deadline; an interrupt or cancellation targets that operation's remote resolver processes.
+SSH transport negotiation and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
+Discovery after compatible negotiation, dependency preparation, and interpreter initialization have no setup deadline; an interrupt or cancellation targets the owned operation.
 An automatic replacement attempt after worker failure shares the same evaluation wait.
 The table assumes the session admits the operation; a conflicting operation or generation change can reject it before the remaining steps.
 

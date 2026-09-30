@@ -147,12 +147,6 @@ def test_interrupts_running_python_evaluation(
             r = code(r"""
                 python_interrupt_started <- tempfile("python-interrupt-started-")
                 python_interrupt_release <- tempfile("python-interrupt-release-")
-                Sys.setenv(
-                  MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
-                  MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
-                )
-                # Initialize from R before the Python evaluation checkpoint.
-                invisible(reticulate::py_config())
                 cat(python_interrupt_started, python_interrupt_release, sep = "\n")
                 """)
             client.send(r=r)
@@ -185,12 +179,12 @@ def test_interrupts_running_python_evaluation(
                 try:
                     with (
                         open(
-                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
+                            str(r.python_interrupt_started),
                             "wb",
                             buffering=0,
                         ) as started,
                         open(
-                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
+                            str(r.python_interrupt_release),
                             "rb",
                             buffering=0,
                         ) as release,
