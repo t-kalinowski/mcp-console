@@ -315,6 +315,7 @@ struct ActiveEvaluation {
     generation: WorkerGeneration,
     evaluation: Arc<Evaluation>,
     inherits_startup: bool,
+    initial_requirements: Arc<Mutex<Option<Requirements>>>,
 }
 
 enum PreparedEvaluation {
@@ -474,6 +475,29 @@ impl Client {
     pub(crate) fn prewarm(&self, languages: Vec<crate::cell::Language>) -> Result<(), String> {
         let generation = self.admit()?;
         let _startup = self.reserve_worker_startup(&generation)?;
+        // An already admitted declaration selects the initial candidate through
+        // the same transaction the evaluator would use after readiness.
+        if let Some(active) = self.current_evaluation()? {
+            let requirements = active
+                .initial_requirements
+                .lock()
+                .map_err(|_| "initial requirements lock poisoned")?
+                .take();
+            if let Some(requirements) = requirements {
+                match self.prepare_cell_requirements(requirements, &generation) {
+                    Ok(()) => {
+                        if let Some(active) = self
+                            .evaluation()?
+                            .as_mut()
+                            .filter(|active| active.generation.is(&generation))
+                        {
+                            active.inherits_startup = true;
+                        }
+                    }
+                    Err(failure) => active.evaluation.complete_cell(Err(failure)),
+                }
+            }
+        }
         let _preparation = self.0.preparation.blocking_read();
         let mut worker = self.0.worker.lock().map_err(|_| "worker lock poisoned")?;
         if let Err(mut failure) = self.start_worker(
@@ -502,7 +526,15 @@ impl Client {
                     .expect("worker environment lock")
                     .python
                     .as_ref()
-                    .is_some_and(|python| !matches!(python, PythonEnvironment::Ambient))
+                    .is_some_and(|python| matches!(python, PythonEnvironment::Managed { .. }))
+            })
+            || self.0.environment.as_ref().is_some_and(|environment| {
+                environment
+                    .lock()
+                    .expect("worker environment lock")
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.python.is_some())
             });
         let languages = languages
             .into_iter()
@@ -1684,7 +1716,26 @@ impl Client {
                     {
                         self.queue_startup_stdin(&generation, input)?;
                     }
+                    // Waiting for shared startup is observation, not a
+                    // reservation against its accepted cell's preparation.
+                    drop(preparation);
+                    drop(operation);
                     loop {
+                        if let Some(active) = self.current_evaluation()? {
+                            self.ensure_ordinary_generation(&generation)?;
+                            if !active.generation.is(&generation) {
+                                return Err("session restarted before the operation began"
+                                    .to_string()
+                                    .into());
+                            }
+                            let claim = active.evaluation.claim()?;
+                            return Ok(send_response_from_wait(
+                                active
+                                    .evaluation
+                                    .wait(claim, deadline.saturating_duration_since(Instant::now()))
+                                    .await?,
+                            ));
+                        }
                         if let Some(result) = startup.borrow_and_update().as_ref() {
                             result.clone()?;
                             break;
@@ -1806,12 +1857,13 @@ impl Client {
             generation: generation.clone(),
             evaluation: evaluation.clone(),
             inherits_startup: initial_requirements.is_none(),
+            initial_requirements: Arc::new(Mutex::new(initial_requirements)),
         });
+        let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
+        let inherits_startup = active.as_ref().unwrap().inherits_startup;
         drop(active);
         #[cfg(unix)]
-        if initial_requirements.is_none()
-            && let Some(worker) = self.worker_handle()?
-        {
+        if inherits_startup && let Some(worker) = self.worker_handle()? {
             worker.adopt_startup_evaluation(&evaluation)?;
         }
 
@@ -1978,7 +2030,7 @@ impl Client {
         evaluation: Arc<Evaluation>,
         generation: WorkerGeneration,
         startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
-        initial_requirements: Option<Requirements>,
+        initial_requirements: Arc<Mutex<Option<Requirements>>>,
     ) {
         let result = (|| {
             tokio::runtime::Handle::current()
@@ -1986,34 +2038,20 @@ impl Client {
                 .map_err(SendFailure::from)?;
             self.ensure_generation(&generation)
                 .map_err(SendFailure::from)?;
+            if !evaluation.is_interruptible()? {
+                return Ok(());
+            }
             self.validate_cell(&cell)?;
             if self.take_initialization_failure(&generation)? {
                 evaluation.complete_cell(Ok(()));
                 return Ok(());
             }
-            if let Some(requirements) = initial_requirements {
-                self.validate_requirements(&requirements)?;
-                let preparation = self.admit_preparation()?;
-                match self.prepare_admitted(
-                    requirements,
-                    &generation,
-                    &preparation,
-                    PreparationIntent::StartupEvaluation,
-                )? {
-                    PrepareResult::Prepared => {}
-                    PrepareResult::RestartRequired => {
-                        return Err("requirements require session restart; cell was not run"
-                            .to_string()
-                            .into());
-                    }
-                    PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
-                        let mut response = response;
-                        response.recover_to(self.0.output.clone());
-                        return Err("requirements were not prepared; cell was not run"
-                            .to_string()
-                            .into());
-                    }
-                }
+            if let Some(requirements) = initial_requirements
+                .lock()
+                .map_err(|_| "initial requirements lock poisoned".to_string())?
+                .take()
+            {
+                self.prepare_cell_requirements(requirements, &generation)?;
             }
             let mut worker = self
                 .0
@@ -2042,6 +2080,36 @@ impl Client {
             return Err("Python cells are unavailable: the target has no Python runtime".into());
         }
         Ok(())
+    }
+
+    fn prepare_cell_requirements(
+        &self,
+        requirements: Requirements,
+        generation: &WorkerGeneration,
+    ) -> Result<(), SendFailure> {
+        self.validate_requirements(&requirements)?;
+        // This accepted cell owns its preparation. Admission's short read
+        // reservation must settle before its background owner can begin.
+        let preparation = self.0.preparation.blocking_write();
+        match self.prepare_admitted(
+            requirements,
+            generation,
+            &preparation,
+            PreparationIntent::StartupEvaluation,
+        )? {
+            PrepareResult::Prepared => Ok(()),
+            PrepareResult::RestartRequired => {
+                Err("requirements require session restart; cell was not run"
+                    .to_string()
+                    .into())
+            }
+            PrepareResult::Failed(mut response) | PrepareResult::WorkerStopped(mut response) => {
+                response.recover_to(self.0.output.clone());
+                Err("requirements were not prepared; cell was not run"
+                    .to_string()
+                    .into())
+            }
+        }
     }
 
     fn validate_requirements(&self, requirements: &Requirements) -> Result<(), String> {
