@@ -1421,6 +1421,8 @@ runner: different
                         sandbox,
                         {
                             "direct.yaml": direct,
+                            "aaa.yaml": sandbox,
+                            "aaa.direct.yaml": direct,
                             "bare.yaml": bare_sandbox,
                             "bare.direct.yaml": bare_direct,
                         },
@@ -1447,9 +1449,11 @@ runner: different
         selected = (self.snapshots / "selected.yaml").read_text()
         self.assertEqual(selected.count("!same-as"), 3, selected)
         self.assertIn("bare MCP initialization for this execution mode", selected)
+        self.assertNotIn("aaa", selected)
         mixed = (self.snapshots / "unselected.yaml").read_text()
         self.assertIn("initializes_and_lists_tools.yaml", mixed)
         self.assertIn("initializes_and_lists_tools.direct.yaml", mixed)
+        self.assertNotIn("aaa", mixed)
         self.suite.write_text(
             self.suite.read_text().replace("else direct", "else sandbox")
         )

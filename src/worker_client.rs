@@ -775,18 +775,6 @@ impl Client {
         self.0.dynamic_resolution
     }
 
-    pub(crate) fn has_default_duckdb_extension(&self, extension: &str) -> bool {
-        self.0.environment.as_ref().is_some_and(|environment| {
-            environment
-                .lock()
-                .expect("environment lock")
-                .startup_declaration()
-                .duckdb
-                .iter()
-                .any(|name| name == extension)
-        })
-    }
-
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
         if let Some(target) = &self.0.target

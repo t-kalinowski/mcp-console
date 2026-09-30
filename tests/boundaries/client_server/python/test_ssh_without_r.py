@@ -206,7 +206,7 @@ def test_selected_remote_python_uses_workspace_and_no_uv(
     ):
         client.initialize_and_list_tools()
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
-        assert "r" not in schema["properties"]
+        assert "r" in schema["properties"]
         client.send(sql="SELECT 42 AS value")
         assert last_result_text(client).startswith("Error: DuckDB is unavailable;")
         client.send(
@@ -640,8 +640,8 @@ def test_external_r_free_execution_host(
         with McpClient(binary, execution.serve(), environment, local) as client:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
-            assert "Persistent remote Python and SQL workbench" in tool["description"]
-            assert "r" not in tool["inputSchema"]["properties"]
+            assert "Configured SSH host:" in tool["description"]
+            assert "r" in tool["inputSchema"]["properties"]
             client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
             assert not client.transcript[-1]["result"]["isError"], (
                 last_result_text(client),
