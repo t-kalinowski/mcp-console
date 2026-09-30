@@ -42,6 +42,26 @@ def no_r_client(binary: Path, execution: Execution):
 
 
 @executions(DIRECT, SANDBOXED)
+def test_prepares_with_only_a_symlinked_system_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        environment = no_r_environment(workspace)
+        (workspace / "commands/python3").symlink_to(Path(sys.executable).resolve())
+        environment.update(
+            UV_PYTHON_INSTALL_DIR=str(workspace / "empty-python-installations"),
+            UV_PYTHON_DOWNLOADS="never",
+            UV_PYTHON_PREFERENCE="only-system",
+        )
+        with McpClient(binary, execution.serve(), environment, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(python="6 * 7")
+            assert last_result_text(client) == "42\n", client.transcript[-1]
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_records_python_without_r_dependencies(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:

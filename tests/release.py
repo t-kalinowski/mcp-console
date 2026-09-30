@@ -260,6 +260,11 @@ class ReleaseScriptTests(unittest.TestCase):
                                     "r_home": os.environ.get("R_HOME"),
                                     "r": shutil.which("R"),
                                     "rscript": shutil.which("Rscript"),
+                                    "python": (
+                                        str(Path(python).resolve())
+                                        if (python := shutil.which("python3"))
+                                        else None
+                                    ),
                                 }
                             )
                             + "\\n"
@@ -676,6 +681,7 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertIsNone(launch["r_home"])
             self.assertIsNone(launch["r"])
             self.assertIsNone(launch["rscript"])
+            self.assertEqual(launch["python"], str(Path(sys.executable).resolve()))
 
     def test_smoke_wheel_reports_startup_response(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

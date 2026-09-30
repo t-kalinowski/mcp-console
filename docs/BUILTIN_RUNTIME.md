@@ -129,8 +129,8 @@ Retirement does not delete resolver caches or the retained environment.
 
 Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
 Interrupts received while the worker is idle do not interrupt the next Python cell.
-When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, DuckDB, and accepted package additions without R defaults or rejected requirements.
-Without R, the document stores these declarations under `mcp-console` metadata, omits R document-engine configuration, and disables execution until a document engine is prepared separately.
+When `uv` resolved a local session's initial environment, the generated Quarto document declares NumPy, pandas, DuckDB, and accepted package additions without R defaults or rejected requirements.
+Without R, a local session's document stores these declarations under `mcp-console` metadata, omits R document-engine configuration, and disables execution until a document engine is prepared separately.
 Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
 Explicitly selected environments remain non-managed; prepare their packages before starting Console.
 R requirements and R cells are unavailable.

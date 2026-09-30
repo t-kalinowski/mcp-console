@@ -407,8 +407,10 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
         uv_bin = Path(directory)
         (uv_bin / "uv").symlink_to(Path(uv).resolve())
-        if args.without_r and (bwrap := shutil.which("bwrap")):
-            (uv_bin / "bwrap").symlink_to(Path(bwrap).resolve())
+        if args.without_r:
+            (uv_bin / "python3").symlink_to(Path(sys.executable).resolve())
+            if bwrap := shutil.which("bwrap"):
+                (uv_bin / "bwrap").symlink_to(Path(bwrap).resolve())
         unavailable_uvx = uv_bin / "uvx"
         unavailable_uvx.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
         unavailable_uvx.chmod(0o755)
