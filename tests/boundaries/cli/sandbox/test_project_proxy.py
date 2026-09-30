@@ -16,7 +16,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
-from support.sandbox_configuration import NATIVE_PROXY
+from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
 from support.suites import run_this_suite
 
 
@@ -38,6 +38,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
     script = code(r"""
         import errno
         import http.client
+        import json
         import os
         import socket
         import sys
@@ -56,9 +57,14 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
         connection.close()
         assert os.environ["ALL_PROXY"].startswith(sys.argv[4])
         if os.environ["CODEX_NETWORK_ALLOW_LOCAL_BINDING"] == "0":
-            origin = urlsplit(sys.argv[1])
+            # A proxy listener can reuse a host port in its network namespace.
+            proxy_ports = {
+                urlsplit(os.environ[key]).port
+                for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+            }
+            port = next(port for port in json.loads(sys.argv[5]) if port not in proxy_ports)
             try:
-                socket.create_connection((origin.hostname, origin.port), timeout=2)
+                socket.create_connection(("127.0.0.1", port), timeout=2)
             except OSError as error:
                 # Linux isolates the host listener in a separate network namespace.
                 assert error.errno in (errno.EPERM, errno.EACCES, errno.ECONNREFUSED)
@@ -125,6 +131,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
     with (
         TemporaryDirectory() as directory,
         ThreadingHTTPServer(("127.0.0.1", 0), Origin) as origin,
+        host_tcp_ports() as ports,
     ):
         thread = threading.Thread(target=origin.serve_forever)
         thread.start()
@@ -171,6 +178,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
                         method,
                         str(status),
                         "http:" if options.get("enableSocks5") is False else "socks5h:",
+                        json.dumps(ports),
                     ],
                     cwd=host,
                     env=environment,

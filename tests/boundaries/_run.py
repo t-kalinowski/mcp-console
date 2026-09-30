@@ -2,6 +2,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "py-yaml12>=0.2.0",
+#     "joblib",
+#     "numpy",
 #     "anyio>=4.9",
 #     "mcp==2.*,>=2.2.0",
 #     "anthropic[mcp]>=1.4.0",
@@ -13,14 +15,16 @@
 # ///
 
 import argparse
+import json
 import math
 import os
 import pickle
 import runpy
+import shlex
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +33,78 @@ from queue import Empty, SimpleQueue
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
 sys.path.insert(0, str(root / "tests"))
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        super().error(
+            f"{message}\nSee scripts/test --help for selectors and execution modes."
+        )
+
+
+parser = ArgumentParser(
+    prog="scripts/test",
+    epilog=(
+        "Execution modes come from @executions(DIRECT, SANDBOXED) in the suite. "
+        "Use execution.serve() for common arguments and SANDBOXED.serve("
+        "'--writable-root', str(path)) for sandbox-only policy."
+    ),
+)
+actions = parser.add_mutually_exclusive_group()
+actions.add_argument("--list", action="store_true", dest="list_tests")
+actions.add_argument("--locate", metavar="SELECTOR")
+parser.add_argument("--update", action="store_true")
+profiles = parser.add_mutually_exclusive_group()
+profiles.add_argument(
+    "--quick",
+    action="store_true",
+    help="alias for the default smoke profile; explicit selectors keep their scope",
+)
+profiles.add_argument(
+    "--full",
+    action="store_true",
+    help="run all capability-applicable cases when no selectors are supplied",
+)
+parser.add_argument(
+    "--timeout",
+    type=float,
+    default=600.0,
+    help="case deadline in seconds; increase for slow resolver workflows (default: 600)",
+)
+parser.add_argument("--bootstrap", action="store_true", help=argparse.SUPPRESS)
+parser.add_argument("--build", action="store_true", help=argparse.SUPPRESS)
+parser.add_argument("--record-case", nargs=3, help=argparse.SUPPRESS)
+parser.add_argument("--supervise-case", nargs=4, help=argparse.SUPPRESS)
+parser.add_argument(
+    "-j",
+    "--jobs",
+    type=int,
+    default=max(2, os.cpu_count() or 2),
+    help="number of transcript cases to run concurrently (default: at least 2)",
+)
+parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
+
+
+def parse_arguments() -> argparse.Namespace:
+    options = parser.parse_args()
+    if options.jobs < 1:
+        parser.error("--jobs must be at least 1")
+    if not math.isfinite(options.timeout) or options.timeout <= 0:
+        parser.error("--timeout must be a positive finite number of seconds")
+    if options.locate is not None and options.update:
+        parser.error("--locate cannot be combined with --update")
+    if options.locate is not None and options.selectors:
+        parser.error("--locate does not accept additional selectors")
+    return options
+
+
+# Help and syntax errors need only Python's standard library, even offline.
+if "--bootstrap" in sys.argv[1:]:
+    parse_arguments()
+    arguments = sys.argv[1:]
+    arguments.remove("--bootstrap")
+    os.execvp("uv", ["uv", "run", "--script", __file__, *arguments])
+
 
 from support.cases import (
     CaseCancelled,
@@ -60,27 +136,6 @@ FREQUENT_STATUS_UNTIL_SECONDS = 600.0
 LATER_STATUS_SECONDS = 300.0
 FAILURE_SETTLE_SECONDS = 2.0
 
-parser = argparse.ArgumentParser(prog="scripts/test")
-actions = parser.add_mutually_exclusive_group()
-actions.add_argument("--list", action="store_true", dest="list_tests")
-actions.add_argument("--locate", metavar="SELECTOR")
-parser.add_argument("--update", action="store_true")
-parser.add_argument(
-    "--timeout",
-    type=float,
-    default=600.0,
-    help="case deadline in seconds; increase for slow resolver workflows (default: 600)",
-)
-parser.add_argument("--record-case", nargs=3, help=argparse.SUPPRESS)
-parser.add_argument("--supervise-case", nargs=4, help=argparse.SUPPRESS)
-parser.add_argument(
-    "-j",
-    "--jobs",
-    type=int,
-    default=max(2, os.cpu_count() or 2),
-    help="number of transcript cases to run concurrently (default: at least 2)",
-)
-parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
 RecordedTranscript = Transcript | TranscriptWithCompanions
 TranscriptCase = Callable[..., RecordedTranscript]
@@ -181,6 +236,8 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
         initialization_case,
     )
     for index, execution in enumerate(modes):
+        started = time.monotonic()
+        status = "failed"
         try:
             recorded = case(binary) if execution is None else case(binary, execution)
             mode_snapshots = check_recording(
@@ -194,10 +251,22 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 "execution modes produced different companion snapshots"
             )
             checked.update(mode_snapshots)
+            status = "passed"
         except BaseException as error:
             if execution is not None:
                 error.add_note(f"execution mode: {execution.name}")
             raise
+        finally:
+            if timing_path := os.environ.get("MCP_CONSOLE_TEST_TIMINGS"):
+                timing = {
+                    "selector": f"{suite_name}::{case_name}",
+                    "execution": execution.name if execution is not None else None,
+                    "status": status,
+                    "elapsed_seconds": time.monotonic() - started,
+                }
+                # One append write per record; parallel cases share the file.
+                with open(timing_path, "ab", buffering=0) as output:
+                    output.write((json.dumps(timing) + "\n").encode())
 
     return checked
 
@@ -234,8 +303,25 @@ class RunningCase:
 
 
 class ProgressReporter:
-    def __init__(self, *, update: bool) -> None:
+    def __init__(
+        self,
+        *,
+        update: bool,
+        full_update: bool,
+        jobs: int,
+        timeout: float,
+    ) -> None:
         self.update = update
+        self.full_update = full_update
+        self.rerun = ["scripts/test"]
+        if full_update:
+            self.rerun.append("--full")
+        if update:
+            self.rerun.append("--update")
+        if full_update and jobs != parser.get_default("jobs"):
+            self.rerun += ["--jobs", str(jobs)]
+        if timeout != parser.get_default("timeout"):
+            self.rerun += ["--timeout", str(timeout)]
         self.running: dict[int, RunningCase] = {}
         self.progress_line_open = False
 
@@ -279,6 +365,9 @@ class ProgressReporter:
             )
         else:
             self._line(f"{running.selector}: failed", error=True)
+        if not succeeded:
+            rerun = self.rerun if self.full_update else [*self.rerun, running.selector]
+            self._line(f"rerun: {shlex.join(rerun)}", error=True)
 
     def cancel(self, index: int, diagnostics: str) -> None:
         running = self.running.pop(index)
@@ -301,7 +390,11 @@ class ProgressReporter:
 
 
 def selected_cases(
-    suites: dict[str, Path], selectors: list[str]
+    suites: dict[str, Path],
+    selectors: Sequence[str],
+    *,
+    report: bool = True,
+    check_requirements: bool = True,
 ) -> list[tuple[str, str, Path]]:
     selected_suites: dict[str, list[str] | None] = {}
     if selectors:
@@ -338,8 +431,9 @@ def selected_cases(
         selected.extend(
             (suite_name, case_name, suite_path)
             for case_name in case_names
-            if available_executions(
-                cases[case_name], f"{suite_name}::{case_name}", report=True
+            if not check_requirements
+            or available_executions(
+                cases[case_name], f"{suite_name}::{case_name}", report=report
             )
         )
     return selected
@@ -512,7 +606,7 @@ def run_cases(
 
 
 def main() -> None:
-    options = parser.parse_args()
+    options = parse_arguments()
     if options.supervise_case is not None:
         suite_path, case_name, output_path, owner = options.supervise_case
         status = supervise_case(
@@ -534,42 +628,49 @@ def main() -> None:
         with Path(output_path).open("wb") as output:
             pickle.dump(checked, output)
         return
-    if options.jobs < 1:
-        parser.error("--jobs must be at least 1")
-    if not math.isfinite(options.timeout) or options.timeout <= 0:
-        parser.error("--timeout must be a positive finite number of seconds")
-    if options.locate is not None and options.update:
-        parser.error("--locate cannot be combined with --update")
 
-    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
-    orphans = orphan_snapshots(suites)
-    full_update = (
-        options.update
-        and not options.selectors
-        and not options.list_tests
-        and options.locate is None
-    )
+    # The global audit imports every suite, including external provider probes.
+    # Keep smoke and focused runs confined to their selected suites.
+    full_selection = options.full and not options.selectors and options.locate is None
+    orphans = orphan_snapshots(suites) if full_selection else []
+    full_update = options.update and full_selection and not options.list_tests
     if orphans and not full_update:
         for orphan in orphans:
             print(f"orphan snapshot: {orphan.relative_to(root)}", file=sys.stderr)
-        raise SystemExit("run scripts/test --update to remove orphan snapshots")
+        raise SystemExit("run scripts/test --full --update to remove orphan snapshots")
 
-    if options.list_tests:
-        for suite_name, suite_path in suites.items():
-            cases = load_suite(suite_path)
-            for case_name in cases:
-                print(f"{suite_name}::{case_name}")
-        return
     if options.locate is not None:
-        if options.selectors:
-            parser.error("--locate does not accept additional selectors")
         locate(suites, options.locate)
         return
 
-    selected = selected_cases(suites, options.selectors)
+    selectors = options.selectors
+    if not selectors and not options.full:
+        from _profiles import SMOKE
+
+        selectors = SMOKE
+    selected = selected_cases(
+        suites,
+        selectors,
+        report=not options.build,
+        check_requirements=not options.list_tests,
+    )
+    if options.list_tests:
+        for suite_name, case_name, _ in selected:
+            print(f"{suite_name}::{case_name}")
+        return
+    if options.build:
+        arguments = sys.argv[1:]
+        arguments.remove("--build")
+        # Re-enter through the shared owner only after metadata and arguments
+        # are valid. The execution child consumes the prepared release binary.
+        os.execv(
+            sys.executable,
+            [sys.executable, str(root / "checkout_workflow.py"), "test", *arguments],
+        )
+    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
     checked_snapshots: set[Path] = set()
     initialization: list[tuple[str, str, Path]] = []
     for index, (suite_name, case_name, _) in enumerate(selected):
@@ -578,7 +679,12 @@ def main() -> None:
         initialization.append(selected.pop(index))
         break
 
-    reporter = ProgressReporter(update=options.update)
+    reporter = ProgressReporter(
+        update=options.update,
+        full_update=full_update,
+        jobs=options.jobs,
+        timeout=options.timeout,
+    )
     try:
         run_cases(
             initialization,
@@ -596,7 +702,7 @@ def main() -> None:
             checked_snapshots=checked_snapshots,
             reporter=reporter,
         )
-        if options.update and not options.selectors:
+        if full_update:
             prune_stale_snapshots(checked_snapshots, orphans)
     finally:
         reporter.close()

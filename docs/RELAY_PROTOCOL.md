@@ -72,15 +72,25 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `3`), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
-Docker and SBX send no managed environment; the image or template supplies its bare runtime.
+Its fields are `version` (currently `7` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Prepared targets accept optional `python` only for runtime probes and require `environment` for worker launch.
+The handoff retains independent R and inspected Python selections, including the complete Python identity when R is present.
+Version 7 permits prepared R-only selections and uses the shared Python preparation request.
+Prepared runtime descriptors have managed flags false and no managed R/Python payloads.
+The image/template supplies its dependencies.
+SSH omits the probe-only `python` field, rejects it when supplied, and carries no prepared runtime-result frames.
+Older peers are rejected, including when the package version matches.
 The helper consumes exactly this frame and passes every following byte to relay stdin, including bytes received in the same write.
 It checks the protocol and Console versions before starting the worker; the relay's `ready` event is not this compatibility check.
 Incompatible changes to the launch envelope or relay wire contract must increment the target bootstrap protocol version, including between development builds with the same package version.
 
 Helper stdout uses a one-byte tag, a four-byte unsigned big-endian payload length, and the payload.
 Payloads are limited to 64 KiB.
-Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner or `sandbox` object with `name` and `id` supplied by the SBX owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`.
+Tag `1` contains a JSON compatibility response with `version` and `build`, plus an optional `container_id` supplied by the Docker owner or `sandbox` object with `name` and `id` supplied by the SBX owner; tag `2` contains raw relay stdout bytes, without imposing JSONL boundaries on the chunks; tag `3` contains a terminal JSON object with `confirmed` and nullable `error`; tag `4` contains a prepared-runtime worker-environment result.
+Tag `4` is accepted exactly once, after compatible tag `1`, only during a Docker/SBX probe.
+Probes reject tag `2`; worker launches and SSH reject tag `4`.
+The strict typed result rejects managed state, contradictory R/native selections, unknown fields, and relative native paths.
+Paths remain opaque target metadata on the controller.
 A setup rejection may emit tag `3` without tag `1`.
 The terminal frame must be followed by EOF.
 Unexpected stdout, incompatible versions, oversized or truncated frames, and missing retirement acknowledgment are transport errors.
@@ -93,6 +103,11 @@ The helper sends only the bootstrap into the resource, consumes the inner launch
 Its terminal confirmation describes outer-resource removal, including when an inner launcher could not confirm cleanup.
 The adapter validates that receipt before replacement; CLI exit and an inner launcher receipt cannot substitute for it.
 The initial probe verifies compatibility, applicable policy, workspace, and runtime without starting an analysis worker.
+It discovers R and inspects CPython inside the owned resource under workload policy, using the existing inspector's descriptor-owned result file instead of Python startup stdout.
+The owner forwards the validated runtime frame separately from diagnostics and relay bytes.
+The controller commits it only after the probe succeeds and the outer resource is confirmed retired.
+One immutable retained descriptor is used with the captured image/template for every worker generation.
+Required executable/library/prefix checks occur again inside the target at launch, without rediscovery or fallback.
 
 Only the transport adapter removes this envelope; the existing JSONL parser receives unmodified relay bytes.
 Copy tasks use fixed buffers and preserve stream backpressure.
@@ -149,8 +164,9 @@ The server can send these flat frames:
 - `{"kind":"prepare_r","library":"..."}` sends the unchanged live R-preparation command.
 - `{"kind":"r_resolved","library":"..."}` returns one provisional host R-resolution result.
 - `{"kind":"r_resolution_failed","failure":"host","message":"..."}` returns one host R-resolution failure; `failure` is `host`, `interrupted`, or `operation`.
-- `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit live Console-owned Python preparation.
+- `{"kind":"prepare_python","packages":["py-yaml12"]}` asks the worker to perform explicit Python preparation through its common requirement owner.
 - `{"kind":"python_resolved","python":"..."}` returns one host Python-resolution result.
+  The optional `native` object carries the host-inspected candidate for shared Python preparation and reached-import activation.
 - `{"kind":"python_resolution_failed","message":"..."}` returns one host Python-resolution failure.
 - `{"kind":"python_version_resolved","version":"3.12.11"}` returns one host Python-version result.
 - `{"kind":"python_version_resolution_failed","message":"..."}` returns one host Python-version failure.
@@ -198,8 +214,11 @@ The relay can emit these flat frames:
   For an inferred mapping, `request` may additionally contain `"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}`.
 - `{"kind":"resolve_python_version","request":{"constraints":[]}}` requests host Python-version selection.
 - `{"kind":"python_activated","requirements":{"packages":["numpy","pandas"]}}` reports a retained managed-Python activation.
+- `{"kind":"python_activation_failed","requirements":{"packages":["numpy","pandas"]}}` reports a matching provisional Python candidate whose activation failed after mutation may have begun, during evaluation, preparation, or an idle callback.
+  Launch protocol version 7 accepts these contexts; the server requires restart for further changes while retaining the usable worker.
 - `{"kind":"python_prepared"}` returns the worker's explicit Python-preparation success result, including before Python initialization.
 - `{"kind":"python_preparation_failed","message":"..."}` completes live Python preparation with an ordinary failure.
+- `{"kind":"python_preparation_rejected","message":"..."}` rejects an explicit native candidate before mutation.
 - `{"kind":"completed"}` completes an evaluation.
 - `{"kind":"stdout","data":"hello\n"}` carries one raw fd-1 chunk that is entirely valid UTF-8.
 - `{"kind":"stderr","data":"..."}` carries one raw fd-2 chunk that is entirely valid UTF-8.
@@ -217,7 +236,10 @@ The relay can emit these flat frames:
 
 The [worker protocol](WORKER_PROTOCOL.md#nested-managed-r-resolution) defines runtime R resolution, failure classes, and activation ordering.
 Its [Python request section](WORKER_PROTOCOL.md#python-request-objects) defines the complete nested Python request and manifest schemas represented above.
-The relay preserves the optional `import_resolution` object unchanged.
+The relay forwards the optional `initialized` and `import_resolution` fields unchanged.
+The worker requests the inspected candidate during preparation, reports live activation before `python_prepared`, and leaves the generation-checked commit to the server.
+An uninitialized interpreter can report materialization with `python_prepared` alone.
+The [live preparation contract](WORKER_PROTOCOL.md#live-python-preparation) defines correlation, failure handling, and restart behavior.
 Worker semantic events are the worker-sideband message variants flattened into the relay event namespace.
 The relay translates them without changing the worker-sideband framing or message shapes.
 It does not run host resolvers, track provisional candidates, interpret activation, or commit retained environments; those are server responsibilities.

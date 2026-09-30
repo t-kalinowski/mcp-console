@@ -63,6 +63,10 @@ pub enum Command {
     #[command(hide = true)]
     Worker,
 
+    /// Run the internal host resolver
+    #[command(hide = true)]
+    Resolve,
+
     #[command(hide = true)]
     DockerOwner,
     #[command(hide = true)]
@@ -70,7 +74,10 @@ pub enum Command {
     #[command(hide = true)]
     DockerProbe,
     #[command(hide = true)]
-    ImageRuntimeProbe,
+    ImageRuntimeProbe {
+        #[arg(long)]
+        python: Option<PathBuf>,
+    },
     #[command(hide = true)]
     DockerSandboxOwner,
     #[command(hide = true)]

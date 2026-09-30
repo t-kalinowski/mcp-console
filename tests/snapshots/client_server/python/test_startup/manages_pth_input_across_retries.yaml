@@ -19,7 +19,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 146, in initialize_site
+          File "<string>", line 80, in initialize_site
           File "<frozen site>", line <line>, in main
           File "<frozen site>", line <line>, in venv
           File "<frozen site>", line <line>, in addsitepackages
@@ -29,7 +29,6 @@ result:
           File "<site-packages>/console_startup.py", line 8, in <module>
             raise KeyboardInterrupt("retry startup")
         KeyboardInterrupt: retry startup
-        Error: Python function `_mcp_console_environment.initialize_site` failed
   isError: false
 ---
 send:
@@ -48,7 +47,7 @@ result:
   isError: false
 ---
 send:
-  stdin: "café\0tail\n"
+  stdin: "café\u0000tail\n"
 result:
   content:
     - type: text

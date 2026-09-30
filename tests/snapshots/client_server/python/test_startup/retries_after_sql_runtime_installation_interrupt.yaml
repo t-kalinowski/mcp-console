@@ -11,7 +11,6 @@ result:
           File "<site-packages>/sitecustomize.py", line 10, in interrupt_sql
             raise KeyboardInterrupt
         KeyboardInterrupt
-        Error: failed to install Python module `_mcp_console_sql`
   isError: false
 ---
 send:

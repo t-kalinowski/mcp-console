@@ -4,7 +4,8 @@
 send:
   r: |
     invisible(reticulate::py_config())
-    cat(.libPaths()[[1L]])
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+    cat(.libPaths()[[managed_index]])
 result:
   content:
     - type: text

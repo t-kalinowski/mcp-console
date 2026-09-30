@@ -34,15 +34,6 @@ def entry_result_text(entry: TranscriptEntry) -> str:
     return content[0]["text"]
 
 
-def assert_large_output(output: str, prefix: str) -> None:
-    expected = prefix + ("x" * LARGE_OUTPUT_SIZE)
-    assert output.startswith(expected), (
-        f"captured {len(output)} bytes without the complete {len(expected)}-byte payload"
-    )
-    barrier = output.removeprefix(expected)
-    assert barrier and not barrier.strip("y"), "unexpected text after captured payload"
-
-
 def large_output(prefix: str) -> str:
     return prefix + ("x" * LARGE_OUTPUT_SIZE) + ("y" * LARGE_OUTPUT_SIZE)
 

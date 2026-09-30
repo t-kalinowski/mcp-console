@@ -17,6 +17,8 @@ from pathlib import Path
 from support.normalization import code
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from checkout_workflow import checkout_owner
 
 
 @unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
@@ -29,7 +31,13 @@ class InstallationTests(unittest.TestCase):
             source = directory / "source"
             (source / "scripts").mkdir(parents=True)
             (source / "src").mkdir()
-            for name in ("pyproject.toml", "README.md", "LICENSE", "build.rs"):
+            for name in (
+                "pyproject.toml",
+                "README.md",
+                "LICENSE",
+                "build.rs",
+                "checkout_workflow.py",
+            ):
                 shutil.copyfile(ROOT / name, source / name)
             shutil.copytree(ROOT / "python", source / "python")
             shutil.copyfile(ROOT / "build_backend.py", source / "build_backend.py")
@@ -65,8 +73,11 @@ class InstallationTests(unittest.TestCase):
                     }
                     """)
             )
-            for name in ("r_graphics.c", "r_repl.c"):
-                (source / "src" / name).touch()
+            # Exercise the build script with empty native sources at their real paths.
+            for native_source in (ROOT / "src").rglob("*.c"):
+                destination = source / native_source.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.touch()
             runner_source = directory / "runner"
             workspace = runner_source / "codex-rs"
             workspace.mkdir(parents=True)
@@ -200,6 +211,7 @@ class InstallationTests(unittest.TestCase):
                     "UV_TOOL_DIR": str(directory / "tools"),
                     "UV_TOOL_BIN_DIR": str(directory / "bin"),
                     "CARGO_TARGET_DIR": str(source / "target"),
+                    "XDG_CACHE_HOME": str(directory / "cache"),
                     "RUSTUP_TOOLCHAIN": console_toolchain,
                     "GIT_CONFIG_COUNT": "1",
                     "GIT_CONFIG_KEY_0": f"url.{runner_source.as_uri()}.insteadOf",
@@ -273,13 +285,8 @@ class InstallationTests(unittest.TestCase):
             source = directory / "source"
             target = ROOT / "target"
             environment = os.environ.copy()
-            # Reuse the checkout already prepared by the caller's build. The
-            # native-flags regression separately exercises automatic fetching.
-            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
-            environment.setdefault(
-                "MCP_CONSOLE_SANDBOX_SOURCE",
-                str(ROOT / "target/sandbox-runner-cache" / pin["commit"]),
-            )
+            # Automatic staging shares the caller's pinned source/build cache.
+            # An explicit source override is retained for CI and release builds.
             environment |= {
                 "CARGO_TARGET_DIR": str(target),
                 "UV_TOOL_DIR": str(directory / "uv-tools"),
@@ -534,4 +541,5 @@ class InstallationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    with checkout_owner(ROOT):
+        unittest.main()

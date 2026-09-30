@@ -328,5 +328,8 @@ def _cleanup(lifetime: _SandboxLifetime) -> None:
 def _command_record(lifetime: _SandboxLifetime) -> dict[str, object]:
     return {
         "command": _command(*lifetime.arguments),
-        "stdout": "<sandbox root pid>\n<detached descendant pid>\n<sandbox temp>\n",
+        "stdout": """<sandbox root pid>
+<detached descendant pid>
+<sandbox temp>
+""",
     }

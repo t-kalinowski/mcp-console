@@ -246,6 +246,21 @@ class ReleaseScriptTests(unittest.TestCase):
                 with open(record, "a") as stream:
                     stream.write(json.dumps(sys.argv[1:]) + "\\n")
 
+            if record := os.environ.get("FAKE_MCP_LOCATIONS"):
+                if sys.argv[1] in ("serve", "sandbox"):
+                    with open(record, "a") as stream:
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "command": sys.argv[1],
+                                    "cwd": str(Path.cwd()),
+                                    "home": os.environ.get("HOME"),
+                                    "console": os.environ.get("MCP_CONSOLE_HOME"),
+                                }
+                            )
+                            + "\\n"
+                        )
+
             if sys.argv[1:] == ["--version"]:
                 print("mcp-console 0.0.2")
             elif sys.argv[1:] == ["--help"]:
@@ -460,6 +475,38 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn("private sandbox runner", result.stderr)
+
+    def test_smoke_wheel_isolates_console_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            record = directory / "locations.jsonl"
+            ambient = directory / "ambient-console"
+            ambient.mkdir()
+            (directory / ".agents/console").mkdir(parents=True)
+            environment |= {
+                "FAKE_MCP_LOCATIONS": str(record),
+                "MCP_CONSOLE_HOME": str(ambient),
+            }
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            launches = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertEqual(
+                [item["command"] for item in launches], ["sandbox", "sandbox", "serve"]
+            )
+            for launch in launches:
+                self.assertEqual(launch["home"], environment.get("HOME"))
+                self.assertNotEqual(launch["cwd"], str(directory.resolve()))
+                self.assertNotEqual(launch["console"], str(ambient))
+                self.assertTrue(Path(launch["console"]).is_absolute())
+                self.assertFalse(Path(launch["cwd"]).exists())
+                self.assertFalse(Path(launch["console"]).exists())
 
     def test_smoke_wheel_requires_runnable_cargo_binary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -709,6 +756,9 @@ class ReleaseScriptTests(unittest.TestCase):
             (root / "scripts").mkdir()
             script = root / "scripts" / STAGE_SCRIPT.name
             shutil.copyfile(STAGE_SCRIPT, script)
+            shutil.copyfile(
+                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+            )
             pin = {"repository": "fixture/runner", "commit": "a" * 40}
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
             output = root / "github-output"
@@ -730,6 +780,9 @@ class ReleaseScriptTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir(parents=True)
             shutil.copyfile(STAGE_SCRIPT, scripts / STAGE_SCRIPT.name)
+            shutil.copyfile(
+                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+            )
             placeholder = root / "wheel-data/data/.gitignore"
             placeholder.parent.mkdir(parents=True)
             placeholder.write_text("/*\n!/.gitignore\n")
@@ -1119,15 +1172,23 @@ class ReleaseScriptTests(unittest.TestCase):
             root = Path(temporary)
             (root / "src").mkdir()
             (root / "src/main.rs").write_text("fn main() {}\n")
-            for name in ("r_graphics.c", "r_repl.c"):
-                (root / "src" / name).touch()
+            # Exercise the build script with empty native sources at their real paths.
+            for native_source in (ROOT / "src").rglob("*.c"):
+                destination = root / native_source.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.touch()
             shutil.copyfile(ROOT / "build.rs", root / "build.rs")
             dependencies = tomllib.loads((ROOT / "Cargo.toml").read_text())[
                 "build-dependencies"
             ]
             (root / "Cargo.toml").write_text(
-                '[package]\nname = "sandbox-artifact-build"\nversion = "0.0.0"\n'
-                'edition = "2024"\n[build-dependencies]\n'
+                """[package]
+name = "sandbox-artifact-build"
+version = "0.0.0"
+"""
+                """edition = "2024"
+[build-dependencies]
+"""
                 + "".join(
                     f"{name} = {json.dumps(version)}\n"
                     for name, version in dependencies.items()

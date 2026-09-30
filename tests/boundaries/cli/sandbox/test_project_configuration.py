@@ -47,6 +47,7 @@ def accepted(binary: Path, host: Path, *arguments: str) -> None:
         binary,
         arguments or ("serve", "--worker", "unused-worker"),
         current_directory=host,
+        record_in_project=False,
     ) as client:
         client.initialize_and_list_tools()
         _, stderr = client.finish_with_standard_error()
@@ -160,7 +161,14 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
         ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
         ("empty", "", "one mapping document"),
         ("sequence", "[]", "mapping"),
-        ("multiple documents", "---\n{}\n---\n{}", "one mapping document"),
+        (
+            "multiple documents",
+            """---
+{}
+---
+{}""",
+            "one mapping document",
+        ),
         ("malformed", "sandbox: [", "line"),
         ("top-level field", "profile: default", "profile"),
         ("sandbox type", "sandbox: false", "sandbox"),

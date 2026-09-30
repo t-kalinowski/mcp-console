@@ -31,6 +31,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
+    python_preparation: bool,
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
@@ -38,6 +39,7 @@ struct TranscriptState {
 
 struct ActiveTranscript {
     directory: PathBuf,
+    public_directory: PathBuf,
     writer: BufWriter<File>,
     projections: Option<markdown::Writers>,
     pending_projection_failure: Option<String>,
@@ -63,22 +65,42 @@ pub(crate) struct Artifact {
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(std::env::current_dir(), dynamic_resolution, None)
+        Self::with_target(std::env::current_dir(), dynamic_resolution, false, None)
     }
 
     pub(crate) fn with_target(
         working_directory: std::io::Result<PathBuf>,
         dynamic_resolution: bool,
+        python_preparation: bool,
         target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
+            python_preparation,
             target,
             active: None,
             failure: None,
         })))
+    }
+
+    pub(crate) fn requirements_selected(
+        &self,
+        call_id: Option<u64>,
+        action: &str,
+        snapshot: &serde_json::Value,
+    ) {
+        self.update(|state| {
+            state.materialize()?.append(
+                Event::RequirementsSelected {
+                    call_id,
+                    action,
+                    snapshot,
+                },
+                Utc::now(),
+            )
+        });
     }
 
     pub(crate) fn target_generation(
@@ -94,6 +116,14 @@ impl Transcript {
                 },
                 Utc::now(),
             )
+        });
+    }
+
+    pub(crate) fn python_environment_accepted(&self, packages: &[String]) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::PythonEnvironmentAccepted { packages }, Utc::now())
         });
     }
 
@@ -229,6 +259,7 @@ impl TranscriptState {
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
                 self.dynamic_resolution,
+                self.python_preparation,
                 self.target.as_ref(),
             )?);
         }
@@ -255,6 +286,7 @@ impl ActiveTranscript {
     fn create(
         working_directory: &Path,
         dynamic_resolution: bool,
+        python_preparation: bool,
         target: Option<&serde_json::Value>,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
@@ -265,8 +297,40 @@ impl ActiveTranscript {
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".agents/console/sessions");
+        let project_console = working_directory.join(".agents/console");
+        let in_project = match std::fs::metadata(&project_console) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {}: {error}",
+                    project_console.display()
+                ));
+            }
+        };
+        let console = if in_project {
+            project_console
+        } else {
+            crate::console_paths::home_console_directory()?
+                .ok_or_else(|| "HOME is not set".to_string())?
+        };
+        let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);
+        let public_directory = if in_project {
+            PathBuf::from(".agents/console/sessions").join(&run_id)
+        } else {
+            directory.clone()
+        };
+        if public_directory.to_str().is_none() {
+            return Err("recording path must be UTF-8".to_string());
+        }
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
@@ -307,6 +371,7 @@ impl ActiveTranscript {
                 quarto_path,
                 working_directory,
                 dynamic_resolution,
+                python_preparation,
                 target,
             ))
         })();
@@ -317,6 +382,7 @@ impl ActiveTranscript {
 
         let mut transcript = Self {
             directory,
+            public_directory,
             writer,
             projections,
             pending_projection_failure,
@@ -330,6 +396,7 @@ impl ActiveTranscript {
                 session: "default",
                 working_directory: &working_directory_text,
                 dynamic_resolution,
+                python_preparation,
                 target,
             },
             started_at,

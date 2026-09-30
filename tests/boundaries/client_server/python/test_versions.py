@@ -40,6 +40,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    # The worker uses the current R library, while host uv must not inherit it.
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         real_uv = shutil.which("uv")
@@ -47,6 +48,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         uv_record = temporary / "uv-environment.jsonl"
         r_libs_record = temporary / "uv-r-libs.jsonl"
         environment, _ = r_test_environment()
+        environment.pop("R_LIBS", None)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -60,13 +62,19 @@ def test_uses_current_r_library_for_managed_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(r="initial_r_library <- .libPaths()[[1L]]")
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            initial_r_library <- .libPaths()[[managed_index]]
+            """)
+        client.send(r=r)
         assert last_result_text(client) == "[done]"
 
         def current_r_library() -> str:
             # fmt: r
             r = code(r"""
-                cat(jsonlite::toJSON(.libPaths()[[1L]], auto_unbox = TRUE))
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                cat(jsonlite::toJSON(.libPaths()[[managed_index]], auto_unbox = TRUE))
                 """)
             client.send(r=r)
             output = last_result_text(client)
@@ -76,19 +84,17 @@ def test_uses_current_r_library_for_managed_python_resolution(
             )
             return library
 
-        def assert_resolver_used(library: str) -> None:
+        def assert_resolver_ignored_r_library() -> None:
             records = [
                 json.loads(line)
                 for line in r_libs_record.read_text(encoding="utf-8").splitlines()
             ]
             assert records, "managed Python resolution did not invoke uv"
-            assert all(record is not None for record in records), records
-            first_libraries = [record.split(os.pathsep, 1)[0] for record in records]
-            assert first_libraries == [library] * len(records), first_libraries
+            assert all(record is None for record in records), records
 
         client.send(requirements={"r": ["zeallot"]})
         assert last_result_text(client) == "[prepared]"
-        prepared_r_library = current_r_library()
+        assert Path(current_r_library()).is_dir()
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
         # Printing unconstrained requirements asks the host for the default
@@ -99,7 +105,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        assert_resolver_used(prepared_r_library)
+        assert_resolver_ignored_r_library()
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -110,7 +116,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             """)
         client.send(r=r)
         assert last_result_text(client) == "[done]", client.transcript[-1]
-        assert_resolver_used(prepared_r_library)
+        assert_resolver_ignored_r_library()
 
         uv_record.write_text("", encoding="utf-8")
         r_libs_record.write_text("", encoding="utf-8")
@@ -121,8 +127,8 @@ def test_uses_current_r_library_for_managed_python_resolution(
         assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
-        restarted_r_library = current_r_library()
-        assert_resolver_used(restarted_r_library)
+        assert Path(current_r_library()).is_dir()
+        assert_resolver_ignored_r_library()
         return client.finish()
 
 
@@ -221,7 +227,10 @@ def test_validates_registry_only_python_requirements(
         worker_installation = temporary / "worker-python-installation"
         for selector in (worker_executable, worker_retained_selector):
             selector.write_text(
-                '#!/bin/sh\ntouch "$0.executed"\nexit 97\n',
+                """#!/bin/sh
+touch "$0.executed"
+exit 97
+""",
                 encoding="utf-8",
             )
             selector.chmod(0o755)
@@ -248,54 +257,93 @@ def test_validates_registry_only_python_requirements(
             "~=3.11",
             "===3.11",
         ]
+        uv_record.write_text("", encoding="utf-8")
+        # Reach both worker-originated resolver requests directly. Interpreter
+        # selectors must be rejected before either host resolver invokes uv.
         # fmt: r
-        r = code("""
+        r = code(rf"""
             selector_worker_pid <- Sys.getpid()
             selector_sentinel <- 42L
-            selector_packages <- reticulate::py_require()$packages
-            invisible(reticulate::py_config())
+            packages <- reticulate::py_require()$packages
+            accepted_package_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
+                python_version = I("python3")
+              ),
+              retained_requirements = list(
+                packages = I(c({", ".join(json.dumps(package) for package in accepted_packages)})),
+                python_version = I(">=3.10")
+              )
+            ), auto_unbox = TRUE)
+            accepted_package_error <- tryCatch(
+              .Call("mcp_console_resolve_python", accepted_package_request),
+              error = conditionMessage
+            )
+            environment_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(packages),
+                python_version = I({json.dumps(str(worker_executable))})
+              ),
+              retained_requirements = list(
+                packages = I(packages),
+                python_version = I(">=3.10")
+              )
+            ), auto_unbox = TRUE)
+            environment_error <- tryCatch(
+              .Call("mcp_console_resolve_python", environment_request),
+              error = conditionMessage
+            )
+            retained_environment_request <- jsonlite::toJSON(list(
+              requirements = list(
+                packages = I(packages),
+                python_version = I(">=3.10")
+              ),
+              retained_requirements = list(
+                packages = I(packages),
+                python_version = I({json.dumps(str(worker_retained_selector))})
+              )
+            ), auto_unbox = TRUE)
+            retained_environment_error <- tryCatch(
+              .Call("mcp_console_resolve_python", retained_environment_request),
+              error = conditionMessage
+            )
+            accepted_version_request <- jsonlite::toJSON(list(
+              constraints = I(c(
+                {", ".join(json.dumps(constraint) for constraint in accepted_version_constraints)},
+                {json.dumps(str(worker_installation))}
+              ))
+            ), auto_unbox = TRUE)
+            accepted_version_error <- tryCatch(
+              .Call(
+                "mcp_console_resolve_python_version",
+                accepted_version_request
+              ),
+              error = conditionMessage
+            )
+            rejected_version_errors <- vapply(
+              c({", ".join(json.dumps(constraint) for constraint in rejected_version_constraints)}),
+              function(constraint) {{
+                request <- jsonlite::toJSON(list(
+                  constraints = I(constraint)
+                ), auto_unbox = TRUE)
+                tryCatch(
+                  .Call("mcp_console_resolve_python_version", request),
+                  error = conditionMessage
+                )
+              }},
+              character(1L),
+              USE.NAMES = FALSE
+            )
+            cat(
+              accepted_package_error,
+              environment_error,
+              retained_environment_error,
+              accepted_version_error,
+              rejected_version_errors,
+              sep = "\n"
+            )
             """)
         client.send(r=r)
-        assert last_result_text(client) == "[done]"
-        uv_record.write_text("", encoding="utf-8")
-        # Reach both native worker callbacks. Worker-supplied interpreter
-        # selectors must be rejected before either host resolver invokes uv.
-        # fmt: python
-        python = code(f"""
-            import json
-            import _mcp_console_native as native_services
-
-            def rejected(operation, payload):
-                try:
-                    native_services.call(json.dumps({{
-                        "operation": operation, "payload": payload
-                    }}))
-                except RuntimeError as error:
-                    print(str(error))
-
-            def manifest(packages, version):
-                return {{"packages": packages, "python_version": [version]}}
-
-            packages = list(r.selector_packages)
-            rejected("resolve_python", {{
-                "requirements": manifest({accepted_packages!r}, "python3"),
-                "retained_requirements": manifest({accepted_packages!r}, ">=3.10"),
-            }})
-            rejected("resolve_python", {{
-                "requirements": manifest(packages, {str(worker_executable)!r}),
-                "retained_requirements": manifest(packages, ">=3.10"),
-            }})
-            rejected("resolve_python", {{
-                "requirements": manifest(packages, ">=3.10"),
-                "retained_requirements": manifest(packages, {str(worker_retained_selector)!r}),
-            }})
-            rejected("resolve_version", {{
-                "constraints": {accepted_version_constraints!r} + [{str(worker_installation)!r}]
-            }})
-            for constraint in {rejected_version_constraints!r}:
-                rejected("resolve_version", {{"constraints": [constraint]}})
-            """)
-        client.send(python=python)
         output = last_result_text(client)
         assert output == (
             python_version_constraint_error("python3")
@@ -625,7 +673,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         write_python_executable(
             path_uv,
             # fmt: python
-            code("""
+            code(r"""
                 #!/usr/bin/env python3
                 import os
                 from pathlib import Path
@@ -805,6 +853,21 @@ def test_interrupts_python_cache_warmup_without_committing(
                         )
                         return
                     if arguments[:2] == ["-I", "-c"]:
+                        if len(arguments) == 4:
+                            # Report this selected fixture while executing the
+                            # real inspection program in isolated CPython.
+                            program = "import sys; sys.executable = sys.argv.pop(1); "
+                            os.execv(
+                                sys.executable,
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    program + arguments[2],
+                                    sys.argv[0],
+                                    arguments[3],
+                                ],
+                            )
                         preflight = Path(os.environ["MCP_CONSOLE_TEST_PREFLIGHT_WARMUP"])
                         if not preflight.exists():
                             preflight.touch()
@@ -922,6 +985,21 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
                     if arguments[:2] == ["-I", "-c"]:
                         if blocked.exists():
                             Path(os.environ["MCP_CONSOLE_TEST_UNEXPECTED_WARMUP"]).touch()
+                        if len(arguments) == 4:
+                            # Report this selected fixture while executing the
+                            # real inspection program in isolated CPython.
+                            program = "import sys; sys.executable = sys.argv.pop(1); "
+                            os.execv(
+                                sys.executable,
+                                [
+                                    sys.executable,
+                                    "-I",
+                                    "-c",
+                                    program + arguments[2],
+                                    sys.argv[0],
+                                    arguments[3],
+                                ],
+                            )
                         return
                     raise SystemExit(f"unexpected fake Python arguments: {arguments!r}")
 

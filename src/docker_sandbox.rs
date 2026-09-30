@@ -102,12 +102,16 @@ impl Captured {
         let mut command = Command::new("sbx");
         command.arg("version");
         let bytes = process::run(command, cancel, Some(Instant::now() + COMMAND_TIMEOUT), process::OutputMode::Data, None)
-            .map_err(|error| format!("{error}; install standalone sbx v0.42.1 and complete Docker login and policy setup before starting Console; see docs/DOCKER_SANDBOX.md"))?;
+            .map_err(|error| format!("{error}; install standalone sbx v0.42.1 or newer and complete Docker login and policy setup before starting Console; see docs/DOCKER_SANDBOX.md"))?;
         let version = String::from_utf8(bytes).map_err(|error| error.to_string())?;
-        // This first adapter targets a verified CLI contract, not legacy docker sandbox.
-        if !version.starts_with("sbx version: v0.42.1 ") {
+        let release = version
+            .strip_prefix("sbx version: v")
+            .and_then(|value| value.split_whitespace().next())
+            .and_then(|value| semver::Version::parse(value).ok());
+        // Newer releases exercise the same CLI contract without an upper bound.
+        if release.is_none_or(|value| value < semver::Version::new(0, 42, 1)) {
             return Err(format!(
-                "Docker Sandbox requires supported sbx v0.42.1; received {}",
+                "Docker Sandbox requires sbx v0.42.1 or newer; received {}",
                 version.trim()
             ));
         }

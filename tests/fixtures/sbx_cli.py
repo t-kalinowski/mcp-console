@@ -48,10 +48,17 @@ if real:
     os.execv(real, [real, *args])
 
 
+# A rejected frame can close the attachment before this peer's next write.
+# Match ordinary CLI pipe termination without adding a Python traceback.
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+
 if args == ["version"]:
     print(
-        "sbx version: v0.41.0 fixture"
+        "sbx version: v0.42.0 fixture"
         if mode == "unsupported-version"
+        else (root / "version").read_text()
+        if (root / "version").exists()
         else "sbx version: v0.42.1 fixture"
     )
 elif args[0] == "ls":
@@ -113,9 +120,90 @@ elif args[0] == "exec":
     probe = args[-1] == "docker-sandbox-probe"
     if (probe and mode == "probe-gate") or (not probe and mode == "launch-gate"):
         gate()
-    frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
+    frame(
+        1,
+        {
+            "version": 3 if mode == "probe-version" else bootstrap["version"],
+            "build": "unsupported" if mode == "probe-build" else bootstrap["build"],
+        },
+    )
+    if probe and mode == "probe-closed-output":
+        # Keep the attachment pipe open until this peer exits, so the owner
+        # cannot cancel the peer before its next write hits the closed reader.
+        attachment = os.dup(1)
+        reader, writer = os.pipe()
+        os.close(reader)
+        os.dup2(writer, 1)
+        os.close(writer)
     if probe:
-        frame(3, {"confirmed": True, "error": None})
+        native_only = mode.startswith("native-")
+        home = None if native_only else "/usr/lib/R"
+        prefix = "/target-only" if native_only else "/opt/analysis"
+        executable = prefix + ("/bin/python3" if native_only else "/bin/python")
+        runtime = {
+            "discovery": {
+                "managed": False,
+                "selections": {"r_home": home, "python": None},
+            },
+            "r": None,
+            "python": None,
+            "native": {
+                "r_home": home,
+                "python": {
+                    "selected": {
+                        "embedding": {
+                            "python": executable,
+                            "libpython": prefix + "/lib/libpython.so",
+                            "python_home": prefix,
+                        },
+                        "prefix": prefix,
+                        "exec_prefix": prefix,
+                        "base_prefix": prefix,
+                        "base_exec_prefix": prefix,
+                    },
+                    "explicit": None,
+                    "managed": False,
+                    "duckdb_extension_directory": None,
+                },
+            },
+        }
+        if mode == "r-only-probe":
+            runtime["native"]["python"] = None
+        if mode == "native-managed":
+            runtime["native"]["python"]["managed"] = True
+        if mode == "native-r-conflict":
+            runtime["discovery"]["selections"]["r_home"] = "/usr/lib/R"
+        if mode == "native-relative":
+            runtime["native"]["python"]["selected"]["embedding"]["python"] = (
+                "relative/python"
+            )
+        if mode == "native-prefix":
+            runtime["native"]["python"]["selected"]["embedding"]["python_home"] = (
+                "/other"
+            )
+        if mode == "native-unknown":
+            runtime["native"]["unused"] = "unsupported"
+        if mode == "native-embedding-unknown":
+            runtime["native"]["python"]["selected"]["embedding"]["unused"] = (
+                "unsupported"
+            )
+        if mode == "probe-managed":
+            runtime["discovery"]["managed"] = True
+        if mode == "probe-oversized":
+            runtime["discovery"]["selections"]["r_home"] = "/" + "r" * (64 * 1024)
+        if mode != "missing-runtime":
+            frame(2 if mode == "probe-data" else 4, runtime)
+        if mode == "duplicate-runtime":
+            frame(4, runtime)
+        if mode == "probe-extra":
+            print("unframed startup output", flush=True)
+        frame(
+            3,
+            {
+                "confirmed": mode != "probe-unconfirmed",
+                "error": "probe validation failed" if mode == "probe-failed" else None,
+            },
+        )
     else:
         frame(2, {"kind": "ready"})
         for line in source:

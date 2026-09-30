@@ -16,7 +16,9 @@ def wait(path: str) -> None:
         assert checkpoint.read(1) == b"1"
 
 
-def report_interrupt(signum: int, _frame: object) -> None:
+def wait_for_interrupt() -> None:
+    signum = signal.sigwait({signal.SIGINT})
+    assert signum == signal.SIGINT
     notify(os.environ["MCP_CONSOLE_TEST_IR_INTERRUPTED"])
     if release := os.environ.get("MCP_CONSOLE_TEST_IR_INTERRUPT_RELEASE"):
         wait(release)
@@ -24,8 +26,12 @@ def report_interrupt(signum: int, _frame: object) -> None:
 
 
 def resolve() -> None:
-    if os.environ.get("MCP_CONSOLE_TEST_IR_INTERRUPTED"):
-        signal.signal(signal.SIGINT, report_interrupt)
+    interruptible = bool(os.environ.get("MCP_CONSOLE_TEST_IR_INTERRUPTED"))
+    if interruptible:
+        # Block before readiness so an early SIGINT stays pending for sigwait.
+        # A Python callback can remain deferred across a blocking FIFO read.
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        assert signal.SIGINT not in previous
     if failure := os.environ.get("MCP_CONSOLE_TEST_IR_FAILURE"):
         print(failure, file=sys.stderr)
         raise SystemExit(1)
@@ -41,7 +47,9 @@ def resolve() -> None:
             notify(started)
         if release_gate := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE_GATE"):
             wait(release_gate)
-        if release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
+        if interruptible:
+            wait_for_interrupt()
+        elif release := os.environ.get("MCP_CONSOLE_TEST_IR_RELEASE"):
             wait(release)
     counter.write_text(str(index + 1), encoding="utf-8")
     if gated:

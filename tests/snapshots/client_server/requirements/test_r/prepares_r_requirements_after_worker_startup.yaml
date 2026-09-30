@@ -15,7 +15,9 @@ send:
   r: |
     sentinel <- 42L
     worker_pid <- Sys.getpid()
-    initial_library <- .libPaths()[[1L]]
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+    sandbox_library <- if (managed_index == 2L) .libPaths()[[1L]] else NULL
+    initial_library <- .libPaths()[[managed_index]]
 result:
   content:
     - type: text
@@ -27,8 +29,9 @@ send:
     stopifnot(
       identical(sentinel, 42L),
       identical(Sys.getpid(), worker_pid),
+      is.null(sandbox_library) || identical(.libPaths()[[1L]], sandbox_library),
       !initial_library %in% .libPaths(),
-      identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+      identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
     )
     42L
   requirements:

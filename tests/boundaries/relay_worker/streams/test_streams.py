@@ -23,20 +23,36 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
           invisible(reticulate::py_run_string("initialized_from_r = True"))
         )
         """)
-    output = _tool_text(client.send(r=r))
-    assert output == "[done]", output
+    assert _tool_text(client.send(r=r)) == "[done]"
 
     # fmt: python
     python = code(r"""
         import sys
 
         assert initialized_from_r
+
+
+        def reject_r_console(frame, event, function):
+            if event == "c_call" and getattr(function, "__module__", None) == "rpycall":
+                raise AssertionError("Python console output entered R")
+
+
+        sys.setprofile(reject_r_console)
         print("Python stdout")
-        sys.stderr.write("Python stderr\n")
+        assert sys.stdout.write("") == 0
+        assert sys.stderr.write("Python stderr\n") == 14
+        assert sys.stderr.write("") == 0
+        assert sys.stdout.write("🐍\n") == 2
+        assert sys.stderr.write("🐍\n") == 2
+        sys.setprofile(None)
         raise ValueError("boom")
         """)
     output = _tool_text(client.send(python=python))
-    assert output.startswith("Python stdout\nPython stderr\nTraceback"), output
+    assert output.startswith("""Python stdout
+Python stderr
+🐍
+🐍
+Traceback"""), output
     assert output.endswith("ValueError: boom\n"), output
 
     # fmt: python
@@ -75,7 +91,63 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     output = _tool_text(client.send(python=python))
     output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client.finish()
+    transcript = client.finish()
+    assert all(
+        event["worker"]["data"]
+        for event in transcript
+        if event.get("worker", {}).get("kind")
+        in {"console_output", "console_diagnostic"}
+    )
+    return transcript
+
+
+@executions(DIRECT, SANDBOXED)
+def test_routes_background_python_text_to_raw_streams(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
+    # fmt: python
+    python = code(r"""
+        import logging
+        import sys
+        import threading
+
+        saved_stdout, saved_stderr = sys.stdout, sys.stderr
+        logger = logging.Logger("thread-output")
+        logger.addHandler(logging.StreamHandler(saved_stderr))
+
+
+        def background():
+            saved_stdout.write("thread stdout\n")
+            saved_stdout.flush()
+            saved_stderr.write("thread stderr\n")
+            saved_stderr.flush()
+            logger.warning("thread log")
+
+
+        thread = threading.Thread(target=background)
+        thread.start()
+        thread.join()
+        """)
+    output = _tool_text(client.send(python=python))
+    expected = """thread stdout
+thread stderr
+thread log
+"""
+    output = client._collect_output(output, len(expected))
+    assert sorted(output.splitlines()) == sorted(expected.splitlines()), output
+    transcript = client.finish()
+    assert "".join(event.get("stdout", "") for event in transcript) == "thread stdout\n"
+    assert (
+        "".join(event.get("stderr", "") for event in transcript)
+        == "thread stderr\nthread log\n"
+    )
+    assert all(
+        event["worker"]["kind"] in {"ready", "completed"}
+        for event in transcript
+        if "worker" in event
+    )
+    return transcript
 
 
 @executions(DIRECT, SANDBOXED)
@@ -91,7 +163,10 @@ def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transc
         )
         """)
     assert _tool_text(client.send(r=r)) == (
-        "R output\nR diagnostic\nWARNING: Only editing the first in the list of files\n"
+        """R output
+R diagnostic
+WARNING: Only editing the first in the list of files
+"""
     )
     return client.finish()
 
@@ -100,10 +175,12 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
     r = code(r"""
+        python <- Sys.which("python3")
+        stopifnot(nzchar(python))
+        reticulate::use_python(python, required = TRUE)
         suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
         """)
-    output = _tool_text(client.send(r=r))
-    assert output == "[done]", output
+    assert _tool_text(client.send(r=r)) == "[done]"
 
     # fmt: python
     python = code(r"""
@@ -129,9 +206,9 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             if (
                 os.getpid() != worker_pid
                 and event == "c_call"
-                and getattr(function, "__module__", None) in {"rpycall", "_mcp_console_native"}
+                and getattr(function, "__module__", None) == "rpycall"
             ):
-                raise AssertionError("fork child called back into Console or R")
+                raise AssertionError("fork child called back into R")
 
 
         def run_child(action):
@@ -194,7 +271,10 @@ def _finish_python_fork_output(
         logger.warning("parent log")
         """)
     assert _tool_text(client.send(python=python)) == (
-        "parent stdout\nparent stderr\nparent log\n"
+        """parent stdout
+parent stderr
+parent log
+"""
     )
     assert _tool_text(client.send(r="6 * 7")) == "[1] 42\n"
     transcript = client.finish()

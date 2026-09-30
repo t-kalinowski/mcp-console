@@ -1,8 +1,8 @@
 ---
 fake_provider: unsupported-version
 stderr: >
-  Docker Sandbox requires supported sbx v0.42.1; received sbx version:
-  v0.41.0 fixture
+  Docker Sandbox requires sbx v0.42.1 or newer; received sbx version:
+  v0.42.0 fixture
 ---
 fake_provider: malformed-listing
 stderr: |

@@ -7,7 +7,7 @@ impl Backend {
         crate::r_bridge::Bridge::initialize(SQL_BRIDGE_SOURCE, "SQL").map(Self)
     }
 
-    pub(super) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+    pub(super) fn evaluate(&self, source: &str) -> Result<(), String> {
         self.0.evaluate(source)
     }
 

@@ -221,7 +221,11 @@ def test_preserves_unexposed_input_output(
 
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == (
-            'before\n[input requested: "late> "]\nduring request\nzod stdin: answer\n'
+            """before
+[input requested: "late> "]
+during request
+zod stdin: answer
+"""
         )
         return client.finish()
 

@@ -3,16 +3,21 @@
 ---
 send:
   r: |
-    length(getHook("reticulate::matplotlib.pyplot::load"))
+    stopifnot(!reticulate::py_available(initialize = FALSE))
+    initialization_count <- 0L
+    setHook("reticulate.onPyInit", function() {
+      initialization_count <<- initialization_count + 1L
+    }, action = "append")
 result:
   content:
     - type: text
-      text: |
-        [1] 0
+      text: "[done]"
   isError: false
 ---
 send:
-  python: "42"
+  python: >-
+    runtime_identity = object(); runtime_identity_id = id(runtime_identity);
+    42
 result:
   content:
     - type: text
@@ -21,11 +26,46 @@ result:
   isError: false
 ---
 send:
-  r: |
-    length(getHook("reticulate::matplotlib.pyplot::load"))
+  python: assert id(runtime_identity) == runtime_identity_id; 43
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  r: initialization_count
 result:
   content:
     - type: text
       text: |
         [1] 0
+  isError: false
+---
+send:
+  r: invisible(reticulate::py_config()); initialization_count
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+---
+send:
+  python: assert id(runtime_identity) == runtime_identity_id; 44
+result:
+  content:
+    - type: text
+      text: |
+        44
+  isError: false
+---
+send:
+  r: invisible(reticulate::py_config()); initialization_count
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
   isError: false

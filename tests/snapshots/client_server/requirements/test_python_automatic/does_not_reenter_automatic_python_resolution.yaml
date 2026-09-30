@@ -11,23 +11,21 @@ result:
 ---
 send:
   python: |
-    import site
-
-    original_addsitedir = site.addsitedir
+    import runpy
+    original_run_path = runpy.run_path
     automatic_nested_calls = 0
     automatic_nested_error = None
 
-    def nested_addsitedir(*args, **kwargs):
+    def activate_with_nested_import(*args, **kwargs):
         global automatic_nested_calls, automatic_nested_error
-        site.addsitedir = original_addsitedir
         automatic_nested_calls += 1
         try:
             import mcp_console_nested_resolution_missing
         except ModuleNotFoundError as error:
             automatic_nested_error = str(error)
-        return original_addsitedir(*args, **kwargs)
+        return original_run_path(*args, **kwargs)
 
-    site.addsitedir = nested_addsitedir
+    runpy.run_path = activate_with_nested_import
 result:
   content:
     - type: text
@@ -46,13 +44,14 @@ result:
 ---
 send:
   python: >-
-    automatic_nested_calls, 'mcp_console_nested_resolution_missing' in
-    automatic_nested_error
+    assert automatic_nested_calls == 1; assert
+    'mcp_console_nested_resolution_missing' in automatic_nested_error;
+    print('nested resolution suppressed')
 result:
   content:
     - type: text
       text: |
-        (1, True)
+        nested resolution suppressed
   isError: false
 ---
 send:

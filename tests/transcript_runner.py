@@ -1,13 +1,15 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["py-yaml12>=0.2.0"]
+# dependencies = ["py-yaml12>=0.2.0", "joblib"]
 # ///
 
 from __future__ import annotations
 
 import os
+import json
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -19,6 +21,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from support.capture import read_lines
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
 from support.normalization import code
@@ -224,6 +227,15 @@ class TranscriptRunnerTests(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(RUNNER, self.boundaries / "_run.py")
+        (self.boundaries / "_profiles.py").write_text(
+            # fmt: python
+            code("""
+                SMOKE = (
+                    "client_server/server/test_tools::initializes_and_lists_tools",
+                    "client_server/server/test_tools::selected",
+                )
+                """)
+        )
         for name in (
             "__init__.py",
             "cases.py",
@@ -268,18 +280,18 @@ class TranscriptRunnerTests(unittest.TestCase):
             arguments, process.returncode, stdout, stderr
         )
 
-    def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
+    def prepare_script(self) -> dict[str, str]:
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts" / "test", scripts / "test")
+        shutil.copy2(ROOT / "checkout_workflow.py", self.root / "checkout_workflow.py")
         commands = self.root / "commands"
         commands.mkdir()
         cargo = commands / "cargo"
-        # fmt: python
         cargo.write_text(
             f"#!{sys.executable}\n"
-            + code(
-                """
+            # fmt: python
+            + code("""
                 import sys
                 from pathlib import Path
 
@@ -287,11 +299,41 @@ class TranscriptRunnerTests(unittest.TestCase):
                 binary = Path("target") / profile / "mcp-console"
                 binary.parent.mkdir(parents=True, exist_ok=True)
                 binary.write_text(profile, encoding="utf-8")
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         cargo.chmod(0o755)
+        return self.script_environment(commands)
+
+    def script_environment(self, commands: Path) -> dict[str, str]:
+        # Exercise the bootstrap argv with this test's prepared interpreter.
+        # Resolving the copied runner's SDK dependencies would make each temporary
+        # checkout depend on registry access inside the command's ten-second limit.
+        uv = commands / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import sys
+
+                assert sys.argv[1:3] == ["run", "--script"], sys.argv
+                os.execv(sys.executable, [sys.executable, *sys.argv[3:]])
+                """),
+            encoding="utf-8",
+        )
+        uv.chmod(0o755)
+        return os.environ | {
+            "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            # Isolate the fake build's host concurrency budget.
+            "XDG_CACHE_HOME": str(self.root / "cache"),
+            # Any accidental real dependency resolution must fail immediately.
+            "UV_CACHE_DIR": str(self.root / "cache/uv"),
+            "UV_OFFLINE": "1",
+        }
+
+    def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
+        environment = self.prepare_script()
         debug = self.root / "target" / "debug" / "mcp-console"
         debug.parent.mkdir()
         debug.write_text("stale debug", encoding="utf-8")
@@ -299,25 +341,340 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 def test_selected(binary: Path) -> list[dict[str, str]]:
                     assert binary.read_text(encoding="utf-8") == "release"
                     return record(binary, "selected")
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = subprocess.run(
-            [scripts / "test", "client_server/server/test_tools::selected"],
+            ["scripts/test", "client_server/server/test_tools::selected"],
             cwd=self.root,
-            env={**os.environ, "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+            env=environment,
             capture_output=True,
             text=True,
             timeout=10,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
+
+    def test_cases_isolate_console_home_and_preserve_host_environment(self) -> None:
+        ambient_home = self.root / "ambient-home"
+        console_home = self.root / "ambient-console"
+        project_console = self.root / ".agents/console"
+        project_console.mkdir(parents=True)
+        (project_console / "config.yaml").write_text("invalid: [", encoding="utf-8")
+        config = console_home / "config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text("invalid: [", encoding="utf-8")
+        commands = self.root / "commands"
+        commands.mkdir()
+        environment = os.environ | {
+            "HOME": str(ambient_home),
+            "MCP_CONSOLE_HOME": str(console_home),
+            "R_HOME": str(self.root / "missing-R"),
+            "PATH": str(commands),
+        }
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import json
+                import os
+
+
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    root = binary.parents[2]
+                    expected = json.loads((root / "environment.json").read_text())
+                    actual = {name: os.environ.get(name) for name in expected}
+                    assert actual == expected, (actual, expected)
+                    console = Path(os.environ["MCP_CONSOLE_HOME"])
+                    assert console.is_absolute()
+                    assert console != root / "ambient-console"
+                    assert not (console / "config.yaml").exists()
+                    workspace = Path.cwd()
+                    assert workspace != root.resolve(), workspace
+                    assert not (workspace / ".agents").exists()
+                    (root / "workspace.txt").write_text(str(workspace))
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        names = (
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "R_LIBS_USER",
+            "R_USER_CACHE_DIR",
+            "R_USER_DATA_DIR",
+            "DOCKER_CONFIG",
+            "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+        )
+        for explicit in (False, True):
+            with self.subTest(explicit=explicit):
+                for name in names:
+                    if explicit:
+                        environment[name] = str(self.root / name)
+                    else:
+                        environment.pop(name, None)
+                expected = {
+                    name: environment.get(name) for name in ("HOME", "R_HOME", *names)
+                }
+                (self.root / "environment.json").write_text(json.dumps(expected))
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        self.boundaries / "_run.py",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(
+                    Path((self.root / "workspace.txt").read_text()).exists()
+                )
+        self.assertEqual(config.read_text(), "invalid: [")
+
+    def test_focused_cases_do_not_probe_r(self) -> None:
+        environment = self.prepare_script()
+        r_home = self.root / "selected-R"
+        (r_home / "bin").mkdir(parents=True)
+        rscript = (
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                from pathlib import Path
+
+                Path(__file__).with_suffix(".probed").touch()
+                raise SystemExit(86)
+                """)
+        )
+        for executable in (r_home / "bin/Rscript", self.root / "commands/Rscript"):
+            executable.write_text(rscript, encoding="utf-8")
+            executable.chmod(0o755)
+        for selected_home in (str(r_home), None):
+            with self.subTest(selected_home=selected_home):
+                environment.pop("R_HOME", None)
+                if selected_home is not None:
+                    environment["R_HOME"] = selected_home
+                result = subprocess.run(
+                    ["scripts/test", "client_server/server/test_tools::selected"],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((r_home / "bin/Rscript.probed").exists())
+        self.assertFalse((self.root / "commands/Rscript.probed").exists())
+
+    def test_script_creates_empty_timings_when_selected_case_is_skipped(self) -> None:
+        environment = self.prepare_script()
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.requirements import Requirement, requires
+
+                test_selected = requires(Requirement("fixture", False, "unavailable"))(test_selected)
+                """),
+        )
+        result = subprocess.run(
+            ["scripts/test", "--quick", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.root / "selected.marker").exists())
+        (record_path,) = (self.root / ".dev-workflow/runs").glob("*/result.json")
+        record = json.loads(record_path.read_text())
+        (phase,) = (p for p in record["phases"] if p["name"] == "transcripts")
+        self.assertEqual(phase["exit_status"], 0)
+        self.assertEqual(Path(phase["case_timings"]).read_text(), "")
+
+    def test_script_discovers_and_rejects_arguments_without_building(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        shutil.copy2(ROOT / "checkout_workflow.py", self.root / "checkout_workflow.py")
+        commands = self.root / "commands"
+        commands.mkdir()
+        cargo = commands / "cargo"
+        cargo.write_text("#!/bin/sh\nexit 99\n")
+        cargo.chmod(0o755)
+        environment = self.script_environment(commands)
+        (self.root / "target/release/mcp-console").unlink()
+        suite = "client_server/server/test_tools"
+        for arguments, status, expected in (
+            (("--help",), 0, "usage: scripts/test"),
+            (("--quick", "--full"), 2, "not allowed with argument"),
+            (("--list",), 0, f"{suite}::selected"),
+            (("--locate", f"{suite}::selected"), 0, "source: tests/boundaries/"),
+            (("--execution", "direct"), 2, "execution modes"),
+            (("--jobs", "0"), 2, "--jobs must be at least 1"),
+            (("--timeout", "nan"), 2, "--timeout must be a positive finite number"),
+            (("unknown/suite",), 2, "unknown transcript suite"),
+            ((f"{suite}::missing",), 2, "unknown transcript case"),
+            (("--locate", suite, "--update"), 2, "cannot be combined"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [scripts / "test", *arguments],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertIn(expected, result.stdout + result.stderr)
+                self.assertFalse((self.root / "target/release/mcp-console").exists())
+        self.assertFalse((self.root / ".dev-workflow").exists())
+
+    def test_execution_fixture_explains_conflicting_arguments(self) -> None:
+        for arguments, expected in (
+            (("--no-sandbox",), "execution.serve() selects --no-sandbox"),
+            (("--writable-root", "/workspace"), "use SANDBOXED.serve()"),
+            (("--writable-root=/workspace",), "use SANDBOXED.serve()"),
+        ):
+            with self.subTest(arguments=arguments):
+                self.suite.write_text(
+                    PUBLIC_SUITE
+                    # fmt: python
+                    + code("""
+                        from support.execution import DIRECT, executions
+
+
+                        @executions(DIRECT)
+                        def test_selected(binary, execution):
+                            execution.serve(*ARGUMENTS)
+                            return record(binary, "selected")
+                        """).replace("ARGUMENTS", repr(arguments))
+                )
+                result = self.run_runner("client_server/server/test_tools::selected")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_sbx_discovery_accepts_newer_versions_without_build_output(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.docker_sandbox import DOCKER_SANDBOX
+                from support.requirements import requires
+
+                assert DOCKER_SANDBOX.available, DOCKER_SANDBOX.reason
+                test_selected = requires(DOCKER_SANDBOX)(test_selected)
+                """)
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        # Dependency installation is outside this discovery contract. Keep the
+        # scripts/test bootstrap, using the interpreter running this test.
+        uv = commands / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import sys
+
+                assert sys.argv[1:3] == ["run", "--script"], sys.argv
+                os.execv(sys.executable, [sys.executable, *sys.argv[3:]])
+                """)
+        )
+        uv.chmod(0o755)
+        sbx = commands / "sbx"
+        sbx.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import sys
+                from pathlib import Path
+
+                Path("sbx-probed").touch()
+                print("sbx version: v99.0.0 fixture" if sys.argv[1] == "version" else "[]")
+                """)
+        )
+        sbx.chmod(0o755)
+        shutil.rmtree(self.root / "target")
+        environment = self.script_environment(commands) | {
+            "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture@sha256:example",
+            "MCP_CONSOLE_TEST_SBX_NETWORK": "0",
+            "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
+        }
+        result = subprocess.run(
+            [scripts / "test", "--list", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "sbx-probed").exists())
+        self.assertFalse((self.root / "target").exists())
+
+    def test_runner_metadata_does_not_require_a_binary(self) -> None:
+        (self.root / "target/release/mcp-console").unlink()
+        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_help_and_syntax_errors_do_not_resolve_script_dependencies(self) -> None:
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        commands = self.root / "commands"
+        commands.mkdir()
+        uv = commands / "uv"
+        uv.write_text("""#!/bin/sh
+echo invoked > uv-receipt
+exit 97
+""")
+        uv.chmod(0o755)
+        for arguments, status in (
+            (("--help",), 0),
+            (("--execution", "direct"), 2),
+            (("--jobs", "0"), 2),
+            (("--timeout", "nan"), 2),
+            (("--locate", "cli/example", "extra"), 2),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [scripts / "test", *arguments],
+                    cwd=self.root,
+                    env=os.environ
+                    | {"PATH": f"{commands}{os.pathsep}{os.environ['PATH']}"},
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertFalse((self.root / "uv-receipt").exists())
 
     def test_external_ssh_availability_gates_public_cases(self) -> None:
         shutil.copy2(
@@ -521,8 +878,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.requirements import Requirement, command, requires
 
                 available = Requirement("available fixture", True, "fixture is available")
@@ -531,14 +887,13 @@ class TranscriptRunnerTests(unittest.TestCase):
                 test_unselected = requires(
                     available, missing, command("mcp-console-deliberately-missing-test-command")
                 )(test_unselected)
-                """
-            ),
+                """),
             encoding="utf-8",
         )
-        listed = self.run_runner("--list")
+        listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertIn("::unselected", listed.stdout)
-        result = self.run_runner("--jobs", "1")
+        result = self.run_runner("--full", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "selected.marker").exists())
         self.assertFalse((self.root / "unselected.marker").exists())
@@ -553,6 +908,314 @@ class TranscriptRunnerTests(unittest.TestCase):
         selected_skip = self.run_runner("client_server/server/test_tools::unselected")
         self.assertEqual(selected_skip.returncode, 0, selected_skip.stderr)
         self.assertIn("fixture deliberately unavailable", selected_skip.stdout)
+
+    def test_r_cases_run_with_home_or_path_selection(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.requirements import R, requires
+
+                test_selected = requires(R)(test_selected)
+                """),
+            encoding="utf-8",
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        executable = commands / "R"
+        marker = self.root / "selected.marker"
+        for home, entry, expected in (
+            (None, None, False),
+            (str(self.root / "selected-R-home"), None, True),
+            ("", None, True),
+            (None, "executable", True),
+            (None, "non-executable", True),
+            (None, "broken symlink", True),
+        ):
+            with self.subTest(home=home, entry=entry):
+                executable.unlink(missing_ok=True)
+                if entry == "broken symlink":
+                    executable.symlink_to(commands / "missing-R")
+                elif entry is not None:
+                    executable.write_text("#!/bin/sh\nexit 99\n")
+                    executable.chmod(0o755 if entry == "executable" else 0o644)
+                environment = os.environ | {"PATH": str(commands)}
+                environment.pop("R_HOME", None)
+                if home is not None:
+                    environment["R_HOME"] = home
+                marker.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        self.boundaries / "_run.py",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    cwd=self.root,
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(marker.exists(), expected, result.stdout)
+                self.assertEqual("skipped; R:" in result.stdout, not expected)
+
+    def test_script_profiles_and_explicit_selectors(self) -> None:
+        environment = self.prepare_script()
+        environment.update(
+            {
+                "MCP_CONSOLE_TEST_DOCKER_IMAGE": "fixture-image",
+                "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture-template",
+            }
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+
+                assert os.environ["MCP_CONSOLE_TEST_DOCKER_IMAGE"] == "fixture-image"
+                assert os.environ["MCP_CONSOLE_TEST_SBX_TEMPLATE"] == "fixture-template"
+                """),
+        )
+        for profile in ((), ("--quick",), ("--full",)):
+            for selectors in (
+                (),
+                ("client_server/server/test_tools::unselected",),
+                ("client_server/server/test_tools",),
+            ):
+                with self.subTest(profile=profile, selectors=selectors):
+                    expected = (
+                        {"unselected"}
+                        if selectors and "::" in selectors[0]
+                        else {"initialization", "selected", "unselected"}
+                        if selectors or profile == ("--full",)
+                        else {"initialization", "selected"}
+                    )
+                    for marker in self.root.glob("*.marker"):
+                        marker.unlink()
+                    for listing in (True, False):
+                        result = subprocess.run(
+                            [
+                                "scripts/test",
+                                *profile,
+                                *(["--list"] if listing else []),
+                                *selectors,
+                            ],
+                            cwd=self.root,
+                            env=environment,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        if listing:
+                            names = {
+                                line.split("::")[1]
+                                for line in result.stdout.splitlines()
+                            }
+                            self.assertEqual(
+                                names,
+                                {
+                                    "initializes_and_lists_tools"
+                                    if name == "initialization"
+                                    else name
+                                    for name in expected
+                                },
+                            )
+                    self.assertEqual(
+                        {p.stem for p in self.root.glob("*.marker")}, expected
+                    )
+
+    def test_smoke_and_focused_runs_do_not_import_unselected_suites(self) -> None:
+        other = self.suite.with_name("test_expensive.py")
+        other.write_text('raise RuntimeError("unselected suite imported")')
+        other_snapshots = self.snapshots.with_name("test_expensive")
+        other_snapshots.mkdir()
+        (other_snapshots / "example.yaml").write_text("""---
+runner: example
+...
+""")
+        for arguments in (
+            (),
+            ("--quick",),
+            ("client_server/server/test_tools::selected",),
+            ("--full", "client_server/server/test_tools::selected"),
+            ("--full", "client_server/server/test_tools"),
+            ("--full", "--list", "client_server/server/test_tools"),
+            ("--full", "--locate", "client_server/server/test_tools::selected"),
+            ("--full", "--update", "client_server/server/test_tools::selected"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        full = self.run_runner("--full")
+        self.assertNotEqual(full.returncode, 0)
+        self.assertIn("unselected suite imported", full.stderr)
+
+    def test_smoke_update_preserves_unselected_and_orphan_snapshots(self) -> None:
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        unselected = self.snapshots / "unselected.yaml"
+        original = unselected.read_bytes()
+        for profile in ((), ("--quick",)):
+            result = self.run_runner(*profile, "--update")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(orphan.exists())
+            self.assertEqual(unselected.read_bytes(), original)
+        full = self.run_runner("--full", "--update")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertFalse(orphan.exists())
+
+    def test_full_profile_selected_updates_preserve_unrelated_orphans(self) -> None:
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        selected = self.snapshots / "selected.yaml"
+        expected = b"---\nrunner: selected\n"
+        for selector in (
+            "client_server/server/test_tools::selected",
+            "client_server/server/test_tools",
+        ):
+            with self.subTest(selector=selector):
+                selected.write_text("""---
+runner: outdated
+...
+""")
+                result = self.run_runner("--full", "--update", selector)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(selected.read_bytes(), expected)
+                self.assertTrue(orphan.exists())
+
+    def test_explicit_profiles_preserve_external_ssh_host_selection(
+        self,
+    ) -> None:
+        shutil.copy2(
+            ROOT / "tests/support/ssh_external.py",
+            self.root / "tests/support/ssh_external.py",
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                import os
+                from support.requirements import requires
+                from support.ssh_external import EXTERNAL_SSH
+
+                assert os.environ["MCP_CONSOLE_TEST_SSH_HOST"] == "fixture-host"
+                assert os.environ["MCP_CONSOLE_TEST_SSH_EXTERNAL"] == os.environ["FIXTURE_SSH_EXTERNAL"]
+                test_selected = requires(EXTERNAL_SSH)(test_selected)
+                """),
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        ssh = commands / "ssh"
+        ssh.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import json
+                import sys
+                from pathlib import Path
+
+                with (Path(__file__).parent / "probes.jsonl").open("a") as output:
+                    print(json.dumps(sys.argv[1:]), file=output)
+                """),
+        )
+        ssh.chmod(0o755)
+        probes = commands / "probes.jsonl"
+        configured = {
+            "target": {"transport": {"host": "configured-host"}},
+            "ssh_config": "fixture-ssh-config",
+        }
+        for external in ("", json.dumps(configured)):
+            with self.subTest(external=external):
+                environment = os.environ | {
+                    "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+                    "MCP_CONSOLE_TEST_SSH_HOST": "fixture-host",
+                    "MCP_CONSOLE_TEST_SSH_EXTERNAL": external,
+                    "FIXTURE_SSH_EXTERNAL": external,
+                }
+                for profile in ([], ["--quick"], ["--full"]):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            self.boundaries / "_run.py",
+                            *profile,
+                            "client_server/server/test_tools::selected",
+                        ],
+                        cwd=self.root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertTrue((self.root / "selected.marker").exists())
+                    expected = [
+                        "-T",
+                        "-a",
+                        "-o",
+                        "BatchMode=yes",
+                        "-o",
+                        "ConnectTimeout=3",
+                        *(["-F", "fixture-ssh-config"] if external else []),
+                        "--",
+                        "configured-host" if external else "fixture-host",
+                        "true",
+                    ]
+                    self.assertTrue(probes.read_text())
+                    for line in probes.read_text().splitlines():
+                        self.assertEqual(json.loads(line), expected)
+                    probes.unlink()
+                    (self.root / "selected.marker").unlink()
+
+    def test_records_timings_for_each_execution_and_snapshot_failure(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+
+
+                @executions(Execution("first"), Execution("second"))
+                def test_selected(binary, execution):
+                    return record(binary, "selected")
+                """),
+        )
+        timing = self.root / "timings.jsonl"
+        selector = "client_server/server/test_tools::selected"
+        for failed in (False, True):
+            if failed:
+                (self.snapshots / "selected.yaml").write_text(
+                    """---
+runner: different
+...
+"""
+                )
+            result = subprocess.run(
+                [sys.executable, self.boundaries / "_run.py", selector],
+                env=os.environ | {"MCP_CONSOLE_TEST_TIMINGS": str(timing)},
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode == 0, not failed, result.stderr)
+        rows = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(
+            [(r["selector"], r["execution"], r["status"]) for r in rows],
+            [
+                (selector, "first", "passed"),
+                (selector, "second", "passed"),
+                (selector, "first", "failed"),
+            ],
+        )
+        self.assertTrue(all(r["elapsed_seconds"] > 0 for r in rows))
 
     def test_repository_cases_skip_missing_resolver_and_formatter_commands(
         self,
@@ -608,19 +1271,42 @@ class TranscriptRunnerTests(unittest.TestCase):
                             f"{missing}: {missing} is missing from PATH", line
                         )
 
+    def test_repository_sklearn_case_skips_one_effective_cpu(self) -> None:
+        shutil.copytree(
+            ROOT / "tests" / "support",
+            self.root / "tests" / "support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        suite = Path("client_server/python/test_processes.py")
+        destination = self.boundaries / suite
+        destination.parent.mkdir(parents=True)
+        shutil.copy2(RUNNER.parent / suite, destination)
+        selector = "client_server/python/test_processes::runs_sklearn_parallel_search"
+        result = subprocess.run(
+            [sys.executable, self.boundaries / "_run.py", selector],
+            cwd=self.root,
+            env={**os.environ, "LOKY_MAX_CPU_COUNT": "1"},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for execution in ("direct", "sandbox"):
+            self.assertIn(f"{selector}[{execution}]: skipped;", result.stdout)
+        self.assertIn("requires at least two effective joblib CPUs", result.stdout)
+
     def test_full_update_preserves_skipped_case_and_companions(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.requirements import Requirement, requires
 
                 test_unselected = requires(Requirement("unavailable", False, "deliberate skip"))(
                     test_unselected
                 )
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         companion = self.snapshots / "unselected.md"
@@ -628,7 +1314,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         stale = self.snapshots / "selected.md"
         stale.write_text("obsolete companion", encoding="utf-8")
         before = (self.snapshots / "unselected.yaml").read_bytes()
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.snapshots / "unselected.yaml").read_bytes(), before)
         self.assertEqual(companion.read_text(), "retained companion")
@@ -640,7 +1326,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         companion.write_text("other platform output\n", encoding="utf-8")
         stale = self.snapshots / f"selected.{sys.platform}.yaml"
         stale.write_text("obsolete local output\n", encoding="utf-8")
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(companion.is_file(), result.stdout)
         self.assertEqual(companion.read_text(), "other platform output\n")
@@ -650,8 +1336,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.execution import Execution, executions
                 from support.requirements import Requirement
 
@@ -664,11 +1349,10 @@ class TranscriptRunnerTests(unittest.TestCase):
                 def test_selected(binary, execution):
                     record(binary, execution.name)
                     return [{"runner": "selected"}]
-                """
-            ),
+                """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "first.marker").exists())
         self.assertTrue((self.root / "second.marker").exists())
@@ -684,7 +1368,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                 'return [{"runner": execution.name}]',
             )
         )
-        differing = self.run_runner("--update", "--jobs", "1")
+        differing = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("second", differing.stderr)
 
@@ -701,18 +1385,16 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                f"""
+            + code(f"""
                 def test_initializes_and_lists_tools(binary):
                     return {handshake!r}
 
                 def test_selected(binary):
                     return [{{"runner": "before"}}] + {handshake!r} + [{{"runner": "between"}}] + {handshake!r} + {changed!r} + {handshake[:-1]!r}
-                """
-            ),
+                """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         snapshot = (self.snapshots / "selected.yaml").read_text()
         self.assertEqual(snapshot.count("!same-as"), 2, snapshot)
@@ -724,8 +1406,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.execution import Execution, executions
                 from support.records import TranscriptWithCompanions
 
@@ -755,11 +1436,10 @@ class TranscriptRunnerTests(unittest.TestCase):
 
                 def test_unselected(binary):
                     return TranscriptWithCompanions(sandbox + direct, {"wire.yaml": direct})
-                """
-            ),
+                """),
             encoding="utf-8",
         )
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         for reference in self.snapshots.glob("initializes_and_lists_tools*.yaml"):
             self.assertNotIn("id:", reference.read_text())
@@ -773,7 +1453,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             self.suite.read_text().replace("else direct", "else sandbox")
         )
-        differing = self.run_runner("--jobs", "1")
+        differing = self.run_runner("--full", "--jobs", "1")
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
@@ -785,8 +1465,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from yaml12 import read_yaml
 
 
@@ -802,8 +1481,7 @@ class TranscriptRunnerTests(unittest.TestCase):
                         "can access the network subject to the launcher's proxy settings",
                     )
                     return [{"runner": "before"}] + handshake + [{"runner": "between"}] + handshake
-                """
-            ),
+                """),
             encoding="utf-8",
         )
         result = self.run_runner(
@@ -819,8 +1497,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         source = (
             PUBLIC_SUITE
             # fmt: python
-            + code(
-                """
+            + code("""
                 from support.execution import Execution, executions
                 from support.records import TranscriptWithCompanions
                 from support.requirements import Requirement
@@ -834,11 +1511,10 @@ class TranscriptRunnerTests(unittest.TestCase):
                     return TranscriptWithCompanions(
                         [{"mode": execution.name}], {"bare.yaml": [{"bare": execution.name}]}
                     )
-                """
-            )
+                """)
         )
         self.suite.write_text(source.replace("AVAILABLE", "True"))
-        result = self.run_runner("--update", "--jobs", "1")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
         self.assertEqual(result.returncode, 0, result.stderr)
         references = {
             path: path.read_bytes()
@@ -871,7 +1547,11 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.suite.write_text(PUBLIC_SUITE + HANGING_SUITE, encoding="utf-8")
         for name in ("hangs", "failure_beside_hang"):
             (self.snapshots / f"{name}.yaml").write_text(
-                "---\nrunner: released\n...\n", encoding="utf-8"
+                """---
+runner: released
+...
+""",
+                encoding="utf-8",
             )
         checkpoints = []
         for name in (
@@ -1160,7 +1840,11 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_runner_loss_retires_case_holding_the_gil(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + GIL_HOLDING_SUITE, encoding="utf-8")
         (self.snapshots / "holds_gil.yaml").write_text(
-            "---\nrunner: released\n...\n", encoding="utf-8"
+            """---
+runner: released
+...
+""",
+            encoding="utf-8",
         )
         subprocess.run(
             [
@@ -1224,7 +1908,12 @@ class TranscriptRunnerTests(unittest.TestCase):
     def test_case_can_fork_without_thread_safety_warnings(self) -> None:
         self.suite.write_text(PUBLIC_SUITE + FORKING_SUITE, encoding="utf-8")
         (self.snapshots / "forks.yaml").write_text(
-            "---\nrunner: forked\nwarnings: []\n...\n", encoding="utf-8"
+            """---
+runner: forked
+warnings: []
+...
+""",
+            encoding="utf-8",
         )
         result = self.run_runner("client_server/server/test_tools::forks")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1245,7 +1934,7 @@ class TranscriptRunnerTests(unittest.TestCase):
             f"{suite}::unselected",
         ]
 
-        listed = self.run_runner("--list")
+        listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertEqual(listed.stdout.splitlines(), cases)
 
@@ -1294,9 +1983,15 @@ class TranscriptRunnerTests(unittest.TestCase):
 
     def test_orphan_rejection_and_full_update_cleanup(self) -> None:
         orphan = self.snapshots / "deleted_case.yaml"
-        orphan.write_text("---\nrunner: orphan\n...\n", encoding="utf-8")
+        orphan.write_text(
+            """---
+runner: orphan
+...
+""",
+            encoding="utf-8",
+        )
 
-        rejected = self.run_runner("--list")
+        rejected = self.run_runner("--full", "--list")
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn(
             "orphan snapshot: "
@@ -1304,10 +1999,11 @@ class TranscriptRunnerTests(unittest.TestCase):
             rejected.stderr,
         )
         self.assertIn(
-            "run scripts/test --update to remove orphan snapshots", rejected.stderr
+            "run scripts/test --full --update to remove orphan snapshots",
+            rejected.stderr,
         )
 
-        updated = self.run_runner("--update", "--jobs", "2")
+        updated = self.run_runner("--full", "--update", "--jobs", "2")
         self.assertEqual(updated.returncode, 0, updated.stderr)
         self.assertFalse(orphan.exists())
         self.assertIn(
@@ -1322,6 +2018,68 @@ class TranscriptRunnerTests(unittest.TestCase):
                 "unselected.yaml",
             },
         )
+
+    def test_focused_failure_rerun_omits_profiles_and_preserves_timeout(self) -> None:
+        (self.snapshots / "selected.yaml").write_text("""---
+runner: mismatch
+...
+""")
+        for profile in ([], ["--quick"], ["--full"]):
+            with self.subTest(profile=profile):
+                arguments = [
+                    "--timeout",
+                    "1200.5",
+                    "client_server/server/test_tools::selected",
+                ]
+                result = self.run_runner(*profile, *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    f"rerun: scripts/test {shlex.join(arguments)}", result.stderr
+                )
+
+    def test_failure_rerun_preserves_snapshot_update(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("fixture failed before snapshot update")
+                """)
+        )
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "rerun: scripts/test --update client_server/server/test_tools::selected",
+            result.stderr,
+        )
+
+    def test_failure_rerun_preserves_full_update_with_orphans(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("fixture failed before snapshot update")
+                """)
+        )
+        orphan = self.snapshots / "deleted_case.yaml"
+        orphan.write_text("""---
+runner: orphan
+...
+""")
+        arguments = ["--full", "--update", "--jobs", "1"]
+        result = self.run_runner(*arguments)
+        self.assertNotEqual(result.returncode, 0)
+        receipt = next(
+            line for line in result.stderr.splitlines() if line.startswith("rerun: ")
+        )
+        self.assertEqual(receipt, f"rerun: scripts/test {shlex.join(arguments)}")
+        self.assertTrue(orphan.exists())
+        retried = self.run_runner(*shlex.split(receipt)[2:])
+        self.assertIn("fixture failed before snapshot update", retried.stderr)
+        self.assertNotIn("orphan snapshot:", retried.stderr)
 
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
@@ -1338,7 +2096,7 @@ class TranscriptRunnerTests(unittest.TestCase):
         started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
         release_first = os.open(self.root / "release-first", os.O_RDWR)
         release_second = os.open(self.root / "release-second", os.O_RDWR)
-        process = self.start_runner("--jobs", "2")
+        process = self.start_runner("--full", "--jobs", "2")
         try:
             acknowledgements = b""
             while len(acknowledgements) < 2:
@@ -1347,17 +2105,16 @@ class TranscriptRunnerTests(unittest.TestCase):
                 acknowledgements += os.read(started, 2 - len(acknowledgements))
             self.assertEqual(os.write(release_first, b"1"), 1)
             assert process.stderr is not None
-            expected_failure = "client_server/server/test_tools::first_failure: failed"
-            observed_stderr = ""
-            deadline = time.monotonic() + 10
-            while expected_failure not in observed_stderr:
-                remaining = deadline - time.monotonic()
-                self.assertGreater(remaining, 0, "first failure was not reported")
-                ready, _, _ = select.select([process.stderr], [], [], remaining)
-                self.assertTrue(ready, "first failure was not reported")
-                line = process.stderr.readline()
-                self.assertNotEqual(line, "", "runner exited before reporting failure")
-                observed_stderr += line
+            # Descriptor reads avoid buffering part of the receipt above the pipe.
+            receipt = read_lines(process.stderr, 2, "first failure receipt")
+            self.assertEqual(
+                receipt,
+                [
+                    "client_server/server/test_tools::first_failure: failed",
+                    "rerun: scripts/test client_server/server/test_tools::first_failure",
+                ],
+            )
+            observed_stderr = "\n".join(receipt) + "\n"
             self.assertEqual(os.write(release_second, b"2"), 1)
             stdout, remaining_stderr = process.communicate(timeout=10)
             stderr = observed_stderr + remaining_stderr
@@ -1378,6 +2135,11 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("client_server/server/test_tools::first_failure: failed", stderr)
         self.assertIn("client_server/server/test_tools::second_failure: failed", stderr)
+        for name in ("first_failure", "second_failure"):
+            self.assertIn(
+                f"rerun: scripts/test client_server/server/test_tools::{name}",
+                stderr,
+            )
         self.assertIn("runner: first actual", stderr)
         self.assertIn("runner: second actual", stderr)
         self.assertIn("multiple transcript cases failed (2 sub-exceptions)", stderr)

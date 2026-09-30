@@ -1,5 +1,23 @@
 # Boundary tests
 
+For embedded programs, execution modes, and lifecycle receipts, start with the [authoring recipe](AUTHORING.md).
+
+`scripts/test` and its `--quick` alias run the explicit smoke selection in [`_profiles.py`](_profiles.py), using existing cases, execution modes, and snapshots.
+The selection uses exact case names so new cases do not silently expand the local gate.
+`scripts/test --full` includes all capability-applicable cases; CI explicitly uses this full profile.
+Explicit selectors retain their scope with any profile flag.
+Use `scripts/test --list` to inspect the smoke selection or `scripts/test --full --list` to discover all cases.
+Only full runs without a case, suite, or `--locate` selector audit orphan snapshots globally; use `scripts/test --full --update` for a complete snapshot update and orphan cleanup.
+Smoke and focused updates preserve unselected snapshots.
+The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
+
+Each case gets a private `MCP_CONSOLE_HOME` for fallback configuration and records.
+Cases also run from a temporary workspace, so an existing checkout `.agents/console` cannot capture their recordings or supply configuration.
+The runner removes the workspace and Console home after the case exits.
+`HOME` and the caller's R, Python, uv, and Docker environment remain unchanged; test discovery does not probe runtimes to reconstruct their storage paths.
+`McpClient` also isolates Console home when used outside the runner and creates no project config file.
+Cases that exercise home discovery pass their chosen `HOME` or `MCP_CONSOLE_HOME` explicitly and use `use_home_configuration=True`; remove the inherited `MCP_CONSOLE_HOME` when testing the default `~/.agents/console` location.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.
@@ -9,6 +27,13 @@ Docker Sandbox cases separately require standalone `sbx`, usable virtualization/
 `tests/support/docker_sandbox.py` owns capability discovery and serializes real microVM fixtures.
 Its controller-isolation fixture relocates Console without its companion and installs sentinels for forbidden native/runtime/resolver calls; fake-provider and real-runtime cases retain separate coverage.
 Fake peers establish orchestration contracts, not real container or VM cleanup.
+
+R-free prepared acceptance uses `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE` and `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE`, built with the corresponding `Dockerfile.python` examples.
+Run `scripts/test client_server/python/test_prepared_without_r` after selecting these fixtures.
+The shared public MCP cases exercise real containers/microVMs with target-only interpreter paths and controller/target resolver sentinels.
+They cover SQL-first startup, Python and catalog persistence, custom connections, plotting, input, interruption, debugger continuation, recording, restart/crash replacement, attachment loss, explicit selection and missing dependencies, and resource retirement.
+Offline extension cases disconnect the owned Docker container or deny network access for the owned SBX VM; they leave global provider policy unchanged.
+Prepared protocol rejection cases use a separate deterministic CLI peer and do not establish provider acceptance.
 
 SSH cases use a private localhost OpenSSH server, pinned temporary host and client keys, and a test alias.
 The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Linux server and prepares `/run/sshd`.
@@ -28,6 +53,13 @@ It removes the workspace and installation when the test finishes and leaves ordi
 To use an already provisioned target instead, set `MCP_CONSOLE_TEST_SSH_EXTERNAL` to a JSON object with `target` (the documented target shape), `environment` (remote worker environment strings), `ssh_config` (an absolute controller OpenSSH configuration path), and `platform` (the expected R `Sys.info()[['sysname']]`).
 That target must provide a compatible build, R, and an existing workspace with `results`, `cli`, and `denied` subdirectories.
 Run `scripts/test client_server/server/test_ssh_policy::external_execution_host_policy`.
+
+Sans-R cross-host acceptance uses `MCP_CONSOLE_TEST_SSH_NO_R_EXTERNAL`, with `target` and an absolute controller `ssh_config` path in the same JSON shape.
+Provide a compatible installed build, an existing writable `target.workspace`, remote uv, an absolute startup `HOME`, and an SSH host with no R installation.
+A container with its own OpenSSH server is suitable; native-sandbox coverage also needs the documented Linux capabilities.
+Run `scripts/test client_server/python/test_ssh_without_r::external_r_free_execution_host`.
+The case runs direct and native-sandbox sessions, uses remote interpreter paths unavailable on the controller, poisons controller interpreter and resolver commands, and checks retained packages, offline extension loading, replacement, explicit relative Python selection, recordings, and private-storage retirement.
+The ordinary localhost SSH cases additionally cover failed and interrupted resolution and inspection with deterministic checkpoints.
 
 A boundary suite is a Python file under one of four directories whose relative path has no component beginning with `_`:
 
@@ -79,6 +111,8 @@ Map each non-generic sandbox allowance to the real workflow that requires it and
 | `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
 | uv platform services        | Offline wheel installation in private storage     | `cli/sandbox/test_uv::installs_a_local_wheel_into_private_storage`                         |
 
+Scikit-learn workflows with `n_jobs=-1`, including grid search over memory-mapped inputs, random forests, cross-validation, and permutation importance, are covered by `client_server/python/test_processes::runs_sklearn_parallel_search` in direct and sandboxed execution.
+
 The [policy audit](../../docs/SANDBOX.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
 Runner protocol parsing belongs to the pinned executable tests; `tests/sandbox_installation.py` covers installation verification, one-shot resource closure, and startup without setup EOF.
 The CLI execution suite verifies frontend exec with PID and binary standard-stream preservation.
@@ -116,9 +150,18 @@ The response's `result` or `error`, when present, appears directly at the docume
 Some cases add `transcript_normalization` after the response.
 This is structured harness metadata, never a field or text observed at the captured boundary.
 Its `target` identifies the normalized value, and its remaining fields describe information omitted or replaced in the snapshot.
+
+The R missing-package fidelity cases compare condition classes, fields, and complete error output against the same source in a live `Rscript --vanilla` process.
+Unhandled reference errors exit naturally; only Rscript's `Execution halted` footer is removed because Console remains running after a cell error.
+The Console display cases enable `showErrorCalls` to match Rscript's default, so call chains remain part of the exact comparison.
+After equality succeeds, these cases record the live comparison with `transcript_normalization` metadata instead of fixing the host R version's wording in YAML.
+An equality failure reports both complete outputs.
+This is a narrow exception to preserving literal runtime errors in snapshots: native R behavior, rather than one platform or R version's output, is the contract.
+
 The initialization, initialized notification, and tool-list exchange have full references in `client_server/server/test_tools::initializes_and_lists_tools`.
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
+The `.python-only.yaml` and `.python-only.direct.yaml` companions record local Python sessions without R.
 The `.proxy.yaml` companion records the sandboxed interface with a project-configured network proxy.
 The `.workspace.yaml` companion records the native workspace profile.
 The `.ssh.yaml` and `.ssh.direct.yaml` companions record bare SSH targets with that profile, using a deterministic preparation peer without starting a remote worker.
@@ -127,7 +170,7 @@ When selected, this reference case runs before the other cases, including during
 At each position in a transcript, the runner compares the complete exchange against the appropriate reference before abbreviating it.
 This includes multiple client sessions in one case.
 A differing or incomplete handshake stays in full.
-For a case with declared execution modes, an exact match becomes `!same-as MCP initialization for this execution mode`, with a `bare` prefix for that reference family.
+For a case with declared execution modes, an exact match becomes `!same-as MCP initialization for this execution mode`, with a variant prefix such as `bare` or `python-only` for that reference family.
 Portable behavior shares one snapshot while each mode verifies its own complete handshake.
 Only the canonical reference case's YAML companions define additional handshake variants; an unmatched exchange stays in full.
 For other cases, each matching exchange becomes `!same-as PATH`, naming the reference it actually matched; mixed sessions retain their separate references.
@@ -185,9 +228,11 @@ Run commands from the repository root:
 
 ```bash
 scripts/test
+scripts/test --full
 scripts/test client_server/server/test_tools
 scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --list
+scripts/test --full --list
 scripts/test --locate client_server/server/test_tools
 scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --jobs 1 client_server/python/test_runtime
@@ -195,12 +240,17 @@ scripts/test --timeout 1800 client_server/requirements/test_r
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
-`scripts/test` builds and uses `target/release/mcp-console`.
+`scripts/test` handles help, listing, location lookup, and invalid arguments before preparing the executable.
+Metadata commands do not claim build ownership or require an existing binary.
+Help and syntax-only validation run before `uv`, so they also work without a cached dependency environment.
+Listing, location lookup, and semantic selector validation may prepare that environment.
+Execution builds and uses `target/release/mcp-console`.
 The Python SDK integration dependencies retain the published lower bounds without exact version pins; `==2.*` also keeps MCP within the supported major.
 CI resolves current SDK releases when the weekly uv cache is empty and can reuse them for the rest of that UTC ISO week.
 Local runs reuse their uv environment until it needs updating; use `uv run --upgrade --script tests/boundaries/_run.py client_server/integrations/test_python` to refresh the SDKs explicitly after building the executable.
 CI also uses this release executable for the R package and installed-wheel integration checks; `scripts/check-core` keeps Rust unit tests in debug so their debug assertions remain enabled.
-With no selectors, `scripts/test` runs every suite and case in separate processes, with at least two concurrent cases and otherwise one per available CPU by default.
+With no selectors, `scripts/test` runs the smoke selection; `scripts/test --full` runs all capability-applicable cases.
+Each selected case runs in a separate process, with at least two concurrent cases and otherwise one per available CPU by default.
 Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
 Each case has a 600-second deadline that starts when its supervisor launches.
 The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
@@ -217,21 +267,27 @@ The case interpreter has no monitoring thread: fixtures can use `fork` and `pree
 Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
 A case that runs for one minute is named with its current status.
 The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.
-On failure, the runner prints the fully qualified selector before the error or diff.
+On failure, the runner prints the fully qualified selector and an exact `scripts/test` rerun command before the error or diff.
+Use the [development routes and validation ladder](../../docs/DEVELOPMENT.md) to choose a focused iteration loop.
 Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
 This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.
 A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
 `--locate SELECTOR` does not run cases.
 It prints every matching case, its source file and definition line, and its mechanically derived primary snapshot path.
-Collection fails before listing, locating, or running cases when a snapshot has no matching suite and case.
+With selector-free `--full`, collection fails before listing or running cases when a snapshot has no matching suite and case.
 Companion snapshots remain owned by the case-name prefix.
 Use `--update` only to accept an intentional transcript change.
-A full `scripts/test --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
+`scripts/test --full --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
 Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
 
 ## Requirements and execution modes
 
-Cases run by default.
+Modes are declared by the suite with `@executions(DIRECT, SANDBOXED)`; the runner has no `--execution` option.
+Use `execution.serve()` to compose common arguments and let the fixture select `--no-sandbox`.
+Sandbox-only policy arguments belong in a sandbox fixture, for example `SANDBOXED.serve("--writable-root", str(path))`.
+The direct fixture rejects writable roots with that example in its error.
+
+Selected cases run by default.
 Declare only the capabilities a case needs, beside its definition, with `@requires(...)` from `support.requirements`.
 For example, `@requires(SANDBOX)` identifies a sandbox contract, `@requires(PROCESS_EVENTS)` identifies a test using shared process observation, and `@requires(command("quarto"))` identifies an optional executable.
 All platform availability decisions belong in test support.
@@ -270,7 +326,7 @@ This preserves differences as failures instead of letting the last mode overwrit
 The canonical initialization case is the exception: each available mode updates its own full and bare-runtime references (`.direct.yaml` and `.bare.direct.yaml` for direct mode).
 Full updates retain initialization references for unavailable modes.
 Multi-session transcripts reuse the same mode-aware handshake compaction.
-All cases remain discoverable with `--list` and `--locate`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
+All cases remain discoverable with `scripts/test --full --list` and `scripts/test --locate SELECTOR`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
 An explicitly selected unavailable case is reported as skipped.
 
 Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.

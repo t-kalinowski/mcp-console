@@ -111,6 +111,25 @@ def test_services_r_input_handlers_at_cell_boundaries(
 def test_services_later_callbacks_while_idle(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return services_later_callbacks_while_idle(binary, execution, "r")
+
+
+@executions(DIRECT, SANDBOXED)
+def test_services_later_callbacks_without_another_r_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = None
+    for language in ("python", "sql"):
+        current = services_later_callbacks_while_idle(binary, execution, language)
+        if records is None:
+            records = current
+    assert records is not None
+    return records
+
+
+def services_later_callbacks_while_idle(
+    binary: Path, execution: Execution, language: str
+) -> Transcript:
     relay = Path(__file__).resolve().parents[3] / "fixtures" / "idle_callback_relay"
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
@@ -123,7 +142,21 @@ def test_services_later_callbacks_while_idle(
             environment,
         ) as client:
             client.initialize_and_list_tools()
-            client.send(requirements={"r": ["later"]})
+            packages = ["later"]
+            if language == "sql":
+                # A custom worker does not receive the built-in runtime's
+                # infrastructure packages. Declare the SQL adapter's imports.
+                packages += [
+                    "DBI",
+                    "duckdb",
+                    "arrow",
+                    "nanoarrow",
+                    "pillar",
+                    "tibble",
+                    "utf8",
+                ]
+            client.send(requirements={"r": packages})
+            assert last_tool_text(client) == "[prepared]", client.transcript[-1]
 
             # fmt: r
             r = code(r"""
@@ -152,11 +185,24 @@ def test_services_later_callbacks_while_idle(
                 # A worker-local file does not prove the server has received
                 # its output. Wait for the relay's server round trip as well.
                 checkpoint.wait()
-                client.send(r="idle_value")
+                source = {
+                    "r": "idle_value",
+                    "python": "print('python after callback')",
+                    "sql": "SELECT 42 AS answer",
+                }[language]
+                client.send(**{language: source})
                 output = last_tool_text(client)
-                assert output == (
-                    "idle callback\n[output produced while idle]\n[1] 42\n"
-                ), repr(output)
+                prefix = "idle callback\n[output produced while idle]\n"
+                assert output.startswith(prefix), repr(output)
+                result = output.removeprefix(prefix)
+                if language == "r":
+                    assert result == "[1] 42\n", repr(output)
+                elif language == "python":
+                    assert result == "python after callback\n", repr(output)
+                else:
+                    assert (
+                        result == "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n"
+                    ), repr(output)
                 return client.finish()
             finally:
                 checkpoint.close()

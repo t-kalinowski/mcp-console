@@ -41,18 +41,18 @@ result:
 ---
 send:
   python: |
-    import site
+    import runpy
     import sys
 
-    original_addsitedir = site.addsitedir
+    original_run_path = runpy.run_path
 
-    def addsitedir_with_finder(*args, **kwargs):
-        result = original_addsitedir(*args, **kwargs)
-        if automatic_meta_finder not in sys.meta_path:
-            sys.meta_path.insert(0, automatic_meta_finder)
+    def activate_with_finder(*args, **kwargs):
+        result = original_run_path(*args, **kwargs)
+        sys.meta_path.insert(0, automatic_meta_finder)
+        runpy.run_path = original_run_path
         return result
 
-    site.addsitedir = addsitedir_with_finder
+    runpy.run_path = activate_with_finder
 result:
   content:
     - type: text

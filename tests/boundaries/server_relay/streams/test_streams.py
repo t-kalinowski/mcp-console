@@ -24,7 +24,11 @@ def test_forwards_raw_stdout_and_stderr(
 ) -> Transcript:
     client = ServerRelayClient(binary, "raw_output", execution=execution)
     assert _tool_text(client.send(r="42")) == (
-        "stdout text 👩🏽‍💻\nstderr text\n�stdout bytes\n�stderr bytes\n"
+        """stdout text 👩🏽‍💻
+stderr text
+�stdout bytes
+�stderr bytes
+"""
     )
     transcript = client.finish_active()
 

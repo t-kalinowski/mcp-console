@@ -15,7 +15,7 @@ from support.assertions import (
     last_result_text,
     wait_for_evaluation_output,
 )
-from support.checkpoints import wait_for_worker_file
+from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -290,9 +290,10 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         output = result["content"][0]["text"]
         assert output.startswith("before show\nafter show\n<Figure size "), output
         assert output.endswith(" with 1 Axes>\n"), output
-        result["content"][0]["text"] = (
-            "before show\nafter show\n<matplotlib figure displayhook representation>\n"
-        )
+        result["content"][0]["text"] = """before show
+after show
+<matplotlib figure displayhook representation>
+"""
         assert_result_content(
             client,
             [result["content"][0]["text"], shown_reference.read_bytes()],
@@ -371,6 +372,7 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         assert result["isError"] is False, result
         output = result["content"][0]["text"]
         assert output.startswith("Traceback (most recent call last):\n"), output
+        assert 'File "<string>"' not in output, output
         assert output.endswith("RuntimeError: plot render failed\n"), output
         second_reference = wait_for_worker_file(
             Path(temporary_directory),
@@ -597,10 +599,11 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
         """)
     client.send(python=python)
     output = last_result_text(client)
-    assert client.transcript[-1]["result"]["isError"] is False
+    assert client.transcript[-1]["result"]["isError"] is False, client.transcript[-1]
     assert output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
     assert "in fail\n" in output
+    assert 'File "<string>"' not in output
     assert output.endswith("ValueError: boom\n")
     # fmt: python
     python = code("""
@@ -609,8 +612,9 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
         """)
     client.send(python=python)
     output = last_result_text(client)
-    assert output.startswith("Traceback (most recent call last):\n")
+    assert not output.startswith("Traceback (most recent call last):\n")
     assert "<mcp-console:python:" in output
+    assert 'File "<string>"' not in output
     assert output.endswith("SyntaxError: 'await' outside function\n")
     client.send(python='"compile_partial" in globals()')
     assert last_result_text(client) == "False\n"
@@ -618,8 +622,29 @@ def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Tran
     client.send(python="nul_state = 42\0")
     output = last_result_text(client)
     assert client.transcript[-1]["result"]["isError"] is False
-    assert "SyntaxError" in output
-    assert "null bytes" in output
+    assert output == "SyntaxError: source code string cannot contain null bytes\n"
+    client.send(python="1 / 0")
+    output = last_result_text(client)
+    assert 'File "<mcp-console:python:e5>", line 1, in <module>' in output
+    assert 'File "<string>"' not in output
+    assert output.endswith("ZeroDivisionError: division by zero\n")
+    client.send(python="exec(\"raise RuntimeError('from exec')\")")
+    output = last_result_text(client)
+    assert 'File "<mcp-console:python:e6>", line 1, in <module>' in output
+    assert 'File "<string>", line 1, in <module>' in output
+    assert output.endswith("RuntimeError: from exec\n")
+    # fmt: python
+    python = code("""
+        try:
+            raise ValueError("cause")
+        except ValueError as error:
+            raise RuntimeError("chained") from error
+        """)
+    client.send(python=python)
+    output = last_result_text(client)
+    assert 'File "<string>"' not in output
+    assert "ValueError: cause\n" in output
+    assert output.endswith("RuntimeError: chained\n")
     client.send(python="answer")
     assert last_result_text(client) == "41\n"
     return client.finish()
@@ -767,6 +792,142 @@ def test_routes_python_input(binary: Path, execution: Execution) -> Transcript:
 
 
 @executions(DIRECT, SANDBOXED)
+def test_reads_unicode_nul_and_long_python_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code(r"""
+            saved_object = object()
+            original_object = saved_object
+            first = input("unicode> ")
+            second = input("long> ")
+            third = input("queued> ")
+            assert first == "Zażółć 🐍\0fin"
+            assert second == "🐍" * 4097 + "\0tail"
+            assert third == "queued"
+            print(len(first), len(second), third)
+            """)
+        # Observe managed input after startup before timing input completion.
+        client.send(python=python)
+        assert last_result_text(client) == (
+            '[input requested: "unicode> "]\n[waiting for stdin]'
+        )
+        expected = (
+            '[input requested: "long> "]\n'
+            '[input requested: "queued> "]\n'
+            "12 4102 queued\n"
+        )
+        wait_for_evaluation_output(
+            client,
+            expected,
+            "Unicode, NUL, long and queued Python input",
+            stdin="Zażółć 🐍\0fin\n" + "🐍" * 4097 + "\0tail\nqueued\n",
+        )
+        # fmt: python
+        python = code(r"""
+            try:
+                input("partial> ")
+            except KeyboardInterrupt:
+                print("input interrupted")
+            """)
+        client.send(python=python, stdin="🐍" * 1025 + "\0prefix")
+        assert last_result_text(client) == (
+            '[input requested: "partial> "]\n[waiting for stdin]'
+        )
+        wait_for_evaluation_output(
+            client,
+            "input interrupted\n",
+            "partial Unicode input interruption",
+            control="interrupt",
+        )
+        # fmt: python
+        python = code(r"""
+            replayed = input("replay> ")
+            assert replayed == "🐍" * 1025 + "\0prefix!"
+            print("complete input retained")
+            """)
+        wait_for_evaluation_output(
+            client,
+            '[input requested: "replay> "]\ncomplete input retained\n',
+            "partial Unicode input replay",
+            python=python,
+            stdin="!\n",
+        )
+        client.send(python="saved_object is original_object")
+        assert last_result_text(client) == "True\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_python_input_eof_retires_worker(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # Keep the cell alive after EOF to observe the input-completion notice.
+        # fmt: r
+        r = code(r"""
+            eof_gate <- tempfile("python-input-eof-")
+            cat(eof_gate)
+            """)
+        client.send(r=r)
+        gate = FifoCheckpoint.create(Path(last_result_text(client)))
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "<Python EOF checkpoint>"
+        )
+        try:
+            # Exercise actual fd-0 EOF without closing the client's MCP transport.
+            # fmt: python
+            python = code(r"""
+                import os
+
+                gate_path = r.eof_gate
+                eof_marker = object()
+                input("ready for EOF> ")
+                reader, writer = os.pipe()
+                os.close(writer)
+                os.dup2(reader, 0)
+                os.close(reader)
+                try:
+                    input("EOF> ")
+                except EOFError:
+                    print("Python input reached EOF")
+                with open(gate_path, "rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
+                """)
+            client.send(python=python)
+            assert last_result_text(client) == (
+                '[input requested: "ready for EOF> "]\n[waiting for stdin]'
+            )
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "EOF> "]\n'
+                "Python input reached EOF\n\n[running; poll with an empty send]",
+                "Python EOF completes managed input before retirement",
+                stdin="\n",
+                timeout_ms=0,
+            )
+            gate.release()
+            wait_for_evaluation_output(
+                client,
+                "[worker sideband read failed: worker sideband closed]\n"
+                "[worker exited with status 0]\n"
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "[idle]",
+                "Python input EOF retirement",
+                expected_error=True,
+            )
+            client.send(python='"eof_marker" in globals()')
+            assert last_result_text(client) == "False\n"
+            return client.finish()
+        finally:
+            gate.close()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -799,7 +960,7 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
-def test_python_evaluation_ignores_r_interpreter_mutations(
+def test_restarts_after_python_bridge_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -820,9 +981,31 @@ def test_python_evaluation_ignores_r_interpreter_mutations(
         """)
     client.send(r=r)
     client.send(python="6 * 7")
-    assert last_result_text(client) == "42\n"
+    result = client.transcript[-1]["result"]
+    assert result["isError"] is True
+    bridge_failure = "Python bridge failed during R evaluation\n"
+    python_failure = (
+        "Error in py_discover_config(required_module, use_environment) : \n"
+        "  Python specified in RETICULATE_PYTHON "
+        "(/mcp-console-missing-python) does not exist\n"
+    )
+    worker_failure = (
+        "[worker sideband read failed: worker sideband closed]\n"
+        "[worker exited with status 1]\n"
+        "[worker stopped: in-memory state lost]\n"
+        "[starting new worker]\n"
+        "[idle]"
+    )
+    output = result["content"][0]["text"]
+    assert output.endswith(worker_failure), output
+    assert_exact_interleaving(
+        output.removesuffix(worker_failure),
+        bridge_failure,
+        python_failure,
+    )
+    result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
     client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_result_text(client) == "[1] TRUE\n"
+    assert last_result_text(client) == "[1] FALSE\n"
     client.send(python="6 * 7")
     assert last_result_text(client) == "42\n"
     return client.finish()

@@ -1,17 +1,35 @@
 # Python integrations
 
-Install the extra for the interface you use, with Python 3.11 or newer:
+MCP Console provides synchronous and asynchronous Python clients and adapters for these interfaces:
 
-| Interface           | Install                                    |
-| ------------------- | ------------------------------------------ |
-| Python client       | `pip install "mcp-console[client]"`        |
-| chatlas             | `pip install "mcp-console[chatlas]"`       |
-| OpenAI Responses    | `pip install "mcp-console[openai]"`        |
-| OpenAI Agents       | `pip install "mcp-console[openai-agents]"` |
-| Anthropic           | `pip install "mcp-console[anthropic]"`     |
-| Official thread SDK | `pip install "mcp-console[codex]"`         |
+| Interface                                   | Package extra   |
+| ------------------------------------------- | --------------- |
+| [Python clients](#python-clients)           | `client`        |
+| [chatlas](#chatlas)                         | `chatlas`       |
+| [OpenAI Responses](#openai-responses)       | `openai`        |
+| [OpenAI Agents](#openai-agents)             | `openai-agents` |
+| [Anthropic](#anthropic)                     | `anthropic`     |
+| [Official thread SDK](#official-thread-sdk) | `codex`         |
+
+The clients require Python 3.11 or newer and are part of the current source checkout.
+The published PyPI 0.0.3 wheels do not include these clients or extras.
+From the repository root, run your program with the appropriate extra; for example:
+
+```sh
+uv tool run --python 3.12 --from ".[client]" python your_client.py
+```
+
+uv installs the checkout and the selected extra into an environment it manages.
+The first installation builds the complete bundle and may download interpreters, packages, and build dependencies; see the [source installation prerequisites](../RELEASE.md#private-sandbox-executable).
+For use with an MCP client, see the [quickstart](../README.md#quickstart).
 
 The base package installs the executable without framework dependencies.
+For command-only use, `uv tool install --reinstall .` installs the complete checkout as a persistent tool.
+(`cargo install` installs only the main binary and leaves out the required private sandbox companion.)
+The [release guide](../RELEASE.md#private-sandbox-executable) explains the relocatable bundle and build caches.
+
+`mcp-console serve` speaks MCP over standard input and output; it waits for a client instead of displaying an interactive terminal prompt.
+The Python clients below own that connection.
 The client uses MCP 2.2 or newer within the 2.x series.
 Each framework extra declares the minimum SDK release used by the integration tests.
 
@@ -229,5 +247,27 @@ The helper creates no client, thread, subprocess, or temporary launcher.
 The synchronous and asynchronous clients and framework adapters receive the same bounded MCP results through their existing methods.
 Each complete result contains at most 8 KiB of rendered UTF-8 text across all text blocks, including notices; images have a separate allowance.
 Oversized output includes the beginning, latest tail, and a retained raw-log path when available.
-That path is relative to the Console server's recording workspace, including for SSH and container targets.
-Retrieving omitted text requires filesystem access to that directory through existing file tools; the clients add no retrieval methods and never re-run a cell to recover its original output.
+That path is relative to the Console server's launch directory when its `.agents/console` exists, or absolute under its Console home directory (`~/.agents/console` by default, or `MCP_CONSOLE_HOME`) otherwise.
+For SSH and container targets, both locations are on the controller.
+Retrieving omitted text requires filesystem access to the selected location through existing file tools; the clients add no retrieval methods and never re-run a cell to recover its original output.
+
+## Inspecting and replacing requirements
+
+Both clients accept `requirements.action`: `get`, `add` (default), `set`, or `reset`.
+Inspection returns complete JSON text, including large manifests:
+
+```python
+import json
+from mcp_console import MCPConsole
+
+with MCPConsole() as console:
+    snapshot = json.loads(console.send(requirements={"action": "get"}))
+    declaration = snapshot["requirements"]
+    declaration["python"] = ["requests>=2"]
+    console.send(control="restart", requirements={**declaration, "action": "set"})
+```
+
+`set` replaces omitted lists and constraints with empty values.
+`reset` accepts no payload and restores startup defaults.
+Changed replacements require explicit restart when a worker is live.
+See [requirements and environments](REQUIREMENTS.md#inspecting-and-replacing-requirements) for lifecycle and target limits.

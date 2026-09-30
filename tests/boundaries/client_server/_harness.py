@@ -18,18 +18,16 @@ import tempfile
 import termios
 import threading
 import time
-from contextlib import closing
 from pathlib import Path
 from typing import Self
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import last_result_text
-from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
+from support.checkpoints import release_fixture_checkpoint
 from support.client import McpClient, TextReader
 from support.events import Events
 from support.execution import SANDBOXED, Execution
-from support.previews import session_directory
 from support.processes import (
     capture_process_identity,
     child_process_identities,
@@ -419,6 +417,7 @@ class SocketGateMcpClient(McpClient):
         assert process.stderr is not None
 
         self.temporary_directory = None
+        self.console_home = None
         self.process = process
         self.stdin = input_stream
         self.stdout = SocketTextReader(output_reader)
@@ -531,51 +530,20 @@ def expose_idle_sideband_output(
     )
 
 
-def restart_with_retirement_output(
-    client: McpClient, marker: Path, *, call_id: int
-) -> None:
-    """Release shutdown output only after the recorded cell has closed."""
-    journal = session_directory(client) / "internal/events.jsonl"
-    with (
-        closing(
-            FifoCheckpoint.attach(marker.with_name("zod-stdin-close-output-release"))
-        ) as release,
-        Events() as events,
-    ):
-        events.watch_file(journal)
-        restarted = client.start_send(control="restart")
-        deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
-        try:
-            while True:
-                records = [
-                    json.loads(line) for line in journal.read_text().splitlines()
-                ]
-                completed = [
-                    record
-                    for record in records
-                    if record["event"] == "cell_output" and record["call_id"] == call_id
-                ]
-                if completed:
-                    assert completed[-1]["retained_bytes"] == 0, completed
-                    break
-                remaining = deadline - time.monotonic()
-                assert remaining > 0 and events.wait(remaining), (
-                    "restart did not close the recorded cell"
-                )
-        finally:
-            release.release()
-        client.receive(restarted)
-
-
 def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
     deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
     with Events() as events:
         events.watch_process(client.process.pid)
         events.watch_file(root)
         while True:
-            for directory in (*root.glob("sandbox-*"), *root.glob("sandbox-*/data")):
+            for directory in root.glob("sandbox-*"):
                 if directory.is_dir():
                     events.watch_file(directory)
+                    # Subscribe to each parent before discovering its child:
+                    # data can appear between discovery and watch registration.
+                    data = directory / "data"
+                    if data.is_dir():
+                        events.watch_file(data)
             marker = find_marker(root, name)
             if marker is not None:
                 return marker

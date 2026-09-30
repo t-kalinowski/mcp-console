@@ -11,24 +11,29 @@ The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_
 ## Session model
 
 MCP Console provides one implicit session.
-That session can use a configured [SSH target](SSH.md) with an existing R installation and a resolver bootstrap such as `uv`.
-Console prepares managed R, Python, and DuckDB dependencies on that host as needed.
-Without a resolver bootstrap, the remote session uses available preinstalled packages and adapters with managed preparation disabled.
+That session can use a configured [SSH target](SSH.md).
+Runtime discovery and dependency preparation run on the execution host.
+With R installed there, Console prepares managed R, Python, and DuckDB dependencies as needed.
+Without R, it uses the native Python and SQL runtime described below.
+An R-present remote session without a resolver bootstrap uses available preinstalled packages and adapters with managed preparation disabled.
 Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
 The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
-Remote source-only Quarto projections default to evaluation disabled and omit the controller execution root.
+Remote source-only Quarto projections omit the controller execution root and execute captured cells when rendered.
 
 A [Docker target](DOCKER.md) instead runs the relay and worker in a fresh owned Linux container for each generation, using a captured image and its preinstalled packages.
 The controller retains the server and records; binds persist across restart, while the container's writable layer is discarded.
-Dynamic package preparation is disabled, and Docker Quarto projections follow the same non-executing convention.
+Dynamic package preparation is disabled, and Docker Quarto projections likewise execute captured cells when rendered.
 They do not reproduce the remote filesystem when rendered locally.
-Each worker generation contains:
+With R available, each worker generation creates these resources when needed:
 
 - one persistent R global environment;
-- one persistent Python `__main__` namespace embedded directly by Console; and
+- one persistent Python `__main__` namespace embedded by Console, with reticulate supplying the R bridge; and
 - one persistent in-memory DuckDB connection and catalog, used as the default SQL backend.
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
+
+Worker readiness precedes interpreter initialization.
+A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -41,12 +46,122 @@ A control-only interrupt may overlap a pending `send` while that call resolves o
 The same call may first interrupt or restart the session through its optional `control` field.
 Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or restart the same implicit session.
 
+Scikit-learn can use `n_jobs=-1` inside the default sandbox, including `GridSearchCV`, `cross_val_score`, random forests, and permutation importance.
+Joblib's process workers and temporary memory-mapped arrays use the selected Python environment and writable temporary storage.
+On macOS, the native sandbox allows the semaphore-limit query (`kern.sysv.semmns`) that joblib performs before starting its process pool; no serial-execution override is needed.
+
+## Python sessions without R
+
+Local and SSH sessions discover R through `R_HOME` or `R` on the execution host's `PATH`.
+If neither exists, ordinary `mcp-console serve` starts a Python session without requiring an interpreter-selection variable or another launch flag.
+An invalid explicit `R_HOME` or a broken discovered R installation reports an R error; it does not select Python instead.
+
+There are two environment modes:
+
+- By default, Console selects `uv` on `PATH` and resolves its default Python manifest (`numpy`, `pandas`, and `duckdb`).
+  It retains the environment for subsequent workers.
+  Resolution failure is reported without trying another interpreter.
+- Set `python: .venv/bin/python` in `.agents/console/config.yaml`, or pass `-c python=.venv/bin/python`, to use an existing environment.
+  Local relative paths use the launch directory; execution-target relative paths use `target.workspace` on the execution host.
+  Console does not invoke uv in this mode, and package preparation is disabled.
+  The selected CPython must provide a usable shared embedding library.
+
+The `python` setting takes precedence over inherited `RETICULATE_PYTHON`, which remains supported for compatibility.
+Selection is captured at server startup, including when sandbox environment controls provide different values.
+Without an explicit selection, local and SSH sessions require uv; there is no automatic PATH-Python fallback for those sessions.
+The `python` setting is unavailable with custom workers.
+Prepared Docker and SBX targets use their preinstalled `python3`, then `python`, from the effective workload PATH when no interpreter is explicitly selected.
+They share the same native runtime and never resolve or install dependencies.
+
+Managed sessions use the execution host's uv configuration, cache, and Python installations.
+Local preparation uses the hidden `mcp-console resolve` subcommand; SSH uses its remote preparation owner.
+Both run outside the worker sandbox with trusted host permissions.
+It captures the startup uv executable and `UV_*` settings, excluding `UV_OFFLINE`, and retains the launch working directory.
+Worker environment changes do not configure later preparation; uv interprets configuration files and relative paths itself.
+Sans-R selection ignores `RETICULATE_UV` and uses uv from the startup `PATH`.
+Console does not impose additional worker-policy or storage-location restrictions on preparation.
+
+Package requests accept named PEP 508 requirements; local paths, editable requirements, and direct URLs remain invalid request values.
+User uv configuration can select other package sources, including local wheel directories through `UV_FIND_LINKS` or `find-links` in `uv.toml`.
+Installation, builds, Python startup hooks, and cache warming may execute code with host permissions.
+The resolver and its inputs are trusted: Console does not prevent worker-created files from becoming resolver inputs.
+See the [concrete escape scenario and trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
+
+A plain restart clears Python objects and reuses the accepted environment without resolving again.
+In a Console-managed uv session, `requirements.python` and `requirements.duckdb` can add packages and DuckDB extensions before the first worker starts, alone or with a Python or SQL cell.
+Once a worker is running, idle `action: "add"` calls can prepare new Python distributions and DuckDB extensions without replacement, with or without accompanying Python or SQL code.
+Already-retained declarations remain no-ops.
+Changing a requirement for a declared distribution, interpreter constraints, publication cutoffs, or a `set` or `reset` declaration still requires `control: "restart"`.
+Requirements already retained are a no-op, including on a running worker.
+Requests combining requirements with `control: "interrupt"` are unavailable; interrupt separately.
+Python and DuckDB additions in one call prepare the complete candidate before native activation.
+
+Additions retain defaults and earlier additions; `requirements.action="set"` replaces the declaration exactly, including when the new declaration is empty, and `reset` restores NumPy, pandas, and DuckDB with the SQLite extension.
+`python_version` and `exclude_newer` use the ordinary requirements contract.
+Restart preparation resolves the complete Python candidate, inspects its executable, and installs retained extensions with that candidate's DuckDB before retiring the current worker.
+The same extension preparation occurs before first startup; if DuckDB is absent, include `duckdb` in `requirements.python`.
+Validation, resolution, or inspection failure preserves that worker, its objects, retained requirements, and queued input.
+Interrupting preparation stops its resolver operation and discards the candidate before any worker retirement.
+Same-call code and input are sent only after successful replacement.
+For an idle live extension addition, the resolver uses the accepted managed Python and captured shared cache without changing packages or the interpreter.
+It installs extension files outside the worker; a later user `LOAD` uses the existing managed connection and catalog.
+For an idle live Python addition, the resolver prepares the complete candidate against the running executable, inspects it, checks the native library identity, and prepares retained DuckDB extensions with the candidate before worker activation.
+The same path handles a missing import reached during a managed Python cell: the existing finder infers a distribution, suspends the cell for host preparation, activates the candidate, then retries the import.
+It does not scan or replay the cell; earlier side effects remain, and SQL cells do not resolve missing imports automatically.
+The native activation keeps the interpreter, Python objects, managed DuckDB catalog, and selected SQL connection in place.
+Once the worker confirms activation, the server retains the new manifest, executable, and embedding configuration together; plain restart and crash replacement use that selection.
+An exception during activation may leave script side effects, so further requirement changes require restart.
+Same-call code and input are withheld.
+Host failure or cancellation leaves the worker, selected connection, and committed declaration unchanged; same-call code and input are not sent.
+Downloads already written to the cache may remain.
+After retirement begins, ordinary retirement and replacement failure semantics apply; the retired worker cannot be restored.
+The mutable session environment commits the manifest, executable, and inspected embedding configuration together.
+Discarding a candidate leaves the accepted selection unchanged; resolver cache, installation, and build effects may remain.
+The embedded interpreter uses the selected environment's packages and prefixes; subprocesses and multiprocessing use its Python executable.
+The selected environment takes precedence over inherited or sandbox-configured `PYTHONHOME` and `PYTHONPLATLIBDIR`.
+Workspace modules and packages are importable without `PYTHONPATH`; the working-directory import entry also follows `os.chdir()`.
+The executable directory is not added to the import path.
+The worker has private temporary storage, retired after startup failure, restart, and shutdown.
+With an absolute `HOME` at server startup, the managed DuckDB connection reads the captured shared version-and-platform extension cache; it keeps spill and stored-secret files in private worker storage.
+Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
+If direct-session cleanup fails, Console reports the remaining directory and the filesystem error; a failed restart does not execute its submitted cell.
+Retirement does not delete resolver caches or the retained environment.
+
+Python expressions, persistent objects, output, exceptions, `input()`, interrupts, and recording use the same evaluator and coordinator as mixed-language sessions.
+Interrupts received while the worker is idle do not interrupt the next Python cell.
+When `uv` resolved the initial environment, the generated Quarto document declares NumPy, pandas, DuckDB, and accepted package additions without R defaults or rejected requirements.
+Matplotlib plots are returned when Matplotlib is already installed in the selected environment; the default manifest does not install it.
+Explicitly selected environments remain non-managed; prepare their packages before starting Console.
+R requirements and R cells are unavailable.
+An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
+`requirements.action="get"` inspects the retained declaration without starting a worker.
+The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
+Docker and Docker Sandbox targets discover R inside the image or template.
+Genuine absence selects native Python; an invalid `R_HOME` or broken R installation reports its R error.
+The CPython inspector checks the selected executable and embedding library without starting an analysis worker or opening a SQL catalog.
+Optional NumPy, pandas, DuckDB, and Matplotlib packages are not required for startup.
+Missing imports keep the non-managed runtime's normal errors.
+Missing DuckDB leaves Python and user-owned DB-API connections available.
+These targets retain one runtime selection with the immutable image/template identity; restart and crash replacement reuse it.
+Private worker storage holds SQL spill files and stored secrets, while preinstalled extension caches retain the target's usual location.
+See the [Docker](DOCKER.md#prepared-python-without-r) and [SBX](DOCKER_SANDBOX.md#prepared-python-without-r) examples.
+
+SQL cells use the existing Python DB-API adapter and a worker-owned, in-memory DuckDB connection that opens on the first SQL cell or `sql_connection()` call.
+Python-only cells do not open it.
+`sql_connection()` returns the connection currently selected for SQL cells, including a user-owned DB-API connection selected with `console_sql_connection(connection)`.
+`console_sql_connection(None)` restores the same managed DuckDB connection and catalog without closing the user-owned connection.
+Register a Python data frame explicitly with `sql_connection().register("name", frame)` before querying it; automatic frame scanning is disabled.
+The managed connection places spill files and persistent secrets beneath the worker's private temporary directory and loads prepared extensions from the retained shared cache.
+Restart and crash replacement create a fresh catalog while retaining the accepted Python environment.
+Query errors and interrupts leave the session usable; transaction effects follow the selected driver.
+If DuckDB is absent from an explicit or replaced environment, SQL reports how to add it or select a DB-API connection, and Python remains usable.
+
 ## Cells and polling
 
 A code-bearing `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
 It may instead contain only control or stdin, or contain none of those fields as an ordinary poll.
 The source is not an interactive fragment assembled across calls.
-R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
+R and Python parse the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
 
 Use a REPL-style workflow: submit one coherent cell, inspect its result, then submit the next cell based on what the result showed.
 One assistant turn can make several sequential calls.
@@ -73,6 +188,8 @@ jobs.shape
 Each call reuses state created by earlier calls, and its output informs the next cell.
 
 A code-bearing call can declare additive R packages, Python packages, or DuckDB extensions in `requirements`, regardless of the cell language.
+`requirements.action="set"` replaces the declaration; `reset` restores startup defaults.
+A changed replacement of a live worker requires explicit restart.
 See [Requirements for a cell](REQUIREMENTS.md#requirements-for-a-cell) for the declaration syntax and [`send` operation order](SEND_OPERATIONS.md#operations) for preparation and failure behavior.
 R resolves missing plain package names when execution reaches a supported package-loading operation.
 The built-in managed Python environment likewise resolves a missing import when Python's ordinary import finders cannot satisfy it.
@@ -110,7 +227,9 @@ Enqueue order does not guarantee consumption by a particular runtime read.
 The built-in worker reports managed reads from:
 
 - R `readline()` and `browser()`; and
-- Python `input()`, `breakpoint()`, and `pdb` through Console's direct input bridge.
+- Python `input()`, `breakpoint()`, and `pdb` on the main worker thread.
+
+Python managed input uses the shared worker input buffer directly and preserves Unicode, embedded NUL bytes, and lines longer than one internal buffer.
 
 A reported read adds a record such as `[input requested: "name> "]`.
 If the request is still outstanding when either its 10-millisecond exposure grace ends or the call reaches its deadline, the response ends in `[waiting for stdin]`.
@@ -147,9 +266,6 @@ An interrupted automatic R or Python resolver reports an interrupted outcome to 
 The response contains available output and current state through the normal `send` conventions, commonly ending in `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, or the completed evaluation result.
 
 R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
-Python startup hooks, including executable `.pth` files and `sitecustomize`, run after Console connects interrupt delivery and managed `input()`.
-Interrupting a hook cancels the submitted cell; a later cell retries initialization in the same interpreter.
-Hook side effects before interruption remain, and incomplete site processing may run again during that retry.
 Managed console reads are cancelled when the active runtime accepts the interrupt.
 User code can catch, delay, replace, or block `SIGINT`, so interruption is cooperative rather than a termination guarantee.
 Use `control = "restart"` when the worker must be replaced.
@@ -178,17 +294,28 @@ A waiting `send` whose evaluation finishes before restart interrupts it receives
 
 ## R
 
-R cells run in persistent global state through R's native console loop.
+R cells must parse completely before any expression is evaluated.
+Incomplete or syntactically invalid source is rejected without applying earlier expressions from that cell.
+Validation reports R's parse diagnostics without invoking `options(error)` or changing `.Traceback`, task callbacks, history, or `.Last.value`.
+Rejected cells do not add internal helper calls to the diagnostic or traceback.
+Accepted cells run in persistent global state through R's native console loop.
 Global bindings and `.Last.value` remain available to later calls.
 R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
-Because R consumes top-level expressions as a console does, earlier complete expressions may take effect before a later expression in the same cell fails or remains incomplete.
+An evaluation or print error still preserves the effects of expressions already evaluated in that cell.
 
 Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
+Callbacks run while idle even when no further R cell is submitted; their output can arrive in a Python, SQL, or polling response.
 Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
 
 Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
 The built-in startup width is 200 columns; evaluated code may change its options.
 Packages prepared for the session are available but are not attached automatically.
+
+In sandboxed built-in R sessions, the first `.libPaths()` entry is a fresh writable directory inside R's `tempdir()`.
+`install.packages()` without a `lib` argument uses this directory, so packages installed by a cell are available to later cells in the same worker generation.
+The directory is temporary and is not retained across a worker restart; managed R libraries follow it in `.libPaths()` and remain available after restart.
+Until a package is installed there, R's `library()` listing call warns that the temporary library contains no packages.
+Downloads and package builds still depend on a configured repository, the sandbox's network policy, and installed system tools.
 
 ### On-demand R packages
 
@@ -196,21 +323,22 @@ When dynamic environment resolution is available, the built-in worker can prepar
 This covers direct `library()`, `require()`, `requireNamespace()`, and `loadNamespace()` calls and package use through `::` and `:::`.
 Use these operations normally; there is no need to probe package availability or call `install.packages()` first.
 
-The worker wraps `base::library` because `library()` checks `find.package()` before namespace loading.
-For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart after a retryable missing-package error.
-The handler makes the package available and lets R's implementation continue, while preserving the original body for packages that inspect it.
+The worker prepares missing `library()` packages before running R's original body in the same call frame, because `library()` checks `find.package()` before namespace loading.
+For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that prepares the package at the existing retryable missing-package path.
+Successful preparation lets namespace loading continue; otherwise R's original `withRestarts()` body signals the original condition with its native call chain.
+The original `loadNamespace()` body remains intact for packages that inspect it.
 These adapters preserve ordinary R behavior: `library()` and `require()` attach only when the original call does, while `::`, `:::`, `requireNamespace()`, and `loadNamespace()` load a namespace without attaching the package.
 They bypass automatic resolution for already available packages, `library()` help and listing calls, an explicit non-NULL `lib.loc`, and partial namespace loads.
 
 Runtime discovery accepts plain package names only.
 Use `requirements.r` to stage a package before evaluation or to supply an explicit `ir` reference such as a remote source.
-The worker does not inspect R source before evaluation.
+The worker does not scan R source for package references.
 Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke `ir` and several new packages in one cell can cause several incremental `ir` calls in execution order.
 
 In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
 Installed packages work normally, missing packages retain their ordinary R behavior, and `requirements.r` is not available.
 
-When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
+When the server returns a candidate library, the worker places it first among the managed `.libPaths()` entries, after the sandbox's temporary library when present, and reports activation before resuming the original base call.
 The server retains the library only after that report.
 The worker is not replaced, so its PID, R globals, loaded namespaces, Python objects, DuckDB catalog, and unread input remain available.
 Once activation succeeds, the retained environment survives later namespace or cell errors and is reused by later cells and restart.
@@ -225,7 +353,7 @@ The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in 
 R can read Python globals through `py$name` and use the R-owned SQL connection through DBI or dplyr.
 `sql_connection()` returns that R-owned connection; it does not proxy a Python connection into R.
 In R, `console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
-In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` requests restoration of managed DuckDB for the next SQL cell.
+In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` restores managed DuckDB for subsequent SQL cells and R `sql_connection()` calls.
 The latest selection controls later SQL cells: selecting from R clears the Python provider, while selecting from Python leaves the R-owned connection available through `sql_connection()` without routing SQL cells to it.
 Do not disconnect the managed DuckDB connection.
 Restore it before disconnecting a custom connection that is still selected.
@@ -237,14 +365,48 @@ Imports, assignments, functions, and objects remain available across cells and t
 The final expression of a cell is displayed through Python's normal display hook; source is not echoed.
 
 An uncaught exception prints its traceback and completes as a language outcome.
+Python cell tracebacks omit Console's private runtime frames while retaining user, standard-library, and third-party frames, including frames from user-created `exec()` code.
+Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
+R and Python initialize on demand.
+An explicit or independently resolved Python selection can run while R remains uninitialized.
+Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
+Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
+Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
+Console applies the environment before Python startup hooks run; reticulate attachment does not replay virtualenv activation.
+Console-owned Python runs executable `.pth` files and `sitecustomize` after connecting managed input and interrupts.
+Interrupted startup hooks can retry in the same interpreter, and completed site processing is not repeated during later setup retries or R attachment.
+`RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for the interpreter and its children in both configurations.
+Ordinary R evaluation does not initialize Python.
+An R cell, Python-side `r` access, or R-owned SQL initializes R.
+Later attachment preserves the existing Python interpreter, objects, selected DB-API connection, display settings, and user redirections of `sys.stdout` and `sys.stderr`.
+Linux loader preparation happens before either interpreter starts.
+R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
+Different virtualenvs remain distinct selections even when their executables link to the same base Python.
+Deferred startup packages load within the initiating R or Python cell's graphics scope, before `tools:mcp-console` is attached at search position 2.
+Their selection includes `R_DEFAULT_PACKAGES` set by the installation's system `Renviron`.
+An unchanged `RETICULATE_PYTHON` selection retains that identity after Python changes the working directory or `PATH`.
+Late attachment preserves reticulate's `ephemeral` marker for Console-managed environments.
+Reconstructed reticulate configuration includes the running interpreter's active and base prefixes.
 
-Ordinary Python text writes use Console's ordered output channels directly.
-Binary stream buffers, native fd 1 or 2, background threads, and descendant processes use the captured standard streams.
-Calls to `input()` from background threads use Python's standard input behavior without emitting managed input notices.
-Python output does not pass through R or reticulate.
+Late R initialization is not safe while another thread accesses the native process environment.
+R's bootstrap itself reads and changes environment variables; Console's serialized interpreter thread does not serialize those operations with Python or native background threads.
+Initialize R before starting background threads that may access the native process environment.
+
+Console activates live managed environments through its retained CPython library.
+The shared Python runtime sets NumPy and pandas display width to 200 columns when they retain their library defaults.
+A different width selected by a Python startup hook is preserved, as are subsequent user changes.
+Matplotlib setup also runs through the shared runtime; bridge setup does not reapply these defaults.
+An attachment failure before reticulate publishes its configuration can be retried with the same interpreter.
+Independent Python selection errors are reported before initialization; rejecting an unsupported interpreter leaves R and the worker available.
+Shared Python setup reports Python tracebacks without requiring the bridge.
+Interrupted module or import setup can retry on the same interpreter; startup hooks that leave incompatible interpreter identity require worker replacement.
+A failing later initialization hook requires restart before further bridge use; ordinary Python objects and evaluation remain available.
+A partially initialized R runtime also requires restart.
+
+Console routes ordinary main-thread Python text and diagnostics directly through the ordered worker console channels.
+Binary buffers, native file descriptors, background threads, and fork children retain raw-stream behavior, including cached output streams and logging handlers.
 There is no guaranteed chronology between independent sideband, stdout, and stderr sources, although each source's order is preserved.
 
 After Python's `os.fork()`, cached console stream objects and logging handlers write to the child's standard streams without calling R or using the worker sideband.
@@ -283,51 +445,52 @@ Resolution starts only when execution reaches the missing import.
 Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
 Each reached missing import resolves in execution order, and the cell is never replayed.
 
-The finder calls Console's shared worker services, which ask the host `uv` resolver for a compatible environment using Console's managed manifest.
+The finder calls the same native managed-requirement callback with or without R.
+The worker proposes an addition to its live declaration; the server validates it against the accepted environment and resolves and inspects the candidate on the execution host.
+A Python-owned managed SQL provider also prepares its retained DuckDB extensions before activation.
+When reticulate is attached, its compatibility adapter projects the addition into the R declaration and history without selecting another interpreter.
 After Console activates that environment, the worker reports the complete manifest to the server.
 Only then does the original import resume against invalidated import caches.
 Preparation makes the distribution available; the original import still performs the import normally.
-The automatic resolver request carries a differently named import and distribution together, and the server adds the bounded notice when it commits the matching activation.
+The automatic resolver request carries the import and inferred distribution together, and the server adds the bounded notice for differently named values when it commits the matching activation.
 
 This transition does not restart the worker or Python interpreter.
-Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
-Paths added by the previous environment's site processing, including `.pth` files, are removed when another environment is activated; user-added paths remain.
+Python objects, the DuckDB catalog, worker PID, and stdin state remain available; R-present sessions also retain R globals.
 New subprocesses use the activated environment and can import its retained packages.
 In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
 On Linux, the PID namespace limits native process enumeration to the sandbox.
 With `serve --no-sandbox`, psutil retains native process enumeration in the selected host or container namespace.
 The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
-An ordinary resolution failure before activation preserves the earlier Console manifest and leaves the worker usable.
+An ordinary resolution failure before activation leaves the accepted environment and worker usable; the R adapter restores its earlier reticulate manifest.
 Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
 
 Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
 Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
 
-Automatic resolution can call worker services only from the main worker process and the Python thread that configured the runtime.
+Automatic resolution runs only from the main worker process and the Python thread that configured the runtime.
+Optional R declaration projection runs on that same thread.
 A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
 Imports already handled by ordinary Python finders remain available in those contexts.
 
-A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed resolution and `requirements.python`.
+A user-selected Python environment disables both automatic managed resolution and `requirements.python`.
 Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
 
 A bare runtime also disables the import resolver and `requirements.python`.
-With a suitable preinstalled Python, installed distributions import normally and a missing import directs the user to install `ir` or `uv` before restarting.
-Python cells do not require reticulate.
+If ambient reticulate and Python are usable, installed distributions import normally and a missing import directs the user to install `ir` or `uv` before restarting.
+An independently selected Python does not require reticulate.
+Unresolved R-side selection or cross-language access reports a missing reticulate adapter when it is needed.
 
 Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
 A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `control = "interrupt"`, or restart according to the normal generation lifecycle.
 
 ## R and Python interoperability
 
-Reticulate attaches to Console's Python interpreter for cross-language calls:
+The two languages share reticulate's live bridge, attached on demand.
+Python-side `r` access works without a preceding R cell:
 
 - Python reads R globals and calls R functions through `r.name`;
 - R reads and writes Python globals through `py$name`; and
 - objects converted or proxied by reticulate remain subject to reticulate's conversion rules.
-
-Console captures interpreter selection at launch.
-Command names and relative executable paths are resolved before evaluated code can change `PATH` or the working directory, preserving virtual environment symlinks.
-Set `RETICULATE_PYTHON` before starting the server to select a preinstalled interpreter; R-side `reticulate::use_python()` and related hints cannot replace that selection.
 
 With the managed DuckDB backend, an R data frame can be queried by name from SQL.
 A Python data frame is not automatically visible to managed DuckDB SQL; bind or convert it to an R global first before querying it there.
@@ -335,9 +498,11 @@ Objects and proxies tied to a worker generation become invalid when that generat
 
 ## SQL and DuckDB
 
-The managed in-memory DuckDB connection is the default SQL backend and is created lazily.
+With R present, the managed in-memory DuckDB connection is the default SQL backend and is created lazily.
 Later managed SQL cells, DBI calls, and dplyr relations reuse its catalog.
 DuckDB CLI dot commands are not supported.
+Managed defaults include the SQLite extension, so existing databases can be queried with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)` without an explicit preparation call.
+CSV, Parquet, JSON, and JSONL can also be queried directly; DuckDB JSON support is built in.
 
 R can redirect later SQL cells to another DBI backend:
 
@@ -362,19 +527,23 @@ console_sql_connection(connection)
 The Python runtime retains the exact connection object.
 If it implements `execute()`, SQL cells execute directly on it so connection-local state is preserved; otherwise the adapter executes through `connection.cursor()`.
 The adapter reads result metadata and bounded rows through the returned cursor protocol, without converting the connection or its result rows through reticulate.
-`console_sql_connection(None)` restores managed DuckDB when the next SQL cell is dispatched.
+With R present, `console_sql_connection(None)` restores managed DuckDB for the next SQL cell or R `sql_connection()` call, whichever comes first.
+Without R, Python `sql_connection()` returns the active Python connection, and `console_sql_connection(None)` restores the worker-owned DuckDB connection and its catalog.
 
 The R provider submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
 Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
 Each selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
 Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
 The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
-DuckDB extension requirements and the managed conveniences below apply only to the managed R-backed DuckDB provider; prepare Python drivers and their dependencies through `requirements.python`.
+DuckDB extension requirements prepare the managed R-backed provider or the sans-R managed Python provider before worker startup or restart; idle sans-R managed sessions also support additive extension preparation.
+They do not alter a selected DB-API connection; prepare Python drivers and their dependencies through `requirements.python`.
+The R-specific managed conveniences below apply only to the R-backed provider.
 
-Environment scanning lets an unqualified relation name refer to an R data frame in global state.
+With R present, environment scanning lets an unqualified relation name refer to an R data frame in global state.
 A DuckDB table or view with the same name takes precedence.
 A view over an R data-frame name observes a later rebinding when queried.
-Managed DuckDB does not expose Python objects as relations and adds no separate registration API.
+The R-owned managed DuckDB connection does not expose Python objects as relations and adds no separate registration API.
+The sans-R managed connection supports explicit registration through DuckDB's Python connection API and does not scan Python frames.
 A selected Python driver can use only the relations and driver-specific registrations available on that connection.
 
 Query results are previews, not complete result materializations for display.
@@ -508,9 +677,10 @@ A partial file is explicitly identified as a prefix; omitted text outside that p
 Some bytes missing from the file may still appear in the preview, so these raw loss counts are not counts of inline omissions.
 Startup, idle, and other sources without an active cell log report that their omitted text is unavailable, without borrowing a later cell's path.
 
-Advertised `.agents/console/sessions/...` paths are relative to the **Console server's recording workspace**.
-For SSH, Docker, and Docker Sandbox, this is the controller's workspace.
-Full retained text requires a filesystem tool with access to that directory; a tool that can read only the worker filesystem or another client host is insufficient.
+Advertised `.agents/console/sessions/...` paths are relative to the **Console server's launch directory**.
+When that directory lacks `.agents/console`, the advertised path is absolute under the server's Console home directory (`~/.agents/console` by default, or `MCP_CONSOLE_HOME`).
+For SSH, Docker, and Docker Sandbox, both locations are on the controller.
+Full retained text requires a filesystem tool with access to the selected recording location; a tool that can read only the worker filesystem or another client host is insufficient.
 Console does not discover file tools or provide a read/search interface in this version.
 Clients without appropriate filesystem access still receive bounded previews and final diagnostics.
 When repeated cancelled deliveries combine output from many cells, fully omitted intervals share one summary so their notices also fit the text budget.
@@ -543,7 +713,8 @@ The [implemented architecture](ARCHITECTURE.md) describes the session record and
 - Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
 - SQL previews do not include affected-row counts or total result counts.
 - Only default-device R graphics and open pyplot figures are captured automatically.
-  Managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
+  With R available, managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
+  Without R, the native runner or direct relay lifetime owns the worker's private temporary storage.
 - In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants across process-group and session changes.
   On Linux, the native namespace monitor waits for kernel retirement of the namespace before acknowledging cleanup.
   On macOS, the guarantee covers the owned process group and detached descendants observed by the runner; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
