@@ -223,17 +223,11 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
 pub(super) fn initialize_r(
     r_home: &std::path::Path,
 ) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
-    // Match the R shell frontend, including the executable reported by
-    // commandArgs() and installation paths inherited by R subprocesses.
-    let architecture = std::env::var_os("R_ARCH").unwrap_or_default();
-    let mut executable = r_home.join("bin/exec");
-    if !architecture.is_empty() {
-        executable.push(std::path::Path::new(&architecture).strip_prefix("/")?);
-    }
-    executable.push("R");
+    // Let the selected R launcher choose its configured default architecture
+    // when users start subprocesses through commandArgs()[1].
+    let executable = r_home.join("bin/R");
     unsafe {
         std::env::set_var("R_HOME", r_home);
-        std::env::set_var("R_ARCH", architecture);
         std::env::set_var("R_SHARE_DIR", r_home.join("share"));
         std::env::set_var("R_INCLUDE_DIR", r_home.join("include"));
         std::env::set_var("R_DOC_DIR", r_home.join("doc"));

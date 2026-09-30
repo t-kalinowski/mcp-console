@@ -40,9 +40,9 @@ Language errors do not reset the worker, and changes made before an error remain
 Restart, worker replacement, or server exit discards all in-memory state.
 Prepared requirements are server-owned and survive restart as described in [Requirements and environments](REQUIREMENTS.md).
 
-R's `commandArgs()[1]` identifies the selected installation's underlying R executable, as it does in stock R and Rscript.
+R's `commandArgs()[1]` identifies the selected installation's launcher, `file.path(R.home("bin"), "R")`, so it can start R subprocesses using that installation's configured default architecture.
 The remaining arguments describe Console's interactive R session; `commandArgs(TRUE)` initially has no user arguments.
-The worker supplies the selected installation's `R_HOME`, `R_ARCH`, `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` for R subprocesses.
+The worker supplies the selected installation's `R_HOME`, `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` for R subprocesses and preserves the caller's `R_ARCH` selection.
 
 Only one cell can run at a time.
 Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.
