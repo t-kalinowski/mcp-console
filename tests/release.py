@@ -239,6 +239,7 @@ class ReleaseScriptTests(unittest.TestCase):
             import json
             import os
             import signal
+            import shutil
             import sys
             from pathlib import Path
 
@@ -256,6 +257,9 @@ class ReleaseScriptTests(unittest.TestCase):
                                     "cwd": str(Path.cwd()),
                                     "home": os.environ.get("HOME"),
                                     "console": os.environ.get("MCP_CONSOLE_HOME"),
+                                    "r_home": os.environ.get("R_HOME"),
+                                    "r": shutil.which("R"),
+                                    "rscript": shutil.which("Rscript"),
                                 }
                             )
                             + "\\n"
@@ -299,6 +303,22 @@ class ReleaseScriptTests(unittest.TestCase):
                 }
                 if os.environ.get("FAKE_MCP_STARTUP_HANG"):
                     signal.pause()
+                if error := os.environ.get("FAKE_MCP_STARTUP_ERROR"):
+                    print(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": startup["id"],
+                                "result": {
+                                    "content": [{"type": "text", "text": error}],
+                                    "isError": True,
+                                },
+                            }
+                        ),
+                        flush=True,
+                    )
+                    sys.stdin.read()
+                    raise SystemExit(0)
                 print(
                     json.dumps(
                         {
@@ -631,6 +651,46 @@ class ReleaseScriptTests(unittest.TestCase):
                 env=environment,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_smoke_wheel_without_r_hides_host_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            record = directory / "launches.jsonl"
+            environment.update(
+                R_HOME="/inherited/R",
+                FAKE_NO_R="1",
+                FAKE_MCP_LOCATIONS=str(record),
+            )
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--without-r",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            launch = json.loads(record.read_text().splitlines()[-1])
+            self.assertEqual(launch["command"], "serve")
+            self.assertIsNone(launch["r_home"])
+            self.assertIsNone(launch["r"])
+            self.assertIsNone(launch["rscript"])
+
+    def test_smoke_wheel_reports_startup_response(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            environment["FAKE_MCP_STARTUP_ERROR"] = "fixture startup failed"
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fixture startup failed", result.stderr)
 
     def test_smoke_wheel_bounds_runtime_startup_separately(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

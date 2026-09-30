@@ -23,12 +23,6 @@ from support.suites import run_this_suite
 
 def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) -> list:
     with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
-        client.start_request(
-            "initialize",
-            protocolVersion="2025-11-25",
-            capabilities={},
-            clientInfo={"name": "r-selection", "version": "1"},
-        )
         assert client.stdout.readline(timeout=20) == "", (
             "invalid R_HOME reached readiness"
         )

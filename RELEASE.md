@@ -7,6 +7,7 @@ Wheel builds require Maturin 1.15 or later.
 R executables, libR, and R packages are not build or Python/SQL execution prerequisites.
 Local SQL without R uses Python DuckDB.
 Run the installed-wheel peer runtime acceptance on an R-free host in addition to mixed-language checks on an R-enabled host.
+`smoke-wheel --without-r` unsets R selections and uses a command path without R or Rscript, so CI and release jobs exercise both runtime modes on their installed wheels.
 It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.

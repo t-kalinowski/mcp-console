@@ -330,6 +330,11 @@ jobs:
             smoke-wheel \
             dist/*.whl \
             target/release/mcp-console
+          python3 scripts/release.py \
+            smoke-wheel \
+            dist/*.whl \
+            target/release/mcp-console \
+            --without-r
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
