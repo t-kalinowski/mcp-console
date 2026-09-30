@@ -1,8 +1,5 @@
 ---
 send:
-  requirements:
-    r:
-      - reticulate
   python: |
     import os
     from pathlib import Path
@@ -130,9 +127,6 @@ result:
   isError: false
 ---
 send:
-  requirements:
-    r:
-      - reticulate
   python: |
     import os
     from pathlib import Path

@@ -247,10 +247,10 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
                 client.initialize_and_list_tools()
                 # Create the startup-hook fixture on its execution host, then
                 # start the generation whose in-memory continuity is exercised.
-                # Prepare defaults before admission so cold dependency preparation
-                # is not bounded by the fixture cell's observation timeout.
-                client.send(
-                    requirements={"r": ["reticulate"]},
+                # Bare targets use their installed packages. Managed targets may
+                # return a running response while their defaults are prepared.
+                collected = send_and_collect_runtime_python_resolution(
+                    client,
                     # fmt: python
                     python=code("""
                         import os
@@ -263,7 +263,7 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
                         )
                         """),
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
+                assert collected == "[done]", client.transcript[-1]
                 client.send(control="restart")
                 exercise_late_r(client)
                 records.extend(client.finish()[3:])
@@ -1414,10 +1414,11 @@ def attach_python_initialized_during_r_startup(
                 client.send(requirements={"python_version": [version]})
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]
             if python_first:
-                client.send(
-                    python="before_r = object(); before_r_identity = id(before_r)"
+                collected = send_and_collect_runtime_python_resolution(
+                    client,
+                    python="before_r = object(); before_r_identity = id(before_r)",
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
+                assert collected == "[done]", client.transcript[-1]
             # R-first startup adopts external CPython. With Python already live,
             # the same startup package must attach to Console's interpreter.
             if system_default_packages:
