@@ -1,0 +1,25 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |-
+    import sys
+    answer = 42
+    sys.exit(33)
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<mcp-console:python:e1>", line 3, in <module>
+        SystemExit: 33
+  isError: false
+---
+send:
+  python: answer
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
