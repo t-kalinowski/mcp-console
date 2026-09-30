@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
@@ -196,7 +196,13 @@ def test_inspection_during_input_and_replacement_resolution(
             client.send(python='marker = 42; print("before input"); answer = input()')
             assert "[waiting for stdin]" in last_tool_text(client)
             assert inspect(client) == old
-            client.send(stdin="kept\n")
+            wait_for_evaluation_output(
+                client,
+                "[done]",
+                "Python input completion",
+                stdin="kept\n",
+                timeout_ms=0,
+            )
             client.send(python="(marker, answer)")
             assert last_tool_text(client) == "(42, 'kept')\n"
             pending = client.start_send(
