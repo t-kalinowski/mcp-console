@@ -72,10 +72,10 @@ It launches the public sandbox command with its own remote PID as `--exit-with-p
 The helper materializes the captured policy on the remote host and never discovers project YAML there.
 
 Controller input starts with a four-byte unsigned big-endian length followed by a UTF-8 JSON bootstrap object, limited to 1 MiB.
-Its fields are `version` (currently `7` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
+Its fields are `version` (currently `8` for SSH and prepared Docker/SBX), `build` (the Console package version), `workspace`, `policy` (the captured policy object), `writable_roots` (an array), `no_sandbox` (a boolean), `provider` (`native` by default, or `compute` for SBX), and optional `environment` (the discovered capability, runtime selections, and prepared R/Python environments).
 Prepared targets accept optional `python` only for runtime probes and require `environment` for worker launch.
 The handoff retains independent R and inspected Python selections, including the complete Python identity when R is present.
-Version 7 permits prepared R-only selections and uses the shared Python preparation request.
+Version 8 retains prepared R-only selections and shared Python preparation, and adds the built-in initialization exchange.
 Prepared runtime descriptors have managed flags false and no managed R/Python payloads.
 The image/template supplies its dependencies.
 SSH omits the probe-only `python` field, rejects it when supplied, and carries no prepared runtime-result frames.
@@ -158,6 +158,9 @@ The retirement output deadline also releases readers waiting for queue space; a 
 
 ## Server commands
 
+The built-in server sends `{"kind":"initialize","languages":["r","python","sql"]}` after transport readiness to prewarm applicable enabled runtimes.
+The relay forwards this command unchanged; custom workers retain demand-driven execution.
+
 The server can send these flat frames:
 
 - `{"kind":"evaluate","language":"r","source":"1 + 1"}` sends the unchanged worker-sideband evaluation command.
@@ -198,7 +201,9 @@ After the replacement relay reports readiness, same-call `stdin` and `evaluate` 
 
 The relay can emit these flat frames:
 
-- `{"kind":"ready"}` reports completed worker startup.
+- `{"kind":"ready"}` reports worker transport readiness.
+- `{"kind":"initialized","completed":true}` acknowledges the built-in `initialize` command after applicable interpreter setup.
+  `completed:false` retains an interrupted Python initializer for its ordinary later-cell retry.
 - `{"kind":"console_output","data":"..."}` forwards ordinary worker console text.
 - `{"kind":"console_diagnostic","data":"..."}` forwards diagnostic worker console text.
 - `{"kind":"image","data":"...","mime_type":"image/png"}` forwards one worker image.

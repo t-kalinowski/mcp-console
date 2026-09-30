@@ -230,7 +230,11 @@ Startup text may use fd 1 or fd 2, but no semantic worker frame may precede `rea
 A second `ready` is a protocol violation.
 
 For the built-in worker, readiness confirms process services and command admission; it does not imply that R or Python has initialized.
-Interpreter startup runs on demand after readiness, so a fatal startup-hook failure follows ordinary worker-generation failure and replacement handling.
+The built-in server can follow transport readiness with `{"kind":"initialize","languages":["r","python","sql"]}` for applicable enabled runtimes.
+The worker initializes them on its serialized runtime thread and returns `{"kind":"initialized","completed":true}`.
+An interrupted, retryable Python setup returns `completed:false` while retaining the interpreter; later cell execution uses the existing retry boundary.
+Output and input during initialization use the ordinary sideband events.
+Custom workers are not sent this optional built-in initialization command.
 
 ### Evaluation
 
@@ -500,6 +504,6 @@ See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the cor
 The common worker import callback and optional R declaration projection use the existing `ResolvePython`, `PythonActivated`, and `PythonActivationFailed` exchanges.
 A candidate remains provisional until the current generation accepts its activation; a later import or cell error does not retract acceptance.
 The shared-import refactor leaves wire fields unchanged.
-Launch protocol version 7 uses shared preparation requests and the optional `resolve_python.request.initialized` field.
+Launch protocol version 8 supports built-in initialization before the first cell; it retains shared preparation requests and the optional `resolve_python.request.initialized` field.
 It retains activation-failure receipts in preparation and idle contexts; preparation protocol version 5 is unchanged.
 R `.Call` registration changes are internal to the worker and its compiled-in bridge, not a remote protocol surface.

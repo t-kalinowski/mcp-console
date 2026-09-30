@@ -205,8 +205,8 @@ struct SendArguments {
     /// when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
     /// background work, then poll with an empty `send`.
     ///
-    /// Defaults to 60,000 milliseconds. The wait starts after cell dispatch or attachment to an active
-    /// evaluation and includes one automatic worker replacement attempt. It does not cancel resolution
+    /// Defaults to 60,000 milliseconds. One deadline starts at call entry and includes initial
+    /// background startup, evaluation observation, and one automatic worker replacement attempt. It does not cancel resolution
     /// or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
     /// before dispatch and may make the complete call take longer. This value does not limit standalone
     /// preparation. Automatic R and Python import
@@ -320,7 +320,26 @@ impl ConsoleServer {
             no_sandbox,
             target.as_ref().map(|(target, _)| target),
         );
-        let startup = startup::Startup::new(input_closed, move |started| {
+        let runtime = Arc::new(startup::Runtime {
+            worker: crate::worker_client::Client::pending(),
+            transcript: crate::transcript::Transcript::pending(
+                recording_directory
+                    .as_ref()
+                    .cloned()
+                    .map_err(|error| std::io::Error::new(error.kind(), error.to_string())),
+            ),
+        });
+        let prewarm = worker.is_none().then(|| {
+            [
+                crate::cell::Language::R,
+                crate::cell::Language::Python,
+                crate::cell::Language::Sql,
+            ]
+            .into_iter()
+            .filter(|language| languages.enables(*language))
+            .collect()
+        });
+        let startup = startup::Startup::new(input_closed, runtime, prewarm, move |started| {
             let worker = if let Some((target, roots)) = target {
                 crate::worker_client::Client::target(
                     target,
@@ -349,7 +368,6 @@ impl ConsoleServer {
                 !worker.python_only(),
                 target.clone(),
             );
-            worker.record_with(transcript.clone());
             Ok(startup::Runtime { worker, transcript })
         });
         Ok(Self {
@@ -500,6 +518,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
         Extension(runtime): Extension<Arc<startup::Runtime>>,
         Extension(call): Extension<crate::transcript::Call>,
         Extension(delivery): Extension<crate::server_transport::ResponseDeliveryCall>,
+        Extension(started): Extension<Instant>,
         Parameters(SendArguments {
             r,
             python,
@@ -529,16 +548,6 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
             }
         };
         if let Some(cell) = cell.as_ref() {
-            if runtime.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
-                return Err("R cells are unavailable in Python sessions without R".into());
-            }
-            if !runtime.worker.python_available()
-                && matches!(cell.language, crate::cell::Language::Python)
-            {
-                return Err(
-                    "Python cells are unavailable: the target has no Python runtime".into(),
-                );
-            }
             if !self.languages.enables(cell.language) {
                 return Err(format!(
                     "`{}` cells are disabled by `{LANGUAGES_ENV}`",
@@ -567,6 +576,24 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                             .into(),
                     );
                 }
+                if tokio::time::timeout(
+                    Duration::from_millis(timeout_ms).saturating_sub(started.elapsed()),
+                    runtime.worker.ready(),
+                )
+                .await
+                .is_err()
+                {
+                    let mut response = crate::worker_client::Response::default();
+                    response.push_notice("worker starting");
+                    return Ok(response_to_tool_result(
+                        response,
+                        &call,
+                        &runtime.transcript,
+                        &self.deliveries,
+                        &delivery,
+                    ));
+                }
+                runtime.worker.ready().await?;
                 let snapshot = runtime.worker.inspect_requirements();
                 let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");
                 let text = if json.len() <= 8 * 1024 {
@@ -610,7 +637,9 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                     SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
                     SendControl::Restart => crate::worker_client::SendControl::Restart,
                 }),
-                timeout: Duration::from_millis(timeout_ms),
+                deadline: started
+                    .checked_add(Duration::from_millis(timeout_ms))
+                    .unwrap_or(started),
                 transcript: runtime.transcript.clone(),
                 call_id: call.id(),
             })
@@ -673,6 +702,7 @@ impl ServerHandler for ConsoleServer {
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let request_id = context.id.clone();
+        context.extensions.insert(Instant::now());
         if request.name.as_ref() != "send" {
             return self
                 .tool_router
@@ -712,31 +742,7 @@ impl ServerHandler for ConsoleServer {
             }
         };
         context.extensions.insert(delivery.clone());
-        let runtime = tokio::select! {
-            biased;
-            _ = context.ct.cancelled() => {
-                return Err(ErrorData::internal_error("request cancelled before execution", None));
-            }
-            runtime = self.startup.ready() => runtime,
-        };
-        let runtime = match runtime {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                let (content, _, _) =
-                    crate::worker_client::Response::tool_error(error).into_parts();
-                let content = content
-                    .into_iter()
-                    .map(|content| {
-                        let crate::worker_client::Content::Text(text) = content else {
-                            unreachable!("preparation errors contain only text");
-                        };
-                        ContentBlock::text(text)
-                    })
-                    .collect();
-                operation.complete();
-                return Ok(CallToolResult::error(content).into());
-            }
-        };
+        let runtime = self.startup.runtime();
         let transcript = runtime.transcript.clone();
         context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
@@ -764,7 +770,12 @@ impl ServerHandler for ConsoleServer {
             .map
             .get("send")
             .expect("send tool must be registered");
-        let result = (send.call)(ToolCallContext::new(self, request, context)).await;
+        let cancellation = context.ct.clone();
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(ErrorData::internal_error("request cancelled; poll with an empty send for any admitted cell", None)),
+            result = (send.call)(ToolCallContext::new(self, request, context)) => result,
+        };
         let result = Arc::new(match result {
             Err(error) if error.code == ErrorCode::INVALID_PARAMS => Ok(response_to_tool_result(
                 crate::worker_client::Response::tool_error(error.message.into_owned()),
@@ -831,7 +842,13 @@ pub async fn run(
         let cancellation = startup.cancel().await;
         let result = match startup.ready().await {
             Ok(runtime) => runtime.worker.shutdown(deadline).await,
-            Err(error) => startup.finish_failed_preparation(error),
+            Err(error) => {
+                let runtime = startup.runtime();
+                if runtime.worker.is_configured() {
+                    runtime.worker.shutdown(deadline).await?;
+                }
+                startup.finish_failed_preparation(error)
+            }
         };
         deliveries
             .settle_before_close(Instant::now() + WORKER_SHUTDOWN_GRACE)

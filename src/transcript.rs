@@ -36,6 +36,21 @@ struct TranscriptState {
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
+    pending_calls: Option<Vec<PendingCall>>,
+    next_pending_call_id: u64,
+}
+
+enum PendingCall {
+    Begin {
+        id: u64,
+        request_id: RequestId,
+        request: CallToolRequestParams,
+        at: DateTime<Utc>,
+    },
+    Finish {
+        call: Call,
+        response: Result<CallToolResponse, ErrorData>,
+    },
 }
 
 struct ActiveTranscript {
@@ -91,7 +106,59 @@ impl Transcript {
             target,
             active: None,
             failure: None,
+            pending_calls: None,
+            next_pending_call_id: 0,
         })))
+    }
+
+    /// Retain early tool records until discovery supplies the recording metadata.
+    pub(crate) fn pending(working_directory: std::io::Result<PathBuf>) -> Self {
+        let transcript = Self::with_target(working_directory, false, false, false, None);
+        transcript.0.lock().expect("transcript lock").pending_calls = Some(Vec::new());
+        transcript
+    }
+
+    pub(crate) fn configure(&self, configured: Self) {
+        let (configuration, _) = configured.lock();
+        self.update(|state| {
+            state.dynamic_resolution = configuration.dynamic_resolution;
+            state.python_preparation = configuration.python_preparation;
+            state.r_available = configuration.r_available;
+            state.target = configuration.target.clone();
+            let pending = state
+                .pending_calls
+                .take()
+                .expect("recording metadata is supplied once");
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let next_call_id = state.next_pending_call_id;
+            let active = state.materialize()?;
+            active.next_call_id = next_call_id;
+            for record in pending {
+                match record {
+                    PendingCall::Begin {
+                        id,
+                        request_id,
+                        request,
+                        at,
+                    } => active.append(
+                        Event::ToolCall {
+                            call_id: id,
+                            request_id: &request_id,
+                            request: &request,
+                        },
+                        at,
+                    )?,
+                    PendingCall::Finish { call, response } => active.finish(
+                        call.id.expect("pending call id"),
+                        call.take_result_images()?,
+                        &response,
+                    )?,
+                }
+            }
+            Ok(())
+        });
     }
 
     pub(crate) fn requirements_selected(
@@ -143,6 +210,24 @@ impl Transcript {
         request: &CallToolRequestParams,
     ) -> Call {
         self.update(|state| {
+            if let Some(pending) = &mut state.pending_calls {
+                state.next_pending_call_id += 1;
+                let id = state.next_pending_call_id;
+                let mut request = request.clone();
+                if !request_meta.is_empty() {
+                    request.meta = Some(request_meta.clone());
+                }
+                pending.push(PendingCall::Begin {
+                    id,
+                    request_id: request_id.clone(),
+                    request,
+                    at: Utc::now(),
+                });
+                return Ok(Call {
+                    id: Some(id),
+                    result_images: Arc::new(Mutex::new(None)),
+                });
+            }
             let active = state.materialize()?;
             active.next_call_id += 1;
             let call_id = active.next_call_id;
@@ -192,6 +277,13 @@ impl Transcript {
             return;
         };
         self.update(|state| {
+            if let Some(pending) = &mut state.pending_calls {
+                pending.push(PendingCall::Finish {
+                    call,
+                    response: response.clone(),
+                });
+                return Ok(());
+            }
             let images = call.take_result_images()?;
             state.active()?.finish(call_id, images, response)
         });

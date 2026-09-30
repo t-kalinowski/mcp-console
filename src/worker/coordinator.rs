@@ -106,6 +106,30 @@ impl Coordinator {
         }
 
         match message {
+            ServerMessage::Initialize { languages } => {
+                let mut completed = true;
+                for language in languages {
+                    match language {
+                        Language::R => {
+                            super::r_integration::ensure_initialized().map_err(io::Error::other)?
+                        }
+                        Language::Python => {
+                            if !crate::python::ensure_initialized().map_err(io::Error::other)? {
+                                completed = false;
+                                break;
+                            }
+                        }
+                        Language::Sql => {
+                            if !self.sql.initialize().map_err(io::Error::other)? {
+                                completed = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                self.writer
+                    .send(&WorkerMessage::Initialized { completed })?;
+            }
             ServerMessage::Evaluate { language, source } => {
                 self.r.check_interrupts();
                 let result = evaluate_cell(

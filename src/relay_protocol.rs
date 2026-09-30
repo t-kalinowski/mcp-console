@@ -16,6 +16,9 @@ pub(crate) struct EncodedBytes(String);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayCommand {
+    Initialize {
+        languages: Vec<Language>,
+    },
     Evaluate {
         language: Language,
         source: String,
@@ -61,6 +64,9 @@ pub(crate) enum RelayCommand {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayEvent {
+    Initialized {
+        completed: bool,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     ConsoleOutput {
@@ -157,6 +163,7 @@ pub(crate) enum RelayEvent {
 impl From<WorkerMessage> for RelayEvent {
     fn from(message: WorkerMessage) -> Self {
         match message {
+            WorkerMessage::Initialized { completed } => Self::Initialized { completed },
             WorkerMessage::Ready => Self::Ready,
             WorkerMessage::ConsoleOutput { data } => Self::ConsoleOutput { data },
             WorkerMessage::ConsoleDiagnostic { data } => Self::ConsoleDiagnostic { data },

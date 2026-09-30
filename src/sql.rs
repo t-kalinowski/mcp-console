@@ -24,6 +24,14 @@ impl Bridge {
         Self
     }
 
+    pub(crate) fn initialize(&self) -> Result<bool, String> {
+        if crate::worker::r_available() {
+            self.r_backend()?.restore_managed().map(|()| true)
+        } else {
+            crate::python::ensure_initialized()
+        }
+    }
+
     fn r_backend(&self) -> Result<std::rc::Rc<r_dbi::Backend>, String> {
         crate::worker::ensure_r()?;
         R_BACKEND

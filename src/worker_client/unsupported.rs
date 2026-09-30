@@ -42,6 +42,13 @@ impl WorkerRuntime {
 }
 
 impl Worker {
+    pub(super) fn initialize(
+        &mut self,
+        _languages: Vec<crate::cell::Language>,
+        _client: super::Client,
+    ) -> Result<bool, String> {
+        Err("worker initialization is unsupported on this platform".into())
+    }
     pub(super) fn reserve_environment_preparation(
         &self,
     ) -> Result<(), super::EnvironmentPreparationAdmissionFailure> {

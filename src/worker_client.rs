@@ -1,7 +1,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
 
 mod environment;
 mod evaluation;
@@ -59,7 +60,7 @@ pub(crate) struct SendRequest {
     pub(crate) stdin: Option<String>,
     pub(crate) requirements: Option<Requirements>,
     pub(crate) control: Option<SendControl>,
-    pub(crate) timeout: Duration,
+    pub(crate) deadline: Instant,
     pub(crate) transcript: crate::transcript::Transcript,
     pub(crate) call_id: Option<u64>,
 }
@@ -105,18 +106,13 @@ impl SendRequest {
     }
 }
 
-/// A cloneable handle to one lazily started worker.
+/// A cloneable handle to the single implicit session, including its startup.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
-    runtime: platform::WorkerRuntime,
-    program: PathBuf,
-    arguments: Vec<OsString>,
-    relay: Option<PathBuf>,
-    no_sandbox: bool,
-    sandbox_settings: crate::settings::SandboxSettings,
-    worker: Mutex<WorkerState>,
+    configuration: OnceLock<ClientConfiguration>,
+    startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
     /// Settles operations admitted before inline control reserves its optional new cell.
@@ -124,6 +120,19 @@ struct ClientInner {
     preparation: tokio::sync::RwLock<()>,
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
+    recording: Mutex<Option<crate::transcript::Transcript>>,
+    initialization_interrupted: AtomicBool,
+    startup_stdin: Mutex<String>,
+}
+
+struct ClientConfiguration {
+    runtime: platform::WorkerRuntime,
+    program: PathBuf,
+    arguments: Vec<OsString>,
+    relay: Option<PathBuf>,
+    no_sandbox: bool,
+    sandbox_settings: crate::settings::SandboxSettings,
+    worker: Mutex<WorkerState>,
     environment: Option<Mutex<Environment>>,
     requirements_snapshot: Mutex<serde_json::Value>,
     runtime_r_requirements: Vec<String>,
@@ -132,7 +141,18 @@ struct ClientInner {
     python_preparation: bool,
     local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
     target: Option<crate::target_session::Session>,
-    recording: Mutex<Option<crate::transcript::Transcript>>,
+    /// A default worker may be replaced without discarding user runtime state.
+    unused_default: AtomicBool,
+}
+
+impl std::ops::Deref for ClientInner {
+    type Target = ClientConfiguration;
+
+    fn deref(&self) -> &Self::Target {
+        self.configuration
+            .get()
+            .expect("runtime configuration is ready")
+    }
 }
 
 #[derive(Clone)]
@@ -294,6 +314,7 @@ impl WorkerState {
 struct ActiveEvaluation {
     generation: WorkerGeneration,
     evaluation: Arc<Evaluation>,
+    inherits_startup: bool,
 }
 
 enum PreparedEvaluation {
@@ -354,6 +375,173 @@ fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
 }
 
 impl Client {
+    pub(crate) fn pending() -> Self {
+        let (startup, _) = tokio::sync::watch::channel(None);
+        Self(Arc::new(ClientInner {
+            configuration: OnceLock::new(),
+            startup,
+            evaluation: Mutex::new(None),
+            admission: tokio::sync::RwLock::new(()),
+            preparation: tokio::sync::RwLock::new(()),
+            output: OutputTape::new(),
+            lifecycle: Mutex::new(LifecycleControl::new()),
+            recording: Mutex::new(None),
+            initialization_interrupted: AtomicBool::new(false),
+            startup_stdin: Mutex::new(String::new()),
+        }))
+    }
+
+    pub(crate) fn configure(&self, configured: Self) {
+        let inner = match Arc::try_unwrap(configured.0) {
+            Ok(inner) => inner,
+            Err(_) => panic!("runtime configuration must have one owner"),
+        };
+        assert!(
+            self.0
+                .configuration
+                .set(inner.configuration.into_inner().expect("configured client"))
+                .is_ok()
+        );
+        self.0.unused_default.store(
+            self.0.environment.as_ref().is_some_and(|environment| {
+                !environment
+                    .lock()
+                    .expect("worker environment lock")
+                    .custom_worker
+            }),
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn finish_startup(&self, result: Result<(), String>) {
+        self.0.startup.send_if_modified(|outcome| {
+            if outcome.is_some() {
+                return false;
+            }
+            *outcome = Some(result);
+            true
+        });
+    }
+
+    pub(crate) fn report_warmup_failure(&self, generation: &WorkerGeneration, error: String) {
+        self.publish_warmup_outcome(generation, Some(error));
+    }
+
+    fn publish_warmup_outcome(&self, generation: &WorkerGeneration, error: Option<String>) {
+        let lifecycle = self.0.lifecycle.lock().expect("worker lifecycle lock");
+        if lifecycle.state == lifecycle::LifecycleState::Ready
+            && lifecycle.generation.is(generation)
+        {
+            if let Some(error) = error {
+                self.0.output.push_failure(error.into());
+            }
+            self.0
+                .initialization_interrupted
+                .store(true, Ordering::Release);
+        }
+    }
+
+    fn take_initialization_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        lifecycle.ensure_generation(generation)?;
+        Ok(self
+            .0
+            .initialization_interrupted
+            .swap(false, Ordering::AcqRel))
+    }
+
+    pub(crate) async fn ready(&self) -> Result<(), String> {
+        let mut result = self.0.startup.subscribe();
+        let ready = result
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| "runtime startup stopped without a result".to_string())?;
+        ready.as_ref().expect("startup completed").clone()
+    }
+
+    pub(crate) fn is_configured(&self) -> bool {
+        self.0.configuration.get().is_some()
+    }
+
+    pub(crate) fn startup_finished(&self) -> bool {
+        self.0.startup.borrow().is_some()
+    }
+
+    pub(crate) fn prewarm(&self, languages: Vec<crate::cell::Language>) -> Result<(), String> {
+        let generation = self.admit()?;
+        let _startup = self.reserve_worker_startup(&generation)?;
+        let _preparation = self.0.preparation.blocking_read();
+        let mut worker = self.0.worker.lock().map_err(|_| "worker lock poisoned")?;
+        if let Err(mut failure) = self.start_worker(
+            &mut worker,
+            generation.clone(),
+            false,
+            |handle| self.register_stop_handle(&generation, handle),
+            || Ok(()),
+        ) {
+            if let Err(error) = self.clear_worker_stop_handle(&generation) {
+                failure.message.push_str(&format!("; {error}"));
+            }
+            return Err(failure.message);
+        }
+        let WorkerState::Running(running) = &mut *worker else {
+            unreachable!("prewarmed worker is running")
+        };
+        let python_selected = self
+            .0
+            .target
+            .as_ref()
+            .is_some_and(|target| target.python_available())
+            || self.0.environment.as_ref().is_some_and(|environment| {
+                environment
+                    .lock()
+                    .expect("worker environment lock")
+                    .python
+                    .as_ref()
+                    .is_some_and(|python| !matches!(python, PythonEnvironment::Ambient))
+            });
+        let languages = languages
+            .into_iter()
+            .filter(|language| match language {
+                crate::cell::Language::R => {
+                    !self.python_only()
+                        && (self.dynamic_resolution()
+                            || self
+                                .0
+                                .target
+                                .as_ref()
+                                .is_some_and(|target| !target.is_ssh()))
+                }
+                crate::cell::Language::Python => python_selected,
+                crate::cell::Language::Sql => {
+                    self.dynamic_resolution()
+                        || self.python_preparation()
+                        || self.0.target.is_some()
+                }
+            })
+            .collect();
+        let initialized = running.initialize(languages, self.clone());
+        if matches!(initialized, Ok(false)) {
+            self.publish_warmup_outcome(&generation, None);
+        }
+        if let Err(error) = initialized {
+            let mut failure = SendFailure::from(error);
+            match self.stop_failed_worker(&mut worker, &generation) {
+                Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
+                    failure = failure.worker_outcome(outcome)
+                }
+                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => {}
+                Err(error) => failure = error.attach_to(failure),
+            }
+            return Err(failure.message);
+        }
+        Ok(())
+    }
+
     pub(crate) fn new(
         program: PathBuf,
         relay: Option<PathBuf>,
@@ -511,7 +699,11 @@ impl Client {
                 r_resolver,
             }),
         );
-        let inner = Arc::get_mut(&mut client.0).expect("new client");
+        let inner = Arc::get_mut(&mut client.0)
+            .expect("new client")
+            .configuration
+            .get_mut()
+            .expect("configured client");
         inner.local_preparation = Mutex::new(local_preparation);
         Ok(client)
     }
@@ -541,42 +733,46 @@ impl Client {
                     .and_then(PythonEnvironment::managed)
                     .is_some()
             });
-        Self(Arc::new(ClientInner {
-            runtime: platform::WorkerRuntime,
-            program,
-            arguments,
-            relay,
-            no_sandbox,
-            sandbox_settings,
-            worker: Mutex::new(WorkerState::Initial),
-            evaluation: Mutex::new(None),
-            admission: tokio::sync::RwLock::new(()),
-            preparation: tokio::sync::RwLock::new(()),
-            output: OutputTape::new(),
-            lifecycle: Mutex::new(LifecycleControl::new()),
-            requirements_snapshot: Mutex::new(
-                environment
-                    .as_ref()
-                    .map(Environment::inspection)
-                    .unwrap_or(serde_json::Value::Null),
-            ),
-            runtime_r_requirements: environment
-                .as_ref()
-                .map(|env| {
-                    env.runtime_r_requirements()
-                        .iter()
-                        .map(|s| (*s).into())
-                        .collect()
+        let client = Self::pending();
+        assert!(
+            client
+                .0
+                .configuration
+                .set(ClientConfiguration {
+                    runtime: platform::WorkerRuntime,
+                    program,
+                    arguments,
+                    relay,
+                    no_sandbox,
+                    sandbox_settings,
+                    worker: Mutex::new(WorkerState::Initial),
+                    requirements_snapshot: Mutex::new(
+                        environment
+                            .as_ref()
+                            .map(Environment::inspection)
+                            .unwrap_or(serde_json::Value::Null),
+                    ),
+                    runtime_r_requirements: environment
+                        .as_ref()
+                        .map(|env| {
+                            env.runtime_r_requirements()
+                                .iter()
+                                .map(|s| (*s).into())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    environment: environment.map(Mutex::new),
+                    dynamic_resolution,
+                    python_only,
+                    python_preparation,
+                    local_preparation: Mutex::new(None),
+                    target: None,
+                    unused_default: AtomicBool::new(false),
                 })
-                .unwrap_or_default(),
-            environment: environment.map(Mutex::new),
-            dynamic_resolution,
-            python_only,
-            python_preparation,
-            local_preparation: Mutex::new(None),
-            target: None,
-            recording: Mutex::new(None),
-        }))
+                .is_ok()
+        );
+        client.finish_startup(Ok(()));
+        client
     }
 
     pub(crate) fn target(
@@ -620,7 +816,11 @@ impl Client {
                 r_resolver: RResolver::Disabled,
             }),
         );
-        let inner = Arc::get_mut(&mut client.0).expect("new client");
+        let inner = Arc::get_mut(&mut client.0)
+            .expect("new client")
+            .configuration
+            .get_mut()
+            .expect("configured client");
         inner.python_only = session.python_only();
         inner.target = Some(session);
         Ok(client)
@@ -739,6 +939,9 @@ impl Client {
         );
         Arc::get_mut(&mut client.0)
             .expect("new client has one owner")
+            .configuration
+            .get_mut()
+            .expect("configured client")
             .target = Some(crate::target_session::Session::Ssh(session));
         Ok(client)
     }
@@ -764,39 +967,89 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
-        if let Some(target) = &self.0.target
-            && !target.is_ssh()
-            && request.requirements.is_some()
+        // Admission does not depend on discovery or readiness. The established
+        // evaluation slot owns an accepted early cell and all subsequent polls.
+        if request.control.is_none()
+            && (request.requirements.is_none()
+                || (!self.startup_finished() && request.cell.is_some()))
         {
-            let source = if matches!(target, crate::target_session::Session::Docker(..)) {
-                "image"
-            } else {
-                "template"
-            };
-            return Err(format!(
-                "dynamic environment resolution is disabled for {} targets; install packages in the {source} and start a new server session",
-                target.protocol().0
-            ));
+            request.validate(true)?;
+            return Ok(
+                match self
+                    .send_inner(
+                        request.cell,
+                        request.stdin,
+                        request.requirements,
+                        request.deadline,
+                        request.transcript,
+                        request.call_id,
+                    )
+                    .await
+                {
+                    Ok(response) => output::render_response(response),
+                    Err(failure) => output::direct_failure(failure.message),
+                },
+            );
         }
-        if self.python_only() {
-            if let Some(requirements) = &request.requirements {
-                if !self.python_preparation() {
-                    if !requirements.duckdb.is_empty() {
-                        return Err("DuckDB extension preparation is unavailable with a user-selected Python environment; install extensions before starting the session".into());
-                    }
-                    return Err(crate::local_runtime::PREPARATION_DISABLED.into());
+        if matches!(request.control, Some(SendControl::Interrupt))
+            && request.cell.is_none()
+            && request.requirements.is_none()
+            && !self.startup_finished()
+        {
+            let client = self.clone();
+            tokio::task::spawn_blocking(move || client.interrupt_standalone_blocking())
+                .await
+                .map_err(|error| format!("startup interrupt task failed: {error}"))??;
+            if let Some(input) = request.stdin.clone().filter(|input| !input.is_empty()) {
+                if let Some(active) = self.current_evaluation()? {
+                    active.evaluation.submit_stdin(input)?;
+                } else if let Some(worker) = self.worker_handle()? {
+                    #[cfg(unix)]
+                    worker.write_startup_stdin(input)?;
                 }
-                if !requirements.r.is_empty() {
-                    return Err(
-                        "R requirements are unavailable in Python sessions without R".into(),
+            }
+            tokio::time::sleep(INTERRUPT_GRACE).await;
+            if let Some(active) = self.current_evaluation()? {
+                let claim = active.evaluation.claim()?;
+                return Ok(output::render_response(send_response_from_wait(
+                    active
+                        .evaluation
+                        .wait(
+                            claim,
+                            request.deadline.saturating_duration_since(Instant::now()),
+                        )
+                        .await?,
+                )));
+            }
+            return Ok(output::render_response(SendResponse::ReplacementStarting(
+                self.0.output.take(),
+            )));
+        }
+        if !matches!(request.control, Some(SendControl::Restart)) || !self.is_configured() {
+            if tokio::time::timeout(
+                request.deadline.saturating_duration_since(Instant::now()),
+                self.ready(),
+            )
+            .await
+            .is_err()
+            {
+                let mut response = output::render_response(SendResponse::ReplacementStarting(
+                    self.0.output.take(),
+                ));
+                if request.cell.is_some() {
+                    response.push_tool_error(
+                        "startup is pending; control was not applied and cell was not run",
                     );
                 }
+                return Ok(response);
             }
-            if let Some(cell) = &request.cell
-                && matches!(cell.language, crate::cell::Language::R)
-            {
-                return Err("R cells are unavailable in Python sessions without R".into());
-            }
+            self.ready().await?;
+        }
+        if let Some(requirements) = &request.requirements {
+            self.validate_requirements(requirements)?;
+        }
+        if let Some(cell) = &request.cell {
+            self.validate_cell(cell)?;
         }
         request.validate(self.dynamic_resolution() || self.python_preparation())?;
         if let Some(control) = request.control {
@@ -807,14 +1060,21 @@ impl Client {
             stdin,
             requirements,
             control: _,
-            timeout,
+            deadline,
             transcript,
             call_id,
         } = request;
         if let Some(requirements) = requirements {
             if let Some(cell) = cell {
                 return Ok(self
-                    .send_with_requirements(cell, stdin, requirements, timeout, transcript, call_id)
+                    .send_with_requirements(
+                        cell,
+                        stdin,
+                        requirements,
+                        deadline,
+                        transcript,
+                        call_id,
+                    )
                     .await);
             }
             let notice = match self.prepare(requirements).await? {
@@ -830,7 +1090,7 @@ impl Client {
         }
         Ok(
             match self
-                .send_inner(cell, stdin, timeout, transcript, call_id)
+                .send_inner(cell, stdin, None, deadline, transcript, call_id)
                 .await
             {
                 Ok(response) => output::render_response(response),
@@ -848,7 +1108,7 @@ impl Client {
         control: SendControl,
         request: SendRequest,
     ) -> Result<Response, String> {
-        let timeout = request.timeout;
+        let deadline = request.deadline;
         let direct_restart_error = matches!(control, SendControl::Restart)
             && request.requirements.is_some()
             && request.cell.is_none();
@@ -869,7 +1129,13 @@ impl Client {
         };
         Ok(match admission {
             ControlledEvaluation::Started(evaluation, wait_claim) => {
-                match evaluation.wait(wait_claim, timeout).await {
+                match evaluation
+                    .wait(
+                        wait_claim,
+                        deadline.saturating_duration_since(Instant::now()),
+                    )
+                    .await
+                {
                     Ok(wait) => output::render_response(send_response_from_wait(wait)),
                     Err(error) => output::direct_failure(error),
                 }
@@ -885,7 +1151,7 @@ impl Client {
                     if cell_not_run {
                         Duration::ZERO
                     } else {
-                        timeout
+                        deadline.saturating_duration_since(Instant::now())
                     },
                 )
                 .await
@@ -907,7 +1173,7 @@ impl Client {
             stdin,
             requirements,
             control: _,
-            timeout: _,
+            deadline: _,
             transcript,
             call_id,
         } = request;
@@ -1134,6 +1400,7 @@ impl Client {
             call_id,
             Some(control),
             &mut prelude,
+            None,
         ) {
             Ok(started) => started,
             Err(error) => {
@@ -1170,6 +1437,10 @@ impl Client {
             }
             return Ok(self.return_controlled_response(response));
         };
+        self.0
+            .initialization_interrupted
+            .store(false, Ordering::Release);
+        self.finish_startup(Ok(()));
         self.ensure_controlled_generation(control, &generation)?;
         let Some(cell) = cell else {
             let response = restart.response;
@@ -1192,6 +1463,7 @@ impl Client {
             call_id,
             Some(control),
             &mut prelude,
+            None,
         ) {
             Ok(started) => started,
             Err(error) => {
@@ -1272,7 +1544,7 @@ impl Client {
         cell: crate::cell::Cell,
         stdin: Option<String>,
         requirements: Requirements,
-        timeout: Duration,
+        deadline: Instant,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Response {
@@ -1294,7 +1566,13 @@ impl Client {
             PreparedEvaluation::Started(evaluation, wait_claim) => (evaluation, wait_claim),
             PreparedEvaluation::Failed(response) => return response,
         };
-        let response = match evaluation.wait(wait_claim, timeout).await {
+        let response = match evaluation
+            .wait(
+                wait_claim,
+                deadline.saturating_duration_since(Instant::now()),
+            )
+            .await
+        {
             Ok(wait) => send_response_from_wait(wait),
             Err(error) => return output::direct_failure(error),
         };
@@ -1360,7 +1638,8 @@ impl Client {
         &self,
         cell: Option<crate::cell::Cell>,
         stdin: Option<String>,
-        timeout: Duration,
+        initial_requirements: Option<Requirements>,
+        deadline: Instant,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<SendResponse, SendFailure> {
@@ -1368,7 +1647,19 @@ impl Client {
         let generation = self.admit()?;
         let preparation = self.admit_send()?;
         let (evaluation, wait_claim) = match cell {
-            Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
+            Some(cell) => {
+                let mut prelude = None;
+                self.start_evaluation_admitted(
+                    cell,
+                    stdin,
+                    generation,
+                    transcript,
+                    call_id,
+                    None,
+                    &mut prelude,
+                    initial_requirements,
+                )?
+            }
             None => match self.current_evaluation()? {
                 Some(active) => {
                     self.ensure_ordinary_generation(&generation)?;
@@ -1385,6 +1676,38 @@ impl Client {
                 }
                 None => {
                     self.ensure_ordinary_generation(&generation)?;
+                    let mut startup = self.0.startup.subscribe();
+                    let mut stdin = stdin;
+                    #[cfg(unix)]
+                    if !self.startup_finished()
+                        && let Some(input) = stdin.take()
+                    {
+                        self.queue_startup_stdin(&generation, input)?;
+                    }
+                    loop {
+                        if let Some(result) = startup.borrow_and_update().as_ref() {
+                            result.clone()?;
+                            break;
+                        }
+                        #[cfg(unix)]
+                        if let Some(worker) = self.worker_handle()? {
+                            let snapshot = worker.startup_snapshot(&self.0.output)?;
+                            if snapshot.input_requested {
+                                return Ok(SendResponse::InputRequested(
+                                    self.0.output.drain_through(snapshot.cut),
+                                ));
+                            }
+                        }
+                        if tokio::time::timeout(
+                            deadline.saturating_duration_since(Instant::now()),
+                            startup.changed(),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            return Ok(SendResponse::ReplacementStarting(self.0.output.take()));
+                        }
+                    }
                     if let Some(stdin) = stdin
                         && let Err(failure) = self.write_idle_stdin(stdin, generation.clone()).await
                     {
@@ -1412,7 +1735,12 @@ impl Client {
         drop(operation);
 
         Ok(send_response_from_wait(
-            evaluation.wait(wait_claim, timeout).await?,
+            evaluation
+                .wait(
+                    wait_claim,
+                    deadline.saturating_duration_since(Instant::now()),
+                )
+                .await?,
         ))
     }
 
@@ -1433,6 +1761,7 @@ impl Client {
             call_id,
             None,
             &mut control_prelude,
+            None,
         )
     }
 
@@ -1446,6 +1775,7 @@ impl Client {
         call_id: Option<u64>,
         control: Option<&ControlledSendAdmission>,
         control_prelude: &mut Option<Response>,
+        initial_requirements: Option<Requirements>,
     ) -> Result<(Arc<Evaluation>, evaluation::WaitClaim), String> {
         self.ensure_evaluation_admission(&generation, control)?;
 
@@ -1475,13 +1805,20 @@ impl Client {
         *active = Some(ActiveEvaluation {
             generation: generation.clone(),
             evaluation: evaluation.clone(),
+            inherits_startup: initial_requirements.is_none(),
         });
         drop(active);
+        #[cfg(unix)]
+        if initial_requirements.is_none()
+            && let Some(worker) = self.worker_handle()?
+        {
+            worker.adopt_startup_evaluation(&evaluation)?;
+        }
 
         let client = self.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, evaluator, generation, startup);
+            client.evaluate_blocking(cell, evaluator, generation, startup, initial_requirements);
         });
         let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
@@ -1592,6 +1929,9 @@ impl Client {
                 .to_string()
                 .into());
         }
+        if self.take_initialization_failure(generation)? {
+            return Ok(SendResponse::Failed(self.0.output.take()));
+        }
         drop(evaluation);
         self.ensure_generation(generation)?;
 
@@ -1638,10 +1978,43 @@ impl Client {
         evaluation: Arc<Evaluation>,
         generation: WorkerGeneration,
         startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
+        initial_requirements: Option<Requirements>,
     ) {
         let result = (|| {
+            tokio::runtime::Handle::current()
+                .block_on(self.ready())
+                .map_err(SendFailure::from)?;
             self.ensure_generation(&generation)
                 .map_err(SendFailure::from)?;
+            self.validate_cell(&cell)?;
+            if self.take_initialization_failure(&generation)? {
+                evaluation.complete_cell(Ok(()));
+                return Ok(());
+            }
+            if let Some(requirements) = initial_requirements {
+                self.validate_requirements(&requirements)?;
+                let preparation = self.admit_preparation()?;
+                match self.prepare_admitted(
+                    requirements,
+                    &generation,
+                    &preparation,
+                    PreparationIntent::StartupEvaluation,
+                )? {
+                    PrepareResult::Prepared => {}
+                    PrepareResult::RestartRequired => {
+                        return Err("requirements require session restart; cell was not run"
+                            .to_string()
+                            .into());
+                    }
+                    PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                        let mut response = response;
+                        response.recover_to(self.0.output.clone());
+                        return Err("requirements were not prepared; cell was not run"
+                            .to_string()
+                            .into());
+                    }
+                }
+            }
             let mut worker = self
                 .0
                 .worker
@@ -1659,6 +2032,47 @@ impl Client {
         if let Err(failure) = result {
             evaluation.complete_cell(Err(failure));
         }
+    }
+
+    fn validate_cell(&self, cell: &crate::cell::Cell) -> Result<(), String> {
+        if self.python_only() && matches!(cell.language, crate::cell::Language::R) {
+            return Err("R cells are unavailable in Python sessions without R".into());
+        }
+        if !self.python_available() && matches!(cell.language, crate::cell::Language::Python) {
+            return Err("Python cells are unavailable: the target has no Python runtime".into());
+        }
+        Ok(())
+    }
+
+    fn validate_requirements(&self, requirements: &Requirements) -> Result<(), String> {
+        if let Some(target) = &self.0.target
+            && !target.is_ssh()
+        {
+            let source = if matches!(target, crate::target_session::Session::Docker(..)) {
+                "image"
+            } else {
+                "template"
+            };
+            return Err(format!(
+                "dynamic environment resolution is disabled for {} targets; install packages in the {source} and start a new server session",
+                target.protocol().0
+            ));
+        }
+        if self.python_only() {
+            if !self.python_preparation() {
+                if !requirements.duckdb.is_empty() {
+                    return Err("DuckDB extension preparation is unavailable with a user-selected Python environment; install extensions before starting the session".into());
+                }
+                return Err(crate::local_runtime::PREPARATION_DISABLED.into());
+            }
+            if !requirements.r.is_empty() {
+                return Err("R requirements are unavailable in Python sessions without R".into());
+            }
+        }
+        if !self.dynamic_resolution() && !self.python_preparation() {
+            return Err("dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console".into());
+        }
+        Ok(())
     }
 
     fn evaluate_with_worker(
@@ -1690,6 +2104,7 @@ impl Client {
         let WorkerState::Running(running) = worker else {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
+        self.0.unused_default.store(false, Ordering::Release);
         let result = running
             .evaluate(cell, evaluation.clone(), capture_idle_prelude)
             .map_err(|message| evaluation.classify_failure(message));

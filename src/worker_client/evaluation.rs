@@ -341,8 +341,12 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.stdin.is_some() {
-            return Err("worker stdin was already attached to this evaluation".to_string());
+        if let Some(attached) = &state.stdin {
+            return if attached.is(&writer) {
+                Ok(())
+            } else {
+                Err("worker stdin belongs to a different worker".to_string())
+            };
         }
         if !state.pending_stdin.is_empty() {
             writer.send(std::mem::take(&mut state.pending_stdin))?;
@@ -398,7 +402,7 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if state.input_report_at.is_some() {
-            return Err("worker evaluation already has an outstanding input request".to_string());
+            return Ok(());
         }
         let grace = if state.pending_stdin.is_empty() {
             Duration::ZERO

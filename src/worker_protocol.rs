@@ -29,6 +29,9 @@ pub(crate) enum RResolutionFailureKind {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
+    Initialize {
+        languages: Vec<Language>,
+    },
     Evaluate {
         language: Language,
         source: String,
@@ -153,6 +156,9 @@ pub(crate) enum ConsoleChannel {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum WorkerMessage {
+    Initialized {
+        completed: bool,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     ConsoleOutput {

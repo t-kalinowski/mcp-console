@@ -8,7 +8,7 @@ use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, plat
 
 /// Identifies work admitted against one worker without exposing an epoch counter.
 #[derive(Clone)]
-pub(super) struct WorkerGeneration(Arc<()>);
+pub(crate) struct WorkerGeneration(Arc<()>);
 
 impl WorkerGeneration {
     fn new() -> Self {
@@ -37,7 +37,7 @@ struct WorkerStartup {
 }
 
 /// Keeps startup interruptible before and between its resolver processes.
-pub(super) struct WorkerStartupAdmission {
+pub(crate) struct WorkerStartupAdmission {
     client: Client,
     generation: WorkerGeneration,
 }
@@ -95,6 +95,17 @@ impl LifecycleControl {
             return Err("worker startup interrupted".to_string());
         }
         Ok(())
+    }
+
+    pub(super) fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {
+        match self.state {
+            LifecycleState::Ready if self.generation.is(expected) => Ok(()),
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
     }
 
     fn startup_interrupted(&self) -> bool {
@@ -300,6 +311,55 @@ impl Drop for WorkerStartupAdmission {
 }
 
 impl Client {
+    #[cfg(unix)]
+    pub(super) fn queue_startup_stdin(
+        &self,
+        generation: &WorkerGeneration,
+        input: String,
+    ) -> Result<(), String> {
+        if input.is_empty() {
+            return Ok(());
+        }
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        lifecycle.ensure_startup(generation)?;
+        if let Some(worker) = &lifecycle.processes.worker {
+            self.0
+                .unused_default
+                .store(false, std::sync::atomic::Ordering::Release);
+            worker.write_startup_stdin(input)
+        } else {
+            self.0
+                .startup_stdin
+                .lock()
+                .map_err(|_| "startup stdin lock poisoned")?
+                .push_str(&input);
+            Ok(())
+        }
+    }
+    pub(super) fn worker_handle(&self) -> Result<Option<platform::WorkerShutdownHandle>, String> {
+        Ok(self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?
+            .processes
+            .worker
+            .clone())
+    }
+    pub(crate) async fn cancel_startup(&self, deadline: Instant) -> Result<(), String> {
+        let processes = self.close_lifecycle(deadline)?.unwrap_or_default();
+        tokio::task::spawn_blocking(move || {
+            let (allowance, errors) = processes.request_shutdown(deadline);
+            processes.finish_shutdown(deadline, allowance, errors)
+        })
+        .await
+        .map_err(|error| format!("startup shutdown task failed: {error}"))?
+    }
+
     pub(super) fn has_live_worker(&self) -> Result<bool, String> {
         Ok(self
             .0
@@ -311,7 +371,7 @@ impl Client {
             .is_some())
     }
 
-    pub(super) fn reserve_worker_startup(
+    pub(crate) fn reserve_worker_startup(
         &self,
         generation: &WorkerGeneration,
     ) -> Result<Option<Arc<WorkerStartupAdmission>>, String> {
@@ -342,7 +402,7 @@ impl Client {
         Ok(Some(owner))
     }
 
-    pub(super) fn ensure_startup(&self, generation: &WorkerGeneration) -> Result<(), String> {
+    pub(crate) fn ensure_startup(&self, generation: &WorkerGeneration) -> Result<(), String> {
         self.0
             .lifecycle
             .lock()
@@ -627,6 +687,11 @@ impl Client {
         self.publish_requirements(environment);
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
+        self.0
+            .startup_stdin
+            .lock()
+            .map_err(|_| "startup stdin lock poisoned")?
+            .clear();
         Ok(RestartContext {
             processes,
             deadline,
@@ -816,7 +881,7 @@ impl Client {
         worker.finish_retirement()
     }
 
-    pub(super) fn admit(&self) -> Result<WorkerGeneration, String> {
+    pub(crate) fn admit(&self) -> Result<WorkerGeneration, String> {
         let lifecycle = self
             .0
             .lifecycle
@@ -883,14 +948,7 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(expected) => Ok(()),
-            LifecycleState::Ready => {
-                Err("session restarted before the operation began".to_string())
-            }
-            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
-            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
-        }
+        lifecycle.ensure_generation(expected)
     }
 
     pub(super) fn ensure_ordinary_generation(
@@ -1001,6 +1059,11 @@ impl Client {
             .transpose()?;
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::Commit);
+        self.0
+            .startup_stdin
+            .lock()
+            .map_err(|_| "startup stdin lock poisoned")?
+            .clear();
         Ok(RestartContext {
             processes,
             deadline,
@@ -1103,6 +1166,23 @@ impl Client {
                     } else {
                         lifecycle.processes.worker = Some(handle.clone());
                         lifecycle.startup = None;
+                        #[cfg(unix)]
+                        {
+                            let input = std::mem::take(
+                                &mut *self
+                                    .0
+                                    .startup_stdin
+                                    .lock()
+                                    .map_err(|_| "startup stdin lock poisoned")?,
+                            );
+                            if !input.is_empty() {
+                                self.0
+                                    .unused_default
+                                    .store(false, std::sync::atomic::Ordering::Release);
+                                handle.write_startup_stdin(input)?;
+                            }
+                        }
+                        self.0.startup.send_modify(|_| {});
                         return Ok(());
                     }
                 }
@@ -1173,7 +1253,7 @@ impl Client {
         Ok(())
     }
 
-    pub(super) fn register_resolver_stop_handle(
+    pub(crate) fn register_resolver_stop_handle(
         &self,
         expected: &WorkerGeneration,
         handle: crate::resolver::ResolverStopHandle,
