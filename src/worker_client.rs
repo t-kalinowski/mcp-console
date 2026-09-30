@@ -41,6 +41,7 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "duckdb",
     "arrow",
     "nanoarrow",
+    "yyjsonr",
 ];
 
 const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json", "sqlite"];

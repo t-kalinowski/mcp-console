@@ -47,6 +47,7 @@ def test_empty_declaration_and_round_trip(
     assert startup["prepared"] is False
     assert startup["requirements"]["python"] == ["numpy", "pandas"]
     assert "tidyverse" in startup["requirements"]["r"]
+    assert "yyjsonr" in startup["requirements"]["r"]
     assert startup["runtime_requirements"]["python"] == []
     client.send(requirements=dict(startup["requirements"], action="set"))
     assert inspect(client) == startup

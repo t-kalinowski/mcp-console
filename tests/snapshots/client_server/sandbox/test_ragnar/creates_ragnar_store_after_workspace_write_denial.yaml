@@ -21,10 +21,11 @@ result:
   content:
     - type: text
       text: |
-        Error in file(con, "w") : cannot open the connection
-        In addition: Warning message:
-        In file(con, "w") :
-          cannot open file 'knowledge.ragnar.duckdb': Operation not permitted
+        Error in `dbConnect()`:
+        ! IO Error: Cannot open file "<workspace>/knowledge.ragnar.duckdb": Operation not permitted
+        ℹ Context: rapi_startup
+        ℹ Error type: IO
+        Run `rlang::last_trace()` to see where the error occurred.
   isError: false
 ---
 send:

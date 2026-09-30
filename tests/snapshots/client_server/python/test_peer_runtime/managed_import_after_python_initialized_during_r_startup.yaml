@@ -95,7 +95,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -137,6 +138,7 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
@@ -189,7 +191,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -231,6 +234,7 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
