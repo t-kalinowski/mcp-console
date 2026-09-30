@@ -76,11 +76,15 @@ def test_records_python_without_r_dependencies(
             transcript = client.finish()
         session = next((workspace / ".agents/console/sessions").iterdir())
         quarto = (session / "transcript.qmd").read_text()
-        assert "knitr:" not in quarto and "\nir:" not in quarto, quarto
-        assert "eval: false" in quarto, quarto
+        assert "knitr:\n  opts_knit:\n    root.dir:" in quarto, quarto
+        assert "\nir:\n  isolated: true\n  packages: []\n" in quarto, quarto
+        assert "execute:\n  eval: false" not in quarto, quarto
+        assert "# Run `ir render transcript.qmd` in a prepared environment" in quarto
+        assert "# IR rendering requires R on the render host" in quarto
         assert "```{python}" in quarto, quarto
         return TranscriptWithCompanions(
-            transcript=transcript, companions={"qmd": quarto}
+            transcript=transcript,
+            companions={"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")},
         )
 
 

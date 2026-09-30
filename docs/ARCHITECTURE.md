@@ -712,6 +712,7 @@ uv tool run --from r-lib-ir ir render transcript.qmd
 ```
 
 When `ir` is installed on `PATH`, `ir render transcript.qmd` is equivalent.
+IR rendering requires R on the render host, including for documents recorded in a Console session without R.
 
 Each admitted evaluation also owns `outputs/call-NNNNNN.log` beneath the run directory.
 The server attaches that file to the ordered output tape at the same boundary as the worker operation, appends console text and direct stdout and stderr before preview collection omits the middle, and detaches it at the evaluation's completion or restart cut.

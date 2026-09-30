@@ -1174,8 +1174,8 @@ def test_records_managed_sql_cells(
         assert '"duckdb": [\n      "json"\n' in markdown
         assert "[prepared]" in markdown
         assert "Requirements selected" not in markdown
-        assert "execute:\n  eval: false" in quarto
-        assert "\nknitr:" not in quarto and "\nir:" not in quarto
+        assert "execute:\n  eval: false" not in quarto
+        assert "\nknitr:" in quarto and "\nir:" in quarto
         assert "```sql\nSELECT 42 AS recorded\n```" in markdown
         assert "```{sql}\nSELECT 42 AS recorded\n```" in quarto
         assert (
@@ -1186,7 +1186,7 @@ def test_records_managed_sql_cells(
 """
             in quarto
         )
-        assert "mcp-console:\n  python-packages:\n" in quarto
+        assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         return TranscriptWithCompanions(
             records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
         )

@@ -208,8 +208,10 @@ def sql_first(binary: Path, provider: str) -> list:
         session = next(root.glob(".agents/console/sessions/*"))
         quarto = (session / "transcript.qmd").read_text()
         assert "ir render" not in quarto, quarto
-        assert "Prepare a document engine separately" in quarto, quarto
-        assert "execute:\n  eval: false" in quarto, quarto
+        assert "Execute these cells in the preinstalled target environment" in quarto, (
+            quarto
+        )
+        assert "execute:\n  eval: false" not in quarto, quarto
         assert "\nknitr:" not in quarto and "\nir:" not in quarto, quarto
         assert "Files and environments remain remote" in quarto, quarto
         result, diagnostics = client.finish_with_standard_error()
