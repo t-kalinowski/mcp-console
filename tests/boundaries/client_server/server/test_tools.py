@@ -131,10 +131,13 @@ def test_initializes_and_lists_tools(
     companions["ssh.yaml"] = _initializes_and_lists_tools(
         binary, execution, bare=True, workspace_profile=True, ssh=True
     )
-    return TranscriptWithCompanions(
-        _initializes_and_lists_tools(binary, execution),
-        companions,
-    )
+    baseline = _initializes_and_lists_tools(binary, execution)
+    # Runtime discovery must not change the configured public interface.
+    for name in ("bare.yaml", "python-only.yaml", "python-managed.yaml"):
+        assert (
+            companions[name][2]["result"]["tools"] == baseline[2]["result"]["tools"]
+        ), name
+    return TranscriptWithCompanions(baseline, companions)
 
 
 def _initializes_and_lists_tools(
@@ -213,28 +216,24 @@ def _initializes_and_lists_tools(
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
             description = send["description"]
-            assert description.index("consider DuckDB SQL first") < description.index(
-                "Send one complete"
-            )
-            assert "CSV, Parquet, JSON, and JSONL directly" in description
-            assert "JSON support is built in" in description
-            assert (
-                "bounded table previews that abbreviate long text cells" in description
-            )
-            assert "attach the database read-only" in description
-            assert ("Managed defaults include SQLite" in description) == (
-                not custom and (python_managed or not (bare or python_only))
-            )
             if custom:
+                assert "custom-worker" in description
+                assert "does not supply built-in runtime packages" in description
+                assert "defaults include SQLite" not in description
+            else:
+                assert description.index(
+                    "consider DuckDB SQL first"
+                ) < description.index("Send one complete")
+                assert "CSV, Parquet, JSON, and JSONL directly" in description
+                assert "JSON support is built in" in description
                 assert (
-                    'requirements={"action":"add","duckdb":["sqlite"]}' in description
+                    "bounded table previews that abbreviate long text cells"
+                    in description
                 )
-            assert (
-                "Use R for vectorized data and string operations" in description
-            ) == (not python_only)
-            assert (
-                'requirements={"action":"add","duckdb":["fts"]}' in description
-            ) == (python_managed or not (bare or python_only))
+                assert "attach the database read-only" in description
+                assert "managed defaults include SQLite when" in description
+                assert "Use R for vectorized data and string operations" in description
+                assert 'requirements={"action":"add","duckdb":["fts"]}' in description
             if proxy:
                 assert (
                     "network subject to the launcher's proxy settings"
@@ -252,25 +251,9 @@ def _initializes_and_lists_tools(
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
-                assert "r" not in send["inputSchema"]["properties"]
-                assert "sql" in send["inputSchema"]["properties"]
-            if python_managed:
-                assert set(
-                    send["inputSchema"]["properties"]["requirements"]["properties"]
-                ) == {"python", "duckdb", "action", "python_version", "exclude_newer"}
-                return client.finish()
-            if bare or python_only:
-                assert send["inputSchema"]["properties"]["requirements"]["properties"][
-                    "action"
-                ]["enum"] == ["get"]
-                transcript = client.finish()
-                if ssh:
-                    transcript = json.loads(
-                        json.dumps(transcript).replace(
-                            str(Path(library).resolve()), "<ssh-test>"
-                        )
-                    )
-                return transcript
+                assert {"r", "python", "sql"} <= send["inputSchema"][
+                    "properties"
+                ].keys()
             send_requirements = send["inputSchema"]["properties"]["requirements"]
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
@@ -297,7 +280,14 @@ def _initializes_and_lists_tools(
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
-            return client.finish()
+            transcript = client.finish()
+            if ssh:
+                transcript = json.loads(
+                    json.dumps(transcript).replace(
+                        str(Path(library).resolve()), "<ssh-test>"
+                    )
+                )
+            return transcript
 
 
 @requires(SANDBOX)

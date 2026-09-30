@@ -166,7 +166,7 @@ def sql_first(binary: Path, provider: str) -> list:
         client.initialize_and_list_tools()
         tool = client.transcript[-1]["result"]["tools"][0]
         fields = tool["inputSchema"]["properties"]
-        assert "r" not in fields
+        assert {"r", "python", "sql"} <= fields.keys()
         assert fields["requirements"]["properties"]["action"]["enum"] == ["get"]
         assert "Console-owned" in tool["description"]
         assert "preinstalled" in tool["description"]

@@ -113,7 +113,7 @@ def _preinstalled_remote_runtime(
                 send = client.transcript[-1]["result"]["tools"][0]
                 assert send["inputSchema"]["properties"]["requirements"]["properties"][
                     "action"
-                ]["enum"] == ["get"], send
+                ]["enum"] == ["get", "add", "set", "reset"], send
                 assert "console-test" in send["description"], send
                 client.send(
                     # fmt: r

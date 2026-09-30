@@ -290,7 +290,12 @@ def test_callable_tools_follow_connected_server_fields(
                     if label == "bare":
                         assert console.send_tool.input_schema["properties"][
                             "requirements"
-                        ]["properties"]["action"]["enum"] == ["get"]
+                        ]["properties"]["action"]["enum"] == [
+                            "get",
+                            "add",
+                            "set",
+                            "reset",
+                        ]
                     output = await exercise_tools(console, source, expected_fields)
                 with MCPConsole(**settings) as console:
                     assert (

@@ -1,108 +1,81 @@
-//! Tool prose derived from effective placement and enforcement metadata.
-use crate::settings::SandboxSettings;
+//! Tool prose derived only from captured launch configuration.
+use crate::settings::{Compute, SandboxSettings, Target};
 use serde_json::{Map, Value};
 
-/// Prepared dependencies are an image capability for either runtime family.
+pub(super) fn configure_custom(description: &mut String, properties: &mut Map<String, Value>) {
+    let (_, remaining) = description
+        .split_once("\n\nSend one complete")
+        .expect("send description");
+    let switching = if ["r", "python", "sql"]
+        .into_iter()
+        .filter(|field| properties.contains_key(*field))
+        .count()
+        > 1
+    {
+        " Switch languages when useful, using capabilities supplied by the worker."
+    } else {
+        ""
+    };
+    *description = format!(
+        "Persistent custom-worker workbench. Language fields describe the configured interface; supported languages, evaluation, display, SQL, and cross-language sharing depend on the selected worker. Console does not supply built-in runtime packages, automatic import hooks, or a default SQL connection to custom workers. Managed requirements require execution-host resolver support and compatible worker preparation callbacks; Python requirements are unavailable with a custom worker.{switching}\n\nSend one complete{remaining}"
+    );
+    for (field, text) in [
+        (
+            "r",
+            "One complete R cell, if supported by the custom worker. Evaluation, display, packages, graphics, and bridges are supplied by that worker. Omit for polling or stdin-only calls.",
+        ),
+        (
+            "python",
+            "One complete Python cell, if supported by the custom worker. Evaluation, display, packages, graphics, and bridges are supplied by that worker. Omit for polling or stdin-only calls.",
+        ),
+        (
+            "sql",
+            "One complete SQL cell, if supported by the custom worker. Its selected connection supplies the dialect, packages, and result display. Console does not create a default database for a custom worker. Omit for polling or stdin-only calls.",
+        ),
+    ] {
+        if let Some(property) = properties.get_mut(field) {
+            property["description"] = text.into();
+        }
+    }
+}
+
+/// Prepared-target restrictions are known from configuration, independent of the probe.
 pub(super) fn configure_prepared(
     description: &mut String,
     properties: &mut Map<String, Value>,
-    kind: &str,
-    python_only: bool,
+    source: &str,
 ) {
-    let python_available = properties.contains_key("python");
-    let source = if kind == "docker" {
-        "image"
-    } else {
-        "template"
-    };
-    *description = description
-        .replace(
-            "Persistent local",
-            if kind == "docker" {
-                "Persistent Docker"
-            } else {
-                "Persistent Docker Sandbox"
-            },
-        )
-        .replace("Managed SQL uses", "SQL uses")
-        .replace(
-            "managed DuckDB SQL",
-            "SQL through the Console-owned DuckDB catalog",
-        )
-        .replace("managed DuckDB", "the Console-owned DuckDB catalog");
-    if !python_available {
-        *description = description
-            .replace("R, Python, and SQL", "R and SQL")
-            .replace(
-                "Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and ",
-                "Reuse live state when switching: ",
-            )
-            .replace("R or Python can select", "R can select")
-            .replace("`r`, `python`, or `sql` cell", "`r` or `sql` cell");
-    }
+    *description = description.replace("managed DuckDB", "Console-owned DuckDB").replace(
+        "Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages.",
+        "Dependency preparation is unavailable on this target.",
+    ).replace(
+        r#"When preparation is supported, prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#,
+        "",
+    );
     description.push_str(&format!(
-        "\n\nRuntimes were inspected inside the captured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
+        "\n\nRuntime availability depends on the configured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
     ));
-    if !python_only {
-        for (field, text) in [
-            (
-                "r",
-                "One complete R cell in persistent state. Expressions display automatically; R plots return as PNG images. Read Python globals through py$name. The Console-owned DuckDB catalog can query R global data frames by name. console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable.",
-            ),
-            (
-                "python",
-                "One complete Python cell in persistent state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Missing imports report ordinary Python errors; automatic package installation is unavailable.",
-            ),
-            (
-                "control",
-                "Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable.",
-            ),
-        ] {
-            if let Some(property) = properties.get_mut(field) {
-                property["description"] = text.into();
-            }
-        }
-    }
-    for field in ["r", "python"] {
+    for (field, text) in [
+        (
+            "r",
+            "One complete R cell when R is available. Expressions display automatically; R plots return as PNG images. When both runtimes and their bridge are available, read Python globals through py$name. R-owned DuckDB can query R global data frames by name. sql_connection() returns the R-owned connection; console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable. Omit for polling or stdin-only calls.",
+        ),
+        (
+            "python",
+            "One complete Python cell when Python is available. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When both runtimes and their bridge are available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Without R, sql_connection() returns the active Python-owned connection. Missing imports report ordinary Python errors; automatic package installation is unavailable. Omit for polling or stdin-only calls.",
+        ),
+        (
+            "control",
+            "Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the 100-millisecond interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable.",
+        ),
+        (
+            "sql",
+            "One complete SQL cell through the active R DBI or Python DB-API connection, depending on available runtimes and the selected connection. Console opens its in-memory DuckDB catalog lazily when the adapter and DuckDB are preinstalled. R-owned DuckDB can query R global data frames by name; without R, Python data frames require explicit registration with sql_connection().register(name, frame). console_sql_connection(connection) selects a user-owned connection; console_sql_connection(None) in Python or console_sql_connection(NULL) in R restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Use the selected driver's SQL dialect; DuckDB CLI dot commands are unsupported. Extensions must be preinstalled; Console does not install extensions or resolve packages. Worker replacement resets the catalog. Omit for polling or stdin-only calls.",
+        ),
+    ] {
         if let Some(property) = properties.get_mut(field) {
-            let text = property["description"]
-                .as_str()
-                .expect("language description");
-            let text = if python_available {
-                text.to_owned()
-            } else {
-                text.replace(" Read Python globals through py$name.", "")
-            };
             property["description"] =
                 format!("{text} Dependencies must be preinstalled in the {source}.").into();
-        }
-    }
-    if let Some(property) = properties.get_mut("sql") {
-        let (connection, frames, restore) = if python_only {
-            (
-                "Python DB-API",
-                "Python data frames require explicit registration with sql_connection().register(name, frame).",
-                "console_sql_connection(None)",
-            )
-        } else if python_available {
-            (
-                "R DBI or Python DB-API",
-                "The default catalog can query R global data frames by name; Python data frames require explicit registration with sql_connection().register(name, frame).",
-                "console_sql_connection(None) in Python or console_sql_connection(NULL) in R",
-            )
-        } else {
-            (
-                "R DBI",
-                "The default catalog can query R global data frames by name.",
-                "console_sql_connection(NULL) in R",
-            )
-        };
-        property["description"] = format!(
-            "One complete SQL cell through the active {connection} connection. Console opens its in-memory DuckDB catalog lazily when the adapter and DuckDB are preinstalled in the {source}. {frames} console_sql_connection(connection) selects a user-owned connection, and {restore} restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Extensions load from the {source}'s cache; Console does not install extensions or resolve packages. Spill files and stored secrets use private disposable worker storage. Worker replacement resets the catalog."
-        ).into();
-        if python_only {
-            let text = property["description"].as_str().expect("SQL description");
-            property["description"] = format!("{text} Missing DuckDB leaves Python and custom connections usable. R cells are unavailable.").into();
         }
     }
 }
@@ -110,15 +83,17 @@ pub(super) fn configure_prepared(
 pub(super) fn description(
     policy: &SandboxSettings,
     no_sandbox: bool,
-    target: Option<&Value>,
+    target: Option<&Target>,
 ) -> String {
-    let kind = target
-        .and_then(|target| target.pointer("/compute/kind"))
-        .and_then(Value::as_str);
-    let compute_enforcement = target
-        .and_then(|target| target.get("provider"))
-        .and_then(Value::as_str)
-        == Some("compute");
+    let kind = target.map(|target| match &target.compute {
+        Compute::Host {} => "host",
+        Compute::Docker(_) => "docker",
+        Compute::DockerSandbox(_) => "docker_sandbox",
+    });
+    // SBX only accepts compute enforcement; settings validation rejects other providers.
+    let remote = target.is_some_and(|target| {
+        !target.is_local_host() && matches!(target.compute, Compute::Host {})
+    });
 
     let files = match kind {
         Some("docker") => "container files",
@@ -169,23 +144,36 @@ pub(super) fn description(
     };
 
     let mut description = match kind {
-        Some("docker_sandbox") if compute_enforcement => "Evaluated code runs inside a Console-owned Docker Sandbox microVM, enforced by Docker Sandboxes and its current inherited machine/organization policy and host integrations. Both relay and worker run in the VM. Native filesystem, network, proxy, and metadata defaults do not apply. Writable shares can expose .git, .agents, and controller records. Provider rules can change during the session. --no-sandbox retains the microVM and cannot bypass Docker policy.".to_string(),
+        Some("docker_sandbox") => "Evaluated code runs inside a Console-owned Docker Sandbox microVM, enforced by Docker Sandboxes and its current inherited machine/organization policy and host integrations. Both relay and worker run in the VM. Native filesystem, network, proxy, and metadata defaults do not apply. Writable shares can expose .git, .agents, and controller records. Provider rules can change during the session. --no-sandbox retains the microVM and cannot bypass Docker policy.".to_string(),
         Some("docker") if no_sandbox => "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.".to_string(),
-        _ if no_sandbox => format!("Evaluated code runs without a sandbox, with {} permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.", if target.is_some() { "the remote account's" } else { "the server's" }),
+        _ if no_sandbox => format!("Evaluated code runs without a sandbox, with {} permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.", if remote { "the remote account's" } else { "the server's" }),
         _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."),
     };
     if let Some(target) = target {
-        description.push_str(&format!("\n\nExecution target: {target}. "));
+        // Only explicit placement fields belong in presentation, never discovered identities
+        // or the command/environment/policy payload used to launch the target.
+        if remote {
+            let host = target.host();
+            description.push_str(&format!("\n\nConfigured SSH host: {host:?}. "));
+        } else {
+            description.push_str("\n\nConfigured local transport. ");
+        }
+        if !target.is_local_host() {
+            description.push_str(&format!(
+                "Configured execution workspace: {:?}. ",
+                target.workspace
+            ));
+        }
         match kind {
             Some("docker" | "docker_sandbox") => {
                 let (identity, storage) = if kind == Some("docker_sandbox") { ("template", "VM") } else { ("image", "container") };
-                let packages = if target.pointer("/runtime/kind").and_then(Value::as_str) == Some("python") { "Python and SQL" } else { "R, Python, and SQL" };
-                description.push_str(&format!("Each generation uses the captured immutable {identity} identity and runtime selection. Use preinstalled {packages} packages; dynamic package preparation is disabled even if ir or uv is installed. Records, output spools, and returned images are written by the controller beneath its existing project .agents/console directory or its Console home directory; declared shares can expose them to the worker. Restart discards files stored only in the {storage} and preserves shared files. Quarto exports execute recorded cells when rendered; prepare the target environment and files first."));
+                description.push_str(&format!("Startup captures an immutable {identity} identity and runtime selection for subsequent generations. Use preinstalled runtime packages; dynamic package preparation is disabled even if ir or uv is installed. Records, output spools, and returned images are written by the controller beneath its existing project .agents/console directory or its Console home directory; declared shares can expose them to the worker. Restart discards files stored only in the {storage} and preserves shared files. Quarto exports execute recorded cells when rendered; prepare the target environment and files first."));
                 if kind == Some("docker") {
                     description.push_str(" Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode.");
                 }
             }
-            _ => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
+            _ if remote => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
+            _ => {},
         }
     }
     description
