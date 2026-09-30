@@ -108,51 +108,54 @@ result:
           python:
             description: >-
               One complete Python cell in persistent state. The final expression
-              displays automatically. Use input() for managed stdin; Matplotlib plots
-              return as PNG images when installed. sql_connection() returns the active
-              SQL connection. An idle worker can add new requirements.python
-              distributions and requirements.duckdb extensions before this cell
-              without replacement. A reached missing import can prepare its inferred
-              distribution during the cell. Changes to declared distributions,
-              constraints, and declaration replacements require control: restart. R
-              integration is unavailable. Use timeout_ms: 0 then poll for background
-              execution.
+              displays automatically. Use input() for managed stdin; Matplotlib
+              plots return as PNG images when installed. sql_connection()
+              returns the active SQL connection. An idle worker can add new
+              requirements.python distributions and requirements.duckdb
+              extensions before this cell without replacement. A reached missing
+              import can prepare its inferred distribution during the cell.
+              Changes to declared distributions, constraints, and declaration
+              replacements require control: restart. R integration is
+              unavailable. Use timeout_ms: 0 then poll for background execution.
             type:
               - string
               - "null"
           sql:
             description: >-
               One complete SQL cell through the active Python DB-API connection.
-              Managed DuckDB opens lazily on the first SQL cell or sql_connection()
-              call and retains an in-memory catalog until worker replacement. Python
-              data frames require explicit registration through
-              sql_connection().register(name, frame); automatic frame scanning is
-              disabled. console_sql_connection(connection) selects a user-owned DB-API
-              connection, and console_sql_connection(None) restores managed DuckDB
-              without discarding its catalog. A query with columns returns a bounded
-              preview. SQL errors leave the Python session usable. Idle
-              requirements.python additions prepare new distributions before this
-              cell; requirements.duckdb prepares extensions before startup, during
-              restart, or on an idle worker. LOAD runs later in the worker. SQL never
-              installs extensions automatically through Console. If DuckDB is
-              unavailable, add duckdb with requirements.python or select a custom
-              connection. R cells are unavailable.
+              Managed DuckDB opens lazily on the first SQL cell or
+              sql_connection() call and retains an in-memory catalog until
+              worker replacement. Python data frames require explicit
+              registration through sql_connection().register(name, frame);
+              automatic frame scanning is disabled.
+              console_sql_connection(connection) selects a user-owned DB-API
+              connection, and console_sql_connection(None) restores managed
+              DuckDB without discarding its catalog. A query with columns
+              returns a bounded preview. SQL errors leave the Python session
+              usable. Idle requirements.python additions prepare new
+              distributions before this cell; requirements.duckdb prepares
+              extensions before startup, during restart, or on an idle worker.
+              LOAD runs later in the worker. SQL never installs extensions
+              automatically through Console. If DuckDB is unavailable, add
+              duckdb with requirements.python or select a custom connection. R
+              cells are unavailable.
             type:
               - string
               - "null"
           control:
             description: >-
-              Applies lifecycle control alone or before compatible same-call fields.
-              interrupt requests SIGINT from the live worker and preserves Python
-              state; during preparation it interrupts the host resolver. Same-call
-              stdin is queued before the interrupt grace. Requirements with interrupt
-              are rejected before signaling or queuing input. restart discards objects
-              and unread stdin, then sends same-call stdin and code only to the
-              replacement. The complete Python candidate is resolved and inspected
-              before its DuckDB extensions are prepared. Validation and host
-              preparation failures preserve the current worker and retained
-              requirements; same-call code and stdin are not sent. A live activation
-              failure may require restart. Plain restart reuses the accepted
+              Applies lifecycle control alone or before compatible same-call
+              fields. interrupt requests SIGINT from the live worker and
+              preserves Python state; during preparation it interrupts the host
+              resolver. Same-call stdin is queued before the interrupt grace.
+              Requirements with interrupt are rejected before signaling or
+              queuing input. restart discards objects and unread stdin, then
+              sends same-call stdin and code only to the replacement. The
+              complete Python candidate is resolved and inspected before its
+              DuckDB extensions are prepared. Validation and host preparation
+              failures preserve the current worker and retained requirements;
+              same-call code and stdin are not sent. A live activation failure
+              may require restart. Plain restart reuses the accepted
               environment.
             type: string
             enum:
@@ -160,23 +163,24 @@ result:
               - restart
           requirements:
             description: >-
-              Inspect with action=get; add named Python packages and DuckDB extensions
-              with action=add (the default), replace the declaration with action=set,
-              or restore defaults with action=reset. Applies to a Console-managed uv
-              environment. Supported before the first worker starts, alone or with a
-              Python or SQL cell, and with control: restart, with or without code. An
-              idle worker accepts new Python distributions and DuckDB extensions
-              together without replacement. Already-retained declarations are no-ops.
-              Additions accumulate from the initial NumPy, pandas, and DuckDB
-              declaration with the sqlite extension. Changes to an already-declared
-              distribution, interpreter constraints, exclusion dates, and set/reset
-              declarations require restart. A live Python candidate is resolved
-              against the running interpreter, inspected, and prepared with all
-              retained extensions before activation. Validation or host preparation
-              failure preserves the worker and committed declaration; an activation
-              failure can require restart. Reached missing Python imports can infer
-              and prepare a distribution during a cell. Standalone preparation cannot
-              queue stdin.
+              Inspect with action=get; add named Python packages and DuckDB
+              extensions with action=add (the default), replace the declaration
+              with action=set, or restore defaults with action=reset. Applies to
+              a Console-managed uv environment. Supported before the first
+              worker starts, alone or with a Python or SQL cell, and with
+              control: restart, with or without code. An idle worker accepts new
+              Python distributions and DuckDB extensions together without
+              replacement. Already-retained declarations are no-ops. Additions
+              accumulate from the initial NumPy, pandas, and DuckDB declaration
+              with the sqlite extension. Changes to an already-declared
+              distribution, interpreter constraints, exclusion dates, and
+              set/reset declarations require restart. A live Python candidate is
+              resolved against the running interpreter, inspected, and prepared
+              with all retained extensions before activation. Validation or host
+              preparation failure preserves the worker and committed
+              declaration; an activation failure can require restart. Reached
+              missing Python imports can infer and prepare a distribution during
+              a cell. Standalone preparation cannot queue stdin.
             type:
               - object
               - "null"
@@ -211,14 +215,16 @@ result:
                   - "null"
               duckdb:
                 description: >-
-                  Validated DuckDB extension names for the managed connection, for example
-                  fts. The host runs the accepted Python environment's DuckDB installation
-                  API with its default repository and signature checks. Preparation does
-                  not LOAD extensions or run cells. Idle action=add changes preserve the
-                  worker, Python objects, managed catalog, and selected connection;
-                  startup and restart preparation are also supported. Changed set/reset
-                  declarations require restart. DuckDB must be included in
-                  requirements.python when an exact set would otherwise omit it.
+                  Validated DuckDB extension names for the managed connection,
+                  for example fts. The host runs the accepted Python
+                  environment's DuckDB installation API with its default
+                  repository and signature checks. Preparation does not LOAD
+                  extensions or run cells. Idle action=add changes preserve the
+                  worker, Python objects, managed catalog, and selected
+                  connection; startup and restart preparation are also
+                  supported. Changed set/reset declarations require restart.
+                  DuckDB must be included in requirements.python when an exact
+                  set would otherwise omit it.
                 type: array
                 items:
                   type: string
@@ -226,15 +232,16 @@ result:
                   maxLength: 64
               python:
                 description: >-
-                  Named PEP 508 requirements added to the retained Python manifest. Local
-                  paths, URLs, editable requirements, and archives are rejected as request
-                  values. Preparation runs outside the worker sandbox with full host
-                  permissions and may execute installation or build code. Use trusted
-                  dependencies and resolver configuration. An idle managed worker accepts
-                  new distributions without restart, together with DuckDB extensions;
-                  changing a declared distribution requires restart. A reached missing
-                  Python import can add its inferred distribution during a managed Python
-                  cell.
+                  Named PEP 508 requirements added to the retained Python
+                  manifest. Local paths, URLs, editable requirements, and
+                  archives are rejected as request values. Preparation runs
+                  outside the worker sandbox with full host permissions and may
+                  execute installation or build code. Use trusted dependencies
+                  and resolver configuration. An idle managed worker accepts new
+                  distributions without restart, together with DuckDB
+                  extensions; changing a declared distribution requires restart.
+                  A reached missing Python import can add its inferred
+                  distribution during a managed Python cell.
                 type: array
                 items:
                   type: string
@@ -242,29 +249,31 @@ result:
             additionalProperties: false
           stdin:
             description: >-
-              Input for an active read, prompt, or debugger. When responding to active
-              input, omit code and send stdin on its own. Its UTF-8 encoding is queued
-              exactly; no newline is added. Line-oriented input normally needs a
-              trailing `\n`. After interrupt, nonempty stdin is queued before the
-              100-millisecond grace and may be consumed while the earlier operation
-              unwinds. After restart, same-call stdin goes only to the replacement.
-              When sent with a cell, nonempty text is queued before code runs. Empty
-              text queues nothing. If output ends in [waiting for stdin], send the
-              requested input here. Unread text can satisfy later reads and is
-              discarded by restart.
+              Input for an active read, prompt, or debugger. When responding to
+              active input, omit code and send stdin on its own. Its UTF-8
+              encoding is queued exactly; no newline is added. Line-oriented
+              input normally needs a trailing `\n`. After interrupt, nonempty
+              stdin is queued before the 100-millisecond grace and may be
+              consumed while the earlier operation unwinds. After restart,
+              same-call stdin goes only to the replacement. When sent with a
+              cell, nonempty text is queued before code runs. Empty text queues
+              nothing. If output ends in [waiting for stdin], send the requested
+              input here. Unread text can satisfy later reads and is discarded
+              by restart.
             type:
               - string
               - "null"
           timeout_ms:
             description: >-
-              Omit for normal calls and polls. Defaults to 60,000 milliseconds. This
-              limits the wait after cell dispatch or attachment to an active
-              evaluation and includes one automatic worker replacement attempt.
-              Reaching the timeout does not cancel execution or startup. Inline
-              control, interrupt grace, and restart happen before dispatch and may
-              make the complete call take longer. Use 0 for background execution, then
-              poll with an empty send. If a response ends with [running; poll with an
-              empty send] or [worker starting], poll without resubmitting the cell.
+              Omit for normal calls and polls. Defaults to 60,000 milliseconds.
+              This limits the wait after cell dispatch or attachment to an
+              active evaluation and includes one automatic worker replacement
+              attempt. Reaching the timeout does not cancel execution or
+              startup. Inline control, interrupt grace, and restart happen
+              before dispatch and may make the complete call take longer. Use 0
+              for background execution, then poll with an empty send. If a
+              response ends with [running; poll with an empty send] or [worker
+              starting], poll without resubmitting the cell.
             type: integer
             format: uint64
             minimum: 0
@@ -286,7 +295,6 @@ send:
     import ctypes
     import os
     import shutil
-    from pathlib import Path
 
     assert shutil.which("R") is None and shutil.which("Rscript") is None
     assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")

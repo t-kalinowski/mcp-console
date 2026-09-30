@@ -15,7 +15,7 @@ from boundaries.client_server.server.test_no_r import no_r_environment
 from support.execution import DIRECT, SANDBOXED, Execution
 from support.no_r import exercise_no_r_catalog
 from support.normalization import code
-from support.requirements import command, requires
+from support.requirements import SANDBOX, command, requires
 from support.suites import run_this_suite
 
 
@@ -37,7 +37,7 @@ def managed_no_r_host_over_openssh(binary: Path, execution: Execution) -> list:
             with McpClient(
                 binary, execution.serve(), environment, controller
             ) as client:
-                exercise_no_r_catalog(client, managed=True)
+                exercise_no_r_catalog(client)
                 client.send(control="restart")
                 client.send(
                     # fmt: python
@@ -60,7 +60,7 @@ def test_managed_no_r_host_over_openssh(binary: Path) -> list:
     return managed_no_r_host_over_openssh(binary, DIRECT)
 
 
-@requires(ssh.SSH, command("uv"))
+@requires(ssh.SSH, command("uv"), SANDBOX)
 def test_managed_no_r_host_over_openssh_with_sandbox(binary: Path) -> list:
     return managed_no_r_host_over_openssh(binary, SANDBOXED)
 

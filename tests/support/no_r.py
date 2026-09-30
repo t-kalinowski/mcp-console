@@ -5,22 +5,19 @@ from support.client import McpClient
 from support.normalization import code
 
 
-def exercise_no_r_catalog(client: McpClient, *, managed: bool) -> None:
+def exercise_no_r_catalog(client: McpClient) -> None:
     client.initialize_and_list_tools()
     properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
         "properties"
     ]
     requirements = properties["requirements"]["properties"]
-    assert ("python" in requirements) == managed
-    if not managed:
-        assert requirements == {"action": {"type": "string", "enum": ["get"]}}
+    assert "python" in requirements
     client.send(sql="CREATE TABLE answers AS SELECT 42 AS answer")
     # fmt: python
     python = code("""
         import ctypes
         import os
         import shutil
-        from pathlib import Path
 
         assert shutil.which("R") is None and shutil.which("Rscript") is None
         assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
@@ -31,9 +28,8 @@ def exercise_no_r_catalog(client: McpClient, *, managed: bool) -> None:
         """)
     client.send(python=python)
     assert last_result_text(client) == "42\n", last_result_text(client)
-    if managed:
-        client.send(requirements={"python": ["py-yaml12"]})
-        assert last_result_text(client) == "[prepared]"
+    client.send(requirements={"python": ["py-yaml12"]})
+    assert last_result_text(client) == "[prepared]"
     client.send(r="1 + 1")
     assert (
         last_result_text(client)
