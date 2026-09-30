@@ -729,12 +729,9 @@ impl Worker {
                     | super::EnvironmentPreparationAdmissionFailure::Infrastructure(error) => error,
                 })?;
         let result = self.operation.begin_initialization(client.clone())?;
-        if let Some(active) = client
-            .current_evaluation()?
-            .filter(|active| active.inherits_startup)
-        {
+        if let Some(active) = client.current_evaluation()? {
             self.shutdown_handle()
-                .adopt_startup_evaluation(&active.evaluation)?;
+                .adopt_startup_evaluation(&active.evaluation, active.inherits_startup)?;
         }
         self.relay
             .commands
@@ -1196,9 +1193,10 @@ impl WorkerShutdownHandle {
     pub(super) fn adopt_startup_evaluation(
         &self,
         evaluation: &Arc<super::Evaluation>,
+        inherits_stdin: bool,
     ) -> Result<(), String> {
         self.operation
-            .adopt_startup_evaluation(evaluation, self.stdin.clone())
+            .adopt_startup_evaluation(evaluation, self.stdin.clone(), inherits_stdin)
     }
 
     pub(super) fn startup_snapshot(

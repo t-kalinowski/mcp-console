@@ -118,6 +118,7 @@ impl WorkerOperationState {
         &self,
         evaluation: &Arc<Evaluation>,
         stdin: super::platform::StdinSender,
+        inherits_stdin: bool,
     ) -> Result<(), String> {
         let state = self.lock()?;
         if matches!(
@@ -125,9 +126,11 @@ impl WorkerOperationState {
             Some(OperationKind::Initialize(_))
         ) {
             if state.idle_input.is_some() {
-                evaluation.resume_input_request()?;
+                evaluation.resume_input_request(inherits_stdin)?;
             }
-            evaluation.attach_writer(stdin)?;
+            if inherits_stdin {
+                evaluation.attach_writer(stdin)?;
+            }
         }
         Ok(())
     }
@@ -196,7 +199,7 @@ impl WorkerOperationState {
                 .map_err(|_| "worker operation state lock poisoned".to_string())?;
         }
         if state.idle_input.take().is_some() {
-            evaluation.resume_input_request()?;
+            evaluation.resume_input_request(true)?;
         }
         let mut operation = Some(Operation {
             kind: OperationKind::Cell(evaluation.clone()),
@@ -459,11 +462,10 @@ impl WorkerOperationState {
                 if let Some(OperationKind::Initialize(client)) =
                     state.operation.as_ref().map(|operation| &operation.kind)
                 {
-                    if let Some(active) = client
-                        .current_evaluation()?
-                        .filter(|active| active.inherits_startup)
-                    {
-                        active.evaluation.resume_input_request()?;
+                    if let Some(active) = client.current_evaluation()? {
+                        active
+                            .evaluation
+                            .resume_input_request(active.inherits_startup)?;
                     }
                     client.0.startup.send_modify(|_| {});
                 }
@@ -485,11 +487,9 @@ impl WorkerOperationState {
                 })?;
                 if let Some(OperationKind::Initialize(client)) =
                     state.operation.as_ref().map(|operation| &operation.kind)
-                    && let Some(active) = client
-                        .current_evaluation()?
-                        .filter(|active| active.inherits_startup)
+                    && let Some(active) = client.current_evaluation()?
                 {
-                    active.evaluation.input_received()?;
+                    active.evaluation.resume_input_received()?;
                 }
                 Ok(())
             }

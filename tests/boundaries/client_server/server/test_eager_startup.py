@@ -342,6 +342,7 @@ def test_idle_stdin_preserves_used_worker_and_input(
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
         initial = client.send(requirements={"action": "get"})["structuredContent"]
+        client.transcript[-1]["result"] = "<committed default manifest>"
         client.send(stdin="retained input\n")
         changed = client.send(requirements={"action": "set"})
         assert changed["isError"] is True, changed
@@ -349,6 +350,7 @@ def test_idle_stdin_preserves_used_worker_and_input(
         assert (
             client.send(requirements={"action": "get"})["structuredContent"] == initial
         )
+        client.transcript[-1]["result"] = "<unchanged default manifest>"
         client.send(python="input()")
         assert last_result_text(client) == (
             "[input requested: \"\"]\n'retained input'\n"
@@ -398,8 +400,8 @@ def test_deferred_requirements_cell_allows_startup_input(
             )
             assert not client.transcript[-1]["result"]["isError"]
             client.send(timeout_ms=0)
-            assert last_result_text(client) == "[waiting for stdin]", last_result_text(
-                client
+            assert last_result_text(client) == "\n[waiting for stdin]", (
+                last_result_text(client)
             )
             client.send(stdin="warmup input\n", timeout_ms=0)
             client.send(timeout_ms=600_000)

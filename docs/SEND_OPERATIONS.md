@@ -31,6 +31,8 @@ Requirement inspection likewise returns `[worker starting]` without a manifest u
 
 Early code-free stdin is buffered for the current generation and delivered once when its worker is registered.
 Startup hooks use the ordinary input notices, stdin delivery, and polling path.
+An accepted cell with deferred requirements also exposes startup input requests through normal polling.
+Code-free stdin can satisfy those requests; that cell's bundled stdin remains withheld until its requirements are prepared.
 Restart discards old-generation buffered input.
 A standalone requirements call that exhausts its budget before readiness returns `[worker starting]` without accepting a preparation; submit that declaration again after startup.
 An interrupt can signal startup before a process is registered and between resolver phases.
@@ -45,6 +47,8 @@ Neither cancellation nor timeout cancels shared startup.
 Closing the MCP connection cancels discovery, preparation, worker launch, and initialization, then joins the existing ownership and retirement protocol.
 
 A failed runtime discovery is retained: subsequent `send` calls report the same failure rather than retrying setup, and tool discovery remains available.
+The failure uses the ordinary bounded tool-error response, including for requirement inspection.
+Recording metadata is unavailable after discovery fails, so buffered early tool records are discarded and subsequent recording is disabled.
 Correct the execution-host setup and start a new MCP server session to retry.
 Default environment and worker startup failures retain the ordinary later-cell retry boundary; they do not trigger a new retry loop.
 An interrupted Python startup hook reports its output without running the accepted cell; a later cell can retry unfinished initialization in the same interpreter.
@@ -55,6 +59,7 @@ Declarations arriving after default preparation begins use the same preparation 
 An unchanged declaration reuses the default candidate.
 A changed replacement can retire an unused prewarmed candidate after successful resolution, without requiring an explicit restart merely because it was prewarmed.
 Once user code or stdin has reached the worker, the ordinary live-change and explicit-restart rules apply.
+This includes idle stdin queued for a later read.
 Resolution failure preserves the committed environment and candidate; uncertain retirement blocks replacement.
 
 ## Validation before actions

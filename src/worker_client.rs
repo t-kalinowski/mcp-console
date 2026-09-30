@@ -1702,7 +1702,24 @@ impl Client {
                     }
                     let wait_claim = active.evaluation.claim()?;
                     if let Some(stdin) = stdin {
-                        active.evaluation.submit_stdin(stdin)?;
+                        #[cfg(unix)]
+                        let startup_input = if !active.inherits_startup && !self.startup_finished()
+                        {
+                            self.worker_handle()?
+                                .map(|worker| worker.startup_snapshot(&self.0.output))
+                                .transpose()?
+                                .is_some_and(|snapshot| snapshot.input_requested)
+                        } else {
+                            false
+                        };
+                        #[cfg(not(unix))]
+                        let startup_input = false;
+                        if startup_input {
+                            #[cfg(unix)]
+                            self.queue_startup_stdin(&generation, stdin)?;
+                        } else {
+                            active.evaluation.submit_stdin(stdin)?;
+                        }
                     }
                     (active.evaluation, wait_claim)
                 }
@@ -1863,8 +1880,8 @@ impl Client {
         let inherits_startup = active.as_ref().unwrap().inherits_startup;
         drop(active);
         #[cfg(unix)]
-        if inherits_startup && let Some(worker) = self.worker_handle()? {
-            worker.adopt_startup_evaluation(&evaluation)?;
+        if let Some(worker) = self.worker_handle()? {
+            worker.adopt_startup_evaluation(&evaluation, inherits_startup)?;
         }
 
         let client = self.clone();
@@ -1966,6 +1983,9 @@ impl Client {
         generation: WorkerGeneration,
     ) -> Result<(), SendFailure> {
         self.with_worker(&generation, |worker| {
+            if !stdin.is_empty() {
+                self.0.unused_default.store(false, Ordering::Release);
+            }
             worker.write_stdin(stdin).map_err(SendFailure::from)
         })
     }
