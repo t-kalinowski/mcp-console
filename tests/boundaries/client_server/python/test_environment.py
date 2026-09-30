@@ -6,18 +6,23 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
+from support.requirements import OLD_PYTHON, PROCESS_EVENTS, SYSTEM_PYTHON, requires
 from support.requirements import R
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 
 @executions(DIRECT, SANDBOXED)
@@ -292,15 +297,15 @@ def test_sends_python_cell_with_initial_requirements(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_compacts_native_duckdb_progress_bar(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
     # fmt: python
     python = code(r"""
         import os
         import tempfile
+        from pathlib import Path
 
         import duckdb
 
@@ -338,32 +343,84 @@ def test_compacts_native_duckdb_progress_bar(
 
         assert result[0] is not None
         assert progress.count(b"\r") >= 100
+        _ = Path("progress.bin").write_bytes(progress)
+        with open("progress-ready", "wb", buffering=0) as ready:
+            _ = ready.write(b"1")
+        with open("progress-release", "rb", buffering=0) as release:
+            assert release.read(1) == b"1"
         with os.fdopen(os.dup(1), "wb") as stdout:
             stdout.write(progress)
+        with open("completion-release", "rb", buffering=0) as release:
+            assert release.read(1) == b"1"
         """)
-    client.send(
-        python=python,
-        requirements={"python": ["duckdb==1.5.5"]},
-        timeout_ms=0,
-    )
-    assert last_result_text(client) == "\n[running; poll with an empty send]"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        with (
+            closing(FifoCheckpoint.create(root / "progress-ready")) as ready,
+            closing(FifoCheckpoint.create(root / "progress-release")) as release,
+            closing(FifoCheckpoint.create(root / "completion-release")) as completion,
+            McpClient(
+                binary,
+                execution.serve(
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                ),
+                no_r_environment(root),
+                current_directory=root,
+            ) as client,
+            Events() as events,
+        ):
+            client.initialize_and_list_tools()
+            try:
+                initial = client.start_send(
+                    python=python,
+                    requirements={"python": ["duckdb==1.5.5"]},
+                    timeout_ms=0,
+                )
+                ready.wait(
+                    "native DuckDB progress captured", timeout=client.response_timeout
+                )
+                client.receive(initial)
+                assert (
+                    last_result_text(client) == "\n[running; poll with an empty send]"
+                )
 
-    client.send(timeout_ms=220_000)
-    output = last_result_text(client)
-    assert "\r" not in output, repr(output)
-    final = output.rstrip()
-    assert final.count("% ▕") == 1, repr(final)
-    graphic, separator, elapsed = final.rpartition(" (")
-    assert graphic.startswith("100% ▕"), repr(final)
-    assert graphic.endswith("▏"), repr(final)
-    assert separator and elapsed.endswith(" elapsed)"), repr(final)
-    client.transcript[-1]["result"]["content"][0]["text"] = f"{graphic} (<elapsed>)\n"
-    client.transcript[-1]["transcript_normalization"] = {
-        "target": "result.content[0].text",
-        "elapsed": "omitted",
-        "trailing_progress_padding": "omitted",
-    }
-    return client.finish()
+                progress = (root / "progress.bin").read_bytes()
+                session = next((root / ".agents/console/sessions").iterdir())
+                raw = session / "outputs/call-000001.log"
+                events.watch_file(raw)
+                response = client.start_send(timeout_ms=220_000)
+                release.release()
+                # Native stdout and completion use independent transports. The
+                # public recording proves the server received every redraw before
+                # the worker is allowed to complete this response interval.
+                deadline = time.monotonic() + 10
+                while raw.read_bytes() != progress:
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0 and events.wait(remaining), (
+                        "native progress did not reach the server recording"
+                    )
+                completion.release()
+                client.receive(response)
+            finally:
+                release.release()
+                completion.release()
+            output = last_result_text(client)
+            assert "\r" not in output, repr(output)
+            final = output.rstrip()
+            assert final.count("% ▕") == 1, repr(final)
+            graphic, separator, elapsed = final.rpartition(" (")
+            assert graphic.startswith("100% ▕"), repr(final)
+            assert graphic.endswith("▏"), repr(final)
+            assert separator and elapsed.endswith(" elapsed)"), repr(final)
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                f"{graphic} (<elapsed>)\n"
+            )
+            client.transcript[-1]["transcript_normalization"] = {
+                "target": "result.content[0].text",
+                "elapsed": "omitted",
+                "trailing_progress_padding": "omitted",
+            }
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

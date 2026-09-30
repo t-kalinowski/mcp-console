@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -70,9 +70,14 @@ def startup_input(binary: Path, execution: Execution, hook: str) -> list:
             assert last_result_text(client) == (
                 '[input requested: "startup> "]\n[waiting for stdin]'
             ), last_result_text(client)
-            result = client.send(stdin="retry\n")
-            interrupted = last_result_text(client)
-            assert "KeyboardInterrupt" in interrupted, interrupted
+            interrupted = wait_for_evaluation_output(
+                client,
+                lambda output: "KeyboardInterrupt" in output,
+                "interrupted Python startup input",
+                stdin="retry\n",
+                timeout_ms=0,
+            )
+            result = client.transcript[-1]["result"]
             result["content"][0]["text"] = re.sub(
                 r'(File "<frozen site>", line )\d+', r"\1<line>", interrupted
             )
@@ -89,9 +94,12 @@ def startup_input(binary: Path, execution: Execution, hook: str) -> list:
             assert last_result_text(client) == (
                 '[input requested: "startup> "]\n[waiting for stdin]'
             ), last_result_text(client)
-            client.send(stdin="caf\u00e9\0tail\n")
-            assert last_result_text(client) == "'caf\u00e9\\x00tail'\n", (
-                last_result_text(client)
+            wait_for_evaluation_output(
+                client,
+                "'caf\u00e9\\x00tail'\n",
+                "retried Python startup input",
+                stdin="caf\u00e9\0tail\n",
+                timeout_ms=0,
             )
             return json.loads(
                 json.dumps(client.finish()).replace(str(site), "<site-packages>")

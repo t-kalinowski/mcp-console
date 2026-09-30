@@ -5,6 +5,7 @@ send:
   python: |
     import os
     import tempfile
+    from pathlib import Path
 
     import duckdb
 
@@ -42,8 +43,15 @@ send:
 
     assert result[0] is not None
     assert progress.count(b"\r") >= 100
+    _ = Path("progress.bin").write_bytes(progress)
+    with open("progress-ready", "wb", buffering=0) as ready:
+        _ = ready.write(b"1")
+    with open("progress-release", "rb", buffering=0) as release:
+        assert release.read(1) == b"1"
     with os.fdopen(os.dup(1), "wb") as stdout:
         stdout.write(progress)
+    with open("completion-release", "rb", buffering=0) as release:
+        assert release.read(1) == b"1"
   requirements:
     python:
       - duckdb==1.5.5
