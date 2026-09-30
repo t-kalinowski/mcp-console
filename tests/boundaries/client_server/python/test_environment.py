@@ -518,6 +518,10 @@ def test_prints_requirements_with_host_uv_cache(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
+        # Observe eager readiness, then exercise R-first resolution in a lazy
+        # replacement with the same captured trusted resolver settings.
+        assert not client.send(requirements={"action": "get"})["isError"]
+        client.send(control="restart")
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(r"""
