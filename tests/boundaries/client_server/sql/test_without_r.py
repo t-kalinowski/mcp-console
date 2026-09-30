@@ -96,6 +96,9 @@ def test_managed_python_requires_home_for_default_extensions(
             env,
             record_in_project=False,
         ) as client:
+            error = client.startup_error()
+            assert "DuckDB extension preparation requires an absolute HOME" in error
+            client.stdin.close()
             client.process.wait(timeout=60)
             diagnostic = client.stderr.read()
             assert client.process.returncode != 0
@@ -128,6 +131,8 @@ def test_default_extension_failure_preserves_close_failure(
             env,
             record_in_project=False,
         ) as client:
+            error = client.startup_error()
+            client.stdin.close()
             assert client.process.wait(timeout=60) != 0
             assert not client.stdout.read()
             diagnostic = client.stderr.read()
@@ -136,6 +141,7 @@ def test_default_extension_failure_preserves_close_failure(
                 "DuckDB extension preparation requires an absolute HOME at server startup; "
                 "resolver input closed"
             ), diagnostic
+            assert error.strip() == diagnostic.strip(), error
             return [{"stderr": diagnostic}]
 
 
