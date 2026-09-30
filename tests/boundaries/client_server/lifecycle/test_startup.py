@@ -231,7 +231,8 @@ def test_first_cell_prepares_defaults_after_running_response(
               "DBI",
               "duckdb",
               "arrow",
-              "nanoarrow"
+              "nanoarrow",
+              "yyjsonr"
             )
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
@@ -260,6 +261,7 @@ def test_first_cell_prepares_defaults_after_running_response(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "yyjsonr",
             "jsonlite",
             "pillar",
             "tibble",
