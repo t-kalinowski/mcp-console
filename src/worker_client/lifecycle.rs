@@ -340,16 +340,6 @@ impl Client {
             Ok(())
         }
     }
-    pub(super) fn worker_handle(&self) -> Result<Option<platform::WorkerShutdownHandle>, String> {
-        Ok(self
-            .0
-            .lifecycle
-            .lock()
-            .map_err(|_| "worker lifecycle lock poisoned")?
-            .processes
-            .worker
-            .clone())
-    }
     pub(crate) async fn cancel_startup(&self, deadline: Instant) -> Result<(), String> {
         let processes = self.close_lifecycle(deadline)?.unwrap_or_default();
         tokio::task::spawn_blocking(move || {

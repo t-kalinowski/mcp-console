@@ -146,7 +146,11 @@ def test_interrupts_running_python_evaluation(
             r = code(r"""
                 python_interrupt_started <- tempfile("python-interrupt-started-")
                 python_interrupt_release <- tempfile("python-interrupt-release-")
-                # Attach R before the Python evaluation checkpoint.
+                Sys.setenv(
+                  MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
+                  MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
+                )
+                # Initialize from R before the Python evaluation checkpoint.
                 invisible(reticulate::py_config())
                 cat(python_interrupt_started, python_interrupt_release, sep = "\n")
                 """)
@@ -159,7 +163,7 @@ def test_interrupts_running_python_evaluation(
             checkpoints.extend((started, release))
 
             # fmt: python
-            python = code(f"""
+            python = code("""
                 import ctypes
                 import os
                 import signal
@@ -180,12 +184,12 @@ def test_interrupts_running_python_evaluation(
                 try:
                     with (
                         open(
-                            {paths[0]!r},
+                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
                             "wb",
                             buffering=0,
                         ) as started,
                         open(
-                            {paths[1]!r},
+                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
                             "rb",
                             buffering=0,
                         ) as release,
@@ -205,11 +209,6 @@ def test_interrupts_running_python_evaluation(
                     os.close(wakeup_write)
                 """)
             client.send(python=python, timeout_ms=0)
-            # Python may have cached os.environ before the R setup cell. Pass
-            # the observed checkpoint paths directly, then normalize literals.
-            client.transcript[-1]["send"]["python"] = python.replace(
-                repr(paths[0]), '"<interrupt started>"'
-            ).replace(repr(paths[1]), '"<interrupt release>"')
             assert last_result_text(client) == "\n[running; poll with an empty send]"
             started.wait("Python evaluation entered native interrupt checkpoint")
 

@@ -114,7 +114,7 @@ struct ShutdownRequest {
 }
 
 #[derive(Clone)]
-pub(super) struct StdinSender(Arc<RelayCommandSender>);
+pub(super) struct StdinSender(RelayCommandSender);
 
 #[derive(Clone)]
 /// Correlates concurrent relay interrupt commands with their completion events.
@@ -303,7 +303,7 @@ impl WorkerRuntime {
             })),
         };
         let mut worker = Worker {
-            stdin: StdinSender(Arc::new(commands.clone())),
+            stdin: StdinSender(commands.clone()),
             operation,
             interrupts,
             shutdown_started,
@@ -717,30 +717,6 @@ fn collected_errors(errors: Vec<String>) -> Result<(), String> {
 }
 
 impl Worker {
-    pub(super) fn initialize(
-        &mut self,
-        languages: Vec<crate::cell::Language>,
-        client: super::Client,
-    ) -> Result<bool, String> {
-        let _preparation =
-            self.reserve_environment_preparation()
-                .map_err(|failure| match failure {
-                    super::EnvironmentPreparationAdmissionFailure::Busy(error)
-                    | super::EnvironmentPreparationAdmissionFailure::Infrastructure(error) => error,
-                })?;
-        let result = self.operation.begin_initialization(client.clone())?;
-        if let Some(active) = client.current_evaluation()? {
-            self.shutdown_handle()
-                .adopt_startup_evaluation(&active.evaluation, active.inherits_startup)?;
-        }
-        self.relay
-            .commands
-            .send(RelayCommand::Initialize { languages })?;
-        match receive_operation(result)? {
-            OperationResult::Initialized(completed) => Ok(completed),
-            _ => Err("worker sent an unexpected initialization result".into()),
-        }
-    }
     pub(super) fn reserve_environment_preparation(
         &self,
     ) -> Result<
@@ -1066,9 +1042,6 @@ impl RelayCommandSender {
 }
 
 impl StdinSender {
-    pub(super) fn is(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
     pub(super) fn send(&self, data: String) -> Result<(), String> {
         self.0.send(RelayCommand::Stdin { data })
     }
@@ -1190,25 +1163,10 @@ impl ShutdownAcceptance {
 }
 
 impl WorkerShutdownHandle {
-    pub(super) fn adopt_startup_evaluation(
-        &self,
-        evaluation: &Arc<super::Evaluation>,
-        inherits_stdin: bool,
-    ) -> Result<(), String> {
-        self.operation
-            .adopt_startup_evaluation(evaluation, self.stdin.clone(), inherits_stdin)
-    }
-
-    pub(super) fn startup_snapshot(
-        &self,
-        output: &super::OutputTape,
-    ) -> Result<super::IdleResponseSnapshot, String> {
-        self.operation.idle_response_snapshot(output)
-    }
-
     pub(super) fn write_startup_stdin(&self, data: String) -> Result<(), String> {
         self.stdin.send(data)
     }
+
     pub(super) fn interrupt(&self) -> Result<(), String> {
         self.interrupts.request(&self.commands)
     }

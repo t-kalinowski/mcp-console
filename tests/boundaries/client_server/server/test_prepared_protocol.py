@@ -139,7 +139,7 @@ def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
 def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 8"),
+        ("probe-version", "expected protocol 7"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),

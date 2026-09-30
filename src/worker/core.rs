@@ -203,11 +203,9 @@ fn resolve_python_candidate(
             mark_shutting_down();
             Err("worker is shutting down".to_string())
         }
-        ServerMessage::Initialize { .. } | ServerMessage::Evaluate { .. } => {
-            Err(infrastructure_failure(
-                "worker received an evaluation while resolving Python".to_string(),
-            ))
-        }
+        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+            "worker received an evaluation while resolving Python".to_string(),
+        )),
         ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
             "worker received Python preparation while resolving Python".to_string(),
         )),
@@ -262,8 +260,7 @@ pub(crate) fn resolve_r(
         | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
             "worker received a Python resolver response while resolving R".to_string(),
         )),
-        ServerMessage::Initialize { .. }
-        | ServerMessage::Evaluate { .. }
+        ServerMessage::Evaluate { .. }
         | ServerMessage::PreparePython { .. }
         | ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
             "worker received an operation while resolving R".to_string(),
@@ -290,11 +287,9 @@ pub(crate) fn resolve_python_version(
             mark_shutting_down();
             Err("worker is shutting down".to_string())
         }
-        ServerMessage::Initialize { .. } | ServerMessage::Evaluate { .. } => {
-            Err(infrastructure_failure(
-                "worker received an evaluation while resolving a Python version".to_string(),
-            ))
-        }
+        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+            "worker received an evaluation while resolving a Python version".to_string(),
+        )),
         ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
             "worker received Python preparation while resolving a Python version".to_string(),
         )),
@@ -320,8 +315,7 @@ fn receive_resolver_message() -> Result<ServerMessage, String> {
     loop {
         let message = receive_server_message()?;
         match message {
-            ServerMessage::Initialize { .. }
-            | ServerMessage::Evaluate { .. }
+            ServerMessage::Evaluate { .. }
             | ServerMessage::PreparePython { .. }
             | ServerMessage::PrepareR { .. } => queue_server_message(message)?,
             _ => return Ok(message),

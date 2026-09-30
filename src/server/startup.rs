@@ -28,7 +28,7 @@ impl Startup {
     pub fn new(
         input_closed: super::InputClosed,
         runtime: Arc<Runtime>,
-        languages: Option<Vec<crate::cell::Language>>,
+        prelaunch: bool,
         initialize: impl FnOnce(
             &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
         ) -> Result<Runtime, String>
@@ -57,10 +57,8 @@ impl Startup {
                     initialize_worker.configure(prepared.worker);
                     task_recording.configure(prepared.transcript);
                     initialize_worker.record_with(task_recording);
-                    if let Some(languages) = languages
-                        && let Err(error) = initialize_worker.prewarm(languages)
-                    {
-                        initialize_worker.report_warmup_failure(&generation, error);
+                    if prelaunch {
+                        initialize_worker.prelaunch(&generation);
                     }
                     drop(startup);
                     Ok(())

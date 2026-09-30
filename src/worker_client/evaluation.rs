@@ -341,12 +341,8 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if let Some(attached) = &state.stdin {
-            return if attached.is(&writer) {
-                Ok(())
-            } else {
-                Err("worker stdin belongs to a different worker".to_string())
-            };
+        if state.stdin.is_some() {
+            return Err("worker stdin was already attached to this evaluation".to_string());
         }
         if !state.pending_stdin.is_empty() {
             writer.send(std::mem::take(&mut state.pending_stdin))?;
@@ -396,15 +392,15 @@ impl Evaluation {
         Ok(())
     }
 
-    pub(super) fn resume_input_request(&self, inherits_stdin: bool) -> Result<(), String> {
+    pub(super) fn resume_input_request(&self) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if state.input_report_at.is_some() {
-            return Ok(());
+            return Err("worker evaluation already has an outstanding input request".to_string());
         }
-        let grace = if !inherits_stdin || state.pending_stdin.is_empty() {
+        let grace = if state.pending_stdin.is_empty() {
             Duration::ZERO
         } else {
             INPUT_REQUEST_GRACE
@@ -423,17 +419,6 @@ impl Evaluation {
             .input_report_at
             .take()
             .ok_or_else(|| "worker reported received input without requesting it".to_string())?;
-        self.changed.notify_one();
-        Ok(())
-    }
-
-    pub(super) fn resume_input_received(&self) -> Result<(), String> {
-        // Initialization can receive input before a newly admitted cell has
-        // mirrored its request. The operation owner validates the actual event.
-        self.state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?
-            .input_report_at = None;
         self.changed.notify_one();
         Ok(())
     }

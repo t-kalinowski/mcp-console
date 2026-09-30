@@ -15,9 +15,8 @@ After launch configuration and applicable local native-policy validation, MCP in
 The tool schema and descriptions come from captured configuration and do not change when that work finishes.
 An advertised language is not proof that its runtime is installed.
 
-One startup owner prepares the default environment, launches its worker, and initializes the enabled runtimes supported by that environment.
-Bare R environments without managed adapters retain demand-driven R initialization; explicitly selected Python can still initialize independently.
-Uninspected R-side Python selection hints remain lazy; they are not treated as proof that Python is available.
+One startup owner prepares the default environment and launches its real worker through transport readiness.
+R, Python, and SQL initialize on first use, preserving their existing ordering and selection semantics.
 Custom workers retain their existing lazy launch contract.
 Startup and all early cells share the ordinary generation, admission, evaluation, and retirement machinery.
 
@@ -30,13 +29,12 @@ An empty poll without an accepted cell waits for startup within its budget and r
 Requirement inspection likewise returns `[worker starting]` without a manifest until discovery and startup settle.
 
 Early code-free stdin is buffered for the current generation and delivered once when its worker is registered.
-Startup hooks use the ordinary input notices, stdin delivery, and polling path.
-An accepted cell with deferred requirements also exposes startup input requests through normal polling.
-Code-free stdin can satisfy those requests; that cell's bundled stdin remains withheld until its requirements are prepared.
+A cell's bundled stdin remains withheld until its requirements are prepared.
+First-use language startup hooks use the ordinary input notices, stdin delivery, and polling path.
 Restart discards old-generation buffered input.
 A standalone requirements call that exhausts its budget before readiness returns `[worker starting]` without accepting a preparation; submit that declaration again after startup.
 An interrupt can signal startup before a process is registered and between resolver phases.
-A restart after discovery uses the existing retirement and replacement protocol, including while initialization is active.
+A restart after discovery uses the existing retirement and replacement protocol, including while the default worker is launching.
 Before discovery completes, a control requiring configuration can exhaust its budget without applying control; a bundled cell is explicitly reported as not run.
 
 MCP cancellation before cell admission leaves no accepted cell.
@@ -44,14 +42,13 @@ After admission, cancellation releases only that call's response wait: the cell 
 Cancellation after execution begins likewise leaves the evaluation and its effects active.
 A cancelled request may have crossed admission before its caller observed cancellation; an empty poll discovers the retained state safely.
 Neither cancellation nor timeout cancels shared startup.
-Closing the MCP connection cancels discovery, preparation, worker launch, and initialization, then joins the existing ownership and retirement protocol.
+Closing the MCP connection cancels discovery, preparation, and worker launch, then joins the existing ownership and retirement protocol.
 
 A failed runtime discovery is retained: subsequent `send` calls report the same failure rather than retrying setup, and tool discovery remains available.
 The failure uses the ordinary bounded tool-error response, including for requirement inspection.
 Recording metadata is unavailable after discovery fails, so buffered early tool records are discarded and subsequent recording is disabled.
 Correct the execution-host setup and start a new MCP server session to retry.
 Default environment and worker startup failures retain the ordinary later-cell retry boundary; they do not trigger a new retry loop.
-An interrupted Python startup hook reports its output without running the accepted cell; a later cell can retry unfinished initialization in the same interpreter.
 
 Explicit early requirements are prepared before the accepted cell or its bundled stdin reaches execution.
 If the declaration is already admitted when discovery finishes, the startup owner uses it to select the initial candidate before preparing defaults.

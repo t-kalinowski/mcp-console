@@ -2,8 +2,6 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  requirements:
-    action: set
   r: |
     reticulate::py_require(character(), action = "set")
     stopifnot(is.null(reticulate::py_config()$numpy))

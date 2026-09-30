@@ -174,8 +174,8 @@ result:
 ---
 send:
   python: >-
-    import os; assert os.getpid() == worker_pid and id(identity) == identity_id;
-    print('compatible worker retained')
+    import os; assert os.getpid() == worker_pid and id(identity) ==
+    identity_id; print('compatible worker retained')
 result:
   content:
     - type: text

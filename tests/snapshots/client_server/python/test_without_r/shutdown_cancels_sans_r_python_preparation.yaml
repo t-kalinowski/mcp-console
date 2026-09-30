@@ -3,7 +3,7 @@ restart: false
 phase: interrupt
 stdout: >
   {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"worker
-  is shutting down"}],"isError":true}}
+  stopped before operation completed"}],"isError":true}}
 stderr: ""
 ---
 restart: true
@@ -17,7 +17,7 @@ restart: false
 phase: inspection-interrupt
 stdout: >
   {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"worker
-  is shutting down"}],"isError":true}}
+  stopped before operation completed"}],"isError":true}}
 stderr: ""
 ---
 restart: true

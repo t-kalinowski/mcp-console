@@ -137,7 +137,8 @@ The [capability-advertising decision](TOOL_DESCRIPTIONS.md#supported-capabilitie
 Tool construction uses captured configuration, while operation validation uses discovered availability.
 `ConsoleServer::new` captures the tool router and starts one background runtime task in `src/server/startup.rs`.
 Launch configuration and applicable local native-policy preflight remain synchronous; `initialize`, `tools/list`, and `ping` do not wait for interpreter, resolver, or target discovery.
-The task configures the existing client, prepares defaults, launches the built-in worker, and initializes enabled runtimes supported by its environment through an `initialize`/`initialized` relay exchange after transport readiness.
+The task configures the existing client, prepares defaults, and launches the built-in worker through actual transport readiness.
+Language runtimes retain their existing first-use initialization and ordering.
 One client-owned readiness result serves all calls; custom workers remain lazy.
 Early cells are admitted to the ordinary evaluation slot before readiness, and their one call deadline covers startup and execution observation.
 No cell queue or scheduler is added.

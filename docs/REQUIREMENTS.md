@@ -103,7 +103,7 @@ When ambient reticulate supplies the bootstrap, this probe loads its namespace a
 These probes have no deadline.
 Closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
 
-Default preparation, worker launch, and applicable initialization start eagerly without a tool call.
+Default preparation and real worker launch start eagerly without a tool call; language initialization remains on demand.
 `initialize`, `tools/list`, and pings do not wait for them.
 An early accepted cell, including one with requirements, can return a running response within `timeout_ms` while startup continues.
 Its explicit requirements are applied before its code or bundled input is sent.
@@ -457,8 +457,6 @@ By itself, this failure does not make restart mandatory.
 A Python transport, protocol, or bridge-infrastructure failure stops the worker instead.
 
 Before Python first initializes, an evaluated `reticulate::py_require()` can change only the live worker's lazy manifest.
-Eager default startup can initialize Python before the first R cell, so initial replacement declarations belong in `send(requirements={"action": "set", ...})`.
-That interface can replace an unused prewarmed candidate; changing a live declaration from R retains the existing initialized-interpreter restrictions.
 That change becomes retained after successful Python initialization reports its activation, or after an explicit preparation materializes it.
 Worker loss before either point loses the uncommitted declaration.
 

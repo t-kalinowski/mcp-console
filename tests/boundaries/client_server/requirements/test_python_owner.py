@@ -98,7 +98,6 @@ def test_materializes_lazy_declarations_without_initializing_python(
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.send(control="restart")
         client.send(
             # fmt: r
             r=code("""
@@ -141,7 +140,6 @@ def test_initializes_with_lazy_exclusion_date(
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.send(control="restart")
         client.send(
             # fmt: r
             r=code("""
@@ -244,7 +242,6 @@ def test_refreshes_numpy_configuration_after_live_preparation(
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
         client.send(
-            requirements={"action": "set"},
             # fmt: r
             r=code("""
                 reticulate::py_require(character(), action = "set")
@@ -270,7 +267,7 @@ def test_refreshes_numpy_configuration_after_live_preparation(
                   startsWith(active$numpy$path, active$prefix),
                   identical(active$numpy$version, config$numpy$version)
                 )
-                """),
+                """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
         return client.finish()

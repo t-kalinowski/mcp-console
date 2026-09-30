@@ -22,7 +22,13 @@ from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.events import Events
+from support.processes import (
+    capture_process_identity,
+    child_process_identities,
+    host_process_id,
+    kill_processes,
+    live_processes,
+)
 from support.normalization import code
 from support.native import build_interposer
 from support.r import r_test_environment
@@ -62,106 +68,28 @@ def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
         return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
-def test_initializes_python_before_any_send(
-    binary: Path, execution: Execution
-) -> Transcript:
-    return blocked_python_startup(binary, execution, close=False)
-
-
-@executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
-def test_connection_closure_retires_initializing_worker(
-    binary: Path, execution: Execution
-) -> Transcript:
-    return blocked_python_startup(binary, execution, close=True)
-
-
-def blocked_python_startup(
-    binary: Path, execution: Execution, *, close: bool
-) -> Transcript:
-    with ExitStack() as resources:
-        root = Path(resources.enter_context(tempfile.TemporaryDirectory())).resolve()
-        reached = FifoCheckpoint.create(root / "reached")
-        release = FifoCheckpoint.create(root / "release")
-        resources.callback(reached.close)
-        resources.callback(release.close)
-        python, site = isolated_python(root)
-        # Resolver probes use -c. Only the embedded interpreter owns this gate.
-        (site / "sitecustomize.py").write_text(
-            # fmt: python
-            code(f"""
-                import os
-                import sys
-
-                if sys.argv[0] != "-c":
-                    with open({str(root / "pid")!r}, "w") as stream:
-                        stream.write(str(os.getpid()))
-                    with open({str(reached.path)!r}, "wb", buffering=0) as stream:
-                        stream.write(b"1")
-                    with open({str(release.path)!r}, "rb", buffering=0) as stream:
-                        assert stream.read(1) == b"1"
-                """),
-        )
-        environment = selected_python(root, python)
-        environment.pop("R_HOME", None)
-        environment["PATH"] = str(root)
-        environment["PYTHONPATH"] = str(site)
-        arguments = execution.serve(
-            *(("--writable-root", str(root)) if execution == SANDBOXED else ())
-        )
-        with McpClient(
-            binary, arguments, environment, root, response_timeout=5
-        ) as client:
-            # Release before connection teardown if an assertion fails.
-            try:
-                try:
-                    reached.wait("embedded Python starts without a send")
-                except AssertionError as error:
-                    raise AssertionError(f"{error}; {client._diagnostics()}") from error
-                client.initialize_and_list_tools()
-                tools = client.transcript[-1]["result"]
-                client.request("ping")
-                if close:
-                    worker = int((root / "pid").read_text())
-                    with Events() as exits:
-                        exits.watch_process(worker)
-                        client.close()
-                        assert worker in exits.wait(5), (
-                            "initializing worker survived MCP closure"
-                        )
-                    return [*client.finish(), {"initializing_worker_retired": True}]
-                client.send(python="import os\nos.getpid()", timeout_ms=0)
-                assert last_result_text(client) == RUNNING
-                release.release()
-                client.send()
-                assert last_result_text(client) == (root / "pid").read_text() + "\n"
-                client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "<prewarmed worker pid>\n"
-                )
-                assert client.request("tools/list")["result"] == tools
-                client.transcript[-1]["result"] = "<unchanged from initialization>"
-                client.send(python="os.getpid()")
-                assert last_result_text(client) == (root / "pid").read_text() + "\n"
-                client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "<same worker pid>\n"
-                )
-                return client.finish()
-            finally:
-                release.release()
-
-
 def ready_without_send(
-    binary: Path, execution: Execution, *, sans_r: bool
+    binary: Path, execution: Execution, *, sans_r: bool, close: bool = False
 ) -> Transcript:
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory())).resolve()
-        reached = FifoCheckpoint.create(root / "initialized")
+        reached = FifoCheckpoint.create(root / "ready")
         release = FifoCheckpoint.create(root / "release")
         resources.callback(reached.close)
         resources.callback(release.close)
         if sans_r:
-            python, _ = isolated_python(root)
+            python, site = isolated_python(root)
+            (site / "sitecustomize.py").write_text(
+                # fmt: python
+                code(f"""
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    if sys.argv[0] != "-c":
+                        Path({str(root / "python-started")!r}).write_text(str(os.getpid()))
+                    """),
+            )
             environment = selected_python(root, python)
             environment.pop("R_HOME", None)
             environment["PATH"] = str(root)
@@ -173,7 +101,7 @@ def ready_without_send(
                 "MCP_CONSOLE_TEST_RELAY_READ_DYLIB": str(
                     build_interposer(root, "relay_stdout_read_interposer")
                 ),
-                "MCP_CONSOLE_TEST_RELAY_READ_MATCH": '"kind":"initialized"',
+                "MCP_CONSOLE_TEST_RELAY_READ_MATCH": '"kind":"ready"',
                 "MCP_CONSOLE_TEST_RELAY_READ_BLOCKED": str(reached.path),
                 "MCP_CONSOLE_TEST_RELAY_READ_RELEASE": str(release.path),
             }
@@ -189,24 +117,48 @@ def ready_without_send(
             """)
         with McpClient(
             Path(sys.executable),
-            ("-c", launcher, str(binary), *execution.serve()),
+            (
+                "-c",
+                launcher,
+                str(binary),
+                *execution.serve(
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                ),
+            ),
             environment,
             root,
             response_timeout=600,
         ) as client:
             try:
-                # Receipt of Initialized proves actual interpreter initialization,
-                # before there has been any tool call that could start a worker.
-                reached.wait(
-                    "default worker completed initialization without send", timeout=600
-                )
+                # The relay reports Ready only after launching the real worker.
+                reached.wait("default worker launched without send", timeout=600)
+                owner = capture_process_identity(client.process.pid)
+                descendants = []
+                pending = [owner]
+                while pending:
+                    children = child_process_identities(pending.pop())
+                    descendants.extend(children)
+                    pending.extend(children)
                 client.initialize_and_list_tools()
                 tools = client.transcript[-1]["result"]
                 if not sans_r:
                     client.transcript[-1]["result"] = "<configured R-only schema>"
                 client.request("ping")
+                if close:
+                    try:
+                        client.close()
+                        assert not live_processes(descendants), (
+                            "prelaunch resources survived MCP closure"
+                        )
+                        return [*client.finish(), {"prelaunch_resources_retired": True}]
+                    finally:
+                        kill_processes(descendants)
                 release.release()
                 client.send(requirements={"action": "get"})
+                if sans_r:
+                    assert not (root / "python-started").exists(), (
+                        "prelaunch initialized Python before first use"
+                    )
                 cell = (
                     {"python": "import os; worker_pid = os.getpid(); worker_pid"}
                     if sans_r
@@ -214,6 +166,12 @@ def ready_without_send(
                 )
                 client.send(**cell)
                 identity = last_result_text(client)
+                worker_pid = int(identity.removeprefix("[1] "))
+                assert host_process_id(worker_pid, owner[0]) in {
+                    identity[0] for identity in descendants
+                }, "first send replaced the already launched worker"
+                if sans_r:
+                    assert identity == (root / "python-started").read_text() + "\n"
                 client.transcript[-1]["result"]["content"][0]["text"] = (
                     "<prewarmed worker pid>\n"
                 )
@@ -237,6 +195,14 @@ def test_sans_r_worker_is_ready_without_send(
     binary: Path, execution: Execution
 ) -> Transcript:
     return ready_without_send(binary, execution, sans_r=True)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_connection_closure_retires_prelaunch_resources(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return ready_without_send(binary, execution, sans_r=True, close=True)
 
 
 @executions(DIRECT, SANDBOXED)
@@ -359,60 +325,6 @@ def test_idle_stdin_preserves_used_worker_and_input(
         return client.finish()[3:]
 
 
-@executions(DIRECT, SANDBOXED)
-@requires(R, PROCESS_EVENTS, command("ir"), command("uv"))
-def test_deferred_requirements_cell_allows_startup_input(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        site = Path(directory)
-        (site / "sitecustomize.py").write_text(
-            code("""
-            import os
-            import sys
-
-            if sys.argv[0] != "-c" and os.environ.get(
-                "R_SESSION_INITIALIZED", ""
-            ).startswith(f"PID={os.getpid()}:"):
-                assert input("warmup> ") == "warmup input"
-            """)
-        )
-        with startup_fixture(
-            binary,
-            execution,
-            phase="none",
-            server_environment={
-                "PYTHONPATH": str(site),
-                "RETICULATE_PYTHONPATH": str(site),
-            },
-        ) as fixture:
-            client = fixture.client
-            client.response_timeout = 600
-            client.initialize_and_list_tools()
-            client.send(timeout_ms=600_000)
-            assert last_result_text(client) == (
-                '[input requested: "warmup> "]\n[waiting for stdin]'
-            ), last_result_text(client)
-            client.send(
-                r='cat(readLines("stdin", n = 1L)); 42L',
-                requirements={"python": ["py-yaml12"]},
-                stdin="cell input\n",
-                timeout_ms=0,
-            )
-            assert not client.transcript[-1]["result"]["isError"]
-            client.send(timeout_ms=0)
-            assert last_result_text(client) == "\n[waiting for stdin]", (
-                last_result_text(client)
-            )
-            client.send(stdin="warmup input\n", timeout_ms=0)
-            client.send(timeout_ms=600_000)
-            assert "cell input[1] 42" in last_result_text(client), last_result_text(
-                client
-            )
-            assert not client.transcript[-1]["result"]["isError"]
-            return client.finish()[3:]
-
-
 @requires(NATIVE_FIXTURES)
 def test_failed_discovery_discards_pending_recording(binary: Path) -> Transcript:
     with (
@@ -438,48 +350,6 @@ def test_failed_discovery_discards_pending_recording(binary: Path) -> Transcript
             _, stderr = client.finish_with_standard_error(expected_exit_status=1)
             assert "fixture R discovery failed" in stderr, stderr
             return [{"failed_send_count": 1024, "result": failure}, {"stderr": stderr}]
-
-
-@executions(DIRECT, SANDBOXED)
-@requires(R, PROCESS_EVENTS, command("ir"), command("uv"))
-def test_interrupt_stdin_preserves_used_default(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        site = Path(directory)
-        (site / "sitecustomize.py").write_text(
-            code("""
-            import os
-            import sys
-
-            if sys.argv[0] != "-c" and os.environ.get(
-                "R_SESSION_INITIALIZED", ""
-            ).startswith(f"PID={os.getpid()}:"):
-                input("warmup> ")
-            """)
-        )
-        with startup_fixture(
-            binary,
-            execution,
-            phase="none",
-            server_environment={
-                "PYTHONPATH": str(site),
-                "RETICULATE_PYTHONPATH": str(site),
-            },
-        ) as fixture:
-            client = fixture.client
-            client.response_timeout = 600
-            client.initialize_and_list_tools()
-            client.send(timeout_ms=600_000)
-            assert last_result_text(client) == (
-                '[input requested: "warmup> "]\n[waiting for stdin]'
-            ), last_result_text(client)
-            client.send(control="interrupt", stdin="retained input\n", timeout_ms=0)
-            assert not client.send(requirements={"action": "get"})["isError"]
-            changed = client.send(requirements={"action": "set"})
-            assert changed["isError"] is True, changed
-            assert "explicit restart" in str(changed), changed
-            return client.finish()[-1:]
 
 
 if __name__ == "__main__":

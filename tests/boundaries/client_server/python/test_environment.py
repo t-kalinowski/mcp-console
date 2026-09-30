@@ -172,36 +172,6 @@ def test_rejects_python_older_than_3_10(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
-@requires(R)
-def test_explicit_python_preserves_r_initialization_callback(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with McpClient(
-        binary, execution.serve(), dict(os.environ, RETICULATE_PYTHON=sys.executable)
-    ) as client:
-        client.initialize_and_list_tools()
-        client.send(
-            # fmt: r
-            r=code("""
-                startup_callbacks <- 0L
-                options(reticulate.python.beforeInitialized = function() {
-                  startup_callbacks <<- startup_callbacks + 1L
-                })
-                stopifnot(!reticulate::py_available(initialize = FALSE))
-                """),
-        )
-        assert last_result_text(client) == "[done]", last_result_text(client)
-        client.send(python="42")
-        assert last_result_text(client) == "42\n", last_result_text(client)
-        client.send(r="startup_callbacks")
-        assert last_result_text(client) == "[1] 1\n", last_result_text(client)
-        client.send(python="43")
-        client.send(r="startup_callbacks")
-        assert last_result_text(client) == "[1] 1\n", last_result_text(client)
-        return client.finish()
-
-
 def managed_python_transcript(
     binary: Path, execution: Execution, configured: bool
 ) -> Transcript:
@@ -548,10 +518,6 @@ def test_prints_requirements_with_host_uv_cache(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        # Observe eager readiness, then exercise R-first resolution in a lazy
-        # replacement with the same captured trusted resolver settings.
-        assert not client.send(requirements={"action": "get"})["isError"]
-        client.send(control="restart")
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(r"""

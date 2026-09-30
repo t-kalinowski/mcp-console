@@ -121,7 +121,7 @@ struct ClientInner {
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
     recording: Mutex<Option<crate::transcript::Transcript>>,
-    initialization_interrupted: AtomicBool,
+    startup_failed: AtomicBool,
     startup_stdin: Mutex<String>,
 }
 
@@ -314,7 +314,6 @@ impl WorkerState {
 struct ActiveEvaluation {
     generation: WorkerGeneration,
     evaluation: Arc<Evaluation>,
-    inherits_startup: bool,
     initial_requirements: Arc<Mutex<Option<Requirements>>>,
 }
 
@@ -387,7 +386,7 @@ impl Client {
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
             recording: Mutex::new(None),
-            initialization_interrupted: AtomicBool::new(false),
+            startup_failed: AtomicBool::new(false),
             startup_stdin: Mutex::new(String::new()),
         }))
     }
@@ -424,35 +423,14 @@ impl Client {
         });
     }
 
-    pub(crate) fn report_warmup_failure(&self, generation: &WorkerGeneration, error: String) {
-        self.publish_warmup_outcome(generation, Some(error));
-    }
-
-    fn publish_warmup_outcome(&self, generation: &WorkerGeneration, error: Option<String>) {
-        let lifecycle = self.0.lifecycle.lock().expect("worker lifecycle lock");
-        if lifecycle.state == lifecycle::LifecycleState::Ready
-            && lifecycle.generation.is(generation)
-        {
-            if let Some(error) = error {
-                self.0.output.push_failure(error.into());
-            }
-            self.0
-                .initialization_interrupted
-                .store(true, Ordering::Release);
-        }
-    }
-
-    fn take_initialization_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
+    fn take_startup_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
         let lifecycle = self
             .0
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned")?;
         lifecycle.ensure_generation(generation)?;
-        Ok(self
-            .0
-            .initialization_interrupted
-            .swap(false, Ordering::AcqRel))
+        Ok(self.0.startup_failed.swap(false, Ordering::AcqRel))
     }
 
     pub(crate) async fn ready(&self) -> Result<(), String> {
@@ -472,106 +450,54 @@ impl Client {
         self.0.startup.borrow().is_some()
     }
 
-    pub(crate) fn prewarm(&self, languages: Vec<crate::cell::Language>) -> Result<(), String> {
-        let generation = self.admit()?;
-        let _startup = self.reserve_worker_startup(&generation)?;
-        // An already admitted declaration selects the initial candidate through
-        // the same transaction the evaluator would use after readiness.
-        if let Some(active) = self.current_evaluation()? {
-            let requirements = active
-                .initial_requirements
+    /// Launch the default process through the ordinary readiness/retirement path.
+    /// Language runtimes retain their existing first-use initialization.
+    pub(crate) fn prelaunch(&self, generation: &WorkerGeneration) {
+        let result = (|| -> Result<(), SendFailure> {
+            self.ensure_startup(generation)?;
+            // An already admitted declaration selects the initial candidate through
+            // the same transaction the evaluator uses after readiness.
+            if let Some(active) = self.current_evaluation()? {
+                let requirements = active
+                    .initial_requirements
+                    .lock()
+                    .map_err(|_| "initial requirements lock poisoned".to_string())?
+                    .take();
+                if let Some(requirements) = requirements
+                    && let Err(failure) = self.prepare_cell_requirements(requirements, generation)
+                {
+                    active.evaluation.complete_cell(Err(failure));
+                }
+            }
+            let _preparation = self.0.preparation.blocking_read();
+            let mut worker = self
+                .0
+                .worker
                 .lock()
-                .map_err(|_| "initial requirements lock poisoned")?
-                .take();
-            if let Some(requirements) = requirements {
-                match self.prepare_cell_requirements(requirements, &generation) {
-                    Ok(()) => {
-                        if let Some(active) = self
-                            .evaluation()?
-                            .as_mut()
-                            .filter(|active| active.generation.is(&generation))
-                        {
-                            active.inherits_startup = true;
-                        }
-                    }
-                    Err(failure) => active.evaluation.complete_cell(Err(failure)),
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            if let Err(mut failure) = self.start_worker(
+                &mut worker,
+                generation.clone(),
+                false,
+                |handle| self.register_stop_handle(generation, handle),
+                || Ok(()),
+            ) {
+                if let Err(error) = self.clear_worker_stop_handle(generation) {
+                    failure.message.push_str(&format!("; {error}"));
                 }
+                return Err(failure);
+            }
+            Ok(())
+        })();
+        if let Err(failure) = result {
+            let lifecycle = self.0.lifecycle.lock().expect("worker lifecycle lock");
+            if lifecycle.state == lifecycle::LifecycleState::Ready
+                && lifecycle.generation.is(generation)
+            {
+                self.0.output.push_failure(failure);
+                self.0.startup_failed.store(true, Ordering::Release);
             }
         }
-        let _preparation = self.0.preparation.blocking_read();
-        let mut worker = self.0.worker.lock().map_err(|_| "worker lock poisoned")?;
-        if let Err(mut failure) = self.start_worker(
-            &mut worker,
-            generation.clone(),
-            false,
-            |handle| self.register_stop_handle(&generation, handle),
-            || Ok(()),
-        ) {
-            if let Err(error) = self.clear_worker_stop_handle(&generation) {
-                failure.message.push_str(&format!("; {error}"));
-            }
-            return Err(failure.message);
-        }
-        let WorkerState::Running(running) = &mut *worker else {
-            unreachable!("prewarmed worker is running")
-        };
-        let python_selected = self
-            .0
-            .target
-            .as_ref()
-            .is_some_and(|target| target.python_available())
-            || self.0.environment.as_ref().is_some_and(|environment| {
-                environment
-                    .lock()
-                    .expect("worker environment lock")
-                    .python
-                    .as_ref()
-                    .is_some_and(|python| matches!(python, PythonEnvironment::Managed { .. }))
-            })
-            || self.0.environment.as_ref().is_some_and(|environment| {
-                environment
-                    .lock()
-                    .expect("worker environment lock")
-                    .local_runtime
-                    .as_ref()
-                    .is_some_and(|runtime| runtime.python.is_some())
-            });
-        let languages = languages
-            .into_iter()
-            .filter(|language| match language {
-                crate::cell::Language::R => {
-                    !self.python_only()
-                        && (self.dynamic_resolution()
-                            || self
-                                .0
-                                .target
-                                .as_ref()
-                                .is_some_and(|target| !target.is_ssh()))
-                }
-                crate::cell::Language::Python => python_selected,
-                crate::cell::Language::Sql => {
-                    self.dynamic_resolution()
-                        || self.python_preparation()
-                        || self.0.target.is_some()
-                }
-            })
-            .collect();
-        let initialized = running.initialize(languages, self.clone());
-        if matches!(initialized, Ok(false)) {
-            self.publish_warmup_outcome(&generation, None);
-        }
-        if let Err(error) = initialized {
-            let mut failure = SendFailure::from(error);
-            match self.stop_failed_worker(&mut worker, &generation) {
-                Ok(lifecycle::FailedWorkerStop::Stopped(outcome)) => {
-                    failure = failure.worker_outcome(outcome)
-                }
-                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => {}
-                Err(error) => failure = error.attach_to(failure),
-            }
-            return Err(failure.message);
-        }
-        Ok(())
     }
 
     pub(crate) fn new(
@@ -999,6 +925,11 @@ impl Client {
 
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        if self.is_configured()
+            && let Some(cell) = &request.cell
+        {
+            self.validate_cell(cell)?;
+        }
         // Admission does not depend on discovery or readiness. The established
         // evaluation slot owns an accepted early cell and all subsequent polls.
         if request.control.is_none()
@@ -1471,9 +1402,7 @@ impl Client {
             }
             return Ok(self.return_controlled_response(response));
         };
-        self.0
-            .initialization_interrupted
-            .store(false, Ordering::Release);
+        self.0.startup_failed.store(false, Ordering::Release);
         self.finish_startup(Ok(()));
         self.ensure_controlled_generation(control, &generation)?;
         let Some(cell) = cell else {
@@ -1677,9 +1606,9 @@ impl Client {
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
     ) -> Result<SendResponse, SendFailure> {
-        let operation = self.admit_operation()?;
+        let mut operation = Some(self.admit_operation()?);
         let generation = self.admit()?;
-        let preparation = self.admit_send()?;
+        let mut preparation = Some(self.admit_send()?);
         let (evaluation, wait_claim) = match cell {
             Some(cell) => {
                 let mut prelude = None;
@@ -1704,24 +1633,7 @@ impl Client {
                     }
                     let wait_claim = active.evaluation.claim()?;
                     if let Some(stdin) = stdin {
-                        #[cfg(unix)]
-                        let startup_input = if !active.inherits_startup && !self.startup_finished()
-                        {
-                            self.worker_handle()?
-                                .map(|worker| worker.startup_snapshot(&self.0.output))
-                                .transpose()?
-                                .is_some_and(|snapshot| snapshot.input_requested)
-                        } else {
-                            false
-                        };
-                        #[cfg(not(unix))]
-                        let startup_input = false;
-                        if startup_input {
-                            #[cfg(unix)]
-                            self.queue_startup_stdin(&generation, stdin)?;
-                        } else {
-                            active.evaluation.submit_stdin(stdin)?;
-                        }
+                        active.evaluation.submit_stdin(stdin)?;
                     }
                     (active.evaluation, wait_claim)
                 }
@@ -1737,8 +1649,10 @@ impl Client {
                     }
                     // Waiting for shared startup is observation, not a
                     // reservation against its accepted cell's preparation.
-                    drop(preparation);
-                    drop(operation);
+                    if !self.startup_finished() {
+                        drop(preparation.take());
+                        drop(operation.take());
+                    }
                     loop {
                         if let Some(active) = self.current_evaluation()? {
                             self.ensure_ordinary_generation(&generation)?;
@@ -1758,15 +1672,6 @@ impl Client {
                         if let Some(result) = startup.borrow_and_update().as_ref() {
                             result.clone()?;
                             break;
-                        }
-                        #[cfg(unix)]
-                        if let Some(worker) = self.worker_handle()? {
-                            let snapshot = worker.startup_snapshot(&self.0.output)?;
-                            if snapshot.input_requested {
-                                return Ok(SendResponse::InputRequested(
-                                    self.0.output.drain_through(snapshot.cut),
-                                ));
-                            }
                         }
                         if tokio::time::timeout(
                             deadline.saturating_duration_since(Instant::now()),
@@ -1875,16 +1780,10 @@ impl Client {
         *active = Some(ActiveEvaluation {
             generation: generation.clone(),
             evaluation: evaluation.clone(),
-            inherits_startup: initial_requirements.is_none(),
             initial_requirements: Arc::new(Mutex::new(initial_requirements)),
         });
         let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
-        let inherits_startup = active.as_ref().unwrap().inherits_startup;
         drop(active);
-        #[cfg(unix)]
-        if let Some(worker) = self.worker_handle()? {
-            worker.adopt_startup_evaluation(&evaluation, inherits_startup)?;
-        }
 
         let client = self.clone();
         let evaluator = evaluation.clone();
@@ -2003,7 +1902,7 @@ impl Client {
                 .to_string()
                 .into());
         }
-        if self.take_initialization_failure(generation)? {
+        if self.take_startup_failure(generation)? {
             return Ok(SendResponse::Failed(self.0.output.take()));
         }
         drop(evaluation);
@@ -2064,7 +1963,7 @@ impl Client {
                 return Ok(());
             }
             self.validate_cell(&cell)?;
-            if self.take_initialization_failure(&generation)? {
+            if self.take_startup_failure(&generation)? {
                 evaluation.complete_cell(Ok(()));
                 return Ok(());
             }

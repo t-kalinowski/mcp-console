@@ -63,7 +63,6 @@ struct Operation {
 }
 
 enum OperationKind {
-    Initialize(super::Client),
     Cell(Arc<Evaluation>),
     PrepareR {
         library: String,
@@ -107,39 +106,12 @@ enum RuntimeRCallbackAdmission {
 }
 
 pub(super) enum OperationResult {
-    Initialized(bool),
     Completed,
     RPrepared(super::PreparationOutcome),
     PythonPrepared(super::PreparationOutcome),
 }
 
 impl WorkerOperationState {
-    pub(super) fn adopt_startup_evaluation(
-        &self,
-        evaluation: &Arc<Evaluation>,
-        stdin: super::platform::StdinSender,
-        inherits_stdin: bool,
-    ) -> Result<(), String> {
-        let state = self.lock()?;
-        if matches!(
-            state.operation.as_ref().map(|operation| &operation.kind),
-            Some(OperationKind::Initialize(_))
-        ) {
-            if state.idle_input.is_some() {
-                evaluation.resume_input_request(inherits_stdin)?;
-            }
-            if inherits_stdin {
-                evaluation.attach_writer(stdin)?;
-            }
-        }
-        Ok(())
-    }
-    pub(super) fn begin_initialization(
-        &self,
-        client: super::Client,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
-        self.begin_preparation(OperationKind::Initialize(client))
-    }
     pub(super) fn new() -> Self {
         Self(Arc::new(OperationStateCell {
             state: Mutex::new(OperationState {
@@ -199,7 +171,7 @@ impl WorkerOperationState {
                 .map_err(|_| "worker operation state lock poisoned".to_string())?;
         }
         if state.idle_input.take().is_some() {
-            evaluation.resume_input_request(true)?;
+            evaluation.resume_input_request()?;
         }
         let mut operation = Some(Operation {
             kind: OperationKind::Cell(evaluation.clone()),
@@ -353,13 +325,6 @@ impl WorkerOperationState {
             Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
                 Route::Preparation
             }
-            Some(OperationKind::Initialize(client)) => match client
-                .current_evaluation()?
-                .filter(|active| active.inherits_startup)
-            {
-                Some(active) => Route::Cell(active.evaluation),
-                None => Route::Idle,
-            },
             None => Route::Idle,
         };
         publish(route)
@@ -382,7 +347,7 @@ impl WorkerOperationState {
                     "worker sent a runtime R callback during requirement preparation".to_string(),
                 );
             }
-            Some(OperationKind::Initialize(_) | OperationKind::Cell(_)) | None => {}
+            Some(OperationKind::Cell(_)) | None => {}
         }
         if state.runtime_r_callback.is_some() {
             return Err("worker sent a second runtime R callback before activation".to_string());
@@ -417,7 +382,7 @@ impl WorkerOperationState {
                     "worker sent a runtime R callback during requirement preparation".to_string(),
                 );
             }
-            Some(OperationKind::Initialize(_) | OperationKind::Cell(_)) | None => {}
+            Some(OperationKind::Cell(_)) | None => {}
         }
         if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
             return Err(
@@ -451,7 +416,7 @@ impl WorkerOperationState {
                     "idle R callback requested input {rendered} during requirement preparation; collect callback input with send before preparing requirements"
                 ))
             }
-            Some(OperationKind::Initialize(_)) | None => {
+            None => {
                 if state.idle_input.is_some() {
                     return Err(
                         "worker requested new input before receiving prior input".to_string()
@@ -459,16 +424,6 @@ impl WorkerOperationState {
                 }
                 state.idle_input = Some(rendered.clone());
                 output.push_notice_line(format!("input requested: {rendered}"));
-                if let Some(OperationKind::Initialize(client)) =
-                    state.operation.as_ref().map(|operation| &operation.kind)
-                {
-                    if let Some(active) = client.current_evaluation()? {
-                        active
-                            .evaluation
-                            .resume_input_request(active.inherits_startup)?;
-                    }
-                    client.0.startup.send_modify(|_| {});
-                }
                 Ok(())
             }
         }
@@ -481,16 +436,10 @@ impl WorkerOperationState {
             Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
                 Err("worker reported received input during requirement preparation".to_string())
             }
-            Some(OperationKind::Initialize(_)) | None => {
+            None => {
                 state.idle_input.take().ok_or_else(|| {
                     "worker reported received input without requesting it".to_string()
                 })?;
-                if let Some(OperationKind::Initialize(client)) =
-                    state.operation.as_ref().map(|operation| &operation.kind)
-                    && let Some(active) = client.current_evaluation()?
-                {
-                    active.evaluation.resume_input_received()?;
-                }
                 Ok(())
             }
         }
@@ -529,12 +478,6 @@ impl WorkerOperationState {
             }
         );
         let committed = match (kind, event) {
-            (OperationKind::Initialize(_), RelayEvent::Initialized { completed }) => {
-                Ok(OperationResult::Initialized(completed))
-            }
-            (OperationKind::Initialize(_), _) => {
-                Err("worker sent an unexpected initialization result".into())
-            }
             (OperationKind::Cell(evaluation), RelayEvent::Completed) => {
                 match evaluation.input_complete() {
                     Ok(()) => {
@@ -654,7 +597,6 @@ impl Drop for EnvironmentPreparationReservation {
 impl OperationKind {
     fn matches_result(&self, event: &RelayEvent) -> bool {
         match (self, event) {
-            (Self::Initialize(_), RelayEvent::Initialized { .. }) => true,
             (Self::Cell(_), RelayEvent::Completed)
             | (Self::PrepareR { .. }, RelayEvent::RPreparationFailed { .. })
             | (
@@ -1224,8 +1166,7 @@ fn handle_semantic_event(
             callbacks.fail_python_activation()?;
             Ok(())
         }
-        event @ (RelayEvent::Initialized { .. }
-        | RelayEvent::Completed
+        event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }
         | RelayEvent::PythonPrepared

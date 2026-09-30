@@ -58,7 +58,7 @@ send:
 result:
   content:
     - type: text
-      text: R cells are unavailable in Python sessions without R
+      text: "[R cells are unavailable in Python sessions without R]"
   isError: true
 ---
 send:

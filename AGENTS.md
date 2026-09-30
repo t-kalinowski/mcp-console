@@ -69,7 +69,7 @@ Docker and SBX share prepared-runtime discovery and configuration in `src/target
 Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and use its R/native-Python capabilities for operation validation and recording.
 Construct MCP tool presentation only from captured launch configuration; discovered runtime availability must not remove language fields.
 Run runtime discovery and initial preparation once in the background so MCP initialization, tool discovery, and pings remain responsive.
-Continue through default worker launch and applicable enabled-runtime initialization using the existing worker lifecycle.
+Continue through real default-worker readiness using the existing launch and retirement lifecycle; language initialization remains on demand.
 Admit early cells to the ordinary evaluation slot and include waiting for shared readiness in the one call deadline; timeout and request cancellation leave admitted cells available to normal polling.
 Cancellation of one waiting call must not cancel shared startup.
 The MCP connection owns startup cancellation and joins the existing resolver/provider retirement protocol on closure or failed handshake.
@@ -255,8 +255,7 @@ Keep these invariants intact:
   Common Python module hooks and reached-import resolution do not use an R callback.
   Idle tool preparation, reached imports, and R declarations share the Console requirement and activation owner; the R adapter retains declaration representation and conditions.
   The Python facade retains the optional adapter after R initialization; it owns attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
-  Applicable enabled runtimes in the default environment initialize during background startup on the same serialized thread.
-  Remaining runtimes and replacement generations initialize on demand.
+  Both interpreters initialize on demand on the same serialized thread.
   An explicit or host-resolved Python selection starts without R; unresolved R-side selection hints require R.
   R cells, Python-side R access, and R-owned SQL initialize R.
   Late bridge attachment uses the running Python identity and preserves its state.

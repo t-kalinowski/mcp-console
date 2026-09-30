@@ -329,17 +329,8 @@ impl ConsoleServer {
                     .map_err(|error| std::io::Error::new(error.kind(), error.to_string())),
             ),
         });
-        let prewarm = worker.is_none().then(|| {
-            [
-                crate::cell::Language::R,
-                crate::cell::Language::Python,
-                crate::cell::Language::Sql,
-            ]
-            .into_iter()
-            .filter(|language| languages.enables(*language))
-            .collect()
-        });
-        let startup = startup::Startup::new(input_closed, runtime, prewarm, move |started| {
+        let prelaunch = worker.is_none();
+        let startup = startup::Startup::new(input_closed, runtime, prelaunch, move |started| {
             let worker = if let Some((target, roots)) = target {
                 crate::worker_client::Client::target(
                     target,
@@ -751,6 +742,7 @@ impl ServerHandler for ConsoleServer {
         };
         context.extensions.insert(delivery.clone());
         let runtime = self.startup.runtime();
+        let waiting_for_startup = !runtime.worker.startup_finished();
         let transcript = runtime.transcript.clone();
         context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
@@ -779,10 +771,15 @@ impl ServerHandler for ConsoleServer {
             .get("send")
             .expect("send tool must be registered");
         let cancellation = context.ct.clone();
-        let result = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(ErrorData::internal_error("request cancelled; poll with an empty send for any admitted cell", None)),
-            result = (send.call)(ToolCallContext::new(self, request, context)) => result,
+        let call_future = (send.call)(ToolCallContext::new(self, request, context));
+        let result = if waiting_for_startup {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(ErrorData::internal_error("request cancelled; poll with an empty send for any admitted cell", None)),
+                result = call_future => result,
+            }
+        } else {
+            call_future.await
         };
         let result = Arc::new(match result {
             Err(error) if error.code == ErrorCode::INVALID_PARAMS => Ok(response_to_tool_result(

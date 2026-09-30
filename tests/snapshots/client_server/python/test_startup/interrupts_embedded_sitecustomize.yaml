@@ -3,7 +3,7 @@
 ---
 send:
   python: never_run = True
-  timeout_ms: 600000
+  timeout_ms: 10000
 result:
   content:
     - type: text
@@ -23,7 +23,7 @@ result:
           File "<string>", line 109, in initialize_site
           File "<frozen site>", line <line>, in main
           File "<frozen site>", line <line>, in execsitecustomize
-          File "<site-packages>/sitecustomize.py", line 16, in <module>
+          File "<site-packages>/sitecustomize.py", line 14, in <module>
             input("startup interrupt> ")
           File "<string>", line 50, in _console_input
         KeyboardInterrupt
