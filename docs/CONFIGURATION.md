@@ -5,6 +5,7 @@ They then apply each `-c KEY=VALUE` or `--config KEY=VALUE` in command-line orde
 Options may appear before or after the subcommand.
 No ancestor directories are searched; if neither file exists, configuration starts empty.
 An unreadable file or malformed YAML prevents launch.
+Custom YAML tags are ignored recursively, including on the top-level mapping; the tagged values still undergo normal configuration validation.
 An existing project file takes precedence even when it is invalid.
 Overrides change the configuration for this launch without editing the file.
 
