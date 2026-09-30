@@ -133,7 +133,6 @@ base::local(
         )
         python_not_found(message)
       }
-      state$check_python_version(config)
       # Discovery retains reticulate's selection precedence and metadata.
       # Console owns the embedding fields consumed by both native startup
       # and reticulate's later attachment to that same interpreter.
@@ -144,6 +143,9 @@ base::local(
           stop(error)
         }
       )
+      # Native inspection rejects unsupported versions through the ordinary
+      # selection-error boundary before any interpreter mutation.
+      state$check_python_version(config)
       embedding <- jsonlite::fromJSON(inspected)$embedding
       config$python <- embedding$python
       config$executable <- embedding$python

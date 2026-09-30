@@ -1,0 +1,51 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    startup_callbacks <- 0L
+    options(reticulate.python.beforeInitialized = function() {
+      startup_callbacks <<- startup_callbacks + 1L
+    })
+    stopifnot(!reticulate::py_available(initialize = FALSE))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: "42"
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  r: startup_callbacks
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+---
+send:
+  python: "43"
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  r: startup_callbacks
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
