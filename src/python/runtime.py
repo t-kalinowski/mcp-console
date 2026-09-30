@@ -95,6 +95,7 @@ class _McpConsoleImportFinder:
         distributions,
         ambiguous_roots,
         metadata,
+        private_codes,
         missing_module,
         missing_submodule,
         explicit_requirement,
@@ -109,6 +110,14 @@ class _McpConsoleImportFinder:
         self._distributions = distributions
         self._ambiguous_roots = ambiguous_roots
         self._metadata = metadata
+        self._private_codes = private_codes
+        self._id = id
+        self._import_globals = (
+            importlib.__dict__,
+            importlib_util.__dict__,
+            importlib._bootstrap.__dict__,
+            importlib._bootstrap_external.__dict__,
+        )
         self._missing_module = missing_module
         self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
@@ -298,33 +307,57 @@ class _McpConsoleImportFinder:
 
     def _is_installed_package_initialization(self):
         # Importlib holds the selected spec throughout both Python and native
-        # initialization, including PyInit before _initializing is set. The
-        # nearest load owns the miss; an installed ancestor cannot own a local
-        # module's imports.
+        # initialization, including PyInit before _initializing is set. Deferred
+        # loader execution after this boundary remains eligible for resolution.
         frame = self._sys._getframe(1)
+        importing_frame = None
         while frame is not None:
             if frame.f_code is self._load_code:
                 specification = frame.f_locals["spec"]
                 break
+            if (
+                importing_frame is None
+                and self._id(frame.f_code) not in self._private_codes
+                and all(frame.f_globals is not scope for scope in self._import_globals)
+            ):
+                importing_frame = frame
             frame = frame.f_back
         else:
             return False
-        if specification.origin is None:
+        # Cached helpers within the initializing distribution share its import
+        # context. A local or other library callback owns its own imports.
+        # Native PyInit has no Python frame.
+        importer = (
+            specification
+            if importing_frame is None
+            else importing_frame.f_globals.get("__spec__")
+        )
+        if importer is None or importer.origin is None or specification.origin is None:
             return False
         root = specification.name.partition(".")[0]
-        origin = self._os.path.realpath(specification.origin)
-        # Consult current metadata rather than caching it across activation:
-        # explicit and automatic preparation can add distributions mid-session.
-        distributions = self._metadata.packages_distributions()
-        for name in distributions.get(root, ()):
-            distribution = self._metadata.distribution(name)
-            # A local module can shadow an installed import root. Only recorded
-            # files establish ownership; file-less or indirect editable metadata
-            # does not identify the selected module and remains eligible.
-            for file in distribution.files or ():
-                installed = distribution.locate_file(file)
-                if origin == self._os.path.realpath(str(installed)):
-                    return True
+        origins = {
+            self._os.path.realpath(specification.origin),
+            self._os.path.realpath(importer.origin),
+        }
+        module = self._sys.modules.get(root)
+        root_spec = specification if module is None else module.__spec__
+        locations = root_spec.submodule_search_locations
+        # Read metadata at the loaded root's locations, not the latest sys.path:
+        # compatible activation preserves existing package paths. Do not cache.
+        metadata_paths = (
+            [self._os.path.dirname(path) for path in locations]
+            if locations is not None
+            else [self._os.path.dirname(root_spec.origin)]
+        )
+        for distribution in self._metadata.distributions(path=metadata_paths):
+            # Both selected files must belong to the same distribution. Names,
+            # file-less metadata and indirect editable records cannot own them.
+            installed = {
+                self._os.path.realpath(str(distribution.locate_file(file)))
+                for file in distribution.files or ()
+            }
+            if origins <= installed:
+                return True
         return False
 
     def _is_availability_probe(self):
@@ -386,6 +419,7 @@ if _mcp_console_import_finder is None:
         _MCP_CONSOLE_IMPORT_DISTRIBUTIONS,
         _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS,
         _importlib_metadata,
+        _mcp_console_private_codes,
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,

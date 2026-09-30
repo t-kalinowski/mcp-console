@@ -591,9 +591,11 @@ Ordinary resolver and activation errors leave an otherwise healthy worker availa
 
 Automatic Python resolution is also a callback from an active built-in worker.
 The private finder runs only after Python's existing import finders have failed, so available standard-library, local, and installed modules do not enter this path.
-It also yields without a callback for missing imports reached while the nearest initializing Python module or native extension belongs to an installed distribution, checking its import root and module origin against current distribution file metadata.
-This preserves ordinary optional-dependency handling; later calls and local modules, including those that shadow installed import roots or are imported by installed initializers, remain eligible for automatic resolution.
+It also yields without a callback when the importing Python module or native extension and the active importlib initializer belong to the same installed distribution's recorded files.
+Metadata is read at the loaded import root's locations, including package paths retained across compatible activation, without a cache.
+This preserves ordinary optional-dependency handling; later calls and local modules, including cached callbacks invoked by installed initializers, remain eligible for automatic resolution.
 An installation without a recorded file matching the selected origin does not establish ownership and remains eligible for automatic resolution.
+Deferred module bodies, including `importlib.util.LazyLoader` execution on later attribute access, fall outside this ordinary importlib initialization boundary.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
 
 The Python finder calls the shared native requirement owner, which forms an additive request from its retained manifest.

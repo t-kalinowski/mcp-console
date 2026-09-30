@@ -441,9 +441,11 @@ Built-in, frozen, standard-library, local, already-installed, and already-loaded
 Ordinary `import` statements, `from ... import ...`, and `importlib.import_module()` all use this machinery.
 Missing imports reached while an installed distribution is initializing stay on Python's ordinary path, so packages can catch `ImportError` for optional dependencies without starting host resolution.
 Import a dependency directly after initialization, call a library function that imports it later, or declare it through `requirements.python`, when it is needed.
-Current distribution file metadata identifies the nearest initializing Python module or native extension.
-Local modules remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer imports them.
+Distribution file metadata must identify the initializer and importing module as files of the same installed distribution, for both Python modules and native extensions.
+The finder reads metadata at the loaded import root's locations, including package paths retained across compatible activation.
+Local modules and callbacks remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer calls them.
 Installations whose metadata does not record the selected module file also remain eligible; package names alone do not establish ownership.
+The initialization boundary is the ordinary importlib load; module bodies deferred until later attribute access by `importlib.util.LazyLoader` remain eligible for automatic resolution.
 When every earlier finder misses, MCP Console takes the top-level name from the requested import.
 A curated table maps established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.
 For other conservative ASCII identifiers, it assumes that the PyPI distribution has the same name as the top-level module.
