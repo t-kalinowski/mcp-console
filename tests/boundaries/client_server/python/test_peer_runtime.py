@@ -442,10 +442,11 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
             fields = tool["inputSchema"]["properties"]
-            assert "r" in fields and "sql" in fields and "python" not in fields, fields
-            assert "Persistent R and SQL workbench" in tool["description"]
-            assert "Python" not in tool["description"]
-            assert "`python`" not in tool["description"]
+            assert {"r", "python", "sql"} <= fields.keys(), fields
+            assert (
+                "Language fields describe the configured interface"
+                in tool["description"]
+            )
             result = client.send(python="raise AssertionError('unavailable cell ran')")
             assert result["isError"], result
             assert last_result_text(client) == (
@@ -455,6 +456,14 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
                 r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer"
             )
             assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            result = client.send(
+                control="restart",
+                python="raise AssertionError('unavailable cell ran')",
+            )
+            assert result["isError"], result
+            assert last_result_text(client) == (
+                "Python cells are unavailable: the target has no Python runtime"
+            ), result
             client.send(
                 r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer"
             )

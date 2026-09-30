@@ -468,10 +468,11 @@ def test_prepares_managed_python_at_startup_and_restart(
             )
             assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
             schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
-            assert "r" not in schema["properties"]
+            assert "r" in schema["properties"]
             assert "sql" in schema["properties"]
             requirement_schema = schema["properties"]["requirements"]
             assert set(requirement_schema["properties"]) == {
+                "r",
                 "python",
                 "duckdb",
                 "action",
@@ -1842,7 +1843,7 @@ def test_resolves_default_python_without_r(
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             schema = client.transcript[-1]["result"]["tools"][0]
-            assert "r" not in schema["inputSchema"]["properties"]
+            assert "r" in schema["inputSchema"]["properties"]
             assert "sql" in schema["inputSchema"]["properties"]
             assert (
                 "duckdb"

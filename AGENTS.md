@@ -66,7 +66,8 @@ Docker resolves its image once before workload startup and uses that immutable I
 Each generation owns a fresh Linux container containing relay and worker; a local owner observes server and attachment loss and requires confirmed container removal before replacement.
 Docker uses image packages with dynamic preparation disabled, even if resolvers are installed.
 Docker and SBX share prepared-runtime discovery and configuration in `src/target_launch/runtime.rs`.
-Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and project its R/native-Python capabilities into the MCP schema.
+Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and use its R/native-Python capabilities for operation validation and recording.
+Construct MCP tool presentation only from captured launch configuration; discovered runtime availability must not remove language fields.
 Prepared targets select preinstalled CPython when R is genuinely absent, support target-relative `python`, never enter dependency preparation, and retain target paths as opaque controller metadata.
 Direct compute launches provide private Python storage through the existing target launcher; extension caches and shared paths retain their provider ownership.
 Docker Sandbox selects compute enforcement by default; explicit `sandbox.provider: compute` documents that selection.
@@ -214,7 +215,7 @@ Keep these invariants intact:
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
 - `src/resolver/preparation.rs`, `src/resolver/preparation/{client,host}.rs` — typed local and SSH preparation connections, JSON transports, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
-- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from effective target/provider metadata, stdio transport, and response-delivery ownership.
+- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from captured target/provider configuration, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
   The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.

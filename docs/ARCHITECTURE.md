@@ -108,7 +108,7 @@ Unacknowledged creation remains uncertain even after an empty listing.
 Each generation uses the captured template reference and discards VM-local changes on retirement; host shares remain.
 There is no native policy materialization, native preflight, companion discovery, or controller interpreter/resolver discovery in this path.
 Workload environment controls are applied inside the VM; provider policy remains externally managed and can change during the session.
-Tool and transcript metadata distinguish the provider, template, VM identity, target directory, shared paths, and controller recording location.
+Tool prose describes configured placement and enforcement; transcript metadata retains discovered template, VM, and runtime identities, target directory, shared paths, and controller recording location.
 Shared paths can expose controller-owned records and metadata to the worker.
 See [Docker Sandbox execution](DOCKER_SANDBOX.md).
 
@@ -116,7 +116,8 @@ Both prepared providers use `target_launch/runtime.rs` for runtime discovery and
 The disposable probe runs under target workload environment and policy and returns a bounded typed worker-environment frame after CPython inspection or R validation.
 It starts no analysis worker or SQL connection and invokes no preparation session or dependency resolver.
 The controller accepts that frame after compatible negotiation, successful validation, and provider-confirmed probe retirement, then retains one immutable descriptor beside the image/template identity.
-Runtime capabilities determine the MCP language schema and recordings; target paths never enter controller runtime validation or library loading.
+Runtime capabilities determine operation validation and recordings, while the MCP language schema depends only on captured launch configuration.
+Target paths never enter controller runtime validation or library loading.
 Sans-R generations use the existing native CPython evaluator and lazy Python DB-API SQL connection.
 Native Docker supplies runner-owned storage where enabled; direct Docker and SBX use private storage retained by the existing target launcher through relay retirement.
 Spill files and stored secrets live there; preinstalled extension caches and shared paths keep their provider ownership.
@@ -132,6 +133,9 @@ Argument decoding errors pass through the same bounded response renderer before 
 The session coordinator in `src/worker_client.rs` validates requirements and interprets every `send` combination, including standalone preparation.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
+The [capability-advertising decision](TOOL_DESCRIPTIONS.md#supported-capabilities-and-host-availability) keeps supported, configured capabilities visible even when the execution host lacks a runtime.
+Tool construction uses captured configuration, while operation validation uses discovered availability.
+`ConsoleServer::new` still constructs the worker client and completes discovery and applicable initial preparation before serving MCP; configuration-only presentation is not yet a fast-handshake implementation.
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.

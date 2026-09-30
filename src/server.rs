@@ -1,5 +1,4 @@
 mod execution;
-mod python_only;
 use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -112,9 +111,9 @@ struct SendArguments {
     /// or call `install.packages()`. Resolution makes a package available but attaches it only
     /// through the original `library()` or `require()` call. In a bare runtime, packages must
     /// already be installed and these operations keep their ordinary R behavior. R source is not
-    /// scanned in advance. Read Python globals through `py$name`. With managed DuckDB active, R data
-    /// frames are directly queryable by name from later SQL cells. `sql_connection()` returns the
-    /// R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
+    /// scanned in advance. When both runtimes and their bridge are available, read Python globals
+    /// through `py$name`. With R-owned managed DuckDB active, R data frames are directly queryable
+    /// by name from later SQL cells. `sql_connection()` returns the R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
     /// cells with `console_sql_connection(connection)` and restore managed DuckDB with
     /// `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
     /// selected connection before disconnecting it. Default-device plots return as PNG images. Keep
@@ -131,23 +130,27 @@ struct SendArguments {
     /// Use `requirements.python` when the distribution differs from the inferred name, exact registry
     /// metadata is needed, or the package should be prepared before the cell. A user-selected Python
     /// environment or bare runtime disables both automatic resolution and managed requirements;
-    /// import packages already installed there directly. Read R globals and call R functions through
-    /// `r.name`. Select a user-owned DB-API connection for later SQL cells with
-    /// `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(None)`. Python data frames are not automatically visible to managed
-    /// DuckDB SQL; bind them to an R name before querying them there. At cell end, including after a
-    /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
+    /// import packages already installed there directly. When both runtimes and their bridge are
+    /// available, read R globals and call R functions through `r.name`. Select a user-owned DB-API
+    /// connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
+    /// `console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
+    /// before querying them. Without R, `sql_connection()` returns the Python-owned connection;
+    /// register frames explicitly with `sql_connection().register(name, frame)`. At cell end,
+    /// including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG
+    /// image and is closed.
     /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
     /// polling or stdin-only calls.
     python: Option<String>,
     /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
-    /// active by default and keeps a persistent catalog. A result with columns returns a bounded
-    /// preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
-    /// state, and a DuckDB table or view with the same name takes precedence. A user-selected R
-    /// connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
+    /// used by default when its adapter and packages are available and keeps a persistent catalog.
+    /// A result with columns returns a bounded preview. With R-owned managed DuckDB, an unqualified
+    /// relation name can query a data frame in R global state, and a DuckDB table or view with the
+    /// same name takes precedence. A user-selected R connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
     /// them through its connection or cursor protocol. The selected driver supplies its own SQL
     /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
-    /// interface. Managed DuckDB conveniences and extension requirements apply only to the managed
+    /// interface. Without R, managed DuckDB uses Python and requires explicit frame registration
+    /// through `sql_connection().register(name, frame)`; it does not scan Python globals.
+    /// Managed DuckDB conveniences and extension requirements apply only to the managed
     /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
     /// databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
     /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
@@ -171,7 +174,8 @@ struct SendArguments {
     /// live worker. Empty set means no optional requirements; bare {} is invalid.
     /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
     /// that cell. With `control = "restart"`, they are part of the restart transaction, with or
-    /// without a cell. Only add can accompany interrupt, and only when a cell follows.
+    /// without a cell. Only add can accompany interrupt, and only when a cell follows; Python-only
+    /// sessions reject requirements with interrupt before signaling or queuing input.
     /// Preparation does not import, attach, or load dependencies. On a code-bearing call without
     /// control, preparation completes before same-call nonempty stdin is queued. Standalone
     /// preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
@@ -304,7 +308,14 @@ impl ConsoleServer {
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
-        let policy = sandbox_settings.clone();
+        // Presentation has no dependency on the client or its discovered capabilities.
+        let tool_router = Self::configured_tool_router(
+            languages,
+            worker.is_none(),
+            &sandbox_settings,
+            no_sandbox,
+            target.as_ref().map(|(target, _)| target),
+        );
         let worker = if let Some((target, roots)) = target {
             crate::worker_client::Client::target(
                 target,
@@ -326,11 +337,6 @@ impl ConsoleServer {
                 }
             }
         };
-        let languages = Languages {
-            r: languages.r && !worker.python_only(),
-            python: languages.python && worker.python_available(),
-            ..languages
-        };
         let target = worker.target_metadata();
         let dynamic_resolution = worker.dynamic_resolution();
         let transcript = crate::transcript::Transcript::with_target(
@@ -341,21 +347,6 @@ impl ConsoleServer {
             target.clone(),
         );
         worker.record_with(transcript.clone());
-        let security = execution::description(&policy, no_sandbox, target.as_ref());
-        let tool_router = Self::configured_tool_router(
-            languages,
-            &worker,
-            &security,
-            target
-                .as_ref()
-                .and_then(|target| target.pointer("/transport/kind"))
-                .and_then(serde_json::Value::as_str)
-                == Some("ssh"),
-            target
-                .as_ref()
-                .and_then(|target| target.pointer("/compute/kind"))
-                .and_then(serde_json::Value::as_str),
-        );
         Ok(Self {
             worker,
             transcript,
@@ -367,14 +358,16 @@ impl ConsoleServer {
 
     fn configured_tool_router(
         languages: Languages,
-        worker: &crate::worker_client::Client,
-        security: &str,
-        remote: bool,
-        prepared: Option<&str>,
+        builtin: bool,
+        policy: &crate::settings::SandboxSettings,
+        no_sandbox: bool,
+        target: Option<&crate::settings::Target>,
     ) -> ToolRouter<Self> {
-        let dynamic_resolution = worker.dynamic_resolution();
-        let python_only = worker.python_only();
-        let python_preparation = worker.python_preparation();
+        let prepared = target.and_then(|target| match &target.compute {
+            crate::settings::Compute::Docker(_) => Some("image"),
+            crate::settings::Compute::DockerSandbox(_) => Some("template"),
+            crate::settings::Compute::Host {} => None,
+        });
         let mut router = Self::tool_router();
         let send = router
             .map
@@ -387,7 +380,7 @@ impl ConsoleServer {
             .expect("send tool must have a description")
             .to_mut();
         description.push_str("\n\n");
-        description.push_str(security);
+        description.push_str(&execution::description(policy, no_sandbox, target));
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
@@ -431,15 +424,6 @@ impl ConsoleServer {
                 properties.shift_remove(field);
             }
         }
-        if python_only {
-            python_only::configure(
-                description,
-                properties,
-                python_preparation,
-                languages.sql,
-                remote,
-            );
-        }
         let mut guidance = String::new();
         if languages.sql {
             guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");
@@ -465,16 +449,10 @@ impl ConsoleServer {
         guidance.truncate(guidance.trim_end().len());
         if languages.sql {
             guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
-            if dynamic_resolution || python_preparation {
-                if worker.has_default_duckdb_extension("sqlite") {
-                    guidance.push_str("Managed defaults include SQLite; ");
-                } else {
-                    guidance.push_str(r#"Prepare SQLite with `requirements={"action":"add","duckdb":["sqlite"]}` before use; "#);
-                }
-                guidance.push_str(r#"attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
-            } else {
-                guidance.push_str("For SQLite, use a preinstalled sqlite extension and attach the database read-only. ");
+            if builtin && prepared.is_none() {
+                guidance.push_str("Built-in managed defaults include SQLite when dependency preparation is available; sessions without DuckDB preparation require preinstalled extensions. ");
             }
+            guidance.push_str(r#"For SQLite, use an available sqlite extension and attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. When preparation is supported, prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
             guidance.push_str("SQL results include bounded table previews that abbreviate long text cells; return focused queries and summaries for inspection.");
         }
         *description = description.replacen(
@@ -482,10 +460,11 @@ impl ConsoleServer {
             &format!("State persists across calls.\n\n{guidance}\n\n"),
             1,
         );
-        if let Some(kind @ ("docker" | "docker_sandbox")) = prepared {
-            execution::configure_prepared(description, properties, kind, python_only);
+        if !builtin {
+            execution::configure_custom(description, properties);
         }
-        if !dynamic_resolution && !python_preparation {
+        if let Some(source) = prepared {
+            execution::configure_prepared(description, properties, source);
             let requirements = properties
                 .get_mut("requirements")
                 .expect("requirements schema");
@@ -504,7 +483,7 @@ impl ConsoleServer {
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
+        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Language fields describe the configured interface, not installed runtimes. With both runtimes and their bridge available, Python reads R globals through `r.name` and R reads Python globals through `py$name`. R-owned managed DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages.
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 
@@ -544,9 +523,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                 return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
             }
         };
-        if let Some(cell) = cell.as_ref()
-            && !self.languages.enables(cell.language)
-        {
+        if let Some(cell) = cell.as_ref() {
             if self.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
                 return Err("R cells are unavailable in Python sessions without R".into());
             }
@@ -557,10 +534,12 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                     "Python cells are unavailable: the target has no Python runtime".into(),
                 );
             }
-            return Err(format!(
-                "`{}` cells are disabled by `{LANGUAGES_ENV}`",
-                Languages::field(cell.language)
-            ));
+            if !self.languages.enables(cell.language) {
+                return Err(format!(
+                    "`{}` cells are disabled by `{LANGUAGES_ENV}`",
+                    Languages::field(cell.language)
+                ));
+            }
         }
         if let Some(requirements) = &requirements {
             use crate::worker_client::RequirementsAction::{Get, Reset};

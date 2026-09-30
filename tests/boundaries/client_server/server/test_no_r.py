@@ -108,9 +108,13 @@ def test_no_r_user_selected_python_is_bare(
             properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
                 "properties"
             ]
-            assert properties["requirements"]["properties"] == {
-                "action": {"type": "string", "enum": ["get"]}
-            }, properties["requirements"]
+            assert {"r", "python", "sql"} <= properties.keys(), properties
+            assert properties["requirements"]["properties"]["action"]["enum"] == [
+                "get",
+                "add",
+                "set",
+                "reset",
+            ], properties["requirements"]
             client.send(
                 # fmt: python
                 python=code("""
@@ -119,6 +123,14 @@ def test_no_r_user_selected_python_is_bare(
                     """)
             )
             assert last_result_text(client) == "42\n", last_result_text(client)
+            result = client.send(
+                requirements={"python": ["mcp-console-definitely-missing-package"]}
+            )
+            assert result["isError"], result
+            assert last_result_text(client) == (
+                "Python requirements are unavailable in this non-managed Python session; "
+                "install packages before starting the session"
+            ), result
             client.send(sql="SELECT 42 AS answer")
             assert "42" in last_result_text(client), last_result_text(client)
             return client.finish()

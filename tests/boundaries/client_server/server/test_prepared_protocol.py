@@ -71,8 +71,10 @@ def test_native_probe_projects_capabilities_without_controller_paths(
         with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
-            assert "r" not in tool["inputSchema"]["properties"], tool
-            assert "/target-only/lib/libpython.so" in tool["description"], tool[
+            assert {"r", "python", "sql"} <= tool["inputSchema"]["properties"].keys(), (
+                tool
+            )
+            assert "/target-only/lib/libpython.so" not in tool["description"], tool[
                 "description"
             ]
             client.send(requirements={"action": "get"})
@@ -96,16 +98,15 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
             properties = tool["inputSchema"]["properties"]
-            assert "r" in properties and "sql" in properties
-            assert "python" not in properties
-            assert "Persistent R and SQL workbench" in tool["description"]
-            assert "Send one complete `r` or `sql` cell" in tool["description"]
-            assert "Python" not in tool["description"]
-            assert "`python`" not in tool["description"]
-            assert "`r.name`" not in tool["description"]
-            assert "`py$name`" not in tool["description"]
-            assert "Python" not in properties["r"]["description"]
-            assert "Python" not in properties["sql"]["description"]
+            assert {"r", "python", "sql"} <= properties.keys()
+            assert (
+                "Language fields describe the configured interface"
+                in tool["description"]
+            )
+            assert (
+                "When both runtimes and their bridge are available"
+                in properties["r"]["description"]
+            )
             result = client.send(python="raise AssertionError('unavailable cell ran')")
             assert result["isError"], result
             assert last_result_text(client) == (
@@ -114,6 +115,23 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
             client.finish()
         assert not (root / "peer/vms").exists()
         return client.transcript
+
+
+@requires(POSIX)
+def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
+    tools = []
+    with workspace() as root:
+        for mode in ("native-probe", "r-only-probe"):
+            environment = cli_peer(root / mode)
+            environment.pop("MCP_CONSOLE_LANGUAGES", None)
+            configure(root, template=TEMPLATE)
+            (root / mode / "mode").write_text(mode)
+            with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
+                tools.append(client.transcript[-1]["result"]["tools"])
+                client.finish()
+    assert tools[0] == tools[1]
+    return [{"same_configured_tools_for_r_and_python_targets": True}]
 
 
 @requires(POSIX)

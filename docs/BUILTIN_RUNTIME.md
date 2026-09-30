@@ -136,7 +136,8 @@ Explicitly selected environments remain non-managed; prepare their packages befo
 R requirements and R cells are unavailable.
 An explicitly selected Python environment remains non-managed: its preinstalled extensions and custom connections work, while host extension preparation is unavailable.
 `requirements.action="get"` inspects the retained declaration without starting a worker.
-The tool schema and descriptions reflect these limits; rejected requests leave existing Python state usable.
+The configured schema retains R and Python fields independently of runtime availability; execution rejects unavailable runtimes before worker startup or replacement.
+Rejected requests leave existing Python state usable.
 Docker and Docker Sandbox targets discover R inside the image or template.
 Genuine absence selects native Python; an invalid `R_HOME` or broken R installation reports its R error.
 The CPython inspector checks the selected executable and embedding library without starting an analysis worker or opening a SQL catalog.
