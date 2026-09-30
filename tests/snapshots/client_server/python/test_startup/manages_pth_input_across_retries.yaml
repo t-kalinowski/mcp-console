@@ -47,7 +47,7 @@ result:
   isError: false
 ---
 send:
-  stdin: "café\u0000tail\n"
+  stdin: "café\0tail\n"
 result:
   content:
     - type: text
