@@ -17,7 +17,9 @@ from support.normalization import code
 from support.requirements import FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, R, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
-from boundaries.client_server.python.test_without_r import environment as without_r_environment
+from boundaries.client_server.python.test_without_r import (
+    environment as without_r_environment,
+)
 
 
 def selected_python(directory: Path, python: Path) -> dict[str, str]:

@@ -22,6 +22,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
+from support.requirements import R, requires
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
@@ -200,6 +201,7 @@ def test_returns_r_plots_from_python_bridge(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
     return returns_matplotlib_plots(binary, execution, with_r=True)
 
