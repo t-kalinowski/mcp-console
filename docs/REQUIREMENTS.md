@@ -86,7 +86,7 @@ The built-in server uses these defaults; R-present preparation begins when an op
 
 | Environment | Defaults                                                                            |
 | ----------- | ----------------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow`                |
+| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, and `yyjsonr`     |
 | Python      | NumPy and pandas when Python is server-managed; sans-R sessions also include DuckDB |
 | DuckDB      | ICU, JSON, and SQLite extensions with R; SQLite in sans-R managed Python            |
 

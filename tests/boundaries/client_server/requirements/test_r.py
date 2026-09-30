@@ -525,8 +525,9 @@ def test_evaluates_with_default_managed_r(
               identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
               identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
               identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("yyjsonr")), .libPaths()[[managed_index]]),
               vapply(
-                c("ggplot2", "dplyr", "readr", "jsonlite"),
+                c("ggplot2", "dplyr", "readr", "jsonlite", "yyjsonr"),
                 requireNamespace,
                 logical(1L),
                 quietly = TRUE
@@ -550,6 +551,7 @@ def test_evaluates_with_default_managed_r(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "yyjsonr",
             "jsonlite",
             "pillar",
             "tibble",
