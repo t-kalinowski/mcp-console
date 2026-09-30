@@ -30,7 +30,7 @@ The default sans-R managed Python declaration includes NumPy, pandas, and DuckDB
 DuckDB is resolved with the rest of the Python manifest through the hidden host resolve process before the environment is accepted; the worker never installs it through Console preparation.
 If it is absent after an explicit replacement, Python and a selected DB-API connection remain usable, while managed SQL reports how to obtain DuckDB.
 An extension requirement with no importable DuckDB package in the candidate fails and explains how to include `duckdb` in `requirements.python`.
-The managed sans-R declaration includes the SQLite extension, prepared on the execution host before MCP readiness.
+The managed sans-R declaration includes the SQLite extension, prepared in the background on the execution host before handling `send`.
 Python preparation uses one control path with or without R; R declaration compatibility is an optional adapter.
 
 Local managed preparation runs through the hidden `mcp-console resolve` command on the host.
@@ -43,7 +43,7 @@ Exact live-worker messages and custom-worker receipts belong to the [worker prot
 
 [SSH targets](SSH.md) use the same capability discovery and managed preparation on the execution host.
 The controller never discovers local R/Python or executes resolvers for remote sessions.
-A separate trusted remote preparation owner captures resolver settings before MCP readiness without starting a worker.
+A separate trusted remote preparation owner captures resolver settings in the background before handling `send`, without starting a worker.
 Sans-R managed discovery resolves and inspects the default Python environment at that boundary; R-present defaults remain deferred until an operation needs them.
 With R present, `requirements`, first-use defaults, automatic R/Python requests, and restart preparation use the remote R installation and its resolver settings.
 A session with no R uses remote uv for its managed Python and DuckDB defaults and additions; missing uv or failed resolution is reported.
@@ -82,7 +82,7 @@ Repeating an accepted requirement is idempotent, and a restart reuses everything
 Use `requirements.action` to inspect or replace the declaration.
 There are no named environments or persistence across server processes.
 
-The built-in server uses these defaults; R-present preparation begins when an operation first needs an environment, while managed sans-R discovery prepares Python before MCP readiness:
+The built-in server uses these defaults; R-present preparation begins when an operation first needs an environment, while managed sans-R discovery prepares Python in the background before handling `send`:
 
 | Environment | Defaults                                                                            |
 | ----------- | ----------------------------------------------------------------------------------- |
