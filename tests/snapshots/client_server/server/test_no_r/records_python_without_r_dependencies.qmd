@@ -16,13 +16,6 @@ ir:
 ---
 
 ```{python}
-import numpy, pandas
-
-retained = 42
-retained
-```
-
-```{python}
-retained
+6 * 7
 ```
 

@@ -17,6 +17,9 @@ from support.normalization import code
 from support.requirements import FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, R, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
+from boundaries.client_server.python.test_without_r import (
+    environment as without_r_environment,
+)
 
 
 def selected_python(directory: Path, python: Path) -> dict[str, str]:
@@ -226,6 +229,7 @@ def interrupted_initialization(
     *,
     hook: str = "sitecustomize",
     r_first: bool = False,
+    language: str = "python",
 ) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -259,6 +263,12 @@ def interrupted_initialization(
             if r_first
             else selected_python(root, python)
         )
+        if language == "sql":
+            commands = root / "no-r-commands"
+            commands.mkdir()
+            environment = dict(
+                without_r_environment(commands), RETICULATE_PYTHON=str(python)
+            )
         environment["PYTHONPATH"] = str(site)
         environment["PYTHONNODEBUGRANGES"] = "1"
         with McpClient(
@@ -279,7 +289,8 @@ def interrupted_initialization(
                 client.transcript[-1]["result"]["content"][0]["text"] = (
                     "[1] <worker pid>\n"
                 )
-            client.send(python="never_run = True", timeout_ms=10_000)
+            cell = "never_run = True" if language == "python" else "SELECT 42"
+            client.send(**{language: cell}, timeout_ms=10_000)
             assert last_result_text(client) == (
                 '[input requested: "startup interrupt> "]\n[waiting for stdin]'
             ), last_result_text(client)
@@ -335,6 +346,13 @@ def test_interrupts_embedded_startup_after_r(
     binary: Path, execution: Execution
 ) -> list:
     return interrupted_initialization(binary, execution, r_first=True)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_sql_first_embedded_startup(
+    binary: Path, execution: Execution
+) -> list:
+    return interrupted_initialization(binary, execution, language="sql")
 
 
 if __name__ == "__main__":

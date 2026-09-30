@@ -100,9 +100,10 @@ result:
 ---
 send:
   r: |
+    # Match the writable instance retained by the creator connection.
     reader <- ragnar::ragnar_store_connect(
       store_path,
-      read_only = TRUE
+      read_only = FALSE
     )
     reader_result <- ragnar::ragnar_retrieve(
       reader,

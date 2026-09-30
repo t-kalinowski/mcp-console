@@ -1,8 +1,7 @@
 ---
 invalid_R_HOME: >
-  failed to inspect ambient reticulate with
-  `<fixture>/missing-r/bin/Rscript`: No such file or directory (os error
-  2)
+  R_HOME must select an existing R installation: <fixture>/missing-r/bin/Rscript
+  is missing
 ---
 broken_R: |
   worker R home discovery failed with exit status: 41: broken discovered R

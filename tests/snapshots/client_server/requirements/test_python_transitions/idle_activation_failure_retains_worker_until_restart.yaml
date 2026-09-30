@@ -149,14 +149,22 @@ result:
         <worker callback complete>
   isError: false
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        idle activation rejected
+
+        [idle]
+  isError: false
+---
 send:
   python: assert id(identity) == identity_id; print('same object')
 result:
   content:
     - type: text
       text: |
-        idle activation rejected
-        [output produced while idle]
         same object
   isError: false
 ---

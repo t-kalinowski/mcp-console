@@ -114,6 +114,7 @@ def smoke_mcp(
     workspace: Path,
     startup_timeout: float,
     response_timeout: float,
+    r_available: bool,
 ) -> None:
     process = subprocess.Popen(
         [str(executable), "serve"],
@@ -176,27 +177,33 @@ def smoke_mcp(
             f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
         )
 
-        send(
-            {
-                "jsonrpc": "2.0",
-                "id": 3,
-                "method": "tools/call",
-                "params": {
-                    "name": "send",
-                    "arguments": {"r": "6 * 7"},
+        evaluations = [("python", "42\n")]
+        if r_available:
+            evaluations.append(("r", "[1] 42\n"))
+        for identifier, (language, output) in enumerate(evaluations, start=3):
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": identifier,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "send",
+                        "arguments": {language: "6 * 7"},
+                    },
+                }
+            )
+            evaluation = receive(process, buffer, response_timeout)
+            require(
+                evaluation.get("id") == identifier, "unexpected evaluation response ID"
+            )
+            require(
+                evaluation.get("result")
+                == {
+                    "content": [{"type": "text", "text": output}],
+                    "isError": False,
                 },
-            }
-        )
-        evaluation = receive(process, buffer, response_timeout)
-        require(evaluation.get("id") == 3, "unexpected evaluation response ID")
-        require(
-            evaluation.get("result")
-            == {
-                "content": [{"type": "text", "text": "[1] 42\n"}],
-                "isError": False,
-            },
-            f"unexpected R evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
-        )
+                f"unexpected {language} evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
+            )
     except Exception as error:
         standard_error = terminate(process)
         if standard_error:
@@ -387,27 +394,46 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
 
-    r_home = command_output(["R", "RHOME"])
+    r_home = None if args.without_r else os.environ.get("R_HOME")
+    if r_home is not None:
+        require(
+            any((Path(r_home) / "bin" / name).is_file() for name in ("R", "Rscript")),
+            "R_HOME must select an existing R installation",
+        )
+    elif not args.without_r and shutil.which("R"):
+        r_home = command_output(["R", "RHOME"])
     uv = shutil.which("uv")
     require(uv is not None, "host `uv` is not on `PATH`")
     with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
         uv_bin = Path(directory)
         (uv_bin / "uv").symlink_to(Path(uv).resolve())
+        if args.without_r:
+            (uv_bin / "python3").symlink_to(Path(sys.executable).resolve())
+            if bwrap := shutil.which("bwrap"):
+                (uv_bin / "bwrap").symlink_to(Path(bwrap).resolve())
         unavailable_uvx = uv_bin / "uvx"
         unavailable_uvx.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
         unavailable_uvx.chmod(0o755)
-        path = os.pathsep.join(
-            [str(uv_bin)]
-            + [
-                entry
-                for entry in os.environ.get("PATH", "").split(os.pathsep)
-                if not (Path(entry) / "ir").is_file()
-            ]
+        path = (
+            str(uv_bin)
+            if args.without_r
+            else os.pathsep.join(
+                [str(uv_bin)]
+                + [
+                    entry
+                    for entry in os.environ.get("PATH", "").split(os.pathsep)
+                    if not (Path(entry) / "ir").is_file()
+                ]
+            )
         )
 
         env = os.environ.copy()
         env.pop("RETICULATE_UV", None)
-        env["R_HOME"] = r_home
+        if args.without_r:
+            for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_PYTHON"):
+                env.pop(name, None)
+        if r_home is not None:
+            env["R_HOME"] = r_home
         env["PATH"] = path
         env["MCP_CONSOLE_HOME"] = str(uv_bin / "console")
         smoke_mcp(
@@ -417,6 +443,7 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             uv_bin,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
+            r_available=r_home is not None,
         )
 
 
@@ -513,6 +540,7 @@ def parser() -> argparse.ArgumentParser:
     smoke.add_argument("wheel")
     smoke.add_argument("cargo_bin")
     smoke.add_argument("--target", choices=sorted(TARGET_ARCHITECTURES))
+    smoke.add_argument("--without-r", action="store_true")
     smoke.add_argument("--startup-timeout-seconds", type=float, default=1200.0)
     smoke.add_argument("--response-timeout-seconds", type=float, default=30.0)
     smoke.set_defaults(function=smoke_wheel)

@@ -8,7 +8,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text, release_worker_callback_gate
+from support.assertions import (
+    last_tool_text,
+    release_worker_callback_gate,
+    wait_for_idle_output,
+)
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -478,11 +482,15 @@ def test_idle_activation_failure_retains_worker_until_restart(
         assert Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"]).read_text() == (
             "py-yaml12\n"
         )
+        # The callback's FIFO receipt does not order its output transport.
+        # Receive the idle output before admitting the follow-up evaluation.
+        wait_for_idle_output(
+            client,
+            "idle activation rejected\n\n[idle]",
+            "idle Python activation failure output",
+        )
         client.send(python="assert id(identity) == identity_id; print('same object')")
-        assert (
-            last_tool_text(client)
-            == "idle activation rejected\n[output produced while idle]\nsame object\n"
-        ), last_tool_text(client)
+        assert last_tool_text(client) == "same object\n", last_tool_text(client)
         assert (
             client.send(requirements={"action": "get"})["structuredContent"][
                 "requirements"

@@ -27,6 +27,10 @@ Default core checks validate extracted runtime sources, architecture, Rust forma
 When changing repository tooling, run its owning test directly, for example `tests/transcript_runner.py`, `python3 tests/workflow.py`, or `python3 tests/staging.py`.
 Installation checks remain last in the full gate because they replace and hide the shared `target` directory.
 
+Set `MCP_CONSOLE_TEST_BINARY` to an installed executable's absolute path to run selected transcripts against that installation.
+For example, `MCP_CONSOLE_TEST_BINARY=/opt/console/bin/mcp-console scripts/test client_server/server/test_no_r` uses that executable and skips the checkout's release build.
+The selected installation must include its companion bundle for sandboxed cases.
+
 ## Resume from a small checkpoint
 
 For work that spans validation, review, or context changes, initialize a [task checkpoint](templates/task-checkpoint.md) and replace its placeholders:

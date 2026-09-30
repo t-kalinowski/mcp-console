@@ -597,7 +597,9 @@ def test_prepares_managed_python_at_startup_and_restart(
             records = client.finish()[3:]
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         quarto = (session / "transcript.qmd").read_text()
-        assert "  packages: []\n" in quarto
+        assert "execute:\n  eval: false" not in quarto
+        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         for package in ("numpy", "pandas", "duckdb", "py-yaml12", "more-itertools"):
             assert f"    - {package}\n" in quarto
     return TranscriptWithCompanions(
@@ -739,6 +741,8 @@ def test_adds_python_packages_to_idle_managed_worker(
         assert {"py-yaml12", "six", "more-itertools"}.issubset(accepted[-1])
         quarto = (session / "transcript.qmd").read_text()
         assert "execute:\n  eval: false" not in quarto
+        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         assert "    - more-itertools\n" in quarto
         return records
 
@@ -859,6 +863,9 @@ def test_resolves_reached_import_in_managed_worker(
             for event in events
         )
         quarto = (session / "transcript.qmd").read_text()
+        assert "execute:\n  eval: false" not in quarto
+        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         assert "    - py-yaml12\n" in quarto and "    - pydash\n" in quarto
         return records
 
@@ -2218,7 +2225,12 @@ False
             markdown = (session / "transcript.md").read_text()
             quarto = (session / "transcript.qmd").read_text()
             assert "recorded_value = 41" in markdown and "recorded_value = 41" in quarto
-            assert "  python-packages: []\n" in quarto
+            assert "execute:\n  eval: false" not in quarto
+            assert "\nknitr:" in quarto and "\nir:" in quarto
+            assert (
+                "ir:\n  isolated: true\n  packages: []\n  python-packages: []\n"
+                in quarto
+            )
             assert "ValueError: recorded failure" in markdown
             assert (session / "outputs/call-000001.log").read_text() == "42\n"
             events = [
@@ -2804,7 +2816,8 @@ def test_records_managed_python_defaults(
 """
             in quarto
         ), quarto
-        assert "  packages: []\n" in quarto, quarto
+        assert "\nknitr:" in quarto and "\nir:" in quarto, quarto
+        assert "eval: false" not in quarto, quarto
         assert "six" not in quarto, quarto
         events = [
             json.loads(line)

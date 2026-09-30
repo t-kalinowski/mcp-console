@@ -346,7 +346,13 @@ def main() -> None:
         ],
         "check-core": core,
         "test": [
-            ("build", ["cargo", "build", "--release", "--target-dir", "target"]),
+            *(
+                []
+                if os.environ.get("MCP_CONSOLE_TEST_BINARY")
+                else [
+                    ("build", ["cargo", "build", "--release", "--target-dir", "target"])
+                ]
+            ),
             (
                 "transcripts",
                 [

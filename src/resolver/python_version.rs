@@ -24,7 +24,6 @@ struct Candidate {
 struct UvPython {
     version: String,
     version_parts: VersionParts,
-    symlink: Option<String>,
     variant: String,
     implementation: String,
 }
@@ -40,9 +39,11 @@ impl PythonVersions {
     pub(super) fn parse(output: &[u8], managed: bool) -> Result<Self, String> {
         let rows = serde_json::from_slice::<Vec<UvPython>>(output)
             .map_err(|error| format!("uv returned invalid Python inventory JSON: {error}"))?;
+        let mut versions = BTreeSet::new();
         let candidates = rows
             .into_iter()
             .filter_map(|row| Candidate::from_uv(row, managed))
+            .filter(|candidate| versions.insert(candidate.version.clone()))
             .collect::<Vec<_>>();
         Ok(Self { candidates })
     }
@@ -116,7 +117,7 @@ Available Python versions found: {available}
 
 impl Candidate {
     fn from_uv(row: UvPython, managed: bool) -> Option<Self> {
-        if row.symlink.is_some() || row.variant != "default" || row.implementation != "cpython" {
+        if row.variant != "default" || row.implementation != "cpython" {
             return None;
         }
         let VersionParts {

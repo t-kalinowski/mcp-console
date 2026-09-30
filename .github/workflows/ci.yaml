@@ -162,6 +162,9 @@ jobs:
             ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
 
+      - name: Validate restored R library links
+        run: python3 scripts/prune-r-cache "$RUNNER_TEMP/mcp-console-r-cache"
+
       - name: Restore Cargo downloads
         id: cargo-downloads
         uses: actions/cache/restore@v6
@@ -330,6 +333,11 @@ jobs:
             smoke-wheel \
             dist/*.whl \
             target/release/mcp-console
+          python3 scripts/release.py \
+            smoke-wheel \
+            dist/*.whl \
+            target/release/mcp-console \
+            --without-r
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2

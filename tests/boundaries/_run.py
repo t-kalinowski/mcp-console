@@ -123,7 +123,11 @@ from support.snapshots import (
     snapshot_path,
 )
 
-binary = root / "target" / "release" / "mcp-console"
+binary = Path(
+    os.environ.get(
+        "MCP_CONSOLE_TEST_BINARY", root / "target" / "release" / "mcp-console"
+    )
+).absolute()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path
@@ -670,7 +674,7 @@ def main() -> None:
             sys.executable,
             [sys.executable, str(root / "checkout_workflow.py"), "test", *arguments],
         )
-    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
+    assert binary.is_file(), f"{binary} is missing; run scripts/test"
     checked_snapshots: set[Path] = set()
     initialization: list[tuple[str, str, Path]] = []
     for index, (suite_name, case_name, _) in enumerate(selected):

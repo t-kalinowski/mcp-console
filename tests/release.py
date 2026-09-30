@@ -239,6 +239,7 @@ class ReleaseScriptTests(unittest.TestCase):
             import json
             import os
             import signal
+            import shutil
             import sys
             from pathlib import Path
 
@@ -256,6 +257,14 @@ class ReleaseScriptTests(unittest.TestCase):
                                     "cwd": str(Path.cwd()),
                                     "home": os.environ.get("HOME"),
                                     "console": os.environ.get("MCP_CONSOLE_HOME"),
+                                    "r_home": os.environ.get("R_HOME"),
+                                    "r": shutil.which("R"),
+                                    "rscript": shutil.which("Rscript"),
+                                    "python": (
+                                        str(Path(python).resolve())
+                                        if (python := shutil.which("python3"))
+                                        else None
+                                    ),
                                 }
                             )
                             + "\\n"
@@ -329,26 +338,30 @@ class ReleaseScriptTests(unittest.TestCase):
                     ),
                     flush=True,
                 )
-                evaluation = json.loads(sys.stdin.readline())
-                assert evaluation["params"] == {
-                    "name": "send",
-                    "arguments": {"r": "6 * 7"},
-                }
-                if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
-                    signal.pause()
-                print(
-                    json.dumps(
-                        {
-                            "jsonrpc": "2.0",
-                            "id": evaluation["id"],
-                            "result": {
-                                "content": [{"type": "text", "text": "[1] 42\\n"}],
-                                "isError": False,
-                            },
-                        }
-                    ),
-                    flush=True,
-                )
+                evaluations = [("python", "42\\n")]
+                if not os.environ.get("FAKE_NO_R"):
+                    evaluations.append(("r", "[1] 42\\n"))
+                for language, output in evaluations:
+                    evaluation = json.loads(sys.stdin.readline())
+                    assert evaluation["params"] == {
+                        "name": "send",
+                        "arguments": {language: "6 * 7"},
+                    }
+                    if os.environ.get("FAKE_MCP_EVALUATION_HANG"):
+                        signal.pause()
+                    print(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": evaluation["id"],
+                                "result": {
+                                    "content": [{"type": "text", "text": output}],
+                                    "isError": False,
+                                },
+                            }
+                        ),
+                        flush=True,
+                    )
             else:
                 raise SystemExit(2)
         """
@@ -399,6 +412,7 @@ class ReleaseScriptTests(unittest.TestCase):
         wheel = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
         self.write_wheel(wheel)
         environment = os.environ.copy()
+        environment.pop("R_HOME", None)
         environment.update(
             {
                 "PATH": f"{commands}{os.pathsep}{environment['PATH']}",
@@ -537,7 +551,7 @@ class ReleaseScriptTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn("private sandbox runner failed", result.stderr)
 
-    def test_smoke_wheel_evaluates_r_and_bounds_response_waits(self) -> None:
+    def test_smoke_wheel_evaluates_peers_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             environment, wheel, cargo_bin = self.smoke_environment(directory)
@@ -596,6 +610,74 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
+
+    def test_smoke_wheel_evaluates_r_selected_only_by_home(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            commands = directory / "commands"
+            r_home = directory / "selected-R"
+            (r_home / "bin").mkdir(parents=True)
+            (commands / "R").rename(r_home / "bin" / "R")
+            environment.update(PATH=str(commands), R_HOME=str(r_home))
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_smoke_wheel_accepts_a_host_without_r(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            commands = directory / "commands"
+            (commands / "R").unlink()
+            environment.update(PATH=str(commands), FAKE_NO_R="1")
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_smoke_wheel_without_r_hides_host_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            record = directory / "launches.jsonl"
+            environment.update(
+                R_HOME="/inherited/R",
+                FAKE_NO_R="1",
+                FAKE_MCP_LOCATIONS=str(record),
+            )
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--without-r",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            launch = json.loads(record.read_text().splitlines()[-1])
+            self.assertEqual(launch["command"], "serve")
+            self.assertIsNone(launch["r_home"])
+            self.assertIsNone(launch["r"])
+            self.assertIsNone(launch["rscript"])
+            self.assertEqual(launch["python"], str(Path(sys.executable).resolve()))
 
     def test_smoke_wheel_reports_startup_response(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1326,6 +1408,43 @@ version = "0.0.0"
                     self.assertIn(f"artifact {name} changed", result.stderr)
                     self.assertEqual(installed.read_bytes(), contents)
                     staged_files[name].write_bytes(contents)
+
+
+class RuntimeSourceValidationTests(unittest.TestCase):
+    def test_r_home_selects_the_syntax_checker_without_r_on_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shutil.copytree(ROOT / "src", root / "src")
+            (root / "scripts").mkdir()
+            script = root / "scripts/validate_runtime_sources.py"
+            shutil.copyfile(ROOT / "scripts/validate_runtime_sources.py", script)
+            r_home = root / "selected-R"
+            (r_home / "bin").mkdir(parents=True)
+            write_executable(
+                r_home / "bin/Rscript",
+                # fmt: python
+                f"""
+                #!{sys.executable}
+                import sys
+
+                assert sys.argv[1:3] == ["--vanilla", "-e"]
+                print("selected R syntax checker rejected source", file=sys.stderr)
+                raise SystemExit(1)
+                """,
+            )
+            environment = {**os.environ, "PATH": str(root), "R_HOME": str(r_home)}
+            result = subprocess.run(
+                [sys.executable, str(script)],
+                env=environment,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn(
+                "src/python/bridge.R: selected R syntax checker rejected source",
+                result.stderr,
+            )
+            self.assertNotIn("checks skipped", result.stderr)
 
 
 if __name__ == "__main__":

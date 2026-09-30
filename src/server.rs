@@ -343,6 +343,7 @@ impl ConsoleServer {
             recording_directory,
             dynamic_resolution,
             worker.python_preparation(),
+            !worker.python_only(),
             target.clone(),
         );
         worker.record_with(transcript.clone());
