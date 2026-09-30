@@ -258,6 +258,19 @@ pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String>
     unsafe {
         // Workspace lookup is installed by common setup, never the bin directory.
         (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
+        let sys = (api.import_add_module)(c"sys".as_ptr());
+        if sys.is_null() {
+            return Err("cannot access Python interpreter arguments".into());
+        }
+        let original = (api.sys_get_object)(c"argv".as_ptr());
+        if (api.dict_set_item_string)((api.module_get_dict)(sys), c"orig_argv".as_ptr(), original)
+            != 0
+        {
+            return Err("cannot retain Python interpreter arguments".into());
+        }
+        // Interactive argv names no script; orig_argv retains the interpreter
+        // executable. Initialize both before site hooks, and only once.
+        (api.set_argv_ex)(0, std::ptr::null_mut(), 0);
         (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut slot = PYTHON_LIBRARY
