@@ -283,9 +283,10 @@ The built-in server-managed Python environment resolves a missing import when Py
 The private runtime appends a last-chance finder to `sys.meta_path`, after the existing built-in, frozen, path, and other finders.
 Already-installed, local, standard-library, and already-loaded modules therefore resolve without a host request.
 Availability queries such as `importlib.util.find_spec()` report the current environment without adding a requirement.
-If a missing optional import is reached while the default NumPy or pandas package is initializing, the finder leaves it to ordinary Python behavior instead of starting host resolution.
-Importing either available default therefore does not add optional modules encountered during its initialization to the retained manifest.
-A later direct import can resolve such a dependency after initialization finishes; an explicit `requirements.python` entry can prepare it earlier.
+Missing imports reached while an installed distribution is initializing use ordinary Python behavior instead of starting host resolution.
+This lets packages catch `ImportError` for optional dependencies without silently adding them to the retained manifest; installed distributions are responsible for declaring their required dependencies.
+A later direct import or a library call after initialization can still resolve a missing dependency, and an explicit `requirements.python` entry can prepare it earlier.
+Imports reached from local modules without installed-distribution metadata remain eligible for automatic resolution.
 
 The finder infers one PyPI distribution from the top-level import name.
 A curated table covers established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.

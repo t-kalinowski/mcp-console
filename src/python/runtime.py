@@ -4,6 +4,7 @@ import ast as _ast
 import base64 as _base64
 import builtins as _builtins
 import importlib as _importlib
+import importlib.metadata as _importlib_metadata
 import importlib.util as _importlib_util
 import io as _io
 import json as _json
@@ -46,8 +47,6 @@ _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS = {
     "opentelemetry",
     "zope",
 }
-
-_MCP_CONSOLE_DEFAULT_IMPORT_ROOTS = {"numpy", "pandas"}
 
 
 def _mcp_console_missing_module(fullname, message):
@@ -95,7 +94,7 @@ class _McpConsoleImportFinder:
         threading,
         distributions,
         ambiguous_roots,
-        default_roots,
+        metadata,
         missing_module,
         missing_submodule,
         explicit_requirement,
@@ -109,7 +108,7 @@ class _McpConsoleImportFinder:
         self._threading = threading
         self._distributions = distributions
         self._ambiguous_roots = ambiguous_roots
-        self._default_roots = default_roots
+        self._metadata = metadata
         self._missing_module = missing_module
         self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
@@ -162,10 +161,10 @@ class _McpConsoleImportFinder:
         # A real import can resolve the distribution if the caller proceeds.
         if self._is_availability_probe():
             return None
-        # The default packages probe for optional dependencies while importing.
-        # Keep those probes from changing the managed environment merely because
-        # a user imported an already-available default package.
-        if self._is_default_package_initialization():
+        # Installed distributions own their dependencies. Their import-time
+        # optional probes must observe absence rather than install a package.
+        # Local modules and calls made after initialization may still resolve.
+        if self._is_installed_package_initialization():
             return None
         # Some libraries append importers after Python initializes. Give only
         # that later suffix its ordinary chance before acting as the last finder.
@@ -296,18 +295,20 @@ class _McpConsoleImportFinder:
             + self._explicit_requirement("correct-distribution-name"),
         )
 
-    def _is_default_package_initialization(self):
+    def _is_installed_package_initialization(self):
+        roots = set()
         frame = self._sys._getframe(1)
         while frame is not None:
             specification = frame.f_globals.get("__spec__")
-            module = frame.f_globals.get("__name__", "")
-            root = module.partition(".")[0]
-            if root in self._default_roots and getattr(
-                specification, "_initializing", False
-            ):
-                return True
+            if getattr(specification, "_initializing", False):
+                module = frame.f_globals.get("__name__", "")
+                roots.add(module.partition(".")[0])
             frame = frame.f_back
-        return False
+        # Consult current metadata rather than caching it across activation:
+        # explicit and automatic preparation can add distributions mid-session.
+        return bool(
+            roots and roots.intersection(self._metadata.packages_distributions())
+        )
 
     def _is_availability_probe(self):
         probe_code = getattr(self._importlib_util.find_spec, "__code__", None)
@@ -367,7 +368,7 @@ if _mcp_console_import_finder is None:
         _threading,
         _MCP_CONSOLE_IMPORT_DISTRIBUTIONS,
         _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS,
-        _MCP_CONSOLE_DEFAULT_IMPORT_ROOTS,
+        _importlib_metadata,
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
