@@ -22,6 +22,7 @@ from support.normalization import (
 from support.r import r_test_environment
 from support.records import Transcript
 from support.previews import assert_preview, cell_text, normalize_preview_paths
+from support.resolvers import normalize_duckdb_resolution_error
 from support.suites import run_this_suite
 
 
@@ -118,7 +119,9 @@ def test_restart_adds_r_and_duckdb_requirements(
         assert (
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
@@ -207,7 +210,9 @@ def test_prepares_and_loads_duckdb_extensions(
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
         assert "unknown core DuckDB extension" not in failure, failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(
             sql=(
@@ -521,14 +526,15 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "beta.md" in preview and "Bananas are yellow fruit" in preview
-    assert "alpha.md" not in preview
+    assert "beta.md" in preview and "Bananas are yellow fruit" in preview, preview
+    assert "alpha.md" not in preview, preview
 
     # fmt: r
     r = code(r"""
+        # Match the writable instance retained by the creator connection.
         reader <- ragnar::ragnar_store_connect(
           store_path,
-          read_only = TRUE
+          read_only = FALSE
         )
         reader_result <- ragnar::ragnar_retrieve(
           reader,
@@ -539,8 +545,8 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "alpha.md" in preview and "Apples are red fruit" in preview
-    assert "beta.md" not in preview
+    assert "alpha.md" in preview and "Apples are red fruit" in preview, preview
+    assert "beta.md" not in preview, preview
 
     sql = code(r"""
         SELECT origin FROM chunks ORDER BY origin
@@ -1293,15 +1299,6 @@ def normalize_duckdb_extension_error(client: McpClient) -> str:
     assert (download_urls, troubleshooting_urls) == (1, 1), output
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return output
-
-
-def duckdb_native_failure(failure: str) -> str:
-    native_failure = next(
-        line.strip().removeprefix("! ")
-        for line in failure.splitlines()
-        if "Failed to download extension" in line
-    )
-    return native_failure.partition(' at URL "')[0]
 
 
 if __name__ == "__main__":

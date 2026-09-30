@@ -251,6 +251,8 @@ def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
         for line in error.splitlines()
         if f'Failed to download extension "{extension}"' in line
     )
+    # DuckDB releases differ in whether the HTTP error has an Invalid wrapper.
+    detail = detail.removeprefix("Invalid Error: ")
     return detail.partition(' at URL "')[0]
 
 
