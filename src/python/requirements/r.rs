@@ -100,7 +100,7 @@ pub(super) struct Projection {
 pub(super) fn project_packages(
     selected: &crate::python::NativePython,
     packages: &[String],
-    inspected: Option<&serde_json::Value>,
+    inspected: &serde_json::Value,
 ) -> Result<Option<Projection>, String> {
     let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
         return Ok(None);
@@ -121,11 +121,9 @@ pub(super) fn project_packages(
 }
 
 impl Projection {
-    pub(super) fn commit(self, environment: Option<&serde_json::Value>) -> Result<(), String> {
-        let environment = harp::exec::r_sandbox(|| {
-            environment.map_or_else(Value::null, |value| Value(RObject::from(value.to_string())))
-        })
-        .map_err(|error| error.to_string())?;
+    pub(super) fn commit(self, environment: &serde_json::Value) -> Result<(), String> {
+        let environment = harp::exec::r_sandbox(|| Value(RObject::from(environment.to_string())))
+            .map_err(|error| error.to_string())?;
         Adapter(self.adapter.sexp)
             .call("commit_import", &[&self.value, &environment])
             .map(|_| ())

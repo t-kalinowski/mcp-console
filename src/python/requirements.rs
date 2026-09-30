@@ -250,7 +250,7 @@ fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, 
             });
         }
     };
-    let projection = match r::project_packages(&candidate.selected, &packages, Some(&inspected)) {
+    let projection = match r::project_packages(&candidate.selected, &packages, &inspected) {
         Ok(projection) => projection,
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
@@ -415,7 +415,7 @@ pub(super) fn publish_activation(activation: super::environment::Activation) -> 
     resolved(pending.candidate);
     if let Some(projection) = pending.projection {
         projection
-            .commit(Some(&activation.environment))
+            .commit(&activation.environment)
             .map_err(super::environment::infrastructure)?;
     } else {
         accept(activation.manifest.clone()).map_err(super::environment::infrastructure)?;
@@ -478,7 +478,7 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     let projection = match r::project_packages(
         &candidate.selected,
         std::slice::from_ref(&resolution.distribution),
-        Some(&inspected),
+        &inspected,
     ) {
         Ok(projection) => projection,
         Err(error) => return Ok(failed(error)),

@@ -354,28 +354,19 @@ base::local(
         )
         current <- current_requirements()
         added <- setdiff(distribution, current$packages)
-        initialized <- !is.null(.Call("mcp_console_running_python"))
-        current$packages <- if (initialized) {
-          c(added, current$packages)
-        } else {
-          c(current$packages, added)
-        }
+        current$packages <- c(added, current$packages)
         current$history <- c(current$history, list(request))
         list(
           manifest = current,
-          config = if (initialized) activation_config(selection) else NULL
+          config = activation_config(selection)
         )
       }
-      commit_import <- function(projection, environment = NULL) {
-        if (!is.null(projection$config)) {
-          if (!is.null(environment)) {
-            active <- jsonlite::fromJSON(environment)
-            projection$config$pythonpath <- active$pythonpath
-          }
-          record_activation(projection$manifest)
-          if (reticulate:::is_python_initialized()) {
-            globals$py_config <- available_config(projection$config)
-          }
+      commit_import <- function(projection, environment) {
+        active <- jsonlite::fromJSON(environment)
+        projection$config$pythonpath <- active$pythonpath
+        record_activation(projection$manifest)
+        if (reticulate:::is_python_initialized()) {
+          globals$py_config <- available_config(projection$config)
         }
         globals$python_requirements <- projection$manifest
         invisible()

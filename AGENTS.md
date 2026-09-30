@@ -258,7 +258,8 @@ Keep these invariants intact:
   Unused warm capacity can be replaced for initial requirements; polling and inspection do not claim it.
   Failed startup is retained for explicit recovery after confirmed cleanup.
   Complete launch plans distinguish genuinely absent Python from pending discovery.
-  Reticulate startup hooks use the authoritative native selection, and conversion metadata is captured on the execution host without worker subprocess inspection.
+  Reticulate startup hooks use the authoritative native selection, and execution-host inspection captures initial conversion metadata before bridge attachment.
+  Live activation probes the already selected candidate inside the worker for site paths, installed distributions, and refreshed metadata; it never discovers interpreters or resolves packages there.
   Sans-R defaults require uv on the startup PATH and an absolute HOME for the shared DuckDB extension cache; top-level `python` selects an existing environment without invoking uv.
   Managed R-backed and sans-R sessions prepare SQLite as a default DuckDB extension on the execution host; exact declaration replacements can remove it, and reset restores it.
   Managed environments support explicit prestart/restart preparation, idle Python and DuckDB additions, and resolution at reached missing Python imports through shared native activation, with the accepted manifest and launch configuration committed together.
