@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
+from support import ssh
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -37,6 +38,20 @@ def test_rejects_invalid_local_r_home(binary: Path) -> list:
         root = Path(temporary).resolve()
         environment = {**os.environ, "R_HOME": str(root / "missing-r")}
         return rejected_selection(binary, root, environment)
+
+
+@requires(ssh.SSH)
+def test_rejects_invalid_remote_r_home(binary: Path) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        ssh.configure(
+            root,
+            root,
+            [str(binary)],
+            sandbox={"environment": {"R_HOME": str(root / "missing-r")}},
+        )
+        with ssh.localhost(root / "sshd") as environment:
+            return rejected_selection(binary, root, environment)
 
 
 @requires(R)

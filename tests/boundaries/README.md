@@ -18,6 +18,8 @@ The runner removes the workspace and Console home after the case exits.
 `McpClient` also isolates Console home when used outside the runner and creates no project config file.
 Cases that exercise home discovery pass their chosen `HOME` or `MCP_CONSOLE_HOME` explicitly and use `use_home_configuration=True`; remove the inherited `MCP_CONSOLE_HOME` when testing the default `~/.agents/console` location.
 
+The `client_server/server/test_no_r_ssh` cases use real OpenSSH and a fixture-owned remote PATH without R executables, including on R-enabled hosts.
+
 Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
 Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
 Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.
