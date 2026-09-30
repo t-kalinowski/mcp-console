@@ -133,6 +133,9 @@ Argument decoding errors pass through the same bounded response renderer before 
 The session coordinator in `src/worker_client.rs` validates requirements and interprets every `send` combination, including standalone preparation.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
+The [capability-advertising decision](TOOL_DESCRIPTIONS.md#supported-capabilities-and-host-availability) keeps supported, configured capabilities visible even when the execution host lacks a runtime.
+Tool construction uses captured configuration, while operation validation uses discovered availability.
+`ConsoleServer::new` still constructs the worker client and completes discovery and applicable initial preparation before serving MCP; configuration-only presentation is not yet a fast-handshake implementation.
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.

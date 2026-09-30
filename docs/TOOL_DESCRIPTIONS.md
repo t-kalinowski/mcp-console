@@ -10,6 +10,29 @@ This separation does not change synchronous startup discovery, preparation, or w
 Review changes in the snapshot and regenerate it intentionally using the [boundary test guide](../tests/boundaries/README.md).
 Ordinary tests check the committed expectation; they do not regenerate it.
 
+## Supported capabilities and host availability
+
+The configured interface advertises capabilities Console supports, including languages that may be missing from the execution host.
+This is an intentional trade-off: tailoring the schema to installed runtimes gives an agent more precise guidance, but hiding an unavailable language also hides the opportunity to make it available.
+For example, an advertised R field lets an agent attempt an R task, report that R is missing, and ask the user to authorize installation on the execution host.
+The cost is less environment-specific guidance and a possible rejected call before the agent learns what is available.
+Advertising a capability does not authorize installation or promise that the current host can satisfy it.
+
+Explicit configuration still constrains the interface: `MCP_CONSOLE_LANGUAGES` removes disabled code fields, and prepared Docker/SBX targets expose requirement inspection without dependency preparation.
+Execution validates discovered runtime availability; an R cell on a sans-R session or a Python cell on an R-only prepared target is rejected before worker startup or replacement.
+For SSH, dependencies belong on the remote execution host; prepared targets require an updated image or template.
+
+Runtime selection is captured for each server session.
+After installing or configuring a missing runtime, start a new MCP Console server session.
+`control="restart"` replaces the worker while retaining the server's runtime selection.
+
+Configuration-only presentation removes a dependency on discovery results, but does not itself defer discovery.
+Server construction still performs discovery and applicable initial preparation before answering `initialize` or `tools/list`.
+A host with no viable runtime can therefore still fail before advertising tools.
+Moving that work off the handshake path is separate startup work.
+
+## Writing guidance
+
 Tool descriptions occupy recurring agent context.
 Keep them concise and action-oriented, and include facts that affect whether or how an agent calls the tool or interprets its result.
 
