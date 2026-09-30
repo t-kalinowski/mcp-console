@@ -158,6 +158,61 @@ def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcr
 
 
 @executions(DIRECT, SANDBOXED)
+def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with no_r_client(binary, execution) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: python
+            python=code("""
+                import os
+
+                original_pid = os.getpid()
+                received = input("original cell> ")
+                print(received)
+                """)
+        )
+        assert "[waiting for stdin]" in last_result_text(client)
+        for requirements, expected in (
+            (
+                {"r": ["praise"]},
+                "R requirements are unavailable in Python sessions without R",
+            ),
+            (
+                {"python": ["numpy"]},
+                (
+                    "[Python requirements cannot accompany control: interrupt; "
+                    "prepare before first use or with control: restart]"
+                ),
+            ),
+        ):
+            result = client.send(
+                control="interrupt",
+                requirements=requirements,
+                stdin="rejected input\n",
+                python="interrupt_followup_ran = True",
+            )
+            assert result["isError"], result
+            assert last_result_text(client) == expected, result
+            client.send()
+            assert "[waiting for stdin]" in last_result_text(client)
+        client.send(stdin="fresh input\n")
+        assert last_result_text(client) == "fresh input\n"
+        client.send(
+            # fmt: python
+            python=code("""
+                assert os.getpid() == original_pid
+                assert received == "fresh input"
+                assert "interrupt_followup_ran" not in globals()
+                print("original cell and worker retained")
+                """)
+        )
+        assert last_result_text(client) == "original cell and worker retained\n"
+        return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
 def test_no_r_sql_interrupt_and_worker_crash(
     binary: Path, execution: Execution
 ) -> Transcript:
