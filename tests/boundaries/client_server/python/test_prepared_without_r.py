@@ -549,11 +549,14 @@ def unusable_library_client(binary: Path, provider: str):
 )
 def test_rejects_unusable_python_library(binary: Path, execution: Execution) -> list:
     with unusable_library_client(binary, execution.name) as client:
+        error = client.startup_error()
+        assert "selected Python embedding library is unusable" in error, error
+        client.stdin.close()
         assert client.stdout.read(timeout=40) == ""
         errors = client.stderr.read(timeout=40)
         assert "selected Python embedding library is unusable" in errors, errors
         assert client.process.wait(timeout=5) != 0
-    return [{"unusable_library_rejected_before_mcp_readiness": True}]
+    return [{"unusable_library_rejected_before_worker_startup": True}]
 
 
 def rejected_probes(binary: Path, provider: str) -> list:

@@ -1,2 +1,2 @@
 ---
-unusable_library_rejected_before_mcp_readiness: true
+unusable_library_rejected_before_worker_startup: true

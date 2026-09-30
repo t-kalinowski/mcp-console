@@ -54,6 +54,8 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             client.initialize_and_list_tools()
             tools = client.transcript[-1]["result"]["tools"]
             assert "requirements" in tools[0]["inputSchema"]["properties"], tools
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
             assert record.read_text(encoding="utf-8").splitlines() == [
                 "namespace:--probe"
             ], "initialization invoked reticulate bootstrap"
