@@ -95,23 +95,52 @@ Retain platform conditionals for modules that use OS-specific APIs and for selec
 CI runs core checks and all capability-applicable transcript modes on macOS and Linux.
 External SSH tests automatically use a reachable optional host, with selection and availability confined to `tests/support/ssh_external.py`; absent hosts skip those cases while localhost SSH coverage remains available.
 Keep Python SDK integration test dependencies free of exact version pins, retain the published dependency lower bounds, and constrain MCP to the supported major using `==2.*`.
-For CI changes, retain one job per platform and follow the build/cache contract in [RELEASE.md](RELEASE.md#private-sandbox-executable).
-For local setup, staging, installation, and concurrent worktrees, follow [development preparation](docs/DEVELOPMENT.md#inspect-local-preparation) and [checkout ownership](docs/DEVELOPMENT.md#checkout-ownership).
-Keep application build outputs checkout-local; wrap direct Cargo and Maturin commands in `scripts/with-checkout`.
+Keep one CI job per platform.
+CI restores Cargo build data across source and dependency changes within the same OS version, architecture, toolchain, applicable R version, and UTC week, with incremental compilation enabled.
+Follow the [CI build and cache contract](RELEASE.md#private-sandbox-executable) for cache keys and weekly resets, runner staging, finished-output reuse, SDK resolution, and cache invalidation and cleanup.
+Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
+Python package builds and installations require Python 3.11 or later.
 
+macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a shared dedicated checkout under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Keep its Cargo build data with that source, and hold the adjacent `<source-checkout>.stage.lock` through preparation, build, and artifact copying.
+Explicit source overrides use the same source ownership.
+Keep application `target` and wheel staging local to each Console checkout.
+The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's compiler configuration; Console's toolchain selection is independent.
+Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
+Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
+Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
+Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
+The Python packaging backend holds a checkout-local lock from staging through wheel creation.
+Staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with the lock path and last recorded owner details.
+Wrap direct Cargo and Maturin commands in `scripts/with-checkout` to claim that ownership.
+See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
 ```text
 scripts/preflight
-scripts/test BOUNDARY/SUITE[::CASE]
 scripts/format
 scripts/check
+scripts/check --full
+scripts/test [BOUNDARY/SUITE[::CASE]]
+scripts/test --full
+scripts/test --full --list
+scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-Use public focused tests for red/green work, and follow the [validation ladder](docs/DEVELOPMENT.md#validation-ladder) before publication.
-The default check is a smoke gate, not exhaustive validation; use `--full` when requested or warranted by the changed area.
-Read each formatter's result even when `scripts/format` exits successfully.
-Record and report the validation actually run; [completion records](docs/DEVELOPMENT.md#completion-records) describe the evidence and timing logs.
+`scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence and reports each result.
+A missing or failing formatter does not prevent the remaining formatters from running; the default exits successfully, while `--strict` returns failure if any formatter failed.
+Review its output and resulting changes.
+Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for checkout ownership and concurrent worktrees.
+`scripts/check` is the ordinary final local gate: stage the companion, validate extracted runtime sources, check architecture, check Rust formatting and Clippy, run Rust tests in debug, and run the explicit smoke transcript profile against the release executable.
+`scripts/check --quick` is a backwards-compatible alias for this default.
+`scripts/check --full` adds repository-tooling self-tests, all capability-applicable transcripts, and uv source and wheel installation checks.
+Use the full local gate only when explicitly requested or when the changed area warrants exhaustive local validation.
+CI explicitly runs full core and transcript profiles plus installation checks and remains the comprehensive merge gate.
+Report the validation commands and scope actually run; the default gate is not exhaustive.
+Use `scripts/test SELECTOR` for red/green work and the owning focused tests when changing repository tooling.
+With no selectors, `scripts/test` and `scripts/test --quick` run the small explicit selection in `tests/boundaries/_profiles.py`; `scripts/test --full` runs the complete capability-applicable suite.
+Explicit case or suite selectors retain their scope with any profile flag.
+Per-execution transcript timings are recorded beside validation results in `case-timings.jsonl`.
 
 ### Boundary snapshots
 
