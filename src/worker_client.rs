@@ -1028,17 +1028,19 @@ impl Client {
             && request.requirements.is_none()
             && !self.startup_finished()
         {
+            let startup_stdin = request
+                .stdin
+                .clone()
+                .filter(|input| !input.is_empty())
+                .map(|input| self.admit().map(|generation| (generation, input)))
+                .transpose()?;
             let client = self.clone();
             tokio::task::spawn_blocking(move || client.interrupt_standalone_blocking())
                 .await
                 .map_err(|error| format!("startup interrupt task failed: {error}"))??;
-            if let Some(input) = request.stdin.clone().filter(|input| !input.is_empty()) {
-                if let Some(active) = self.current_evaluation()? {
-                    active.evaluation.submit_stdin(input)?;
-                } else if let Some(worker) = self.worker_handle()? {
-                    #[cfg(unix)]
-                    worker.write_startup_stdin(input)?;
-                }
+            if let Some((generation, input)) = startup_stdin {
+                #[cfg(unix)]
+                self.queue_startup_stdin(&generation, input)?;
             }
             tokio::time::sleep(INTERRUPT_GRACE).await;
             if let Some(active) = self.current_evaluation()? {

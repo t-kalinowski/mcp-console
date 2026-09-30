@@ -270,7 +270,7 @@ def test_refreshes_numpy_configuration_after_live_preparation(
                   startsWith(active$numpy$path, active$prefix),
                   identical(active$numpy$version, config$numpy$version)
                 )
-                """)
+                """),
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
         return client.finish()
