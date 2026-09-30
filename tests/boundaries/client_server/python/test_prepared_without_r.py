@@ -475,6 +475,8 @@ def inspection_boundary(binary: Path, provider: str) -> list:
         binary, provider, setup=lambda root, value: probe_setup(root, value, "noisy")
     ) as (client, root):
         client.initialize_and_list_tools()
+        discovery = client.send(requirements={"action": "get"})
+        assert not discovery.get("isError", False), discovery
         assert (root / "probe-observed").exists(), client._diagnostics()
         assert not (root / "worker-started").exists(), (
             "probe started the analysis worker"

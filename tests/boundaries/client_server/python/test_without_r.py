@@ -188,6 +188,8 @@ exec "{shutil.which("uv")}" "$@"
         )
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
             assert marker.read_text() == "host resolver ran"
             marker.unlink()
             client.send(
@@ -2364,6 +2366,8 @@ def test_inspection_excludes_workspace_and_pythonpath(
         env["PYTHONPATH"] = str(poisoned_path)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
             assert not (workspace / "host-import-executed").exists()
             # Workload imports keep their ordinary semantics inside the worker.
             (workspace / "ctypes.py").unlink()
