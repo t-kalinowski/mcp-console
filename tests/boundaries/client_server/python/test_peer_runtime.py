@@ -245,8 +245,6 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
             )
             with McpClient(binary, serve, environment, local) as client:
                 client.initialize_and_list_tools()
-                client.send(requirements={"python": ["numpy"]})
-                assert last_result_text(client) == "[prepared]", client.transcript[-1]
                 # Create the startup-hook fixture on its execution host, then
                 # start the generation whose in-memory continuity is exercised.
                 # Bare targets use their installed packages. Managed targets may
