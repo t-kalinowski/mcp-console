@@ -9,30 +9,26 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support import ssh
 from support.assertions import last_result_text
+from support import ssh
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
-from support.requirements import NO_R, R_RUNTIME, requires
+from support.requirements import R, requires
+from support.linux_sandbox import retain_system_bwrap
+from boundaries.client_server.server.test_no_r import no_r_environment
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
 
 def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) -> list:
     with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
-        client.start_request(
-            "initialize",
-            protocolVersion="2025-11-25",
-            capabilities={},
-            clientInfo={"name": "r-selection", "version": "1"},
-        )
         assert client.stdout.readline(timeout=20) == "", (
             "invalid R_HOME reached readiness"
         )
         error = client.stderr.read(timeout=20)
-        assert "R_HOME" in error and "bin/Rscript" in error, error
+        assert "R_HOME" in error and str(root / "missing-r") in error, error
         assert client.process.wait(timeout=5) != 0
         return [{"stderr": error.replace(str(root), "<workspace>")}]
 
@@ -58,7 +54,7 @@ def test_rejects_invalid_remote_r_home(binary: Path) -> list:
             return rejected_selection(binary, root, environment)
 
 
-@requires(R_RUNTIME)
+@requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_retains_discovered_r_home_across_generations(
     binary: Path, execution: Execution
@@ -96,7 +92,6 @@ def test_retains_discovered_r_home_across_generations(
             return client.finish()
 
 
-@requires(NO_R)
 @executions(DIRECT, SANDBOXED)
 def test_retains_r_absence_across_generations(
     binary: Path, execution: Execution
@@ -105,6 +100,7 @@ def test_retains_r_absence_across_generations(
         root = Path(temporary).resolve()
         commands = root / "bin"
         commands.mkdir()
+        retain_system_bwrap(commands)
         marker = root / "discovered-r"
         environment = bare_runtime_environment(os.environ.copy(), root / "r-library")
         environment.pop("R_HOME", None)
@@ -126,16 +122,18 @@ def test_retains_r_absence_across_generations(
                 client.send(python="answer = 41; answer + 1")
                 assert last_result_text(client) == "42\n", last_result_text(client)
                 client.send(r="1 + 1")
-                assert "R is unavailable" in last_result_text(client)
+                assert (
+                    last_result_text(client)
+                    == "R cells are unavailable in Python sessions without R"
+                ), client.transcript[-1]
                 assert not marker.exists(), "worker rediscovered R after server startup"
             return client.finish()
 
 
-@requires(NO_R)
 def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        with McpClient(binary, DIRECT.serve(), current_directory=root) as client:
+        with McpClient(binary, DIRECT.serve(), no_r_environment(root), root) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
                 if restart:
@@ -150,10 +148,14 @@ def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> li
                     storage = Path(
                         connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
                     ).parent
+                    storage.mkdir(parents=True, exist_ok=True)
                     (storage / "cleanup-marker").write_text("owned storage")
                     print(json.dumps(str(storage)))
                     """)
                 client.send(python=python)
+                assert client.transcript[-1]["result"]["isError"] is False, (
+                    client.transcript[-1]
+                )
                 storage = Path(json.loads(last_result_text(client)))
                 assert storage.is_dir()
                 client.transcript[-1]["result"]["content"][0]["text"] = (

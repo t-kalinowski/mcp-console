@@ -1,14 +1,21 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as custom MCP initialization for this execution mode
 ---
 send:
   r: overflow console output
 result:
   content:
     - type: text
-      text: |-
-        <retained 8388608 text bytes>
-        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (7 of 7 omitted text bytes)]
+      text:
+        text_bytes: 8059
+        concat:
+          - repeat: x
+            count: 3904
+          - |
+
+            [output preview: omitted 8380807 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 8388615 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3904
   isError: false
 ---
 send:

@@ -1,9 +1,11 @@
 /target
 /dist
 /.sandbox-runner-source
+/.sandbox-runner-source.stage.lock
 .mcp-console
 **/.agents/console/sessions/
 __pycache__/
 .codex
 .claude
 .positai
+/.dev-workflow/

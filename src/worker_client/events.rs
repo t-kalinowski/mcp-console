@@ -70,8 +70,8 @@ enum OperationKind {
     },
     PreparePython {
         commit: PythonPreparationCommit,
-        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     },
 }
 
@@ -83,6 +83,7 @@ enum Route {
 
 struct PendingPythonCandidate {
     managed: crate::resolver::ManagedPython,
+    configuration: crate::python::NativePython,
     import_resolution: Option<crate::worker_protocol::PythonImportResolution>,
 }
 
@@ -193,24 +194,26 @@ impl WorkerOperationState {
     pub(super) fn begin_python_preparation(
         &self,
         commit: PythonPreparationCommit,
-        duckdb_extensions: Vec<String>,
         continue_environment_preparation: bool,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython {
             commit,
-            duckdb_extensions,
             continue_environment_preparation,
+            duckdb_extensions,
         })
     }
 
-    fn python_duckdb_extensions(&self) -> Result<Vec<String>, String> {
+    fn python_preparation_extensions(
+        &self,
+    ) -> Result<Option<std::collections::BTreeSet<String>>, String> {
         let state = self.lock()?;
         Ok(
             match state.operation.as_ref().map(|operation| &operation.kind) {
                 Some(OperationKind::PreparePython {
                     duckdb_extensions, ..
                 }) => duckdb_extensions.clone(),
-                _ => Vec::new(),
+                _ => None,
             },
         )
     }
@@ -506,7 +509,9 @@ impl WorkerOperationState {
                 commit(Err(message)).map(OperationResult::RPrepared)
             }
             (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
-                let candidate = python_candidates.pop().map(|candidate| candidate.managed);
+                let candidate = python_candidates
+                    .pop()
+                    .map(|candidate| (candidate.managed, candidate.configuration));
                 r_candidates.clear();
                 python_candidates.clear();
                 commit(Ok(candidate)).map(OperationResult::PythonPrepared)
@@ -518,6 +523,16 @@ impl WorkerOperationState {
                 r_candidates.clear();
                 python_candidates.clear();
                 commit(Err(message)).map(OperationResult::PythonPrepared)
+            }
+            (
+                OperationKind::PreparePython { .. },
+                RelayEvent::PythonPreparationRejected { message },
+            ) => {
+                r_candidates.clear();
+                python_candidates.clear();
+                Ok(OperationResult::PythonPrepared(
+                    super::PreparationOutcome::Completed(Err(message)),
+                ))
             }
             (OperationKind::Cell(_), _) => {
                 Err("worker sent an unexpected evaluation result".to_string())
@@ -586,7 +601,9 @@ impl OperationKind {
             | (Self::PrepareR { .. }, RelayEvent::RPreparationFailed { .. })
             | (
                 Self::PreparePython { .. },
-                RelayEvent::PythonPrepared | RelayEvent::PythonPreparationFailed { .. },
+                RelayEvent::PythonPrepared
+                | RelayEvent::PythonPreparationFailed { .. }
+                | RelayEvent::PythonPreparationRejected { .. },
             ) => true,
             (
                 Self::PrepareR {
@@ -915,6 +932,7 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
             | RelayEvent::ResolvePython { .. }
             | RelayEvent::ResolvePythonVersion { .. }
             | RelayEvent::PythonActivated { .. }
+            | RelayEvent::PythonActivationFailed { .. }
     )
 }
 
@@ -1066,18 +1084,24 @@ fn handle_semantic_event(
                 })?;
             }
             let import_resolution = request.import_resolution.clone();
-            let response =
-                match callbacks.resolve_python(request, operation.python_duckdb_extensions()?) {
-                    Ok(managed) => {
-                        let python = managed.python().to_string_lossy().into_owned();
-                        candidates.python.push(PendingPythonCandidate {
-                            managed,
-                            import_resolution,
-                        });
-                        RelayCommand::PythonResolved { python }
-                    }
-                    Err(message) => RelayCommand::PythonResolutionFailed { message },
-                };
+            let response = match callbacks
+                .resolve_python(request, operation.python_preparation_extensions()?)
+            {
+                Ok((managed, configuration)) => {
+                    let python = managed.python().to_string_lossy().into_owned();
+                    let native = Some(Box::new(crate::worker_protocol::NativePythonActivation {
+                        selected: configuration.clone(),
+                        requirements: managed.requirements().clone(),
+                    }));
+                    candidates.python.push(PendingPythonCandidate {
+                        managed,
+                        configuration,
+                        import_resolution,
+                    });
+                    RelayCommand::PythonResolved { python, native }
+                }
+                Err(message) => RelayCommand::PythonResolutionFailed { message },
+            };
             commands.send(response)
         }
         RelayEvent::ResolvePythonVersion { request } => {
@@ -1094,14 +1118,24 @@ fn handle_semantic_event(
                 .iter()
                 .rposition(|candidate| candidate.managed.requirements() == &activated)
                 .map(|index| candidates.python.remove(index));
-            let (managed, resolution) = match candidate {
-                Some(candidate) => (Some(candidate.managed), candidate.import_resolution),
-                None => (None, None),
+            let (managed, configuration, resolution) = match candidate {
+                Some(candidate) => (
+                    Some(candidate.managed),
+                    Some(candidate.configuration),
+                    candidate.import_resolution,
+                ),
+                None => (None, None, None),
             };
             candidates.python.clear();
-            let disposition = callbacks.activate_python(requirements, managed)?;
+            let disposition = callbacks.activate_python(
+                requirements,
+                managed,
+                configuration,
+                operation.python_preparation_extensions()?,
+            )?;
             if disposition == OldGenerationCommitDisposition::Commit
                 && let Some(resolution) = resolution
+                && resolution.module != resolution.distribution
             {
                 operation.with_route(|route| match route {
                     Route::Cell(evaluation) => evaluation.bounded_notice(format!(
@@ -1116,11 +1150,28 @@ fn handle_semantic_event(
             }
             Ok(())
         }
+        RelayEvent::PythonActivationFailed { requirements } => {
+            // R declarations can activate during a cell, explicit preparation,
+            // or an idle callback. In every context the failure must identify
+            // a provisional candidate belonging to this generation.
+            let expected = requirements.normalized();
+            if !candidates
+                .python
+                .iter()
+                .any(|candidate| candidate.managed.requirements() == &expected)
+            {
+                return Err("worker failed an unexpected Python candidate".into());
+            }
+            candidates.python.clear();
+            callbacks.fail_python_activation()?;
+            Ok(())
+        }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }
         | RelayEvent::PythonPrepared
-        | RelayEvent::PythonPreparationFailed { .. }) => {
+        | RelayEvent::PythonPreparationFailed { .. }
+        | RelayEvent::PythonPreparationRejected { .. }) => {
             operation.complete(event, &mut candidates.r, &mut candidates.python)
         }
         RelayEvent::Ready

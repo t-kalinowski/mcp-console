@@ -217,6 +217,14 @@ pub(super) struct ProcessStopHandles {
 
 impl ProcessStopHandles {
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+        let (allowance, errors) = self.request_shutdown(deadline);
+        self.finish_shutdown(deadline, allowance, errors)
+    }
+
+    fn request_shutdown(
+        &self,
+        deadline: Instant,
+    ) -> (Option<platform::RelayRetirementAllowance>, Vec<String>) {
         let mut errors = Vec::new();
         let mut worker_allowance = None;
         // Queue worker shutdown before resolver cancellation can release a
@@ -233,6 +241,15 @@ impl ProcessStopHandles {
         {
             errors.push(error);
         }
+        (worker_allowance, errors)
+    }
+
+    fn finish_shutdown(
+        &self,
+        deadline: Instant,
+        worker_allowance: Option<platform::RelayRetirementAllowance>,
+        mut errors: Vec<String>,
+    ) -> Result<(), String> {
         // The barrier lets the ordered consumer apply failures and finish a
         // cancelled resolver callback before relay retirement is enforced.
         if let (Some(worker), Some(allowance)) = (self.worker.as_ref(), worker_allowance)
@@ -283,6 +300,17 @@ impl Drop for WorkerStartupAdmission {
 }
 
 impl Client {
+    pub(super) fn has_live_worker(&self) -> Result<bool, String> {
+        Ok(self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?
+            .processes
+            .worker
+            .is_some())
+    }
+
     pub(super) fn reserve_worker_startup(
         &self,
         generation: &WorkerGeneration,
@@ -419,7 +447,10 @@ impl Client {
         defer_idle: bool,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartAttempt, String> {
-        let mut restart = if requirements.duckdb.is_empty()
+        let mut restart = if requirements.action == super::RequirementsAction::Add
+            && requirements.python_version.is_empty()
+            && requirements.exclude_newer.is_none()
+            && requirements.duckdb.is_empty()
             && requirements.python.is_empty()
             && requirements.r.is_empty()
         {
@@ -526,22 +557,31 @@ impl Client {
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
+        let action = requirements.action;
+        let call_id = requirements.call_id;
         let delta = RequirementDelta::calculate(&environment, requirements)?;
-        if delta.is_empty() {
-            drop(environment);
-            return self.begin_restart(grace, control);
-        }
-        let resolved = self
-            .resolve_prestart_environment(&generation, &environment, delta)
-            .map_err(|failure| failure.into_message())?;
+        let resolved = if delta.is_empty() {
+            if action == super::RequirementsAction::Add {
+                drop(environment);
+                return self.begin_restart(grace, control);
+            }
+            // Even an unchanged replacement excludes uncommitted old-worker
+            // activations. Keep the environment locked through generation change.
+            environment.clone()
+        } else {
+            self.resolve_prestart_environment(&generation, &environment, delta)
+                .map_err(|failure| failure.into_message())?
+        };
 
-        self.commit_environment_and_begin_restart(
+        let restart = self.commit_environment_and_begin_restart(
             &generation,
             grace,
             &mut environment,
             resolved,
             control,
-        )
+        )?;
+        self.record_requirements(action, call_id, &environment);
+        Ok(restart)
     }
 
     fn commit_environment_and_begin_restart(
@@ -583,6 +623,8 @@ impl Client {
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
         *environment = resolved;
+        self.record_accepted_python(environment);
+        self.publish_requirements(environment);
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
         Ok(RestartContext {
@@ -1203,22 +1245,33 @@ impl Client {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
-            let preparation = client
+            let local = client
                 .0
-                .target
-                .as_ref()
-                .and_then(crate::target_session::Session::ssh_preparation)
-                .map(|preparation| {
-                    let preparation = preparation.clone();
-                    // The two SSH retirement bounds run together. A lost
-                    // preparation connection must not extend worker shutdown.
-                    std::thread::spawn(move || preparation.close())
-                });
-            let stopped = stop_handles.shutdown(deadline);
+                .local_preparation
+                .lock()
+                .expect("local preparation lock")
+                .clone();
+            let preparation = local.or_else(|| {
+                client
+                    .0
+                    .target
+                    .as_ref()
+                    .and_then(crate::target_session::Session::ssh_preparation)
+                    .cloned()
+            });
+            // Queue relay shutdown and resolver cancellation before Close can
+            // retire the preparation host and its control-input pipe.
+            let (allowance, errors) = stop_handles.request_shutdown(deadline);
+            let preparation = preparation.map(|preparation| {
+                // Resolver and worker retirement run together. A lost
+                // preparation connection must not extend worker shutdown.
+                std::thread::spawn(move || preparation.close())
+            });
+            let stopped = stop_handles.finish_shutdown(deadline, allowance, errors);
             let retired = client.finish_worker_retirement().map(|_| ());
             let preparation = preparation.map_or(Ok(()), |task| {
                 task.join()
-                    .map_err(|_| "SSH preparation shutdown task panicked")?
+                    .map_err(|_| "preparation shutdown task panicked")?
             });
             let worker = match (stopped, retired) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -1231,7 +1284,7 @@ impl Client {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
                 (Err(error), Err(preparation_error)) => Err(format!(
-                    "{error}; additionally failed to retire SSH preparation: {preparation_error}"
+                    "{error}; additionally failed to retire preparation: {preparation_error}"
                 )),
             }
         })

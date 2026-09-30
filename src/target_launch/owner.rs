@@ -119,6 +119,7 @@ pub(crate) fn outcome(result: Result<(), String>, cleanup: Result<(), String>) -
 pub(crate) fn attach(
     mut command: Command,
     bootstrap: &Bootstrap,
+    probe: bool,
     hello: Hello,
     protocol: target_launch::Protocol,
     cancel: &Cancel,
@@ -173,6 +174,9 @@ pub(crate) fn attach(
         }
         let retirement = target_launch::Retirement::default();
         let mut source = target_launch::Output::new(source, protocol, retirement);
+        if probe {
+            source = source.for_probe();
+        }
         let mut destination = Io::new(duplicate(1)?, Some(output_cancel), None)?;
         let hello = serde_json::to_vec(&hello).map_err(|e| e.to_string())?;
         target_launch::write_frame(&mut destination, target_launch::HELLO, &hello)
@@ -181,6 +185,12 @@ pub(crate) fn attach(
         loop {
             let count = source.read(&mut buffer).map_err(|e| e.to_string())?;
             if count == 0 {
+                if probe {
+                    target_launch::runtime::write_result(
+                        &mut destination,
+                        &source.take_runtime()?,
+                    )?;
+                }
                 return Ok(());
             }
             target_launch::write_frame(&mut destination, target_launch::DATA, &buffer[..count])

@@ -514,10 +514,10 @@ The implementation should distinguish three output classes.
 
 ### 10.1 Explicit stdout and stderr
 
-All explicit stream output is appended to a per-evaluation file, for example:
+Emitted cell streams are appended to the existing per-evaluation raw file, up to 1 GiB, for example:
 
 ```text
-.agents/console/sessions/default/outputs/e0017.log
+.agents/console/sessions/<run ID>/outputs/call-000017.log
 ```
 
 Each MCP reply considers only bytes produced since the previous sealed reply for that evaluation.
@@ -527,7 +527,7 @@ If it exceeds the budget:
 
 1. return a bounded useful excerpt, normally preserving both the beginning and the most recent tail;
 2. state how much was omitted;
-3. include the relative path to the complete output;
+3. include the retained-file path and distinguish a complete retained stream, a retained prefix, and sources with no cell log;
 4. advance the reply cursor to the current end of the spool.
 
 Example:
@@ -541,16 +541,19 @@ Loading partition 2...
 Loading partition 98...
 Loading partition 99...
 
-[truncated: .agents/console/sessions/default/outputs/e0017.log]
+[truncated: .agents/console/sessions/<run ID>/outputs/call-000017.log]
 [running]
 ```
 
 A later poll reports only output created after that reply.
 It does not force the agent to page through an old truncated backlog.
-The complete prior output remains available through ordinary host file-reading and search tools.
+Retained prior output remains available through ordinary file tools with access to the Console server recording workspace.
+The path is controller-owned for SSH, Docker, and Docker Sandbox; worker-only file access is insufficient.
+Omitted output beyond a retention limit or write failure, and omitted output from sources without a cell log, is unavailable.
 
 When an evaluation completes, unread omitted bytes are not injected into later unrelated evaluations.
-The file path is the continuation mechanism for clients with workspace file tools; v1 does not add a second output-reading protocol.
+The file path is the continuation mechanism for clients with access to that recording workspace; v1 does not add an output-reading protocol.
+Clients without that access still receive bounded previews and final diagnostics; their retrieval workflow remains deferred.
 
 ### 10.2 Large returned values
 
@@ -579,26 +582,31 @@ Do not claim a structural preview that the runtime cannot safely produce.
 
 ### 10.3 Plots and binary artifacts
 
-Plots and binary outputs are written to the session artifact directory.
-The text response reports a relative path:
+Current plot responses use whole MCP image blocks under independent image budgets.
+Images admitted for recording are also saved in the session artifact directory.
+Text-preview exhaustion does not suppress a later image that fits its own budget.
+Images rejected at ingestion are not retained; broader binary-artifact retention and retrieval remain future work.
 
-```text
-Plot saved: .agents/console/sessions/default/artifacts/e0021-plot-1.png
-```
-
-Viewing the file is delegated to the host agent's ordinary file or image capabilities.
+Viewing a retained file requires ordinary file or image tools with access to the Console server recording workspace.
 
 ### 10.4 Initial default budgets
 
-Exact values are configurable.
-Suggested starting defaults:
+The selected initial text default is 8 KiB across the complete result, with approximately equal head and tail space after reserving notices.
+It has no per-call control or configuration field in the current implementation; configuration remains future work.
+Other suggested printer defaults in this sketch remain exploratory:
 
 ```text
-inline text per reply:  12 KiB
+inline text per reply:  8 KiB of rendered UTF-8, including notices
 preview rows:           20
 preview columns:        12
 maximum cell width:     160 characters
 ```
+
+Retained-file continuation uses the existing raw per-cell logs and their 1 GiB limit.
+Advertised paths belong to the Console server recording workspace, on the controller for SSH, Docker, and Docker Sandbox.
+Full retained text requires existing filesystem tools with access there; tools confined to another host cannot retrieve it.
+A retained prefix is not the complete emitted output, and preview tails remain independent of retention failures.
+Console-owned read/search, file transfer, export, and a retrieval workflow for clients without suitable file access remain unresolved and deferred.
 
 Tests should assert hard bounds and semantic markers, not incidental table glyphs or terminal widths.
 

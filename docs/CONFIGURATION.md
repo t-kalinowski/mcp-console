@@ -1,16 +1,50 @@
 # Configuration layering
 
-`serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the current directory, then apply each `-c KEY=VALUE` or `--config KEY=VALUE` in command-line order.
+`serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the current directory, falling back to `~/.agents/console/config.yaml` when the project file is absent.
+They then apply each `-c KEY=VALUE` or `--config KEY=VALUE` in command-line order.
 Options may appear before or after the subcommand.
-Only the current directory is searched; an absent file starts with an empty configuration.
+No ancestor directories are searched; if neither file exists, configuration starts empty.
 An unreadable file or malformed YAML prevents launch.
+An existing project file takes precedence even when it is invalid.
 Overrides change the configuration for this launch without editing the file.
+
+Set `MCP_CONSOLE_HOME` to an absolute directory to replace the default home Console directory, `~/.agents/console`.
+Console uses `<MCP_CONSOLE_HOME>/config.yaml` for fallback configuration and `<MCP_CONSOLE_HOME>/sessions/` for fallback recordings.
+Project configuration and an existing project recording directory still take precedence independently.
+An empty or relative override is an error when the fallback directory is selected; Console does not expand `~` in the value.
+This setting changes only Console's file locations; `HOME` and the configuration and storage of R, Python, uv, and Docker remain unchanged.
 
 ```sh
 mcp-console serve -c extends=:workspace
 mcp-console -c extends=:workspace serve -c sandbox.network=enabled
 mcp-console sandbox -c 'sandbox.environment={LABEL: analysis, MODE: "batch"}' -- Rscript analysis.R
 ```
+
+## Python environment selection
+
+For a built-in session, select an existing Python environment with:
+
+```yaml
+python: .venv/bin/python
+```
+
+Local paths are relative to the launch directory.
+SSH, Docker, and Docker Sandbox paths are interpreted on the execution host, relative to `target.workspace`, including a bare filename.
+The equivalent CLI override is `mcp-console serve -c python=.venv/bin/python`.
+This setting takes precedence over inherited `RETICULATE_PYTHON` and is retained across worker restarts.
+It is unavailable with custom workers.
+
+In a local or SSH [session without R](BUILTIN_RUNTIME.md#python-sessions-without-r), omitting both selections uses Python resolved through uv and enables explicit startup/restart Python package and DuckDB extension preparation.
+An explicit Python selection bypasses uv entirely and disables package preparation.
+Configure the existing environment's packages before starting Console.
+
+Prepared Docker images and SBX templates always use preinstalled packages.
+Their runtime probe runs inside the target under the effective workload environment and policy.
+The top-level `python` setting takes precedence over workload or image `RETICULATE_PYTHON`.
+Without either explicit selection, it selects `python3`, then `python`, from the target PATH.
+A selected interpreter that fails validation reports its own error without trying another interpreter.
+Controller interpreter and resolver installations do not participate.
+See [Docker](DOCKER.md#prepared-python-without-r) and [Docker Sandbox](DOCKER_SANDBOX.md#prepared-python-without-r) for complete examples.
 
 ## Keys and values
 

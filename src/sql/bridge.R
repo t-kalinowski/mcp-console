@@ -28,7 +28,7 @@ base::local(
         return(invisible(managed_connection))
       }
 
-      storage <- file.path(tempdir(), "mcp-console-duckdb")
+      storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
       managed_connection <<- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",
@@ -54,6 +54,9 @@ base::local(
     }
 
     sql_connection <- function() {
+      if (.Call("mcp_console_sql_take_restore_request")) {
+        selected_connection <<- NULL
+      }
       ensure_connection()
     }
 
@@ -80,7 +83,15 @@ base::local(
       selected_connection <<- NULL
       1L
     }
-    tools <- as.environment("tools:mcp-console")
+    tools <- base::attach(
+      NULL,
+      pos = 2L,
+      name = "tools:mcp-console",
+      warn.conflicts = FALSE
+    )
+    # Match reticulate's getter-only `py` binding. Attribute assignment such as
+    # `py$name <- value` already writes through the returned Python module proxy.
+    base::makeActiveBinding("py", function() reticulate::py, tools)
     base::assign("sql_connection", sql_connection, envir = tools)
     base::assign(
       "console_sql_connection",

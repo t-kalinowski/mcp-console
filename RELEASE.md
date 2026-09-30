@@ -5,8 +5,9 @@ The release workflow publishes native Apple Silicon and Intel macOS wheels and A
 Linux wheels are built on Ubuntu 24.04 and require glibc 2.39 or later.
 Wheel builds require Maturin 1.15 or later.
 R executables, libR, and R packages are not build or Python/SQL execution prerequisites.
-No-R SQL uses Python DuckDB; install it in prepared target images.
+Local SQL without R uses Python DuckDB.
 Run the installed-wheel peer runtime acceptance on an R-free host in addition to mixed-language checks on an R-enabled host.
+`smoke-wheel --without-r` unsets R selections and uses a command path without R or Rscript, so CI and release jobs exercise both runtime modes on their installed wheels.
 It does not publish a source distribution, Windows wheels, or GitHub release archives.
 
 `Cargo.toml` is the package-version source of truth.
@@ -20,8 +21,10 @@ The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's Rust tool
 `uv tool install --reinstall .` prepares the native companion automatically before Maturin compiles MCP Console and assembles the wheel.
 Editable source installations (`uv tool install --reinstall --editable .`) use the same preparation and packaging lock.
 Source builds require Python 3.11 or later, Git, and rustup; rustup installs the pinned toolchain if needed.
-The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `target/sandbox-runner-cache/<commit>` within the source checkout.
-The default build does not inspect or change other working checkouts.
+The packaging backend calls `scripts/stage-sandbox-runner`, which fetches the exact revision into `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Source installations and separate Console worktrees reuse this dedicated source checkout and its Cargo build data.
+An explicitly configured `XDG_CACHE_HOME` must be absolute.
+The default build does not inspect or change other development checkouts.
 To use a dedicated clean checkout at the pin, explicitly set `MCP_CONSOLE_SANDBOX_SOURCE`; CI and releases use a checkout within their own workspace.
 
 Every source installation invokes the runner's Cargo build with its pinned toolchain and lockfile.
@@ -29,13 +32,17 @@ Staging reads `[toolchain].channel` from that file with Python's standard-librar
 This selection takes precedence over the caller's `RUSTUP_TOOLCHAIN` for runner commands.
 Console's build retains the caller's toolchain selection.
 Cargo reuses its build intermediates under the runner checkout's `codex-rs/target` and checks inputs tracked by Cargo and dependency build scripts.
+Staging holds `<source-checkout>.stage.lock` beside the selected checkout through source preparation, both Linux build steps, and copying the verified artifacts into the Console checkout.
+Automatic selection and explicit source overrides share this ownership; a conflicting stage fails with the lock path and owner diagnostic.
+Keep Console's application Cargo output and wheel staging separate between worktrees.
 Source builds use the caller's normal Cargo configuration and download cache.
 There is no separate local cache of finished runners that bypasses Cargo's freshness checks.
 The runner build finishes before the application's Cargo build starts.
 
 Build reuse has the same limits as an ordinary Cargo build: Cargo may not detect a different compiler or linker selected through `PATH`, changes to the tools themselves, or changes to an SDK or system library.
 After changing those external build inputs, clean the affected Cargo build directories, including the runner checkout's `codex-rs/target`, before reinstalling.
-For the default source checkout, that directory is `target/sandbox-runner-cache/<commit>/codex-rs/target`.
+Use `scripts/stage-sandbox-runner --describe` to locate the selected source checkout and its build directory.
+Existing checkout-local runner caches are not migrated automatically and can be removed when no build is using them.
 Automatic detection of those environment changes is outside the source installer's contract.
 
 For direct Cargo builds or direct Maturin wheel builds, first run `scripts/stage-sandbox-runner`.
@@ -100,8 +107,10 @@ Each source build reconciles the generated `libexec` and `share` trees, includin
 Staging removes obsolete files and preserves timestamps when the intended contents and permissions are unchanged.
 `build.rs` verifies the prepared manifest and files and copies them beside native Cargo output; it neither builds the runner nor modifies wheel staging.
 Unchanged native companions and generated Rust retain their timestamps so subsequent Cargo invocations can reuse the executable.
-Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout; release matrix jobs use separate checkouts.
-Source distributions include the packaging backend, staging script, source pin, and data-directory marker, and omit generated companions.
+Staging and packaging share checkout ownership with validation.
+Wrap direct Cargo or Maturin commands in `scripts/with-checkout` to claim the same lock; release matrix jobs use separate checkouts.
+See [development validation](docs/DEVELOPMENT.md) for conflict diagnostics and retained run records.
+Source distributions include the packaging backend, checkout ownership helper, staging script, source pin, and data-directory marker, and omit generated companions.
 
 CI separately caches completed staged runners, release wheels and native bundles, and Cargo build data for both workspaces.
 Runner build-cache keys include the toolchain file from the checked-out source.
@@ -143,7 +152,7 @@ Check the kernel AppArmor records for a `net_admin` denial under the `unprivileg
 Keep the empty-`PATH` smoke checks: they verify that the installed bundle works without a host helper.
 
 For local installation checks on such a host, use a disposable development container with the build prerequisites above and an isolated checkout.
-Start it as container root with `--cap-add SYS_ADMIN --security-opt apparmor=unconfined --security-opt seccomp=unconfined --security-opt systempaths=unconfined`, then run `scripts/check` inside it.
+Start it as container root with `--cap-add SYS_ADMIN --security-opt apparmor=unconfined --security-opt seccomp=unconfined --security-opt systempaths=unconfined`, then run `scripts/check --full` inside it.
 These settings permit the nested namespace operations without changing the host's AppArmor policy.
 Removing Docker's default system-path masks permits namespace-local procfs; otherwise inherited procfs can make PID-based process inspection fail, including `processx` initialization.
 Keep the checkout and `TMPDIR` on the same writable filesystem because the installation tests rename build artifacts into their temporary directory.
@@ -171,7 +180,7 @@ Update `Cargo.toml` and the root `mcp-console` entry in `Cargo.lock`; `pyproject
 
 A version bump also changes CLI and MCP snapshots.
 Regenerate affected snapshots with `scripts/test --update ...`, updating the full handshake snapshot before abbreviated transcripts as described in `tests/boundaries/README.md`.
-Review the diffs for version-only changes, then run `scripts/format` and `scripts/check` before opening the release PR.
+Review the diffs for version-only changes, then run `scripts/format` and `scripts/check --full` before opening the release PR.
 
 Rehearse the Release workflow on the release branch before tagging, replacing `release/X.Y.Z` with that branch:
 

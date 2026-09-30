@@ -10,17 +10,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import assert_exact_interleaving, last_result_text
+from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import R_RUNTIME, OLD_PYTHON, SYSTEM_PYTHON, requires
+from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
+from support.requirements import R
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -62,8 +63,31 @@ def test_preserves_configured_python_environment(
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     assert last_result_text(client) == disabled
-    client.send(python="6 * 7")
-    assert "Python is unavailable" in last_result_text(client)
+    # Reach the same worker-originated resolver request used by reticulate's
+    # managed hooks. The server must enforce the external-selection policy
+    # even though those hooks are not installed for this worker.
+    # fmt: r
+    r = code(r"""
+        environment_request <- jsonlite::toJSON(list(
+          requirements = list(packages = I("numpy")),
+          retained_requirements = list(packages = I("numpy"))
+        ), auto_unbox = TRUE)
+        environment_error <- tryCatch(
+          .Call("mcp_console_resolve_python", environment_request),
+          error = conditionMessage
+        )
+        version_request <- jsonlite::toJSON(list(
+          constraints = I(">=3.11")
+        ), auto_unbox = TRUE)
+        version_error <- tryCatch(
+          .Call("mcp_console_resolve_python_version", version_request),
+          error = conditionMessage
+        )
+        cat(environment_error, version_error, sep = "\n")
+        """)
+    client.send(r=r)
+    output = last_result_text(client)
+    assert output == f"{disabled}\n{disabled}\n", repr(output)
     # fmt: r
     r = code(r"""
         stopifnot(
@@ -83,7 +107,7 @@ def test_preserves_configured_python_environment(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_preserves_empty_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -105,25 +129,22 @@ def test_preserves_empty_python_environment(
 def test_rejects_python_older_than_3_10(
     binary: Path, execution: Execution
 ) -> Transcript:
-    # Resolve Apple's launcher before entering the worker sandbox.
-    discovery = subprocess.run(
+    # Resolve Apple's dispatcher before entering the sandbox; its Xcode probes
+    # can emit unrelated diagnostics even when Python itself starts correctly.
+    probe = subprocess.run(
         (
             SYSTEM_PYTHON,
+            "-I",
             "-c",
-            # fmt: python
-            code("""
-                import json
-                import sys
-
-                print(json.dumps([sys.executable, sys.version_info[:2]]))
-                """),
+            "import json, sys; print(json.dumps([sys.executable, sys.version_info[:2]]))",
         ),
         check=True,
         capture_output=True,
         text=True,
     )
-    interpreter, version = json.loads(discovery.stdout)
+    interpreter, version = json.loads(probe.stdout)
     assert version == [3, 9], version
+    assert Path(interpreter).is_absolute() and Path(interpreter) != SYSTEM_PYTHON
 
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)
@@ -132,11 +153,17 @@ def test_rejects_python_older_than_3_10(
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
     assert result["isError"] is False, result
-    assert last_result_text(client) == (
-        "Error: Python discovery failed: MCP Console requires Python 3.10 or later\n"
-    ), last_result_text(client)
-    client.send(python="6 * 7")
-    assert "[worker stopped" not in last_result_text(client)
+    output = result["content"][0]["text"]
+    assert output.startswith(
+        "Error: selected Python inspection failed (exit status: 1): Traceback"
+    ), output
+    assert output.endswith(
+        "RuntimeError: MCP Console requires Python 3.10 or later\n\n"
+    ), output
+    assert "[worker stopped" not in output, output
+    # Inspection rejects the selection before interpreter mutation. R remains usable.
+    client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE)); 42L")
+    assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
     return client.finish()
 
 
@@ -189,7 +216,7 @@ def managed_python_transcript(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_evaluates_with_default_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -197,7 +224,7 @@ def test_evaluates_with_default_managed_python(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_evaluates_with_explicit_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -273,7 +300,6 @@ def test_compacts_native_duckdb_progress_bar(
     # fmt: python
     python = code(r"""
         import os
-        import sys
         import tempfile
 
         import duckdb
@@ -312,11 +338,8 @@ def test_compacts_native_duckdb_progress_bar(
 
         assert result[0] is not None
         assert progress.count(b"\r") >= 100
-        # Replay the captured native redraws through the ordered console stream
-        # so the completion response includes them. Raw fd delivery has no
-        # ordering relationship with the independent completion sideband.
-        sys.stdout.write(progress.decode())
-        sys.stdout.flush()
+        with os.fdopen(os.dup(1), "wb") as stdout:
+            stdout.write(progress)
         """)
     client.send(
         python=python,
@@ -365,7 +388,10 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     client.send(python=python)
     output = last_result_text(client)
     assert output.startswith(
-        "terminal columns: 200\npandas display.width: 200\nNumPy linewidth: 200\n"
+        """terminal columns: 200
+pandas display.width: 200
+NumPy linewidth: 200
+"""
     ), repr(output)
     for column in range(12):
         assert f"column_{column:02}" in output
@@ -375,7 +401,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_uses_200_column_default_after_r_initializes_python(
     binary: Path,
     execution: Execution,
@@ -407,7 +433,7 @@ def test_uses_200_column_default_after_r_initializes_python(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_prints_requirements_with_host_uv_cache(
     binary: Path, execution: Execution
 ) -> Transcript:

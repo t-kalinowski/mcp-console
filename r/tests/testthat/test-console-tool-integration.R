@@ -56,7 +56,29 @@ with_temp_working_directory <- function(code) {
   directory <- tempfile("mcp-console-test-")
   dir.create(directory)
   old <- setwd(directory)
-  on.exit(setwd(old), add = TRUE)
+  old_environment <- Sys.getenv(
+    c("MCP_CONSOLE_HOME", "R_USER_CACHE_DIR", "IR_CACHE_DIR"),
+    unset = NA_character_
+  )
+  on.exit(
+    {
+      setwd(old)
+      missing <- is.na(old_environment)
+      Sys.unsetenv(names(old_environment)[missing])
+      if (any(!missing)) {
+        do.call(Sys.setenv, as.list(old_environment[!missing]))
+      }
+      unlink(directory, recursive = TRUE)
+    },
+    add = TRUE
+  )
+  # Pak requires an explicit cache during R CMD check. A fresh ir cache keeps
+  # cached resolutions from hiding failures in the preparation path.
+  Sys.setenv(
+    MCP_CONSOLE_HOME = file.path(getwd(), "console"),
+    R_USER_CACHE_DIR = file.path(getwd(), "r-cache"),
+    IR_CACHE_DIR = file.path(getwd(), "ir-cache")
+  )
   force(code)
 }
 
@@ -80,6 +102,12 @@ mock_completion <- function(message, finish_reason) {
 }
 
 test_that("console_tool works when registered with an ellmer chat", {
+  # fmt: r
+  source <- r"(
+    x <- 41L
+    cat("adapter head\n", strrep("x", 10000), "\nadapter tail\n", sep = "")
+    x + 1L
+  )"
   responses <- list(
     mock_completion(
       list(
@@ -90,7 +118,7 @@ test_that("console_tool works when registered with an ellmer chat", {
           type = "function",
           `function` = list(
             name = "send",
-            arguments = '{"r":"x <- 41L; x + 1L"}'
+            arguments = jsonlite::toJSON(list(r = source), auto_unbox = TRUE)
           )
         ))
       ),
@@ -121,6 +149,8 @@ test_that("console_tool works when registered with an ellmer chat", {
         tryCatch(
           {
             chat$register_tool(console_tool())
+            text <- NULL
+            chat$on_tool_result(function(result) text <<- result@value@text)
 
             expect_identical(
               as.character(chat$chat("Use the console.")),
@@ -137,6 +167,17 @@ test_that("console_tool works when registered with an ellmer chat", {
               "[1] 42",
               fixed = TRUE
             )
+            expect_type(text, "character")
+            expect_lte(nchar(text, type = "bytes"), 8192L)
+            expect_match(text, "adapter head\n", fixed = TRUE)
+            expect_match(text, "adapter tail\n", fixed = TRUE)
+            expect_match(text, "rendered UTF-8 bytes", fixed = TRUE)
+            expect_match(
+              text,
+              file.path(getwd(), "console", "sessions"),
+              fixed = TRUE
+            )
+            expect_length(list.dirs("console/sessions", recursive = FALSE), 1L)
           },
           finally = {
             rm(chat)
@@ -145,5 +186,40 @@ test_that("console_tool works when registered with an ellmer chat", {
         )
       })
     })
+  })
+})
+
+
+test_that("requirements actions preserve scalar fields and empty lists", {
+  with_temp_working_directory({
+    send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
+    startup <- jsonlite::fromJSON(
+      send(requirements = list(action = "get"))@text
+    )
+    expect_false(startup$prepared)
+    prepared <- send(
+      requirements = list(
+        action = "set",
+        r = character(),
+        python = character(),
+        duckdb = character(),
+        python_version = ">=3.11",
+        exclude_newer = "2026-01-01"
+      )
+    )
+    expect_identical(prepared@text, "[prepared]")
+    selected <- jsonlite::fromJSON(
+      send(requirements = list(action = "get"))@text
+    )
+    expect_length(selected$requirements$python, 0L)
+    expect_identical(selected$requirements$python_version, ">=3.11")
+    expect_identical(selected$requirements$exclude_newer, "2026-01-01")
+    declaration <- selected$requirements
+    declaration$action <- "set"
+    expect_identical(send(requirements = declaration)@text, "[prepared]")
+    expect_identical(
+      jsonlite::fromJSON(send(requirements = list(action = "get"))@text),
+      selected
+    )
   })
 })

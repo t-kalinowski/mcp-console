@@ -6,7 +6,7 @@ type TryEval = unsafe extern "C-unwind" fn(libr::SEXP, libr::SEXP, *mut c_int) -
 pub(crate) struct Bridge {
     state: libr::SEXP,
     try_eval: TryEval,
-    next_evaluation_id: u64,
+    next_evaluation_id: std::cell::Cell<u64>,
     language: &'static str,
 }
 
@@ -64,16 +64,36 @@ impl Bridge {
         Ok(Self {
             state,
             try_eval,
-            next_evaluation_id: 1,
+            next_evaluation_id: std::cell::Cell::new(1),
             language,
         })
     }
 
-    pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+    pub(crate) fn evaluate(&self, source: &str) -> Result<(), String> {
+        self.evaluate_completed(source).map(|_| ())
+    }
+
+    pub(crate) fn evaluate_completed(&self, source: &str) -> Result<bool, String> {
+        self.evaluate_completed_with(source, |_| Ok(()))
+            .map(|value| value.is_some())
+    }
+
+    pub(crate) fn evaluate_completed_string(&self, source: &str) -> Result<Option<String>, String> {
+        self.evaluate_completed_with(source, |value| {
+            String::try_from(harp::object::RObject::view(value)).map_err(|error| error.to_string())
+        })
+    }
+
+    fn evaluate_completed_with<T>(
+        &self,
+        source: &str,
+        convert: impl FnOnce(libr::SEXP) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
         let source_length = c_int::try_from(source.len())
             .map_err(|_| format!("{} source exceeds R's maximum string size", self.language))?;
-        let evaluation_id = format!("e{}", self.next_evaluation_id);
-        self.next_evaluation_id += 1;
+        let evaluation_id = format!("e{}", self.next_evaluation_id.get());
+        self.next_evaluation_id
+            .set(self.next_evaluation_id.get() + 1);
         let evaluation_id_length = c_int::try_from(evaluation_id.len())
             .expect("generated evaluation IDs should fit in an R string");
         let result = harp::top_level_exec(|| {
@@ -90,27 +110,38 @@ impl Bridge {
                 libr::Rf_defineVar(source_symbol, source, self.state);
                 let call = libr::Rf_protect(libr::Rf_lang2(evaluate_symbol, evaluation_id));
                 let mut evaluation_error = 0;
-                (self.try_eval)(call, self.state, &mut evaluation_error);
+                let value = (self.try_eval)(call, self.state, &mut evaluation_error);
                 let interrupted = evaluation_error != 0
                     && libr::Rf_asInteger(libr::Rf_findVarInFrame(self.state, interrupted_symbol))
                         == 1;
+                let value = if evaluation_error == 0 {
+                    let value = libr::Rf_protect(value);
+                    let converted = convert(value);
+                    libr::Rf_unprotect(1);
+                    Some(converted)
+                } else {
+                    None
+                };
                 libr::Rf_defineVar(source_symbol, libr::R_NilValue, self.state);
                 libr::Rf_unprotect(3);
-                (evaluation_error, interrupted)
+                (evaluation_error, interrupted, value)
             }
         });
-        let (evaluation_error, interrupted) = result
+        let (evaluation_error, interrupted, value) = result
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
             if interrupted {
-                return Ok(());
+                return Ok(None);
             }
             return Err(format!(
                 "{} bridge failed during R evaluation",
                 self.language
             ));
         }
-        Ok(())
+        value
+            .expect("successful R evaluation should return a value")
+            .map(Some)
+            .map_err(|error| format!("{} bridge returned {error}", self.language))
     }
 
     pub(crate) fn call0_integer(&self, function: &CStr) -> Result<c_int, String> {

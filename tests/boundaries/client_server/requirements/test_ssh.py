@@ -30,6 +30,8 @@ from support.resolvers import (
     resolve_public_python_version,
 )
 from support.ssh import SSH, configure, localhost, remote_command, poison_controller
+from support.previews import CONTROL_OMISSION, assert_preview
+from support.evidence import compact_text
 from support.suites import run_this_suite
 
 
@@ -186,10 +188,10 @@ def managed_session(
             assert shutil.which("uv", path=environment["PATH"]) == str(
                 remote_bin / "uv"
             )
-        # Distinct host pathnames can share already downloaded artifacts in this
-        # localhost harness. The controller process is forbidden to use either.
-        # Always use a symlink, including without inherited cache configuration,
-        # to exercise the resolver's canonical library paths on every host.
+        # Share downloaded artifacts through distinct host pathnames in this
+        # localhost harness. The controller is forbidden to use either cache.
+        # Keep the aliases for worker path assertions, but give ir the stable
+        # root: its shared resolution records must outlive this session's alias.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
             cache = Path(
                 (environment.get(variable) or root / "ir-cache")
@@ -199,7 +201,9 @@ def managed_session(
             remote_cache = remote / f"{tool}-cache"
             cache.mkdir(parents=True, exist_ok=True)
             remote_cache.symlink_to(cache, target_is_directory=True)
-            environment[variable] = str(remote_cache)
+            environment[variable] = str(
+                remote_cache.resolve() if tool == "ir" else remote_cache
+            )
         if not bootstrap_uv:
             environment["UV_OFFLINE"] = "1"
             environment["UV_NO_CACHE"] = "1"
@@ -498,7 +502,8 @@ def test_failed_restart_and_invalid_requirements_preserve_worker(binary, executi
 def test_large_remote_install_failure_preserves_diagnostics_and_worker(
     binary, execution
 ):
-    diagnostic = ('compile: α\t"error"\\source ' * 128).rstrip()
+    diagnostic_unit = 'compile: α\t"error"\\source '
+    diagnostic = (diagnostic_unit * 128).rstrip()
     diagnostics = ((diagnostic + "\n") * 352) + "final diagnostic"
     with managed_session(binary, execution, failure_output=diagnostics) as (
         client,
@@ -517,11 +522,18 @@ def test_large_remote_install_failure_preserves_diagnostics_and_worker(
         assert client.transcript[-1]["result"]["isError"]
         output = last_result_text(client)
         expected = f"[R package resolution failed with exit status: 1: {diagnostics}]"
-        assert output == expected, {"length": len(output), "prefix": output[:500]}
+        assert_preview(output, expected, pattern=CONTROL_OMISSION)
+        assert "outputs/call-" not in output, "resolver diagnostics have no cell log"
         client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
         assert last_tool_text(client) == "[1] 42\n"
         client.send(requirements={"r": ["praise"]}, r="sentinel")
         assert last_tool_text(client) == "[1] 42\n"
+        for entry in client.transcript[3:]:
+            for block in entry.get("result", {}).get("content", []):
+                if block["type"] == "text":
+                    block["text"] = compact_text(
+                        block["text"], diagnostic + "\n", diagnostic_unit
+                    )
         return client.finish()[3:]
 
 

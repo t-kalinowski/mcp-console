@@ -4,8 +4,12 @@ worker:
 ---
 relay:
   kind: evaluate
-  language: python
-  source: fork_ready = True
+  language: r
+  source: |
+    python <- Sys.which("python3")
+    stopifnot(nzchar(python))
+    reticulate::use_python(python, required = TRUE)
+    suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
 ---
 worker:
   kind: completed
@@ -36,9 +40,9 @@ relay:
         if (
             os.getpid() != worker_pid
             and event == "c_call"
-            and getattr(function, "__module__", None) in {"rpycall", "_mcp_console_native"}
+            and getattr(function, "__module__", None) == "rpycall"
         ):
-            raise AssertionError("fork child called back into Console or R")
+            raise AssertionError("fork child called back into R")
 
 
     def run_child(action):
@@ -169,12 +173,16 @@ worker:
 ---
 relay:
   kind: evaluate
-  language: python
+  language: r
   source: 6 * 7
 ---
 worker:
   kind: console_output
-  data: "42"
+  data: "[1]"
+---
+worker:
+  kind: console_output
+  data: " 42"
 ---
 worker:
   kind: console_output

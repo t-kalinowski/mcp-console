@@ -1,0 +1,109 @@
+---
+send:
+  sql: CREATE TABLE answer AS SELECT 42 AS value
+result:
+  content:
+    - type: text
+      text: |
+        Count
+        -----
+        1
+  isError: false
+---
+send:
+  python: value = 42; print(value)
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - six
+  python: import six; print(value)
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  python: input('busy> ')
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "busy> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: >-
+        worker is already evaluating a cell; poll it before preparing
+        requirements
+  isError: true
+---
+send:
+  requirements:
+    python:
+      - numpy
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  stdin: |
+    ready
+result:
+  content:
+    - type: text
+      text: |-
+
+        [waiting for stdin]
+  isError: false
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |
+        'ready'
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+  stdin: |
+    live input
+  python: import yaml12; assert input() == 'live input'; print(value)
+result:
+  content:
+    - type: text
+      text: |
+        [input requested: ""]
+        42
+  isError: false
+---
+send:
+  sql: SELECT value FROM answer
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        42
+  isError: false

@@ -4,8 +4,10 @@ exec "${MCP_CONSOLE_TEST_PYTHON:?}" "$0" "$@"
 ":"""
 
 import array
+import base64
 import errno
 import fcntl
+import io
 import json
 import os
 import select
@@ -14,6 +16,7 @@ import stat
 import sys
 import termios
 import time
+from contextlib import redirect_stdout
 from enum import StrEnum
 import tempfile
 from pathlib import Path
@@ -29,6 +32,7 @@ TEST_RESPONSE_QUERY_FIFO_NAME = "zod-test-response-query"
 TEST_RESPONSE_RESULT_FIFO_NAME = "zod-test-response-result"
 TEST_CONTROL_READY_NAME = "zod-test-control-ready"
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
+PIPE_TAIL_PREFIX_SIZE = 16 * 1024
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -249,13 +253,13 @@ def emit_large_output(descriptor: int, prefix: bytes) -> None:
 
 
 def fill_nonblocking(descriptor: int, data: bytes) -> int:
-    assert data
-    # Guarantee a nonempty tail even when the preceding blocking write refills
-    # the pipe before this process can switch the descriptor to nonblocking.
-    write_all(descriptor, data[:1])
+    assert len(data) > PIPE_TAIL_PREFIX_SIZE
+    # Cover the retained preview tail even when the pipe accepts few additional
+    # bytes. The nonblocking remainder still measures the native pipe fill.
+    write_all(descriptor, data[:PIPE_TAIL_PREFIX_SIZE])
     flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
     fcntl.fcntl(descriptor, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-    written = 1
+    written = PIPE_TAIL_PREFIX_SIZE
     try:
         while written < len(data):
             try:
@@ -272,6 +276,9 @@ def emit_background_stderr(root: Path, reader: TextIO, writer: TextIO) -> None:
     while not (root / "zod-release-background-stderr").exists():
         time.sleep(0.01)
     emit_large_output(2, b"zod background stderr\n")
+    # Writing can finish with one pipe of bytes still unread. A further suffix
+    # makes the intended payload reach the relay before the sideband round trip.
+    write_all(2, b"y" * LARGE_OUTPUT_SIZE)
     wait_for_server_to_process_sideband(reader, writer)
     publish_marker(root / "zod-background-stderr-emitted")
 
@@ -302,7 +309,8 @@ def configure_startup(
     if mode == "fail":
         os._exit(86)
     if mode == "fail with stderr":
-        publish_marker(root / "zod-replacement-startup-failing")
+        # Keep the checkpoint after the failed worker's sandbox is retired.
+        publish_marker(control.with_name("zod-replacement-startup-failing"))
         write_all(2, b"zod replacement startup failed\n")
         os._exit(86)
     if mode == "block with detached sideband writer":
@@ -381,10 +389,10 @@ def main() -> None:
     emit_output_before_r_preparation_failure = False
     controlled_restart_state = "fresh"
     controlled_restart_evaluations = 0
+    python_globals: dict[str, Any] = {}
     queued_message: dict[str, Any] | None = None
     block_next_sideband_write: int | None = None
     idle_input_received = False
-    fail_sideband_during_shutdown = False
     retain_blocked_sideband = False
     if os.environ.get("ZOD_BLOCK_NEXT_SIDEBAND_WRITE") == "1":
         command = wait_for_test_control(0, "block_next_sideband_write")
@@ -435,11 +443,6 @@ def main() -> None:
             queued_message = None
         message_kind = message["kind"]
         if message_kind == "shutdown":
-            if fail_sideband_during_shutdown:
-                writer.write('{"kind":"console_output","data":}\n')
-                writer.flush()
-                while True:
-                    signal.pause()
             return
 
         if message_kind == "prepare_r":
@@ -474,6 +477,17 @@ def main() -> None:
         assert set(message) == {"kind", "language", "source"}
         language = message["language"]
         source = message["source"]
+        if record := os.environ.get("MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"):
+            # Admission probes use real Python cells and record every evaluation.
+            with Path(record).open("a", encoding="utf-8") as cells:
+                cells.write(json.dumps(message) + "\n")
+            assert language == "python", message
+            with redirect_stdout(io.StringIO()) as output:
+                exec(source, python_globals)
+            if text := output.getvalue():
+                send_output(writer, text)
+            send(writer, {"kind": "completed"})
+            continue
         if idle_input_received:
             assert (language, source) == ("r", "echo echo"), message
         if language in {"python", "sql"}:
@@ -486,9 +500,14 @@ def main() -> None:
 
         assert language == "r"
         if source == "fail sideband during shutdown":
-            fail_sideband_during_shutdown = True
             send(writer, {"kind": "completed"})
-            continue
+            # The client receives completion before releasing this write, so the
+            # relay's gated read cannot also hold the completed frame.
+            wait_for_test_control(0, "emit_shutdown_failure")
+            writer.write('{"kind":"console_output","data":}\n')
+            writer.flush()
+            while True:
+                signal.pause()
 
         if source.startswith("check response gate: "):
             operation = int(source.removeprefix("check response gate: "))
@@ -639,7 +658,7 @@ def main() -> None:
         if source == "unexpected input receipt after stdout":
             emit_large_output(1, b"zod unexpected input receipt: ")
             tail_size = fill_nonblocking(1, b"z" * LARGE_OUTPUT_SIZE)
-            write_all(1, f"zod expected semantic tail: {tail_size}\n".encode())
+            write_all(1, f"zod expected semantic tail: {tail_size:010d}\n".encode())
             send(writer, {"kind": "input_received"})
             while True:
                 signal.pause()
@@ -657,7 +676,7 @@ def main() -> None:
             tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
             write_all(
                 descriptor,
-                f"zod expected {stream} malformed tail: {tail_size}\n".encode(),
+                f"zod expected {stream} malformed tail: {tail_size:010d}\n".encode(),
             )
             write_all(descriptor, b"zod malformed output read\n")
             # Hold the complete tail in the raw reader until retirement joins it.
@@ -725,6 +744,108 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "preview image limit":
+            send_output(writer, "before oversized image\n")
+            data = base64.b64encode(b"\0" * (6 * 1024 * 1024 + 3)).decode("ascii")
+            send(writer, {"kind": "image", "data": data, "mime_type": "image/png"})
+            send_output(writer, "before accepted image\n")
+            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+            send_output(writer, "after accepted image\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source in {"preview allocation image", "preview allocation image and text"}:
+            send(writer, {"kind": "image", "data": "A" * (8 * 1024 * 1024), "mime_type": "image/png"})
+            if source.endswith("and text"):
+                send_output(writer, "preview head\n" + "x" * 32768 + "\npreview tail\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "preview rejected image":
+            send(writer, {"kind": "image", "data": "AAAA", "mime_type": "m" * 65537})
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "preview invalid oversized image":
+            send_output(writer, "before invalid image\n")
+            send(writer, {"kind": "image", "data": "A" * (8 * 1024 * 1024) + "AA?=", "mime_type": "image/png"})
+            # If validation is skipped, completion returns a successful result
+            # that the public test rejects. Fatal validation instead requests
+            # shutdown; remain alive for the test's forced-retirement assertion.
+            send(writer, {"kind": "completed"})
+            response = json.loads(reader.readline())
+            assert response == {"kind": "shutdown"}, response
+            while True:
+                signal.pause()
+
+        if source == "preview recovery intervals":
+            directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+            release = directory / "preview-release"
+            processed = directory / "preview-processed"
+            for index in range(3):
+                with release.open("rb", buffering=0) as checkpoint:
+                    assert checkpoint.read(1) == b"1"
+                send_output(writer, f"interval {index} head\n" + "x" * 32768 + f"\ninterval {index} tail\n")
+                wait_for_server_to_process_sideband(reader, writer)
+                with processed.open("wb", buffering=0) as checkpoint:
+                    assert checkpoint.write(b"1") == 1
+            with release.open("rb", buffering=0) as checkpoint:
+                assert checkpoint.read(1) == b"1"
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source.startswith("preview recovery cell "):
+            number = int(source.removeprefix("preview recovery cell "))
+            send_output(writer, f"cell {number} head\n" + "x" * 32768 + f"\ncell {number} tail\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "preview alternating bytes":
+            for index in range(8192):
+                send_output(
+                    writer,
+                    "b" if index % 2 else "a",
+                    ConsoleKind.DIAGNOSTIC if index % 2 else ConsoleKind.OUTPUT,
+                )
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source in {"preview same producer", "preview unicode suffix", "preview unicode replacement"}:
+            send_output(writer, "preview head\n")
+            unit, count = ("ab", 100000) if source == "preview same producer" else ("a€🙂b", 10000)
+            for _ in range(count):
+                send_output(writer, unit)
+            if source == "preview unicode suffix":
+                send_output(writer, "\b🙂\b\r\n")
+            elif source == "preview unicode replacement":
+                send_output(writer, "\b" * 8192 + "\r\bfinal 🙂\bframe\r\n")
+            else:
+                send_output(writer, "\n")
+            send_output(writer, "preview tail: final diagnostic\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source in {"preview huge line", "preview tiny events", "preview many tiny events", "preview redraw"}:
+            send_output(writer, "preview head\n")
+            if source == "preview huge line":
+                send_output(writer, "x" * (2 * PENDING_TEXT_BUDGET))
+            elif source in {"preview tiny events", "preview many tiny events"}:
+                for index in range(100000 if source == "preview many tiny events" else 12000):
+                    send_output(
+                        writer,
+                        "ab",
+                        ConsoleKind.DIAGNOSTIC if index % 2 else ConsoleKind.OUTPUT,
+                    )
+            else:
+                for _ in range(5000):
+                    send_output(writer, "\r" + "x" * 2048)
+                send_output(writer, "\rprogress final")
+            send_output(writer, "\npreview tail: final diagnostic\n")
+            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+            send_output(writer, "after final image\n")
+            send(writer, {"kind": "completed"})
+            continue
+
         if source == "exit zero":
             os._exit(0)
 
@@ -756,10 +877,14 @@ def main() -> None:
                 signal.pause()
 
         if source == "emit stdout":
+            release = temporary / "zod-release-stdout-completion"
+            os.mkfifo(release)
             write_all(1, b"zod stdout ")
             for part in ("👩", "🏽", "\u200d", "💻", "\n"):
                 write_all(1, part.encode())
             emit_large_output(1, b"")
+            with release.open("rb", buffering=0) as checkpoint:
+                assert checkpoint.read(1) == b"1"
             send(writer, {"kind": "completed"})
             continue
 
@@ -800,7 +925,7 @@ def main() -> None:
             tail_size = fill_nonblocking(descriptor, b"z" * LARGE_OUTPUT_SIZE)
             write_all(
                 descriptor,
-                f"zod expected {stream} crash tail: {tail_size}\n".encode(),
+                f"zod expected {stream} crash tail: {tail_size:010d}\n".encode(),
             )
             os._exit(86)
 
@@ -1045,6 +1170,29 @@ def main() -> None:
             publish_marker(temporary / "zod-prompted-input-processed")
             continue
 
+        if source == "preview prompt":
+            send_output(
+                writer,
+                "prompt output head\n"
+                + "x" * (2 * PENDING_TEXT_BUDGET)
+                + "\nprompt output tail\n",
+            )
+            send(
+                writer,
+                {
+                    "kind": "input_requested",
+                    "prompt": "prompt head " + "p" * 20000 + " prompt tail> ",
+                },
+            )
+            wait_for_test_control(0, "read_preview_input")
+            stdin = input()
+            send(writer, {"kind": "input_received"})
+            send_output(writer, f"received {stdin}\n")
+            send(writer, {"kind": "completed"})
+            wait_for_server_to_process_sideband(reader, writer)
+            emit_test_event(0, "preview_input_processed")
+            continue
+
         if source == "language error":
             send_output(
                 writer,
@@ -1057,6 +1205,10 @@ def main() -> None:
         if source == "wait for stdin close":
             publish_marker(temporary / "zod-waiting-for-stdin-close")
             assert os.read(0, 1) == b"", "Zod received input instead of stdin EOF"
+            # Stdin closure and cell-log retirement travel through independent
+            # transports. Emit only after both, so this is all unretained output.
+            with Path(os.environ["ZOD_STDIN_CLOSE_RELEASE"]).open("rb") as release:
+                assert release.read(1) == b"1"
             emit_large_output(1, b"zod stdin closed\n")
             send(writer, {"kind": "completed"})
             continue
@@ -1161,6 +1313,26 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             continue
 
+        if source == "shutdown output checkpoints":
+            emit_test_event(0, "evaluation_started")
+            wait_for_test_control(0, "emit_output")
+            send_output(writer, "before shutdown\n")
+            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+            send_output(writer, "after image\n")
+            wait_for_server_to_process_sideband(reader, writer)
+            emit_test_event(0, "output_processed")
+            ownership = wait_for_test_control(0, "observe_poll_ownership")
+            request = ownership["request"]
+            assert isinstance(request, int), ownership
+            # Poll stdin reaches Zod only after the server claims the evaluation wait.
+            assert os.read(0, 1) == b"p"
+            emit_test_event(request, "poll_ownership_observed", target_operation=0)
+            wait_for_test_control(0, "complete")
+            send(writer, {"kind": "completed"})
+            wait_for_server_to_process_sideband(reader, writer)
+            emit_test_event(0, "completion_processed")
+            continue
+
         if source == "complete before restart checkpoint":
             send(writer, {"kind": "completed"})
             wait_for_server_to_process_sideband(reader, writer)
@@ -1253,6 +1425,13 @@ def main() -> None:
                 or configured_r_libraries[:1] == [expected_r_library]
             ).lower()
             send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
+            send(writer, {"kind": "completed"})
+            continue
+
+        if source == "report raw R library bytes":
+            libraries = os.environb.get(b"R_LIBS", b"").split(os.pathsep.encode())
+            preserved = any(path.endswith(b"/ambient-\xff") for path in libraries)
+            send_output(writer, f"zod raw R library: preserved={str(preserved).lower()}\n")
             send(writer, {"kind": "completed"})
             continue
 

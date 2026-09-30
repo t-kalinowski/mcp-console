@@ -10,12 +10,13 @@ from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, R_RUNTIME, command, requires
+from support.requirements import POSIX, command, requires
+from support.requirements import R
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -31,12 +32,29 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
         import sys
 
         assert initialized_from_r
+
+
+        def reject_r_console(frame, event, function):
+            if event == "c_call" and getattr(function, "__module__", None) == "rpycall":
+                raise AssertionError("Python console output entered R")
+
+
+        sys.setprofile(reject_r_console)
         print("Python stdout")
-        sys.stderr.write("Python stderr\n")
+        assert sys.stdout.write("") == 0
+        assert sys.stderr.write("Python stderr\n") == 14
+        assert sys.stderr.write("") == 0
+        assert sys.stdout.write("🐍\n") == 2
+        assert sys.stderr.write("🐍\n") == 2
+        sys.setprofile(None)
         raise ValueError("boom")
         """)
     output = _tool_text(client.send(python=python))
-    assert output.startswith("Python stdout\nPython stderr\nTraceback"), output
+    assert output.startswith("""Python stdout
+Python stderr
+🐍
+🐍
+Traceback"""), output
     assert output.endswith("ValueError: boom\n"), output
 
     # fmt: python
@@ -75,11 +93,67 @@ def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     output = _tool_text(client.send(python=python))
     output = client._collect_output(output, sum(len(line) + 1 for line in expected))
     assert sorted(output.splitlines()) == sorted(expected), repr(output)
-    return client.finish()
+    transcript = client.finish()
+    assert all(
+        event["worker"]["data"]
+        for event in transcript
+        if event.get("worker", {}).get("kind")
+        in {"console_output", "console_diagnostic"}
+    )
+    return transcript
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+def test_routes_background_python_text_to_raw_streams(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = RelayWorkerClient(binary, execution=execution)
+    # fmt: python
+    python = code(r"""
+        import logging
+        import sys
+        import threading
+
+        saved_stdout, saved_stderr = sys.stdout, sys.stderr
+        logger = logging.Logger("thread-output")
+        logger.addHandler(logging.StreamHandler(saved_stderr))
+
+
+        def background():
+            saved_stdout.write("thread stdout\n")
+            saved_stdout.flush()
+            saved_stderr.write("thread stderr\n")
+            saved_stderr.flush()
+            logger.warning("thread log")
+
+
+        thread = threading.Thread(target=background)
+        thread.start()
+        thread.join()
+        """)
+    output = _tool_text(client.send(python=python))
+    expected = """thread stdout
+thread stderr
+thread log
+"""
+    output = client._collect_output(output, len(expected))
+    assert sorted(output.splitlines()) == sorted(expected.splitlines()), output
+    transcript = client.finish()
+    assert "".join(event.get("stdout", "") for event in transcript) == "thread stdout\n"
+    assert (
+        "".join(event.get("stderr", "") for event in transcript)
+        == "thread stderr\nthread log\n"
+    )
+    assert all(
+        event["worker"]["kind"] in {"ready", "completed"}
+        for event in transcript
+        if "worker" in event
+    )
+    return transcript
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -92,14 +166,24 @@ def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transc
         )
         """)
     assert _tool_text(client.send(r=r)) == (
-        "R output\nR diagnostic\nWARNING: Only editing the first in the list of files\n"
+        """R output
+R diagnostic
+WARNING: Only editing the first in the list of files
+"""
     )
     return client.finish()
 
 
 def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient:
     client = RelayWorkerClient(binary, execution=execution)
-    assert _tool_text(client.send(python="fork_ready = True")) == "[done]"
+    # fmt: r
+    r = code(r"""
+        python <- Sys.which("python3")
+        stopifnot(nzchar(python))
+        reticulate::use_python(python, required = TRUE)
+        suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
+        """)
+    assert _tool_text(client.send(r=r)) == "[done]"
 
     # fmt: python
     python = code(r"""
@@ -121,11 +205,12 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
         logger.addHandler(handler)
 
 
-        def reject_r_callback(frame, event, function):
+        def reject_runtime_callback(frame, event, function):
             if (
                 os.getpid() != worker_pid
                 and event == "c_call"
-                and getattr(function, "__module__", None) in {"rpycall", "_mcp_console_native"}
+                and getattr(function, "__module__", None)
+                in {"rpycall", "_mcp_console_services"}
             ):
                 raise AssertionError("fork child called back into Console or R")
 
@@ -135,7 +220,7 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             # Only this known CPython diagnostic is filtered, only around fork.
             # The automatic-resolution lifecycle test records it in full.
             previous_profile = sys.getprofile()
-            sys.setprofile(reject_r_callback)
+            sys.setprofile(reject_runtime_callback)
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
@@ -190,9 +275,12 @@ def _finish_python_fork_output(
         logger.warning("parent log")
         """)
     assert _tool_text(client.send(python=python)) == (
-        "parent stdout\nparent stderr\nparent log\n"
+        """parent stdout
+parent stderr
+parent log
+"""
     )
-    assert _tool_text(client.send(python="6 * 7")) == "42\n"
+    assert _tool_text(client.send(r="6 * 7")) == "[1] 42\n"
     transcript = client.finish()
     # These are the actual worker pipes, not sideband console events.
     assert "".join(event.get("stdout", "") for event in transcript) == stdout
@@ -203,7 +291,7 @@ def _finish_python_fork_output(
         for event in worker
     ), worker
     for kind, expected in (
-        ("console_output", "parent stdout\n42\n"),
+        ("console_output", "parent stdout\n[1] 42\n"),
         ("console_diagnostic", "parent stderr\nparent log\n"),
     ):
         actual = "".join(event["data"] for event in worker if event["kind"] == kind)
@@ -213,6 +301,7 @@ def _finish_python_fork_output(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_python_output_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -239,6 +328,7 @@ def test_preserves_python_output_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_cached_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -268,6 +358,7 @@ def test_preserves_cached_python_streams_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_cached_python_logging_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -286,6 +377,7 @@ def test_preserves_cached_python_logging_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_fork_stderr_after_stdout_is_closed(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -319,6 +411,7 @@ def test_preserves_fork_stderr_after_stdout_is_closed(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_redirected_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -395,11 +488,14 @@ def test_drains_standard_streams_while_evaluating(
         write_all(1, b"x" * {size})
         write_all(2, b"y" * {size})
         """)
-    output = _tool_text(client.send(python=python))
-    output = client._collect_output(output, 2 * size)
-    assert output.count("x") == size
-    assert output.count("y") == size
+    result = client.send(python=python)
+    output = _tool_text(result)
+    assert not result["isError"]
+    assert len(output.encode()) <= 8 * 1024
+    assert "output preview: omitted" in output
+    assert "raw cell log:" in output
 
+    # The wire capture verifies every emitted byte independently of the preview.
     transcript = client.finish()
     assert transcript[-2] == {"stdout": "x" * size, "stderr": "y" * size}
     assert transcript[-1] == {"worker": {"kind": "completed"}}

@@ -4,6 +4,7 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::cell::Language;
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
@@ -11,6 +12,19 @@ static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
 static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static CELL_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
+
+pub(super) fn begin_cell(language: Language) {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = Some(language);
+}
+
+pub(super) fn finish_cell() {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = None;
+}
+
+pub(super) fn cell_language() -> Option<Language> {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned")
+}
 
 pub(crate) fn initialize(
     reader: crate::sideband::Reader,
@@ -18,15 +32,35 @@ pub(crate) fn initialize(
 ) -> io::Result<()> {
     WORKER_READER
         .set(Mutex::new(reader))
-        .map_err(|_| io::Error::other("Console worker sideband was already initialized"))?;
+        .map_err(|_| io::Error::other("R worker sideband was already initialized"))?;
     WORKER_WRITER
         .set(writer)
-        .map_err(|_| io::Error::other("Console worker sideband was already initialized"))
+        .map_err(|_| io::Error::other("R worker sideband was already initialized"))
 }
 
-pub(crate) fn sideband_activity() -> Result<(bool, RawFd), String> {
-    let reader = worker_reader()?;
-    Ok((reader.has_buffered_data(), reader.as_raw_fd()))
+pub(super) enum CommandReadiness {
+    Ready(ServerMessage),
+    Waiting(RawFd),
+}
+
+// Decide whether a command can be received without waiting for activity.
+// The coordinator chooses the runtime's wait and idle processing separately.
+pub(super) fn next_command() -> Result<CommandReadiness, String> {
+    if is_shutting_down() {
+        return Ok(CommandReadiness::Ready(ServerMessage::Shutdown));
+    }
+    if let Some(message) = take_pending_server_message()? {
+        return Ok(CommandReadiness::Ready(message));
+    }
+    let (buffered, descriptor) = {
+        let reader = worker_reader()?;
+        (reader.has_buffered_data(), reader.as_raw_fd())
+    };
+    if buffered {
+        receive_server_message().map(CommandReadiness::Ready)
+    } else {
+        Ok(CommandReadiness::Waiting(descriptor))
+    }
 }
 
 pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
@@ -35,7 +69,7 @@ pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
-pub(crate) fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
+fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
     PENDING_SERVER_MESSAGES
         .lock()
         .map_err(|_| "pending server message lock poisoned".to_string())
@@ -74,7 +108,7 @@ pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
 pub(crate) fn record_worker_failure(message: String) {
     let mut failure = WORKER_FAILURE
         .lock()
-        .expect("Console worker failure lock should not be poisoned");
+        .expect("R worker failure lock should not be poisoned");
     if failure.is_none() {
         *failure = Some(message);
     }
@@ -83,7 +117,7 @@ pub(crate) fn record_worker_failure(message: String) {
 pub(crate) fn take_worker_failure() -> Option<String> {
     WORKER_FAILURE
         .lock()
-        .expect("Console worker failure lock should not be poisoned")
+        .expect("R worker failure lock should not be poisoned")
         .take()
 }
 
@@ -96,27 +130,27 @@ pub(crate) fn emit_output(channel: ConsoleChannel, bytes: &[u8]) {
 pub(crate) fn send_input_requested(prompt: &str) -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("Console worker sideband writer should be initialized")
+        .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::InputRequested {
             prompt: prompt.to_string(),
         })
-        .map_err(|error| format!("Console worker failed to report an input request: {error}"))
+        .map_err(|error| format!("R worker failed to report an input request: {error}"))
 }
 
 pub(crate) fn send_input_received() -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("Console worker sideband writer should be initialized")
+        .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::InputReceived)
-        .map_err(|error| format!("Console worker failed to report received input: {error}"))
+        .map_err(|error| format!("R worker failed to report received input: {error}"))
 }
 
 pub(crate) fn send_input_cancelled() -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("Console worker sideband writer should be initialized")
+        .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::InputCancelled)
-        .map_err(|error| format!("Console worker failed to cancel an input request: {error}"))
+        .map_err(|error| format!("R worker failed to cancel an input request: {error}"))
 }
 
 pub(crate) fn publish_plot(image: Result<String, String>) {
@@ -127,12 +161,33 @@ pub(crate) fn publish_plot(image: Result<String, String>) {
 
 pub(crate) fn resolve_python(
     request: crate::worker_protocol::PythonResolveRequest,
-) -> Result<String, String> {
+) -> Result<crate::worker_protocol::NativePythonActivation, String> {
+    let (python, native) = resolve_python_candidate(request)?;
+    let native = native.ok_or_else(|| {
+        infrastructure_failure("native Python resolver omitted the candidate configuration".into())
+    })?;
+    if native.selected.embedding.python != python {
+        return Err(infrastructure_failure(
+            "native Python resolver returned mismatched executables".into(),
+        ));
+    }
+    Ok(*native)
+}
+
+fn resolve_python_candidate(
+    request: crate::worker_protocol::PythonResolveRequest,
+) -> Result<
+    (
+        String,
+        Option<Box<crate::worker_protocol::NativePythonActivation>>,
+    ),
+    String,
+> {
     send_worker_message(&WorkerMessage::ResolvePython { request })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
-        ServerMessage::PythonResolved { python } => {
+        ServerMessage::PythonResolved { python, native } => {
             crate::python::link_matplotlib_caches();
-            Ok(python)
+            Ok((python, native))
         }
         ServerMessage::PythonResolutionFailed { message } => Err(message),
         ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
@@ -166,12 +221,22 @@ pub(crate) fn publish_python_activation(
     send_worker_message(&WorkerMessage::PythonActivated { requirements })
 }
 
+pub(crate) fn publish_python_activation_failure(
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+) -> Result<(), String> {
+    send_worker_message(&WorkerMessage::PythonActivationFailed { requirements })
+}
+
 pub(crate) fn resolve_r(
     packages: Vec<String>,
 ) -> Result<crate::r_environment::ResolutionOutcome, String> {
     use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
     use crate::worker_protocol::RResolutionFailureKind;
 
+    // SQL callbacks can reenter R, but SQL evaluation does not resolve packages.
+    if matches!(cell_language(), Some(Language::Sql)) {
+        return Ok(ResolutionOutcome::Unavailable);
+    }
     send_worker_message(&WorkerMessage::ResolveR { packages })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
@@ -269,9 +334,9 @@ fn queue_server_message(message: ServerMessage) -> Result<(), String> {
 fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Reader>, String> {
     WORKER_READER
         .get()
-        .ok_or_else(|| "Console worker sideband reader is not initialized".to_string())?
+        .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?
         .lock()
-        .map_err(|_| "Console worker sideband reader lock poisoned".to_string())
+        .map_err(|_| "R worker sideband reader lock poisoned".to_string())
 }
 
 fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
@@ -280,7 +345,7 @@ fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
     }
     WORKER_WRITER
         .get()
-        .ok_or_else(|| "Console worker sideband writer is not initialized".to_string())?
+        .ok_or_else(|| "R worker sideband writer is not initialized".to_string())?
         .send(message)
         .map_err(|error| format!("worker sideband write failed: {error}"))
         .map_err(infrastructure_failure)
@@ -314,10 +379,10 @@ fn send_output(channel: ConsoleChannel, bytes: &[u8]) -> Result<(), String> {
 fn send_image(data: String) -> Result<(), String> {
     WORKER_WRITER
         .get()
-        .expect("Console worker sideband writer should be initialized")
+        .expect("R worker sideband writer should be initialized")
         .send(&WorkerMessage::Image {
             data,
             mime_type: "image/png".to_string(),
         })
-        .map_err(|error| format!("Console worker failed to send a plot image: {error}"))
+        .map_err(|error| format!("R worker failed to send a plot image: {error}"))
 }

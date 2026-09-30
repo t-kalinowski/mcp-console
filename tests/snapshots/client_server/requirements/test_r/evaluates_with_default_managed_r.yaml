@@ -3,13 +3,14 @@
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
-      identical(dirname(find.package("tidyverse")), .libPaths()[[1L]]),
-      identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
-      identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
-      identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
-      identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
-      identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
+      identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
       vapply(
         c("ggplot2", "dplyr", "readr", "jsonlite"),
         requireNamespace,

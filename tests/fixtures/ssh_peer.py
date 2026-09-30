@@ -26,7 +26,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 4, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 5, "build": bootstrap["Open"]["build"]}})
     preparation_frame(
         {
             "Completed": {
@@ -34,8 +34,7 @@ if "Open" in bootstrap:
                 "result": {
                     "Ok": {
                         "managed": False,
-                        "managed_r": False,
-                        "selections": {"r_home": "/remote/R", "python": None},
+                        "selections": {"r_home": None, "python": None},
                     }
                 },
                 "control": None,
@@ -57,7 +56,7 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(1, {"version": 999 if mode == "incompatible" else 3, "build": bootstrap["build"]})
+frame(1, {"version": 999 if mode == "incompatible" else 7, "build": bootstrap["build"]})
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})

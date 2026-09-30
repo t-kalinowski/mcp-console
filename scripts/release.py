@@ -51,8 +51,10 @@ def command_output(
     return result.stdout.strip() if strip else result.stdout
 
 
-def run_command(command: list[str], env: dict[str, str] | None = None) -> None:
-    result = subprocess.run(command, env=env, check=False)
+def run_command(
+    command: list[str], env: dict[str, str] | None = None, *, cwd: Path | None = None
+) -> None:
+    result = subprocess.run(command, env=env, cwd=cwd, check=False)
     if result.returncode != 0:
         raise ReleaseError(
             f"{' '.join(command)} failed with status {result.returncode}"
@@ -109,6 +111,7 @@ def smoke_mcp(
     executable: Path,
     version: str,
     env: dict[str, str],
+    workspace: Path,
     startup_timeout: float,
     response_timeout: float,
     r_available: bool,
@@ -116,6 +119,7 @@ def smoke_mcp(
     process = subprocess.Popen(
         [str(executable), "serve"],
         env=env,
+        cwd=workspace,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -170,7 +174,7 @@ def smoke_mcp(
                 "content": [{"type": "text", "text": "[starting new worker]\n[idle]"}],
                 "isError": False,
             },
-            "unexpected runtime startup response",
+            f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
         )
 
         evaluations = [("python", "42\n")]
@@ -379,46 +383,64 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     with tempfile.TemporaryDirectory(prefix="mcp-console-empty-path-") as directory:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
-        run_command([str(cargo_bin), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
-        run_command([str(installed), "sandbox", "--", "/usr/bin/true"], env=sandbox_env)
+        sandbox_env["MCP_CONSOLE_HOME"] = str(Path(directory) / "console")
+        for executable in (cargo_bin, installed):
+            run_command(
+                [str(executable), "sandbox", "--", "/usr/bin/true"],
+                env=sandbox_env,
+                cwd=Path(directory),
+            )
 
     internal_ir = installed.resolve().with_name("ir")
     require(not internal_ir.exists(), f"wheel contains sibling `ir`: {internal_ir}")
 
-    r_home = os.environ.get("R_HOME")
+    r_home = None if args.without_r else os.environ.get("R_HOME")
     if r_home is not None:
         require(
             any((Path(r_home) / "bin" / name).is_file() for name in ("R", "Rscript")),
             "R_HOME must select an existing R installation",
         )
-    elif shutil.which("R"):
+    elif not args.without_r and shutil.which("R"):
         r_home = command_output(["R", "RHOME"])
     uv = shutil.which("uv")
     require(uv is not None, "host `uv` is not on `PATH`")
     with tempfile.TemporaryDirectory(prefix="mcp-console-uv-path-") as directory:
         uv_bin = Path(directory)
         (uv_bin / "uv").symlink_to(Path(uv).resolve())
+        if args.without_r:
+            (uv_bin / "python3").symlink_to(Path(sys.executable).resolve())
+            if bwrap := shutil.which("bwrap"):
+                (uv_bin / "bwrap").symlink_to(Path(bwrap).resolve())
         unavailable_uvx = uv_bin / "uvx"
         unavailable_uvx.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
         unavailable_uvx.chmod(0o755)
-        path = os.pathsep.join(
-            [str(uv_bin)]
-            + [
-                entry
-                for entry in os.environ.get("PATH", "").split(os.pathsep)
-                if not (Path(entry) / "ir").is_file()
-            ]
+        path = (
+            str(uv_bin)
+            if args.without_r
+            else os.pathsep.join(
+                [str(uv_bin)]
+                + [
+                    entry
+                    for entry in os.environ.get("PATH", "").split(os.pathsep)
+                    if not (Path(entry) / "ir").is_file()
+                ]
+            )
         )
 
         env = os.environ.copy()
         env.pop("RETICULATE_UV", None)
+        if args.without_r:
+            for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_PYTHON"):
+                env.pop(name, None)
         if r_home is not None:
             env["R_HOME"] = r_home
         env["PATH"] = path
+        env["MCP_CONSOLE_HOME"] = str(uv_bin / "console")
         smoke_mcp(
             installed,
             version,
             env,
+            uv_bin,
             args.startup_timeout_seconds,
             args.response_timeout_seconds,
             r_available=r_home is not None,
@@ -518,6 +540,7 @@ def parser() -> argparse.ArgumentParser:
     smoke.add_argument("wheel")
     smoke.add_argument("cargo_bin")
     smoke.add_argument("--target", choices=sorted(TARGET_ARCHITECTURES))
+    smoke.add_argument("--without-r", action="store_true")
     smoke.add_argument("--startup-timeout-seconds", type=float, default=1200.0)
     smoke.add_argument("--response-timeout-seconds", type=float, default=30.0)
     smoke.set_defaults(function=smoke_wheel)

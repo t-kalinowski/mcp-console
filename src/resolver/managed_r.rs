@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command, stop_resolver,
+    resolver_command,
 };
 
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
@@ -116,6 +116,7 @@ pub(crate) struct ManagedRResolverConfiguration {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ManagedR {
     library: PathBuf,
+    // Serde's Unix OsString representation preserves native path bytes in JSON.
     r_libs: OsString,
     // Executable selection never travels in a preparation request.
     #[serde(skip)]
@@ -175,6 +176,11 @@ impl ManagedR {
         Ok(())
     }
 
+    pub(crate) fn with_retained_requirements(mut self, requirements: Vec<String>) -> Self {
+        self.requirements = requirements;
+        self
+    }
+
     pub(crate) fn requirements(&self) -> &[String] {
         &self.requirements
     }
@@ -189,36 +195,37 @@ impl ManagedR {
 }
 
 pub(crate) fn discover(
-    python: &mut super::ManagedPythonResolverConfiguration,
+    python: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<(Option<ManagedRBootstrap>, Option<PathBuf>), String> {
+) -> Result<(Option<ManagedRBootstrap>, PathBuf), String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    let Some(rscript) = discover_rscript(&resolver, &mut on_started)? else {
-        return Ok((None, None));
-    };
+    let rscript = discover_rscript(&resolver, &mut on_started)?;
     let ir = select_ir_command(python);
     if ir.is_none() && !probe_ambient_uv(&resolver, &mut on_started, &rscript, python)? {
-        return Ok((None, Some(rscript)));
+        return Ok((None, rscript));
     }
     Ok((
         Some(ManagedRBootstrap {
             ir,
             rscript: rscript.clone(),
         }),
-        Some(rscript),
+        rscript,
     ))
 }
 
 pub(crate) fn resolve_r(
     requirements: Vec<String>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    on_configured: impl FnOnce(ManagedRResolverConfiguration),
 ) -> Result<ManagedR, String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     let mut python = super::ManagedPythonResolverConfiguration::capture();
     let configuration = discover_r_resolver_with(&resolver, &mut on_started, &mut python)?
         .ok_or_else(|| "dynamic environment resolution requires `ir` or `uv`".to_string())?;
+    // Retain the selected executables even when this first manifest fails.
+    on_configured(configuration.clone());
     resolve_r_with_process(&configuration, requirements, &resolver, &mut on_started)
 }
 
@@ -237,8 +244,7 @@ fn discover_r_resolver_with(
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
     python: &mut super::ManagedPythonResolverConfiguration,
 ) -> Result<Option<ManagedRResolverConfiguration>, String> {
-    let rscript = discover_rscript(resolver, on_started)?
-        .ok_or("R is unavailable on the execution host; install R and restart MCP Console")?;
+    let rscript = discover_rscript(resolver, on_started)?;
     let ir = match select_ir_command(python) {
         Some(ir) => ir,
         None => {
@@ -254,16 +260,12 @@ fn discover_r_resolver_with(
     Ok(Some(ManagedRResolverConfiguration { ir, rscript }))
 }
 
-fn select_ir_command(python: &mut super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
-    let path_ir = find_path_entry("ir");
-    let path_uv = find_path_entry("uv");
+fn select_ir_command(python: &super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
+    let path_ir = super::find_path_entry("ir");
+    let path_uv = super::find_path_entry("uv");
     if let Some(ir) = path_ir {
-        if let Some(uv) = path_uv.as_ref() {
-            python.set_default_uv(uv.as_os_str().to_os_string());
-        }
         Some(IrCommand::direct(ir))
     } else if let Some(uv) = path_uv {
-        python.set_default_uv(uv.as_os_str().to_os_string());
         Some(IrCommand::through_path_uv(uv))
     } else {
         python
@@ -276,7 +278,7 @@ fn select_ir_command(python: &mut super::ManagedPythonResolverConfiguration) -> 
 fn discover_rscript(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<PathBuf, String> {
     if let Some(r_home) = std::env::var_os("R_HOME") {
         let rscript = PathBuf::from(r_home).join("bin/Rscript");
         if !rscript.is_file() {
@@ -285,12 +287,9 @@ fn discover_rscript(
                 rscript.display()
             ));
         }
-        return Ok(Some(rscript));
+        return Ok(rscript);
     }
-    let Some(program) = find_path_entry("R") else {
-        return Ok(None);
-    };
-    let program = program.as_path();
+    let program = Path::new("R");
     let mut command = resolver_command(program);
     command
         .arg("RHOME")
@@ -319,7 +318,7 @@ fn discover_rscript(
     if r_home.is_empty() {
         return Err("worker R returned an empty home path".to_string());
     }
-    Ok(Some(PathBuf::from(r_home).join("bin/Rscript")))
+    Ok(PathBuf::from(r_home).join("bin/Rscript"))
 }
 
 fn resolve_uv_with_rscript(
@@ -511,21 +510,6 @@ fn resolve_r_with_process(
     })
 }
 
-pub(super) fn find_path_entry(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    // A broken symlink or non-executable entry is a broken installation, not
-    // permission to select a different resolver.
-    std::env::split_paths(&path)
-        .map(|directory| {
-            if directory.as_os_str().is_empty() {
-                PathBuf::from(".").join(program)
-            } else {
-                directory.join(program)
-            }
-        })
-        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
-}
-
 fn validate_ir_version(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
@@ -592,12 +576,14 @@ fn collect_resolver_output(
 ) -> Result<ResolverOutput, String> {
     let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
     let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+    resolver.watch_exit(child.id());
     if let Some(on_started) = on_started.take()
         && let Err(error) = on_started(resolver.stop_handle())
     {
-        let _ = stop_resolver(child, program, kind);
+        resolver
+            .abort(child, program, kind)
+            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
-    resolver.watch_exit(child.id());
     resolver.wait(child, completed_write(), stdout, stderr, program, kind)
 }

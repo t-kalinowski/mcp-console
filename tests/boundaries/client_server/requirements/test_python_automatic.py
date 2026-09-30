@@ -8,6 +8,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
+from support.previews import (
+    assert_preview,
+    compact_previews,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import (
@@ -105,10 +109,9 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     client.send(python=python, timeout_ms=120_000)
     output = last_result_text(client)
     prefix = "x" * retained
-    assert output.startswith(prefix), len(output)
-    remainder = output.removeprefix(prefix)
-    assert remainder.startswith("\n[output truncated: omitted "), repr(remainder[:200])
-    assert "resolved PyPI distribution" not in remainder, repr(remainder[:200])
+    notice = "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+    assert notice in output
+    assert_preview(output, prefix + notice + "'yaml12'\n")
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
     session = next((workspace / ".agents/console" / "sessions").iterdir())
@@ -116,17 +119,54 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     public_output = (
         f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
     )
-    assert (
-        f"; retained text: {public_output} (9 of 78 omitted text bytes)]" in remainder
-    ), remainder[-300:]
+    assert f"raw cell log: {public_output}" in output
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )
-    remainder = remainder.replace(session.name, "<run ID>")
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        f"<retained {retained} text bytes>{remainder}"
+    client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+        session.name, "<run ID>"
     )
+    compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
     return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            print("notice head\\n" + "x" * 10000, end="")
+            import yaml12
+
+            print("y" * 10000 + "\\nnotice tail")
+            """)
+        client.send(python=python, timeout_ms=120_000)
+        output = last_result_text(client)
+        head = "notice head\n" + "x" * 10000
+        tail = "y" * 10000 + "\nnotice tail\n"
+        notice = (
+            "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+        )
+        assert_preview(output, head + notice + tail)
+        assert "generated notice bytes not retained" in output
+        assert "resolved PyPI distribution" not in output
+        assert client.temporary_directory is not None
+        session = next(
+            (
+                Path(client.temporary_directory.name) / ".agents/console/sessions"
+            ).iterdir()
+        )
+        assert (session / "outputs/call-000001.log").read_text() == head + tail
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            session.name, "<run ID>"
+        )
+        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -173,22 +213,22 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         client.send(python=python)
         assert last_result_text(client) == "[done]"
 
-        # Adding the candidate's site directory may install new import finders,
-        # as editable wheels and .pth files can do during activation.
+        # Activation runs ordinary Python code. Install a finder while the
+        # original import is waiting, after the new environment is active.
         # fmt: python
-        python = code("""
-            import site
+        python = code(r"""
+            import runpy
             import sys
 
-            original_addsitedir = site.addsitedir
+            original_run_path = runpy.run_path
 
-            def addsitedir_with_finder(*args, **kwargs):
-                result = original_addsitedir(*args, **kwargs)
-                if automatic_meta_finder not in sys.meta_path:
-                    sys.meta_path.insert(0, automatic_meta_finder)
+            def activate_with_finder(*args, **kwargs):
+                result = original_run_path(*args, **kwargs)
+                sys.meta_path.insert(0, automatic_meta_finder)
+                runpy.run_path = original_run_path
                 return result
 
-            site.addsitedir = addsitedir_with_finder
+            runpy.run_path = activate_with_finder
             """)
         client.send(python=python)
         assert last_result_text(client) == "[done]"
@@ -484,28 +524,25 @@ def test_does_not_reenter_automatic_python_resolution(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        # Candidate activation visits site directories. A nested import from
-        # that hook must not start a second resolver while the outer import
-        # owns resolution.
+        # A missing import inside the activation script must not reenter
+        # resolution. Use ordinary Python's script hook in every composition.
         # fmt: python
-        python = code(f"""
-            import site
-
-            original_addsitedir = site.addsitedir
+        python = code(rf"""
+            import runpy
+            original_run_path = runpy.run_path
             automatic_nested_calls = 0
             automatic_nested_error = None
 
-            def nested_addsitedir(*args, **kwargs):
+            def activate_with_nested_import(*args, **kwargs):
                 global automatic_nested_calls, automatic_nested_error
-                site.addsitedir = original_addsitedir
                 automatic_nested_calls += 1
                 try:
                     import {nested}
                 except ModuleNotFoundError as error:
                     automatic_nested_error = str(error)
-                return original_addsitedir(*args, **kwargs)
+                return original_run_path(*args, **kwargs)
 
-            site.addsitedir = nested_addsitedir
+            runpy.run_path = activate_with_nested_import
             """)
         client.send(python=python)
         assert last_result_text(client) == "[done]"
@@ -522,9 +559,9 @@ def test_does_not_reenter_automatic_python_resolution(
         assert len(runs) == 1 and "py-yaml12" in runs[0], runs
 
         client.send(
-            python=f"automatic_nested_calls, {nested!r} in automatic_nested_error"
+            python=f"assert automatic_nested_calls == 1; assert '{nested}' in automatic_nested_error; print('nested resolution suppressed')"
         )
-        assert last_result_text(client) == "(1, True)\n", last_result_text(client)
+        assert last_result_text(client) == "nested resolution suppressed\n"
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
@@ -582,6 +619,10 @@ def test_reports_automatic_python_resolution_failure(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
+        client.send(python="import sys; print(sys.executable)")
+        executable = last_result_text(client).strip()
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
+
         output = send_and_collect_runtime_python_resolution(
             client,
             python="import sklearn",
@@ -600,7 +641,7 @@ def test_reports_automatic_python_resolution_failure(
         assert len(runs) == 1, runs
         assert requirement in runs[0] and "sklearn" not in runs[0], runs
 
-        normalized = normalize_python_resolution_error(output)
+        normalized = normalize_python_resolution_error(output, executable=executable)
         client.transcript[-1]["result"]["content"][0]["text"] = normalized
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')

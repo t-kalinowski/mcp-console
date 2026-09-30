@@ -1,8 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import re
 import signal
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -20,10 +20,12 @@ from support.processes import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
-from support.requirements import NO_R, PROCESS_EVENTS, R_RUNTIME, requires
+from support.requirements import PROCESS_EVENTS, R, requires
+from boundaries.client_server.python.test_peer_runtime import without_r
 from support.resolvers import (
     checkpoint_uv_environment,
     initialize_python_and_record_baseline,
+    local_resolver_owner,
     recording_uv_environment,
     uv_tool_run_requirements,
 )
@@ -223,7 +225,7 @@ def test_times_out_and_polls_automatic_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, R_RUNTIME)
+@requires(PROCESS_EVENTS, R)
 def test_interrupts_automatic_python_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
@@ -232,18 +234,22 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, NO_R)
+@requires(PROCESS_EVENTS)
 def test_interrupts_no_r_automatic_python_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
     # The recorded candidate includes the no-R SQL provider's Python dependency.
-    return interrupts_automatic_python_resolver_and_preserves_worker(binary, execution)
+    return interrupts_automatic_python_resolver_and_preserves_worker(
+        binary, execution, with_r=False
+    )
 
 
 def interrupts_automatic_python_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
+    *,
+    with_r: bool = True,
 ) -> Transcript:
     requirement = "mcp_console_blocked_automatic_import"
     with tempfile.TemporaryDirectory() as temporary:
@@ -253,6 +259,15 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
             requirement,
         )
         environment.pop("RETICULATE_PYTHON", None)
+        if not with_r:
+            uv = environment["RETICULATE_UV"]
+            without_r(environment, directory)
+            environment["RETICULATE_UV"] = uv
+            commands = Path(environment["PATH"])
+            wrapper = commands / "uv"
+            wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(uv)} "$@"\n')
+            wrapper.chmod(0o755)
+            (commands / "python3").symlink_to(sys.executable)
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
@@ -264,10 +279,12 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(python="None")
-            assert last_result_text(client) == "[done]"
+            client.send(python="import sys; print(sys.executable)")
+            executable = last_result_text(client).strip()
+            client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
             server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
+            owner = local_resolver_owner(server, binary)
+            existing_children = child_process_identities(owner)
             # fmt: python
             python = code(f"""
                 import importlib
@@ -283,7 +300,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
             started.wait("automatic Python resolver")
             resolver = [
                 child
-                for child in child_process_identities(server)
+                for child in child_process_identities(owner)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver
@@ -303,7 +320,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
             ):
                 assert expected in error, (expected, error)
             interrupt["result"]["content"][0]["text"] = (
-                normalize_python_resolution_error(error)
+                normalize_python_resolution_error(error, executable=executable)
             )
 
             client.send(
@@ -326,7 +343,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R_RUNTIME)
+@requires(R)
 def test_restart_discards_unactivated_automatic_python_candidate(
     binary: Path,
     execution: Execution,
@@ -383,35 +400,34 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             )
 
             # Pause after resolution and immediately before PythonActivated.
-            # fmt: python
-            python = code(f"""
-                import json
-                import _mcp_console_native as native_services
-
-                original_call = native_services.call
-
-                def gated_call(request):
-                    if json.loads(request)["operation"] != "activate_python":
-                        return original_call(request)
-                    with open({json.dumps(str(activation_ready.path))}, "wb", buffering=0) as ready:
-                        ready.write(b"1")
-                    with open({json.dumps(str(activation_release.path))}, "rb", buffering=0) as release:
-                        assert release.read(1) == b"1"
-                    result = original_call(request)
-                    with open({json.dumps(str(activation_sent.path))}, "wb", buffering=0) as sent:
-                        sent.write(b"1")
-                    return result
-
-                native_services.call = gated_call
-                import yaml12
+            # fmt: r
+            r = code(r"""
+                globals <- get(".globals", envir = asNamespace("reticulate"))
+                original <- activeBindingFunction("python_requirements", globals)
+                rm(list = "python_requirements", envir = globals)
+                makeActiveBinding("python_requirements", function(value) {
+                  if (missing(value)) {
+                    return(original())
+                  }
+                  ready <- fifo(activation_ready, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), ready)
+                  close(ready)
+                  release <- fifo(activation_release, open = "rb", blocking = TRUE)
+                  stopifnot(identical(readBin(release, "raw", n = 1L), charToRaw("1")))
+                  close(release)
+                  original(value)
+                  sent <- fifo(activation_sent, open = "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), sent)
+                  close(sent)
+                }, globals)
                 """)
-            evaluation = client.start_send(python=python, timeout_ms=0)
-            for checkpoint, label in zip(
-                worker_checkpoints, ("ready", "release", "sent")
-            ):
-                evaluation["send"]["python"] = evaluation["send"]["python"].replace(
-                    str(checkpoint.path), f"<activation {label}>"
-                )
+            client.send(r=r)
+            assert last_result_text(client) == "[done]"
+
+            evaluation = client.start_send(
+                python="import yaml12",
+                timeout_ms=0,
+            )
             activation_ready.wait("automatic managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]

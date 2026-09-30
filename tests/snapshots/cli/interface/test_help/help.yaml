@@ -55,7 +55,7 @@ stdout: |
 ---
 command: mcp-console worker --help
 stdout: |
-  Run the internal Console worker
+  Run the internal R worker
 
   Usage: mcp-console worker
 

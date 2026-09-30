@@ -818,10 +818,11 @@ mod platform {
                                     return;
                                 }
                             }
-                            RelayCommand::PythonResolved { python } => {
+                            RelayCommand::PythonResolved { python, native } => {
                                 if sideband
                                     .send(SidebandWrite::Message(ServerMessage::PythonResolved {
                                         python,
+                                        native,
                                     }))
                                     .is_err()
                                 {

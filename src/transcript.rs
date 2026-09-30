@@ -21,7 +21,7 @@ mod event;
 mod markdown;
 mod output;
 
-pub(crate) use output::CellOutput;
+pub(crate) use output::{CellOutput, OutputRecord};
 
 const SCHEMA_VERSION: u64 = 1;
 
@@ -31,6 +31,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
+    python_preparation: bool,
     r_available: bool,
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
@@ -39,6 +40,7 @@ struct TranscriptState {
 
 struct ActiveTranscript {
     directory: PathBuf,
+    public_directory: PathBuf,
     writer: BufWriter<File>,
     projections: Option<markdown::Writers>,
     pending_projection_failure: Option<String>,
@@ -64,12 +66,19 @@ pub(crate) struct Artifact {
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(std::env::current_dir(), dynamic_resolution, true, None)
+        Self::with_target(
+            std::env::current_dir(),
+            dynamic_resolution,
+            false,
+            true,
+            None,
+        )
     }
 
     pub(crate) fn with_target(
         working_directory: std::io::Result<PathBuf>,
         dynamic_resolution: bool,
+        python_preparation: bool,
         r_available: bool,
         target: Option<serde_json::Value>,
     ) -> Self {
@@ -77,11 +86,30 @@ impl Transcript {
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
+            python_preparation,
             r_available,
             target,
             active: None,
             failure: None,
         })))
+    }
+
+    pub(crate) fn requirements_selected(
+        &self,
+        call_id: Option<u64>,
+        action: &str,
+        snapshot: &serde_json::Value,
+    ) {
+        self.update(|state| {
+            state.materialize()?.append(
+                Event::RequirementsSelected {
+                    call_id,
+                    action,
+                    snapshot,
+                },
+                Utc::now(),
+            )
+        });
     }
 
     pub(crate) fn target_generation(
@@ -97,6 +125,14 @@ impl Transcript {
                 },
                 Utc::now(),
             )
+        });
+    }
+
+    pub(crate) fn python_environment_accepted(&self, packages: &[String]) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::PythonEnvironmentAccepted { packages }, Utc::now())
         });
     }
 
@@ -138,10 +174,17 @@ impl Transcript {
         mime_type: &str,
     ) -> Result<Option<Artifact>, String> {
         let bytes = decode_image_data(data)?;
-        let Some(call_id) = call_id else {
-            return Ok(None);
-        };
-        Ok(self.update(|state| state.active()?.persist_image(call_id, &bytes, mime_type)))
+        Ok(self.persist_decoded_image(call_id, &bytes, mime_type))
+    }
+
+    pub(crate) fn persist_decoded_image(
+        &self,
+        call_id: Option<u64>,
+        bytes: &[u8],
+        mime_type: &str,
+    ) -> Option<Artifact> {
+        let call_id = call_id?;
+        self.update(|state| state.active()?.persist_image(call_id, bytes, mime_type))
     }
 
     pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
@@ -212,7 +255,7 @@ pub(crate) fn validate_image_data(data: &str) -> Result<(), String> {
     decode_image_data(data).map(drop)
 }
 
-fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
     base64::engine::general_purpose::STANDARD
         .decode(data)
         .map_err(|error| format!("worker returned invalid base64 image data: {error}"))
@@ -225,6 +268,7 @@ impl TranscriptState {
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
                 self.dynamic_resolution,
+                self.python_preparation,
                 self.r_available,
                 self.target.as_ref(),
             )?);
@@ -252,18 +296,52 @@ impl ActiveTranscript {
     fn create(
         working_directory: &Path,
         dynamic_resolution: bool,
+        python_preparation: bool,
         r_available: bool,
         target: Option<&serde_json::Value>,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         let started_at = Utc::now();
+        // Keep incidental process-ID widths from shifting bounded output previews.
         let run_id = format!(
-            "{}-{}",
+            "{}-{:010}",
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".agents/console/sessions");
+        let project_console = working_directory.join(".agents/console");
+        let in_project = match std::fs::metadata(&project_console) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {}: {error}",
+                    project_console.display()
+                ));
+            }
+        };
+        let console = if in_project {
+            project_console
+        } else {
+            crate::console_paths::home_console_directory()?
+                .ok_or_else(|| "HOME is not set".to_string())?
+        };
+        let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);
+        let public_directory = if in_project {
+            PathBuf::from(".agents/console/sessions").join(&run_id)
+        } else {
+            directory.clone()
+        };
+        if public_directory.to_str().is_none() {
+            return Err("recording path must be UTF-8".to_string());
+        }
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
@@ -304,6 +382,7 @@ impl ActiveTranscript {
                 quarto_path,
                 working_directory,
                 dynamic_resolution,
+                python_preparation,
                 r_available,
                 target,
             ))
@@ -315,6 +394,7 @@ impl ActiveTranscript {
 
         let mut transcript = Self {
             directory,
+            public_directory,
             writer,
             projections,
             pending_projection_failure,
@@ -328,6 +408,7 @@ impl ActiveTranscript {
                 session: "default",
                 working_directory: &working_directory_text,
                 dynamic_resolution,
+                python_preparation,
                 target,
             },
             started_at,

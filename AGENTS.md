@@ -2,6 +2,8 @@
 
 This file contains repository-wide instructions and a navigation map.
 Keep it synchronized with implemented code.
+Start with the [development routes and validation ladder](docs/DEVELOPMENT.md) to find a focused public test and the next validation command.
+For resumed work, read the ignored `.dev-workflow/task.md` checkpoint if present, verify it against Git status, and follow the [resume recipe](docs/DEVELOPMENT.md#resume-from-a-small-checkpoint).
 Detailed current behavior belongs in the documents indexed by `docs/README.md`, source, and public transcript tests.
 
 The documents under `design-sketches/` describe intended behavior, not the current implementation.
@@ -39,27 +41,35 @@ Do not treat `design-sketches/` as evidence of implemented behavior.
 
 ## Platform and development
 
-Project configuration is read only from `.agents/console/config.yaml` in the launch working directory.
+Project configuration is read from `.agents/console/config.yaml` in the launch working directory, falling back to `~/.agents/console/config.yaml` only when the project file is absent.
+`MCP_CONSOLE_HOME` selects an absolute replacement for the home Console directory, shared by fallback configuration and recordings; it does not change `HOME` or runtime storage.
 Repeated `-c KEY=VALUE` overrides apply in command-line order before application decoding and validation.
 Keep `src/config.rs` and its parsers independent of application field names: mappings merge recursively, while lists, scalars, and explicit null replace prior values.
 Top-level `extends` selects the native `":workspace"` or `":read-only"` built-in; omission preserves the default policy.
 Capture the workspace once at trusted launch and retain it across worker generations.
 Reuse native constructors and path handling, and keep explicit native adjustments subject to native precedence.
 Console adds `.claude` as a read entry and excludes shared temporary write grants by default for `":workspace"`; metadata defaults are deliberately overridable.
-Recorded sessions, transcripts, outputs, and artifacts are written beneath `.agents/console/sessions/`.
+Recorded sessions, transcripts, outputs, and artifacts are written beneath the launch directory's `.agents/console/sessions/` only if `.agents/console` already exists there; otherwise they go beneath `~/.agents/console/sessions/`.
 
 An optional `target` independently selects transport and compute for `serve`, including `--no-sandbox`: SSH host, local Docker container, or local Docker Sandbox microVM.
 Omitted target and explicit local host selection share the existing local launch path.
 Capture its required absolute remote workspace, executable prefix, and raw user policy locally once; materialize paths, platform additions, and native preflight on that execution host without rediscovering YAML.
 SSH discovers capability and executes managed preparation on the remote host, independently of the relay and worker.
 Its default command uses remote PATH `mcp-console`, falling back to `uvx mcp-console` only when absent; configured argv prefixes run without executable preflight validation.
-The preparation owner captures trusted resolver settings once; the local server owns requirements, candidates, and activation decisions.
-Only explicit remote R_HOME and RETICULATE_PYTHON workload selections also inform preparation.
+The SSH preparation owner captures trusted resolver settings and runtime capabilities once; the local server owns requirements, candidates, and activation decisions.
+Local host preparation uses the hidden `resolve` subcommand over JSON lines; it captures resolver choices once, runs R, Python, and DuckDB resolvers, and confirms child cleanup before the server commits results.
+Only explicit remote R_HOME and RETICULATE_PYTHON workload selections, plus the top-level `python` selection, inform preparation.
+Remote sans-R sessions use remote uv by default or an explicitly selected remote interpreter; interpreter inspection stays inside the execution-host preparation boundary.
 Never discover controller interpreters, invoke controller resolvers, or validate remote paths on the controller.
 Require explicit result and resolver cleanup confirmation before committing an environment; uncertain preparation retirement blocks further preparation and replacement.
 Docker resolves its image once before workload startup and uses that immutable ID for every probe and generation.
 Each generation owns a fresh Linux container containing relay and worker; a local owner observes server and attachment loss and requires confirmed container removal before replacement.
 Docker uses image packages with dynamic preparation disabled, even if resolvers are installed.
+Docker and SBX share prepared-runtime discovery and configuration in `src/target_launch/runtime.rs`.
+Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and use its R/native-Python capabilities for operation validation and recording.
+Construct MCP tool presentation only from captured launch configuration; discovered runtime availability must not remove language fields.
+Prepared targets select preinstalled CPython when R is genuinely absent, support target-relative `python`, never enter dependency preparation, and retain target paths as opaque controller metadata.
+Direct compute launches provide private Python storage through the existing target launcher; extension caches and shared paths retain their provider ownership.
 Docker Sandbox selects compute enforcement by default; explicit `sandbox.provider: compute` documents that selection.
 All other targets default to native enforcement.
 Keep this selector separate from native policy JSON and from whether direct launch needs an inner native runner.
@@ -95,37 +105,57 @@ An exact match of compiled and packaging inputs additionally lets CI skip the re
 Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when build inputs outside the hashed files change, such as workflow build flags or native dependency setup; unrelated workflow edits must not invalidate build caches.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
-R is optional for builds and Python/SQL execution; retain R syntax and mixed-language checks on R-enabled hosts.
-The no-R managed SQL provider requires Python DuckDB.
-SQL without either language and installed R-only operation without Python are not verified combinations.
-Worker runtime activation, exposed language fields, and SQL provider dependencies remain separate facts.
 
-macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a dedicated checkout under `target`.
+macOS and Linux uv source installations prepare the pinned sandbox companion before invoking the application's Cargo build, using a shared dedicated checkout under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
+Keep its Cargo build data with that source, and hold the adjacent `<source-checkout>.stage.lock` through preparation, build, and artifact copying.
+Explicit source overrides use the same source ownership.
+Keep application `target` and wheel staging local to each Console checkout.
 The pinned checkout's `codex-rs/rust-toolchain.toml` owns the runner's compiler configuration; Console's toolchain selection is independent.
 Direct Cargo or Maturin builds require `scripts/stage-sandbox-runner` first; `scripts/check` performs this preparation.
 Install development checkouts with `uv tool install --reinstall .`; bare `cargo install` does not install the companion bundle.
 Build reuse follows Cargo's tracked inputs; external tool changes through `PATH` can require cleaning the affected Cargo build directories, as described in `RELEASE.md`.
 Native Cargo bundles require the default shared build/target layout; a separate intermediate build directory is unsupported for running the Cargo output.
 The Python packaging backend holds a checkout-local lock from staging through wheel creation.
-Direct staging, Cargo, and Maturin commands require exclusive use of their source checkout.
+Staging, packaging, and validation share checkout ownership outside `target`; conflicts fail with the lock path and last recorded owner details.
+Wrap direct Cargo and Maturin commands in `scripts/with-checkout` to claim that ownership.
 See `RELEASE.md` for prerequisites, bundle layout, build caches, and the explicit source-checkout override.
 Run commands from the repository root:
 
 ```text
+scripts/preflight
 scripts/format
 scripts/check
+scripts/check --full
 scripts/test [BOUNDARY/SUITE[::CASE]]
-scripts/test --list
+scripts/test --full
+scripts/test --full --list
 scripts/test --update BOUNDARY/SUITE[::CASE]
 ```
 
-`scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence.
-A missing or failing formatter does not prevent the remaining formatters from running or make the script fail, so review its output and resulting changes.
-`scripts/check` validates extracted runtime sources, checks Rust formatting and Clippy, runs Rust tests in debug, runs the complete transcript suite against the release executable, and checks uv source and wheel installations with a shared Cargo target directory.
+`scripts/format` attempts Ruff, Yamark, rustfmt, and Air in sequence and reports each result.
+A missing or failing formatter does not prevent the remaining formatters from running; the default exits successfully, while `--strict` returns failure if any formatter failed.
+Review its output and resulting changes.
+Validation records and phase logs remain in `.dev-workflow/runs/`; see `docs/DEVELOPMENT.md` for checkout ownership and concurrent worktrees.
+`scripts/check` is the ordinary final local gate: stage the companion, validate extracted runtime sources, check architecture, check Rust formatting and Clippy, run Rust tests in debug, and run the explicit smoke transcript profile against the release executable.
+`scripts/check --quick` is a backwards-compatible alias for this default.
+`scripts/check --full` adds repository-tooling self-tests, all capability-applicable transcripts, and uv source and wheel installation checks.
+Use the full local gate only when explicitly requested or when the changed area warrants exhaustive local validation.
+CI explicitly runs full core and transcript profiles plus installation checks and remains the comprehensive merge gate.
+Report the validation commands and scope actually run; the default gate is not exhaustive.
+Use `scripts/test SELECTOR` for red/green work and the owning focused tests when changing repository tooling.
+With no selectors, `scripts/test` and `scripts/test --quick` run the small explicit selection in `tests/boundaries/_profiles.py`; `scripts/test --full` runs the complete capability-applicable suite.
+Explicit case or suite selectors retain their scope with any profile flag.
+Per-execution transcript timings are recorded beside validation results in `case-timings.jsonl`.
 
 ### Boundary snapshots
 
-Cases run by default; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
+Transcript cases and default MCP client fixtures isolate Console with a temporary `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's tool environment.
+Run transcript cases, installation smoke evaluations, and R integration tests from temporary workspaces so existing checkout recording directories cannot capture test sessions.
+Remove test-owned workspaces and Console directories after their processes exit.
+Do not reconstruct runtime or provider defaults to isolate Console configuration.
+Home discovery cases select their environment explicitly and opt in to it with `use_home_configuration=True`.
+
+The full profile includes every case; declare capability requirements beside affected cases with `@requires(...)` from `tests/support/requirements.py`.
 Keep platform availability in test support.
 Use `@executions(DIRECT, SANDBOXED)` and `execution.serve(...)` to reuse ordinary cases across applicable execution modes with a shared snapshot.
 Sandbox contracts use explicit sandbox fixtures and requirements.
@@ -143,7 +173,7 @@ The suite covers client-server MCP, server-relay JSONL, relay-worker sideband an
 `docs/ARCHITECTURE.md` owns component contracts; `docs/SANDBOX.md` owns the Console policy and external runner boundary.
 Keep these invariants intact:
 
-- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolvers.
+- The server owns logical relay lifetime orchestration and retirement, worker-generation state, operation admission, output cuts, pending-output budgets, response assembly, delivery ownership, retained requirements, and host resolver orchestration and result commits.
   By default, it starts the relay through an ordinary sandbox launcher child and uses successful managed launcher exit as its synchronous cleanup barrier.
   `serve --no-sandbox` skips the native runner at the selected target.
   Docker containers and Docker Sandbox microVMs retain their outer enforcement and retirement; host execution retains direct-worker cleanup limits.
@@ -160,7 +190,10 @@ Keep these invariants intact:
 - Restart, replacement, evaluation admission, stdin writes, resolver callbacks, and retained-environment commits are scoped to the worker generation that accepted them.
   Work admitted for an old generation must not reach its replacement.
 - R, Python, and DuckDB dependency resolution runs outside the worker sandbox.
-  Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 registry requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
+  Sans-R Python and DuckDB extension preparation use the trusted execution-host preparation owner with full host permissions, without a resolver sandbox or worker-policy/storage checks.
+  Callers assume `resolve` and its shared SSH preparation implementation are trustworthy; enforcing that boundary is deferred to follow-up work within the preparation command.
+  Resolver isolation is outside this feature's scope; document client-controlled executable and local-source escape paths in `docs/REQUIREMENTS.md`.
+  Accept only documented trusted inputs: `ir` package references with `IR_NO_LOCAL_SOURCES`, named PEP 508 requirements under the trusted startup resolver configuration, and validated DuckDB extension names.
   Accepted installation or build code may execute with server permissions.
 - Treat submitted R, Python, and SQL as shell-class capability and enforce isolation at the worker-process boundary unless `serve --no-sandbox` is selected.
   Keep complete code cells separate from interactive `stdin`, and keep the MCP adapter independent of interpreter implementation details.
@@ -173,15 +206,16 @@ Keep these invariants intact:
 
 - `src/main.rs`, `src/cli.rs` — binary entry point and command definitions.
 - `src/config.rs`, `src/config/{inline,yaml}.rs` — schema-independent project-file loading, inline override parsing, and recursive configuration layering.
+- `src/console_paths.rs` — the controller home Console directory shared by configuration discovery and recording selection.
 - `src/settings.rs`, `src/settings/target.rs` — project-path selection and application settings decoded after layering and retained across worker launches; native policy values remain JSON; the sandbox layer adds application launch requirements and delegates validation and defaults to the runner.
 - `src/ssh.rs` — configured OpenSSH transport and remote retirement confirmation.
 - `src/target_launch.rs`, `src/target_launch/` — shared versioned bootstrap, relay envelope, direct/native launcher mechanics, image runtime selection, workload environment decoding, cancellable CLI transfer, and the shared local owner request and observation.
 - `src/target_session.rs` — selected SSH/Docker/SBX sessions, shared compute probes and controller replacement blocking, and generation-owned retirement receipts and resource names.
 - `src/docker.rs`, `src/docker/` — captured Docker endpoint and immutable image setup, local ownership helper, and confirmed container retirement.
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
-- `src/ssh/preparation.rs`, `src/ssh/preparation/{client,host}.rs` — typed trusted preparation connection, remote startup configuration, operation-scoped resolver control, and confirmed results.
+- `src/resolver/preparation.rs`, `src/resolver/preparation/{client,host}.rs` — typed local and SSH preparation connections, JSON transports, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
-- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from effective target/provider metadata, stdio transport, and response-delivery ownership.
+- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from captured target/provider configuration, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
   The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.
@@ -195,30 +229,49 @@ Keep these invariants intact:
 - `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup and the compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
+- `src/worker_client/output.rs`, `src/worker_client/output/{tape,preview,terminal}.rs` — canonical response composition, streaming output cuts, bounded 8 KiB text previews, independent image admission, raw-file receipts, and progress projection.
 - `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, shared Unix relay transport, and platform-specific startup observation.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
-- `src/worker.rs`, `src/worker/{coordinator,core,input,interrupt,process}.rs`, `src/worker/embedded_r.rs`, `src/r_repl.c` — Console-owned event loop and shared services, optional embedded-R backend, native interrupt routing, and C-owned DLL-REPL error boundary.
+- `src/worker.rs`, `src/worker/{coordinator,core,input,r_integration}.rs` — worker facade, language coordination, shared command readiness and cell bookkeeping, interactive stdin buffering, and optional R event, graphics, and interrupt hooks.
+- `src/worker/interrupt.{rs,c}` — process-lifetime signal distribution, native waiting, managed-input wakeups, and an explicit R attachment transition preserving pending interrupts.
+- `src/worker/embedded_r.rs`, `src/worker/embedded_r/parse.{rs,R}`, `src/r_repl.c` — R runtime, complete-cell parsing, interrupt state and deferral, native event-aware waiting, graphics, console source routing, and the C-owned DLL-REPL boundary.
 
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/python.rs`, `src/python/{library,native,reticulate}.rs`, `src/python/{discovery,environment,runtime}.py`, `src/python/bridge.R` — Console-owned CPython initialization, evaluator and environment activation, native shared services, and optional reticulate conversion bridge.
+- `src/local_runtime.rs` — independent captured R home and inspected Python identity, retained host-resolved environments, and direct-worker temporary storage.
+- `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — common interpreter bootstrap and process environment, complete inspected identity of an already-selected executable, shared setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
+- `src/python/requirements.rs`, `src/python/requirements/r.rs` — shared live managed selection, resolved candidates and import control, R declaration values and transitions, shared CPython activation, and R binding conversion and history.
+- `src/python/environment.{rs,py}`, `src/python/probe.{rs,py}` — managed activation transactions, loaded-distribution compatibility, environment-owned path bookkeeping, and cancellable worker-side inspection of a selected environment.
+- `src/python/reticulate.rs`, `src/python/initialize.R`, `src/python/bridge.R` — reticulate selection compatibility and attachment adapter, full Console identity handoff, exact-candidate conversion metadata and declaration checks.
+  Common Python module hooks and reached-import resolution do not use an R callback.
+  Idle tool preparation, reached imports, and R declarations share the Console requirement and activation owner; the R adapter retains declaration representation and conditions.
+  The Python facade retains the optional adapter after R initialization; it owns attachment completion, while `startup.rs` has no R-adapter dependency and the CPython library retains shared setup completion.
+  Both interpreters initialize on demand on the same serialized thread.
+  An explicit or host-resolved Python selection starts without R; unresolved R-side selection hints require R.
+  R cells, Python-side R access, and R-owned SQL initialize R.
+  Late bridge attachment uses the running Python identity and preserves its state.
+  Sans-R defaults require uv on the startup PATH and an absolute HOME for the shared DuckDB extension cache; top-level `python` selects an existing environment without invoking uv.
+  Managed R-backed and sans-R sessions prepare SQLite as a default DuckDB extension on the execution host; exact declaration replacements can remove it, and reset restores it.
+  Managed environments support explicit prestart/restart preparation, idle Python and DuckDB additions, and resolution at reached missing Python imports through shared native activation, with the accepted manifest and launch configuration committed together.
+  Declaration replacements, changed requirements for declared distributions, interpreter constraints, and publication cutoffs require explicit restart; explicitly selected Python environments remain non-managed.
 - `src/sql.rs`, `src/sql/r_dbi.rs`, `src/sql/py_dbapi.rs`, `src/sql/bridge.R`, `src/sql/dbapi.py` — worker-facing SQL router, R DBI and Python DB-API providers, and their runtime bridges.
 - `src/r_graphics.rs`, `src/r_graphics.c`, `src/r_graphics/bridge.R` — managed graphics orchestration, C callback boundary, and R bridge.
 - `src/r_environment.rs`, `src/r_environment/bridge.R` — live R-library bridge.
 
 ### Resolvers and sandbox
 
-- `src/resolver.rs`, `src/resolver/` — retained host environments, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
-- `src/resolver/programs/` — compile-time R and Python programs for provider-specific DuckDB extension preparation, R-library resolution, and `uv` discovery.
+- `src/resolver.rs`, `src/resolver/python_configuration.rs`, `src/resolver/` — host resolver entry point, retained environments, captured local `uv` selection, direct Python-version selection, validation, platform implementations, and resolver process-group lifecycle.
+- `src/resolver/programs/` — compile-time R programs for R-backed DuckDB extension preparation, R-library resolution, and `uv` discovery, plus the Python DuckDB helper for sans-R preparation on the execution host.
 - `src/sandbox/runner.rs`, `src/sandbox/policy_extensions.sbpl`, `src/process_descriptors.rs` — immutable runner launch configuration, macOS policy additions, and ordinary child inherited-descriptor boundary.
 - `sandbox-runner.json`, `scripts/stage-sandbox-runner`, `build_backend.py`, `build.rs`, `src/sandbox/installation.rs` — pinned source preparation, companion bundle packaging, and streaming artifact verification.
 
 ### Tests and development scripts
 
 - `tests/support/` — shared capability requirements, explicit execution fixtures, transcript records, snapshots, normalization, checkpoints, capture, process, platform event, native fixture, macOS, assertion, R, resolver, client, and direct-suite helpers.
+- `tests/support/python.py` — local wheel and package-index fixtures, including installed console entry points for runtime and preparation tests.
 - `tests/support/ssh_external.py`, `tests/fixtures/ssh_install.py` — optional real-host availability, test-owned source installation and build cache, and temporary remote workspace setup.
 - `tests/fixtures/` — deterministic workers, resolvers, package fixtures, searchable native interposers, and boundary-specific relay and worker programs.
 - `tests/boundaries/client_server/` — public MCP client-server behavior, including real Python SDK integrations under `integrations/`.
@@ -227,15 +280,19 @@ Keep these invariants intact:
 - `tests/boundaries/cli/` — direct CLI behavior.
 - `tests/boundaries/*/sandbox/` — sandbox-specific contracts within their owning boundary; ordinary cases remain under their runtime, protocol, or lifecycle subject.
 - `tests/boundaries/*/_harness.py` — boundary-specific process launch and capture mechanics.
-- `tests/boundaries/_run.py`, `tests/transcript_runner.py` — recursive transcript discovery, selection, location, snapshot checking, progress reporting, and runner regressions.
+- `tests/boundaries/_run.py`, `tests/boundaries/_profiles.py`, `tests/transcript_runner.py` — transcript discovery, explicit smoke selection, full and focused profiles, location, snapshot checking, progress reporting, and runner regressions.
 - `tests/architecture.py` — sandbox dependency-direction checks and their command-line regressions.
 - `tests/snapshots/` — generated YAML 1.2 snapshots, parallel to the boundary test hierarchy.
 - `r/tests/testthat/` — R package protocol and ellmer adapter tests.
 - `scripts/release.py`, `tests/release.py` — release validation and installed-wheel acceptance.
 - `tests/install.py`, `tests/sandbox_installation.py` — unstaged uv installation, relocated bundle acceptance, and private companion verification.
+- `tests/staging.py` — public staging command regressions for shared source/build reuse, pin changes, and cross-checkout ownership.
 - `scripts/test` — release binary build and selected transcript execution.
 - `scripts/validate_runtime_sources.py` — extracted R/Python inventory and syntax validation.
+- `scripts/preflight`, `scripts/review-diff`, `tests/development.py` — local preparation inventory, review-volume reports, and their public command regressions; see `docs/DEVELOPMENT.md`.
 - `scripts/format`, `scripts/check-core`, `scripts/check` — formatting, core checks, and repository-wide checks.
+- `tests/format.py` — public formatter command regressions.
+- `checkout_workflow.py`, `scripts/with-checkout`, `tests/workflow.py` — shared checkout ownership, validation records, host concurrency, and public command regressions.
 
 ## Working rules
 
@@ -249,6 +306,7 @@ Keep these invariants intact:
   Prefer a larger coherent change over an artificial split.
 - Keep each behavior-changing PR to one observable behavior.
   Internal-only refactors may stand alone but must preserve observable behavior.
+  Choose its owning modules, public cases, expected snapshots, and intended base before cross-cutting implementation; use the planning template and `scripts/review-diff` in `docs/DEVELOPMENT.md`.
 - For a public behavior change, first add a public acceptance or regression test and confirm it fails.
   Verify an internal-only refactor with the existing public suite.
   Test public interfaces, not private helpers.
@@ -256,9 +314,16 @@ Keep these invariants intact:
   Do not use busy loops or short fixed-interval polling when the state transition can notify a condition variable, descriptor, or platform event.
 - Preserve client-visible runtime output in transcript snapshots, including complete errors and tracebacks.
   Normalize only incidental values such as run-specific temporary paths; do not replace behavior with summaries or placeholders.
-- Keep embedded R, Python, SQL, and shell fixture programs as readable multiline strings.
-  Use escapes such as `\n` only when the character is data.
-- Put `# fmt: r` or `# fmt: python` immediately before each embedded R or Python test program, including `code(...)` calls nested inside other calls.
+  Native R fidelity cases may record a live-reference comparison after asserting exact equality with the same source in `Rscript --vanilla`, including error calls and condition classes; see `tests/boundaries/README.md`.
+  Synthetic stress repetitions may use lossless text-and-count notation after exact full-response assertions; see `tests/support/evidence.py`.
+- Prioritize source readability when choosing a string representation.
+  Short strings and fixtures may use `\n` escapes when easy to read, such as `"#!/bin/sh\nexit 99\n"`.
+  Joining a short list of lines with `"\n"` or writing lines separately is also acceptable when clearer.
+  Prefer readable multiline literals for longer messages, documents, and embedded R, Python, SQL, or shell programs.
+  Dedent indented literals when needed to keep the surrounding source readable.
+  Preserve exact content, indentation, and trailing newlines when changing representations.
+- Put `# fmt: r` or `# fmt: python` immediately before each multiline embedded R or Python test program, including `code(...)` calls nested inside other calls.
+  Keep `code(` and the opening string delimiter on the same line, immediately below the directive.
   Indent the payload and closing delimiter one Python indentation level deeper than the line containing `code(`, preserving the embedded program's own indentation.
   Recheck this indentation after running `scripts/format` and in the committed source.
   When formatting a shared payload, refresh each platform's affected snapshots, including cases skipped on the current host.
@@ -270,4 +335,5 @@ Keep these invariants intact:
 - Update design documents in the same PR only when they describe changed behavior.
   Update this file when repository-wide constraints or navigation change.
 - Run `scripts/format` unchanged and review its changes before every commit.
-  Run `scripts/check` before opening a PR.
+  Use `scripts/check` as the ordinary final local gate and report its scope.
+  A full local gate is not required before every PR; CI provides comprehensive validation before merge.

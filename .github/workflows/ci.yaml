@@ -152,14 +152,18 @@ jobs:
         id: ir-cache
         uses: actions/cache/restore@v6
         with:
-          # v4 covers the three prewarmed requirement sets below.
+          # v5 includes explicit bridge dependencies in the prewarmed sets below.
           # Bump it when that contract changes.
           path: ${{ runner.temp }}/mcp-console-r-cache
           key: >-
-            ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
+            ir-v5-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
           restore-keys: |
+            ir-v5-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
+
+      - name: Validate restored R library links
+        run: python3 scripts/prune-r-cache "$RUNNER_TEMP/mcp-console-r-cache"
 
       - name: Restore Cargo downloads
         id: cargo-downloads
@@ -314,7 +318,7 @@ jobs:
       - name: Run core checks
         env:
           GITHUB_PAT: ${{ github.token }}
-        run: scripts/check-core
+        run: scripts/check-core --full
 
       - name: Smoke-test Python package
         env:
@@ -329,6 +333,11 @@ jobs:
             smoke-wheel \
             dist/*.whl \
             target/release/mcp-console
+          python3 scripts/release.py \
+            smoke-wheel \
+            dist/*.whl \
+            target/release/mcp-console \
+            --without-r
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -377,10 +386,14 @@ jobs:
               --with duckdb \
               --with arrow \
               --with nanoarrow \
+              --with jsonlite \
+              --with pillar \
+              --with tibble \
+              --with utf8 \
               --isolated \
               --vanilla \
               "$@" \
-              -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+              -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow", "jsonlite", "pillar", "tibble", "utf8"))'
           }
           prewarm_r -e 'cat("MCP_CONSOLE_TEST_SSH_R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep), "\n", sep = "", file = Sys.getenv("GITHUB_ENV"), append = TRUE)'
           prewarm_r --with praise
@@ -390,7 +403,7 @@ jobs:
         env:
           GITHUB_PAT: ${{ github.token }}
         # Use the prepared executable; scripts/test also invokes Cargo.
-        run: uv run --script tests/boundaries/_run.py --jobs 6
+        run: uv run --script tests/boundaries/_run.py --full --jobs 6
 
       - name: Check uv source installations
         env:

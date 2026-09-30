@@ -2,9 +2,6 @@
 import _mcp_console as _runtime
 import builtins as _builtins
 import traceback as _traceback
-import json as _json
-import os as _os
-import tempfile as _tempfile
 import unicodedata as _unicodedata
 
 _PREVIEW_ROWS = 20
@@ -15,37 +12,6 @@ _RESPONSE_BYTES = 12 * 1024
 _PROVIDER_R = 0
 _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
-_managed_r = True
-_managed_connection = None
-_temporary = None
-
-
-def configure(request):
-    global _managed_r, _temporary
-    config = _json.loads(request)
-    _managed_r, _temporary = config["managed_r"], config["temporary"]
-    return "null"
-
-
-def sql_connection():
-    global _managed_connection
-    if _managed_r:
-        raise RuntimeError(
-            "The managed SQL provider is R DBI; use r.sql_connection() to access it"
-        )
-    if _managed_connection is None:
-        import duckdb
-
-        storage = _tempfile.mkdtemp(prefix="duckdb-", dir=_temporary)
-        _managed_connection = duckdb.connect(
-            config={
-                "secret_directory": _os.path.join(storage, "stored-secrets"),
-                "temp_directory": _os.path.join(storage, "spill"),
-            }
-        )
-        _managed_connection.execute("SET enable_progress_bar = false")
-    return _managed_connection
-
 
 try:
     _connection
@@ -276,21 +242,13 @@ def _evaluate(source):
 
 
 def _dispatch(source):
-    global _connection
-    if _connection is not None:
+    if _connection is not None or _select_native_connection():
         _evaluate(source)
         return _PROVIDER_HANDLED
-    if not _managed_r:
-        _connection = sql_connection()
-        try:
-            _evaluate(source)
-        finally:
-            _connection = None
-        return _PROVIDER_HANDLED
-    if _restore_managed:
+    if _restore_managed and _native_storage is None:
         use_r()
         return _PROVIDER_MANAGED
-    return _PROVIDER_R
+    return _PROVIDER_HANDLED if _native_storage is not None else _PROVIDER_R
 
 
 def dispatch(source):
@@ -299,4 +257,90 @@ def dispatch(source):
 
 _builtins.console_sql_connection = console_sql_connection
 
-_builtins.sql_connection = sql_connection
+
+def take_managed_restore_request():
+    global _restore_managed
+    requested = _restore_managed
+    _restore_managed = False
+    return requested
+
+
+# Native Python sessions use the same evaluator and preview formatter. Keep
+# their connection setup below the R-present adapter so its traceback lines
+# remain stable in public transcripts.
+import os as _os
+from pathlib import Path as _Path
+
+_native_storage = None
+_native_extension_directory = None
+_native_prepared_source = None
+_managed_connection = None
+
+
+def enable_native():
+    global _native_storage, _native_extension_directory, _native_prepared_source
+
+    _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
+    _native_extension_directory = _os.environ.get(
+        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", ""
+    )
+    _native_prepared_source = {
+        "docker": "image",
+        "docker_sandbox": "template",
+    }.get(_os.environ.get("MCP_CONSOLE_EXECUTION_COMPUTE"))
+    _builtins.sql_connection = sql_connection
+
+
+def _ensure_managed_connection():
+    global _managed_connection
+
+    if _managed_connection is None:
+        try:
+            import duckdb
+        except ImportError as error:
+            message = (
+                "DuckDB is unavailable; add duckdb with requirements.python and control: restart "
+                "in a managed session, install it before starting a selected Python environment, "
+                "or select a DB-API connection with console_sql_connection(connection)"
+            )
+            if _native_prepared_source is not None:
+                message = (
+                    f"DuckDB is unavailable in this prepared {_native_prepared_source}; "
+                    "preinstall duckdb there and start a new server session, or select a "
+                    "DB-API connection with console_sql_connection(connection)"
+                )
+            raise RuntimeError(message) from error
+        config = {
+            "extension_directory": _native_extension_directory,
+            "secret_directory": str(_native_storage / "stored-secrets"),
+            "temp_directory": str(_native_storage / "spill"),
+            "python_enable_replacements": "false",
+        }
+        if _native_prepared_source is not None:
+            config["autoinstall_known_extensions"] = "false"
+        connection = duckdb.connect(":memory:", config=config)
+        connection.execute("SET enable_progress_bar = false")
+        _managed_connection = connection
+    return _managed_connection
+
+
+def _select_native_connection():
+    global _connection
+
+    if _native_storage is None:
+        return False
+    try:
+        _connection = _ensure_managed_connection()
+    except Exception as error:
+        print(f"Error: {error}")
+        return False
+    return True
+
+
+def sql_connection():
+    global _connection
+
+    assert _native_storage is not None
+    if _connection is None:
+        _connection = _ensure_managed_connection()
+    return _connection

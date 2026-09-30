@@ -2,7 +2,9 @@ use super::super::Client;
 use super::super::lifecycle::{
     OldGenerationCommitDisposition, RequirementChangeState, WorkerGeneration,
 };
-use super::requirements::{select_python_activation, validate_python_import_resolution};
+use super::requirements::{
+    RequirementDelta, Requirements, select_python_activation, validate_python_import_resolution,
+};
 use super::state::Environment;
 
 impl Client {
@@ -10,8 +12,8 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
-        duckdb_extensions: Vec<String>,
-    ) -> Result<crate::resolver::ManagedPython, String> {
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+    ) -> Result<super::super::PythonCandidate, String> {
         self.ensure_generation(&generation)?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
             "Python requirements are unavailable with a custom worker".to_string()
@@ -32,6 +34,7 @@ impl Client {
         let crate::worker_protocol::PythonResolveRequest {
             requirements,
             retained_requirements,
+            initialized,
             import_resolution,
         } = request;
         crate::python_requirement::validate_all(&requirements.packages)?;
@@ -50,12 +53,81 @@ impl Client {
                     .to_string(),
             );
         }
+        if (initialized || self.python_only()) && import_resolution.is_none() {
+            if self.requirement_change_state(&generation)?
+                == RequirementChangeState::RestartRequired
+            {
+                return Err("requirement changes are unavailable until session restart".into());
+            }
+            if initialized {
+                RequirementDelta::calculate(
+                    &environment,
+                    Requirements {
+                        python: retained_requirements.packages.clone(),
+                        ..Default::default()
+                    },
+                )?
+                .validate_live_python_additions(&environment)?;
+            }
+            // A live tool addition resolves against the already accepted
+            // executable, just like a reached import. Do not select a newer
+            // interpreter while the worker retains the current library.
+            let (candidate, inspected) = self
+                .resolve_live_native_python(
+                    &generation,
+                    &environment,
+                    requirements,
+                    duckdb_extensions
+                        .as_ref()
+                        .unwrap_or(&environment.duckdb_extensions),
+                )
+                .map_err(|failure| failure.into_message())?;
+            return Ok((
+                candidate.with_retained_requirements(retained_requirements),
+                inspected,
+            ));
+        }
         if let Some(resolution) = import_resolution.as_ref() {
             validate_python_import_resolution(resolution, &retained_requirements)?;
         }
+        if let Some(resolution) = import_resolution.as_ref() {
+            let delta = RequirementDelta::calculate(
+                &environment,
+                Requirements {
+                    python: vec![resolution.distribution.clone()],
+                    ..Default::default()
+                },
+            )?;
+            delta.validate_live_python_additions(&environment)?;
+            let expected = delta.python_candidate.ok_or_else(|| {
+                "automatic Python import did not add a new distribution".to_string()
+            })?;
+            if expected != requirements || expected != retained_requirements {
+                return Err(
+                    "automatic Python import does not match the retained declaration".into(),
+                );
+            }
+            if self.requirement_change_state(&generation)?
+                == RequirementChangeState::RestartRequired
+            {
+                return Err("requirement changes are unavailable until session restart".into());
+            }
+            let (candidate, inspected) = self
+                .resolve_live_native_python(
+                    &generation,
+                    &environment,
+                    expected,
+                    &environment.duckdb_extensions,
+                )
+                .map_err(|failure| failure.into_message())?;
+            return Ok((candidate, inspected));
+        }
         if current.requirements() == &retained_requirements {
             self.ensure_generation(&generation)?;
-            return Ok(current);
+            let inspected = self
+                .inspect_managed_python(&generation, &current, resolver)
+                .map_err(|failure| failure.into_message())?;
+            return Ok((current, inspected));
         }
         match self.requirement_change_state(&generation)? {
             RequirementChangeState::Available => {}
@@ -68,6 +140,7 @@ impl Client {
             requirements,
             resolver,
             environment.r.as_ref(),
+            None,
             |handle| self.register_resolver_stop_handle(&generation, handle),
         ) {
             Ok(managed) => managed,
@@ -78,21 +151,13 @@ impl Client {
         };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
-        let extensions = environment
-            .duckdb_extensions
-            .iter()
-            .cloned()
-            .chain(duckdb_extensions)
-            .collect::<std::collections::BTreeSet<_>>();
-        if environment.r.is_none() && !extensions.is_empty() {
-            self.resolve_python_duckdb_extensions(
-                &generation,
-                &managed,
-                &extensions.into_iter().collect::<Vec<_>>(),
-            )
-            .map_err(super::resolution::EnvironmentResolutionFailure::into_message)?;
-        }
-        Ok(managed.with_retained_requirements(retained_requirements))
+        let inspected = self
+            .inspect_managed_python(&generation, &managed, resolver)
+            .map_err(|failure| failure.into_message())?;
+        Ok((
+            managed.with_retained_requirements(retained_requirements),
+            inspected,
+        ))
     }
 
     pub(in crate::worker_client) fn resolve_runtime_python_version(
@@ -115,11 +180,10 @@ impl Client {
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
-        let managed_r = environment.r.as_ref();
         let result = crate::resolver::execution::resolve_python_version(
             request.constraints,
             resolver,
-            managed_r,
+            environment.r.as_ref(),
             |handle| self.register_resolver_stop_handle(&generation, handle),
         );
         self.clear_resolver_stop_handle(&generation)?;
@@ -132,6 +196,8 @@ impl Client {
         generation: WorkerGeneration,
         requirements: crate::worker_protocol::PythonRequirementManifest,
         candidate: Option<crate::resolver::ManagedPython>,
+        configuration: Option<crate::python::NativePython>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
@@ -151,13 +217,20 @@ impl Client {
             .managed_parts()?
             .0;
         let managed = select_python_activation(Some(current), requirements, candidate)?;
-        self.commit_locked_runtime_python(&generation, &mut environment, managed)
+        self.commit_locked_runtime_python(
+            &generation,
+            &mut environment,
+            managed,
+            configuration,
+            duckdb_extensions,
+        )
     }
 
     pub(super) fn commit_runtime_python(
         &self,
         generation: WorkerGeneration,
         managed: crate::resolver::ManagedPython,
+        configuration: crate::python::NativePython,
     ) -> Result<OldGenerationCommitDisposition, String> {
         let environment = self
             .0
@@ -167,7 +240,13 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        self.commit_locked_runtime_python(&generation, &mut environment, managed)
+        self.commit_locked_runtime_python(
+            &generation,
+            &mut environment,
+            managed,
+            Some(configuration),
+            None,
+        )
     }
 
     fn commit_locked_runtime_python(
@@ -175,7 +254,22 @@ impl Client {
         generation: &WorkerGeneration,
         environment: &mut Environment,
         managed: crate::resolver::ManagedPython,
+        configuration: Option<crate::python::NativePython>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<OldGenerationCommitDisposition, String> {
+        if let Some(configuration) = configuration.as_ref()
+            && (environment.local_runtime.is_none()
+                || environment
+                    .local_runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.python.as_ref())
+                    .is_some_and(|python| !python.managed)
+                || std::path::Path::new(&configuration.embedding.python) != managed.python())
+        {
+            return Err(
+                "worker activation does not match the approved native Python candidate".into(),
+            );
+        }
         let lifecycle = self
             .0
             .lifecycle
@@ -189,6 +283,28 @@ impl Client {
                     .as_mut()
                     .ok_or_else(|| "managed Python environment is unavailable".to_string())?
                     .replace_managed(managed)?;
+                if let Some(configuration) = configuration {
+                    let runtime = environment
+                        .local_runtime
+                        .as_mut()
+                        .expect("candidate runtime validated");
+                    match &mut runtime.python {
+                        Some(python) => *python.selected = configuration,
+                        None => {
+                            runtime.python = Some(crate::local_runtime::Python {
+                                selected: Box::new(configuration),
+                                explicit: None,
+                                managed: true,
+                                duckdb_extension_directory: None,
+                            })
+                        }
+                    }
+                    self.record_accepted_python(environment);
+                }
+                if let Some(duckdb_extensions) = duckdb_extensions {
+                    environment.duckdb_extensions = duckdb_extensions;
+                }
+                self.publish_requirements(environment);
                 Ok(disposition)
             }
             OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),

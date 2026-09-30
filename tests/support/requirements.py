@@ -28,24 +28,18 @@ class Requirement:
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
-NO_R = Requirement(
-    "host without R",
-    shutil.which("R") is None
-    and shutil.which("Rscript") is None
-    and not os.environ.get("R_HOME")
-    and not any(
-        Path(path).exists()
-        for path in (
-            "/usr/lib/R",
-            "/usr/local/lib/R",
-            "/opt/R",
-            "/Library/Frameworks/R.framework",
+# Match runtime selection so invalid R_HOME and broken PATH entries report errors.
+R = Requirement(
+    "R",
+    "R_HOME" in os.environ
+    or (
+        "PATH" in os.environ
+        and any(
+            os.path.lexists(Path(directory) / "R")
+            for directory in os.environ["PATH"].split(os.pathsep)
         )
     ),
-    "requires an execution environment without R executables, libraries, or packages",
-)
-R_RUNTIME = Requirement(
-    "R runtime", not NO_R.available, "requires an available R installation"
+    "requires R_HOME or R on PATH",
 )
 SANDBOX = Requirement(
     "sandbox",
@@ -135,6 +129,16 @@ def command(name: str) -> Requirement:
     )
 
 
+def joblib_processes() -> Requirement:
+    from joblib import cpu_count
+
+    return Requirement(
+        "joblib process pool",
+        cpu_count() >= 2,
+        "requires at least two effective joblib CPUs",
+    )
+
+
 Case = TypeVar("Case", bound=Callable)
 
 
@@ -161,9 +165,22 @@ LINUX_NATIVE = Requirement(
     "requires Linux ELF loading and seccomp",
 )
 
+NON_UTF8_FILENAMES = Requirement(
+    "non-UTF-8 filenames",
+    sys.platform == "linux",
+    "requires Linux; macOS rejects non-UTF-8 filenames",
+)
+
 
 LANDLOCK = Requirement(
     "Landlock filesystem enforcement",
     landlock_available(),
     "requires Landlock with truncate enforcement (ABI 3 or later)",
+)
+
+
+UNPRIVILEGED = Requirement(
+    "unprivileged filesystem access",
+    os.geteuid() != 0,
+    "requires an account without root permission bypass",
 )

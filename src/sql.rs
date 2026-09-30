@@ -1,74 +1,52 @@
 mod py_dbapi;
 mod r_dbi;
 
-use std::cell::{OnceCell, RefCell};
-use std::sync::{
-    OnceLock,
-    atomic::{AtomicBool, Ordering},
-};
-
-static MANAGED_R: OnceLock<bool> = OnceLock::new();
-static EVALUATING: AtomicBool = AtomicBool::new(false);
 thread_local! {
-    static R_BACKEND: OnceCell<RefCell<r_dbi::Backend>> = const { OnceCell::new() };
+    static R_BACKEND: std::cell::OnceCell<std::rc::Rc<r_dbi::Backend>> = const { std::cell::OnceCell::new() };
 }
 
-/// SQL owns provider selection. Its adapters retain their native connection
-/// objects; activating another language never changes the managed provider.
+pub(crate) fn attach_r() -> Result<(), String> {
+    let backend = std::rc::Rc::new(r_dbi::Backend::initialize()?);
+    R_BACKEND
+        .with(|slot| slot.set(backend))
+        .map_err(|_| "R SQL backend already attached".to_string())
+}
+
+/// Worker-facing SQL runtime router.
+///
+/// R DBI connections stay in embedded R, while Python DB-API connections stay
+/// in CPython. Rust chooses the active provider for each SQL cell without
+/// converting connection objects or result rows between the runtimes.
 pub(crate) struct Bridge;
 
 impl Bridge {
-    pub(crate) fn initialize(managed_r: bool) -> Result<Self, String> {
-        MANAGED_R
-            .set(managed_r)
-            .map_err(|_| "SQL provider already selected")?;
-        Ok(Self)
+    pub(crate) fn new() -> Self {
+        Self
+    }
+
+    fn r_backend(&self) -> Result<std::rc::Rc<r_dbi::Backend>, String> {
+        crate::worker::ensure_r()?;
+        R_BACKEND
+            .with(|slot| slot.get().cloned())
+            .ok_or("R SQL backend is unavailable".into())
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        if !managed_r()
-            && let Err(message) = crate::python::ensure_initialized()
-        {
-            crate::worker::emit_diagnostic(&format!("Error: {message}\n"));
+        if !crate::worker::r_available() && !crate::python::ensure_initialized()? {
             return Ok(());
         }
-        EVALUATING.store(true, Ordering::SeqCst);
-        let result = (|| match py_dbapi::dispatch(source)? {
+        match py_dbapi::dispatch(source)? {
             py_dbapi::Provider::Handled => Ok(()),
-            provider => {
-                crate::worker::activate_r()?;
-                R_BACKEND.with(|backend| {
-                    let mut backend = backend.get().expect("active R SQL adapter").borrow_mut();
-                    if matches!(provider, py_dbapi::Provider::Managed) {
-                        backend.restore_managed()?;
-                    }
-                    backend.evaluate(source)
-                })
+            py_dbapi::Provider::Managed => {
+                let r_dbi = self.r_backend()?;
+                r_dbi.restore_managed()?;
+                r_dbi.evaluate(source)
             }
-        })();
-        EVALUATING.store(false, Ordering::SeqCst);
-        result
+            py_dbapi::Provider::R => self.r_backend()?.evaluate(source),
+        }
     }
 }
 
-pub(crate) fn managed_r() -> bool {
-    *MANAGED_R.get().expect("SQL provider selected")
-}
-pub(crate) fn evaluating() -> bool {
-    EVALUATING.load(Ordering::SeqCst)
-}
-
-pub(crate) fn activate_r_adapter() -> Result<(), String> {
-    R_BACKEND.with(|backend| {
-        if backend.get().is_none() {
-            backend
-                .set(RefCell::new(r_dbi::Backend::initialize()?))
-                .map_err(|_| "R SQL adapter already initialized")?;
-        }
-        Ok(())
-    })
-}
-
-pub(crate) fn install_python_runtime() -> Result<(), String> {
+pub(crate) fn install_python_runtime() -> Result<bool, String> {
     py_dbapi::install_runtime()
 }

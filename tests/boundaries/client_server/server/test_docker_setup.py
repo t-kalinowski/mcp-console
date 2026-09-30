@@ -56,6 +56,19 @@ def test_build_and_image_defaults_captured_once(binary: Path) -> Transcript:
         environment = cli_peer(root / "peer")
         docker_config = root / "docker config"
         docker_config.mkdir()
+        selected_context = docker("context", "show").stdout.strip()
+        if selected_context != "default":
+            archive = root / "selected.dockercontext"
+            exported = docker("context", "export", selected_context, str(archive))
+            assert exported.returncode == 0, exported.stderr
+            imported = docker(
+                "context",
+                "import",
+                selected_context,
+                str(archive),
+                env={**os.environ, "DOCKER_CONFIG": str(docker_config)},
+            )
+            assert imported.returncode == 0, imported.stderr
         environment["DOCKER_CONFIG"] = str(docker_config)
         config = configure(
             root,
@@ -203,8 +216,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
         ("workspace", "workspace"),
         ("mount", "bind source path does not exist"),
         ("runtime", "RETICULATE_PYTHON"),
-        ("r_home", "R_HOME must select an existing R installation"),
-        ("python_executable", "container Python probe failed"),
+        ("python_executable", "failed to inspect selected Python executable"),
         ("python_version", "MCP Console requires Python 3.10 or later"),
         ("compatibility", "incompatible Docker bootstrap"),
         ("native_environment", "mcp-console-sandbox: invalid configuration JSON"),
@@ -224,8 +236,6 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["environment"] = {
                     "RETICULATE_PYTHON": "/missing-python"
                 }
-            elif case == "r_home":
-                value["sandbox"]["environment"] = {"R_HOME": "/missing-r"}
             elif case == "python_executable":
                 value["sandbox"]["environment"] = {"RETICULATE_PYTHON": "/etc/hostname"}
             elif case == "python_version":
@@ -240,7 +250,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
 
                         VersionInfo = namedtuple("VersionInfo", "major minor micro releaselevel serial")
                         sys.version_info = VersionInfo(3, 9, 0, "final", 0)
-                        exec(sys.argv[2])
+                        exec(sys.argv[sys.argv.index("-c") + 1])
                         """)
                 )
                 program.chmod(0o755)
@@ -334,7 +344,10 @@ def test_callbacks_cannot_prepare_controller_packages(binary: Path) -> Transcrip
             client.initialize_and_list_tools()
             wait_for_evaluation_output(
                 client,
-                "dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session\ndynamic environment resolution is unavailable\ndynamic environment resolution is unavailable\n",
+                """dynamic environment resolution is unavailable for Docker targets; install packages in the image and start a new server session
+dynamic environment resolution is unavailable
+dynamic environment resolution is unavailable
+""",
                 "disabled container callbacks",
                 r="42",
             )

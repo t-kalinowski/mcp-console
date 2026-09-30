@@ -1,15 +1,15 @@
 ---
-!same-as bare MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   sql: SELECT 42
-  timeout_ms: 0
+  timeout_ms: 10000
 result:
   content:
     - type: text
       text: |-
-
-        [running; poll with an empty send]
+        [input requested: "startup interrupt> "]
+        [waiting for stdin]
   isError: false
 ---
 send:
@@ -20,13 +20,13 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
+          File "<string>", line 109, in initialize_site
           File "<frozen site>", line <line>, in main
           File "<frozen site>", line <line>, in execsitecustomize
-          File "<site-packages>/sitecustomize.py", line 15, in <module>
-            signal.pause()
-          File "<string>", line 92, in _interrupt
+          File "<site-packages>/sitecustomize.py", line 14, in <module>
+            input("startup interrupt> ")
+          File "<string>", line 50, in _console_input
         KeyboardInterrupt
-        Error: Python function `site.main` failed
   isError: false
 ---
 send:

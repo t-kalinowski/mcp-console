@@ -1,5 +1,5 @@
 ---
-!same-as bare MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: answer = 41; answer + 1
@@ -15,10 +15,8 @@ send:
 result:
   content:
     - type: text
-      text: >
-        Error: R is unavailable on the execution host; install R and restart MCP
-        Console to use R cells or requirements.r
-  isError: false
+      text: R cells are unavailable in Python sessions without R
+  isError: true
 ---
 send:
   control: restart
@@ -45,7 +43,5 @@ send:
 result:
   content:
     - type: text
-      text: >
-        Error: R is unavailable on the execution host; install R and restart MCP
-        Console to use R cells or requirements.r
-  isError: false
+      text: R cells are unavailable in Python sessions without R
+  isError: true

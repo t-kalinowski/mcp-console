@@ -1,13 +1,21 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as custom MCP initialization for this execution mode
 ---
 send:
   r: "42"
 result:
   content:
     - type: text
-      text: |-
-        <retained 8388608 startup text bytes>
-        [output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]
-        [output truncated: omitted 12 text bytes and 0 encoded image bytes across 1 event; retained text: .agents/console/sessions/<run ID>/outputs/call-000001.log (12 of 12 omitted text bytes)]
+      text:
+        text_bytes: 8072
+        concat:
+          - repeat: s
+            count: 3968
+          - |
+
+            [output preview: omitted 8380691 rendered UTF-8 bytes; no retained cell log (8388615 raw bytes observed); omitted text is unavailable]
+          - repeat: s
+            count: 3956
+          - |
+            cell output
   isError: false

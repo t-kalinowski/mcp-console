@@ -5,6 +5,13 @@ Explanatory documents cover current behavior and ownership, and protocol documen
 The tool description guide links to the canonical snapshot of the registered tools and schemas.
 Source and public acceptance tests remain the final authority when prose disagrees with the implementation.
 
+## Start here
+
+1. Start with the [quickstart](../README.md#quickstart) and [analysis prompts](../README.md#try-an-analysis), or choose a [Python integration](PYTHON.md).
+2. Follow the [process diagram](ARCHITECTURE.md#process-layout) into the server, relay, worker, and runner ownership sections.
+3. Read the [runtime limitations](BUILTIN_RUNTIME.md#current-limitations), [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits), and [dependency trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
+4. Inspect the [recording formats and rendering behavior](ARCHITECTURE.md#recording-cell-output-and-image-artifacts) before sharing or executing recorded source.
+
 ## Project and console users
 
 - The [project README](../README.md) is the short product overview and current project-status page.
@@ -29,6 +36,9 @@ Source and public acceptance tests remain the final authority when prose disagre
 
 ## Test contributors
 
+- [Development workflow](DEVELOPMENT.md) maps common tasks to public tests and describes the validation ladder, checkout ownership, retained run records, and host concurrency.
+- [Prepared runtime acceptance](PREPARED_RUNTIME_ACCEPTANCE.md) records the bounded cross-target audit for R-free Docker/SBX runtimes and local/SSH regressions.
+- The [task checkpoint template](templates/task-checkpoint.md) keeps temporary progress and the requested stopping condition in an ignored local file; the [resume recipe](DEVELOPMENT.md#resume-from-a-small-checkpoint) explains how to use it.
 - The [boundary test guide](../tests/boundaries/README.md) is the source of truth for process boundaries, selectors, normalization, and snapshot updates.
 - [`AGENTS.md`](../AGENTS.md) contains repository-wide maintenance rules and the source and test navigation map.
 

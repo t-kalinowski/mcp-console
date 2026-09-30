@@ -53,6 +53,17 @@ fn launch(
     let bootstrap: Bootstrap = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid {} bootstrap: {error}", protocol.0))?;
     protocol.compatible(bootstrap.version, &bootstrap.build)?;
+    if compute.is_none() && bootstrap.python.is_some() {
+        return Err("prepared Python probe selection is unavailable for SSH launch".into());
+    }
+    if compute.is_some() {
+        if probe_only && bootstrap.environment.is_some() {
+            return Err("prepared runtime probe cannot accept a worker environment".into());
+        }
+        if !probe_only && (bootstrap.environment.is_none() || bootstrap.python.is_some()) {
+            return Err("prepared worker launch requires its retained runtime environment".into());
+        }
+    }
     if bootstrap.provider == crate::settings::Provider::Compute {
         if compute != Some("docker_sandbox") {
             return Err("compute enforcement requires Docker Sandbox execution".into());
@@ -87,9 +98,17 @@ fn launch(
             .args(["--settings-env", crate::settings::ENVIRONMENT, "--"]);
     }
     if let Some(compute) = compute {
-        super::runtime::configure_runtime(&mut command, &policy, compute)?;
-        if let Some(environment) = &bootstrap.environment {
-            environment.configure(&mut command)?;
+        if probe_only {
+            super::runtime::configure_probe(&mut command, &policy, compute);
+        } else {
+            super::runtime::configure_launch(
+                &mut command,
+                bootstrap
+                    .environment
+                    .as_ref()
+                    .expect("validated prepared environment"),
+                compute,
+            )?;
         }
     } else if let Some(environment) = &bootstrap.environment {
         environment.configure(&mut command)?;
@@ -99,7 +118,6 @@ fn launch(
             .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "0")
             .env("RETICULATE_USE_MANAGED_VENV", "no")
             .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
-            .env_remove("MCP_CONSOLE_PYTHON_EXECUTABLE")
             .env_remove("MCP_CONSOLE_PREINSTALLED");
     }
     command.env_remove(crate::settings::ENVIRONMENT);
@@ -123,7 +141,7 @@ fn launch(
         }
         supervise(
             probe,
-            LaunchMode::Preflight,
+            OutputKind::Preflight,
             true,
             Some(deadline),
             confirmed,
@@ -133,38 +151,58 @@ fn launch(
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
         sandbox: None,
-        version: super::VERSION,
+        version: protocol.version(),
         build: env!("CARGO_PKG_VERSION").into(),
     })
     .map_err(|error| error.to_string())?;
     let mut output = Io::new(duplicate(1)?, None, Some(deadline))?;
     super::write_frame(&mut output, super::HELLO, &hello).map_err(|error| error.to_string())?;
-    if probe_only {
+    // Direct prepared probes and workers have no runner-owned
+    // storage. The existing target launcher owns it until child retirement.
+    let mut temporary = if !native {
+        Some(crate::local_runtime::TemporaryDirectory::create()?)
+    } else {
+        None
+    };
+    if let Some(temporary) = &temporary {
+        command.env("TMPDIR", temporary.path());
+    }
+    let (output_kind, operation_deadline) = if probe_only {
         if native {
             command.arg(&executable);
         }
         command.arg("image-runtime-probe");
-        return supervise(
-            command,
-            LaunchMode::Probe,
-            native,
-            Some(deadline),
-            confirmed,
-            protocol,
-        );
-    }
-    if native {
-        command.arg(&executable);
-    }
-    command.arg("worker-relay").arg(&executable).arg("worker");
-    supervise(
+        if let Some(python) = bootstrap.python {
+            command.args(["--python", &python]);
+        }
+        (OutputKind::Probe, Some(deadline))
+    } else {
+        if native {
+            command.arg(&executable);
+        }
+        command.arg("worker-relay").arg(&executable).arg("worker");
+        (OutputKind::Relay, None)
+    };
+    let result = supervise(
         command,
-        LaunchMode::Relay,
+        output_kind,
         native,
-        None,
+        operation_deadline,
         confirmed,
         protocol,
-    )
+    );
+    let cleanup = temporary
+        .as_mut()
+        .map_or(Ok(()), |temporary| temporary.retire());
+    if cleanup.is_err() {
+        *confirmed = false;
+    }
+    match (result, cleanup) {
+        (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+        (Err(error), _) => Err(error),
+        (_, Err(cleanup)) => Err(cleanup),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 struct Owner {
@@ -218,7 +256,7 @@ impl Drop for Owner {
 }
 
 #[derive(Clone, Copy)]
-enum LaunchMode {
+enum OutputKind {
     Preflight,
     Probe,
     Relay,
@@ -226,7 +264,7 @@ enum LaunchMode {
 
 fn supervise(
     mut command: Command,
-    mode: LaunchMode,
+    output_kind: OutputKind,
     sandbox: bool,
     deadline: Option<Instant>,
     confirmed: &mut bool,
@@ -257,7 +295,7 @@ fn supervise(
     };
     let (cancel_input, input_cancel) = io::pipe().map_err(|error| error.to_string())?;
     let (input_finished, input_done) = io::pipe().map_err(|error| error.to_string())?;
-    let mut input_task = if matches!(mode, LaunchMode::Relay) {
+    let mut input_task = if matches!(output_kind, OutputKind::Relay) {
         let mut source = Io::new(
             duplicate(0)?,
             Some(cancel_input.try_clone().map_err(|e| e.to_string())?),
@@ -280,13 +318,37 @@ fn supervise(
         let _done = output_done;
         let mut source = crate::process_output::RelayOutput::new(stdout, output_exit);
         let mut destination = Io::new(duplicate(1)?, Some(cancel_output), None)?;
+        if matches!(output_kind, OutputKind::Probe) {
+            // The trusted probe emits exactly one bounded frame. Interpreter
+            // stdout is captured separately by the existing native inspector.
+            let mut tag = [0];
+            if source.read(&mut tag).map_err(|error| error.to_string())? == 0 {
+                // Validation failures emit diagnostics and a failed exit. Let
+                // that exit carry the error independently of EOF timing. A
+                // successful probe without a runtime is rejected by its owner.
+                return Ok(());
+            }
+            if tag[0] != super::RUNTIME {
+                return Err("unexpected stdout during prepared runtime probe".into());
+            }
+            let bytes = super::read_payload(&mut source, super::MAX_FRAME, protocol)
+                .map_err(|error| error.to_string())?;
+            let environment = serde_json::from_slice(&bytes)
+                .map_err(|error| format!("invalid prepared runtime result: {error}"))?;
+            super::runtime::validate_result(&environment)?;
+            if source.read(&mut tag).map_err(|error| error.to_string())? != 0 {
+                return Err("unexpected stdout after prepared runtime result".into());
+            }
+            return super::write_frame(&mut destination, super::RUNTIME, &bytes)
+                .map_err(|error| error.to_string());
+        }
         let mut bytes = [0; super::MAX_FRAME];
         loop {
             let count = source.read(&mut bytes).map_err(|error| error.to_string())?;
             if count == 0 {
                 return Ok(());
             }
-            if matches!(mode, LaunchMode::Preflight) {
+            if matches!(output_kind, OutputKind::Preflight) {
                 return Err("unexpected stdout during remote sandbox preflight".into());
             }
             super::write_frame(&mut destination, super::DATA, &bytes[..count])

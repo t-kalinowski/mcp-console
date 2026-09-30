@@ -13,6 +13,10 @@ import sys as _sys
 import threading as _threading
 import traceback as _traceback
 import types as _types
+import _mcp_console_services as _services
+
+
+_mcp_console_private_codes = set()
 
 
 _MCP_CONSOLE_IMPORT_DISTRIBUTIONS = {
@@ -58,7 +62,7 @@ def _mcp_console_explicit_requirement(distribution):
     return f'requirements: {{"python": ["{distribution}"]}}'
 
 
-class _McpConsolePsutilLoader:
+class _McpConsoleModuleLoader:
     def __init__(self, loader, callback):
         self._loader = loader
         self._callback = callback
@@ -367,7 +371,7 @@ if _mcp_console_import_finder is None:
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
-        _McpConsolePsutilLoader,
+        _McpConsoleModuleLoader,
     )
     _sys.meta_path.append(_mcp_console_import_finder)
 
@@ -390,8 +394,6 @@ for _mcp_console_filter in _mcp_console_logger.filters:
 if not _mcp_console_filter_installed:
     _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
 
-_mcp_console_image_state = [()]
-
 
 def _mcp_console_disable_matplotlib_show(
     _setattr=_builtins.setattr,
@@ -403,11 +405,59 @@ def _mcp_console_disable_matplotlib_show(
     return None
 
 
+def _mcp_console_print_exception(
+    error,
+    source_error=False,
+    _traceback=_traceback,
+    _sys=_sys,
+    _private_codes=_mcp_console_private_codes,
+    _services_globals=_services.__dict__,
+    _getattr=_builtins.getattr,
+    _id=_builtins.id,
+    _zip=_builtins.zip,
+):
+    # Build every frame first so filtering retains Python's source positions.
+    rendered = _traceback.TracebackException.from_exception(error, limit=_sys.maxsize)
+
+    def remove_private_frames(exception, summary):
+        if exception is None or summary is None:
+            return
+        if source_error and exception is error:
+            summary.stack = _traceback.StackSummary()
+        else:
+            frames = []
+            traceback = exception.__traceback__
+            for position in summary.stack:
+                assert traceback is not None
+                frame = traceback.tb_frame
+                if (
+                    _id(frame.f_code) not in _private_codes
+                    and frame.f_globals is not _services_globals
+                ):
+                    frames.append(position)
+                traceback = traceback.tb_next
+            assert traceback is None
+            limit = _getattr(_sys, "tracebacklimit", None)
+            if limit is not None:
+                frames = frames[:limit] if limit >= 0 else frames[limit:]
+            summary.stack = _traceback.StackSummary(frames)
+        remove_private_frames(exception.__cause__, summary.__cause__)
+        remove_private_frames(exception.__context__, summary.__context__)
+        for child, child_summary in _zip(
+            _getattr(exception, "exceptions", ()),
+            _getattr(summary, "exceptions", ()) or (),
+        ):
+            remove_private_frames(child, child_summary)
+
+    remove_private_frames(error, rendered)
+    _sys.stderr.write("".join(rendered.format()))
+
+
 def _mcp_console_collect_plots(
     _BaseException=_builtins.BaseException,
     _base64=_base64,
     _io=_io,
-    _print_exc=_traceback.print_exc,
+    _print_exception=_mcp_console_print_exception,
     _sorted=_builtins.sorted,
     _sys=_sys,
 ):
@@ -425,13 +475,13 @@ def _mcp_console_collect_plots(
                 output = _io.BytesIO()
                 figure.savefig(output, format="png")
                 images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
-            except _BaseException:
-                _print_exc()
+            except _BaseException as error:
+                _print_exception(error)
     finally:
         try:
             pyplot.close("all")
-        except _BaseException:
-            _print_exc()
+        except _BaseException as error:
+            _print_exception(error)
     return tuple(images)
 
 
@@ -448,9 +498,11 @@ def _mcp_console_eval_cell(
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
     _collect_plots=_mcp_console_collect_plots,
-    _image_state=_mcp_console_image_state,
+    _publish_plot=_services.publish_plot,
     _sys=_sys,
-    _print_exc=_traceback.print_exc,
+    _print_exception=_mcp_console_print_exception,
+    _ValueError=_builtins.ValueError,
+    _SyntaxError=_builtins.SyntaxError,
 ):
     try:
         module = _parse(source, filename=filename, mode="exec")
@@ -463,24 +515,24 @@ def _mcp_console_eval_cell(
             statements = _compile(module, filename, "exec")
             expression = None
 
-        if statements is not None:
-            _exec(statements, _main.__dict__)
-        if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
-    except _BaseException:
-        _print_exc()
+    except _BaseException as error:
+        if "\0" in source and _isinstance(error, _ValueError):
+            error = _SyntaxError("source code string cannot contain null bytes")
+        _print_exception(error, source_error=_isinstance(error, _SyntaxError))
+    else:
+        try:
+            if statements is not None:
+                _exec(statements, _main.__dict__)
+            if expression is not None:
+                _sys.displayhook(_eval(expression, _main.__dict__))
+        except _BaseException as error:
+            _print_exception(error)
     try:
-        _image_state[0] = _collect_plots()
-    except _BaseException:
-        _print_exc()
-        _image_state[0] = ()
+        for image in _collect_plots():
+            _publish_plot(image)
+    except _BaseException as error:
+        _print_exception(error)
     return None
-
-
-def _mcp_console_take_images(_image_state=_mcp_console_image_state):
-    images = _image_state[0]
-    _image_state[0] = ()
-    return images
 
 
 def _mcp_console_apply_psutil_process_group(
@@ -557,7 +609,7 @@ def _mcp_console_configure_psutil(
 ):
     if not _sandboxed:
         return None
-    # This adapter may run after Console has activated an environment, so
+    # This adapter may run after reticulate has activated an environment, so
     # its optional probe and setup must not abort activation.
     try:
         _apply()
@@ -584,11 +636,11 @@ def _mcp_console_activate_process_environment(
 
 _mcp_console = _types.ModuleType("_mcp_console")
 
-
-def _mcp_console_dispatch(state=_mcp_console.__dict__):
-    operation = state.pop("operation")
-    arguments = state.pop("arguments")
-    return state[operation](*arguments)
+# Native startup configures the import finder through CPython. Reticulate
+# supplies its converted callback without executing Python source here.
+# Keep the embedded-source lines below stable: public traceback transcripts
+# record their line numbers, including the SQL dispatch wrapper following
+# this setup boundary.
 
 
 def _mcp_console_without_automatic_resolution(
@@ -609,8 +661,198 @@ _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
-_mcp_console.take_images = _mcp_console_take_images
-_mcp_console.dispatch = _mcp_console_dispatch
 _sys.modules[_mcp_console.__name__] = _mcp_console
-_builtins.__dict__["_mcp_console_dispatch"] = _mcp_console_dispatch
+# Native startup calls this module directly instead of using a dispatcher.
 _mcp_console_configure_psutil()
+
+
+def _mcp_console_raise_setup_error(_state=_builtins.__dict__):
+    raise _state.pop("_mcp_console_setup_error")
+
+
+_builtins.__dict__["_mcp_console_raise_setup_error"] = _mcp_console_raise_setup_error
+
+
+def _mcp_console_activate_environment(
+    script,
+    executable,
+    _configure_process=_mcp_console_activate_process_environment,
+):
+    import runpy
+
+    runpy.run_path(script)
+    _configure_process(executable)
+    return None
+
+
+_mcp_console.activate_environment = _mcp_console_activate_environment
+
+
+# The host inspection and embedded interpreter must agree on the complete
+# environment, independently of whether a bridge attaches later.
+def _mcp_console_configure_environment(
+    configuration: str,
+    _json=_json,
+    _sys=_sys,
+    _os=_os,
+    _configure_process=_mcp_console_activate_process_environment,
+) -> None:
+    expected = _json.loads(configuration)
+    for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
+        # Framework launchers and embedding can retain different spellings of
+        # the same directory (for example /var and /private/var on macOS).
+        if _os.path.realpath(getattr(_sys, name)) != _os.path.realpath(expected[name]):
+            raise RuntimeError(
+                f"embedded Python {name} differs from the selected environment: "
+                f"{getattr(_sys, name)!r} != {expected[name]!r}"
+            )
+    executable = expected["embedding"]["python"]
+    if not _os.path.samefile(_sys.executable, executable):
+        raise RuntimeError("embedded Python executable differs from host selection")
+    # Match an interactive interpreter: imports follow the current workspace,
+    # including a later os.chdir(), rather than the selected executable's bin.
+    _sys.path.insert(0, "")
+    _configure_process(executable)
+
+
+_mcp_console.configure_environment = _mcp_console_configure_environment
+
+
+# Setup and activation retain exceptions until their Rust caller reports them.
+# The wrapper below routes them through Console's ordered diagnostic stream.
+def _mcp_console_display_setup_exception(
+    _state=_builtins.__dict__,
+    _traceback=_traceback,
+    _stderr=_sys.__stderr__,
+) -> None:
+    error = _state.pop("_mcp_console_setup_error", None)
+    if error is not None:
+        _traceback.print_exception(
+            type(error), error, error.__traceback__, file=_stderr
+        )
+        _stderr.flush()
+
+
+_mcp_console.display_setup_exception = _mcp_console_display_setup_exception
+
+
+def _mcp_console_display_activation_exception(
+    _display=_mcp_console_display_setup_exception,
+    _stderr=_sys.stderr,
+) -> None:
+    # After Ready, diagnostics must precede the preparation result on the
+    # sideband. Capture the installed console stream, independent of fd 2.
+    _display(_stderr=_stderr)
+
+
+_mcp_console.display_activation_exception = _mcp_console_display_activation_exception
+
+
+def _mcp_console_configure_native_child_environment(
+    configuration: str,
+    _json=_json,
+    _os=_os,
+) -> None:
+    expected = _json.loads(configuration)
+    executable = expected["embedding"]["python"]
+    directory = _os.path.dirname(executable)
+    inherited = _os.environ.get("PATH", "")
+    _os.environ["PATH"] = directory + (_os.pathsep + inherited if inherited else "")
+    if expected["prefix"] != expected["base_prefix"]:
+        _os.environ["VIRTUAL_ENV"] = expected["prefix"]
+    else:
+        _os.environ.pop("VIRTUAL_ENV", None)
+
+
+_mcp_console.configure_native_child_environment = (
+    _mcp_console_configure_native_child_environment
+)
+
+
+class _McpConsoleModuleDefaults:
+    """Apply Python-only defaults once, after a module's ordinary loader runs."""
+
+    def __init__(
+        self,
+        sys,
+        threading,
+        finder,
+        loader,
+        disable_show,
+    ) -> None:
+        self._sys = sys
+        self._state = threading.local()
+        self._finder = finder
+        self._loader = loader
+        self._disable_show = disable_show
+        self._pending = {"numpy", "pandas", "matplotlib.pyplot"}
+
+    def apply(self, name: str) -> None:
+        module = self._sys.modules.get(name)
+        if name not in self._pending or module is None:
+            return
+        if name == "numpy":
+            # A startup hook may already have selected a display width.
+            if module.get_printoptions()["linewidth"] == 75:
+                module.set_printoptions(linewidth=200)
+        elif name == "pandas":
+            if module.get_option("display.width") == 80:
+                module.set_option("display.width", 200)
+        elif getattr(module.show, "__module__", None) == "matplotlib.pyplot":
+            self._disable_show()
+        self._pending.remove(name)
+
+    def find_spec(self, fullname: str, path=None, target=None):
+        if fullname not in self._pending or getattr(self._state, "finding", False):
+            return None
+        self._state.finding = True
+        try:
+            # Reuse ordinary finder order. This lookup excludes the resolver;
+            # a missing module reaches it through the original import instead.
+            specification = self._finder._find_spec(
+                self._sys.meta_path, fullname, path, target
+            )
+        finally:
+            self._state.finding = False
+        if specification is not None and hasattr(specification.loader, "exec_module"):
+            specification.loader = self._loader(
+                specification.loader, lambda: self.apply(fullname)
+            )
+        return specification
+
+
+_mcp_console_module_defaults = _McpConsoleModuleDefaults(
+    _sys,
+    _threading,
+    _mcp_console_import_finder,
+    _McpConsoleModuleLoader,
+    _mcp_console_disable_matplotlib_show,
+)
+_sys.meta_path.insert(0, _mcp_console_module_defaults)
+
+
+def _mcp_console_configure_module_defaults(
+    _defaults=_mcp_console_module_defaults,
+) -> None:
+    for name in tuple(_defaults._pending):
+        _defaults.apply(name)
+
+
+_mcp_console.configure_module_defaults = _mcp_console_configure_module_defaults
+
+# The runtime runs with __main__ globals and private locals. Remember its code
+# objects so cell tracebacks can omit our frames without hiding user exec() code.
+_mcp_console_codes_to_record = []
+for _mcp_console_value in tuple(locals().values()):
+    if isinstance(_mcp_console_value, _types.FunctionType):
+        _mcp_console_codes_to_record.append(_mcp_console_value.__code__)
+    elif isinstance(_mcp_console_value, type):
+        for _mcp_console_member in vars(_mcp_console_value).values():
+            if isinstance(_mcp_console_member, _types.FunctionType):
+                _mcp_console_codes_to_record.append(_mcp_console_member.__code__)
+while _mcp_console_codes_to_record:
+    _mcp_console_code = _mcp_console_codes_to_record.pop()
+    _mcp_console_private_codes.add(id(_mcp_console_code))
+    for _mcp_console_constant in _mcp_console_code.co_consts:
+        if isinstance(_mcp_console_constant, _types.CodeType):
+            _mcp_console_codes_to_record.append(_mcp_console_constant)

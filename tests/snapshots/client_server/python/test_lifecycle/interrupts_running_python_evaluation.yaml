@@ -2,16 +2,16 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  python: |
-    import os
-    import tempfile
-    from pathlib import Path
-
-    checkpoint_directory = Path(tempfile.mkdtemp())
-    for name in ("STARTED", "RELEASE"):
-        path = str(checkpoint_directory / name.lower())
-        os.environ[f"MCP_CONSOLE_PYTHON_INTERRUPT_{name}"] = path
-        print(path)
+  r: |
+    python_interrupt_started <- tempfile("python-interrupt-started-")
+    python_interrupt_release <- tempfile("python-interrupt-release-")
+    Sys.setenv(
+      MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
+      MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
+    )
+    # Initialize from R before the Python evaluation checkpoint.
+    invisible(reticulate::py_config())
+    cat(python_interrupt_started, python_interrupt_release, sep = "\n")
 result:
   content:
     - type: text
@@ -91,14 +91,13 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 467, in _mcp_console_eval_cell
-          File "<mcp-console:python:e2>", line 32, in <module>
-          File "<string>", line 92, in _interrupt
+          File "<mcp-console:python:e1>", line 32, in <module>
         KeyboardInterrupt
   isError: false
 ---
 send:
-  python: python_interrupt_state + 1
+  python: |
+    python_interrupt_state + 1
 result:
   content:
     - type: text

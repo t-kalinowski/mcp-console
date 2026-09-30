@@ -1,13 +1,10 @@
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use serde::Serialize;
 
 use super::process::{
-    ResolverProcess, ResolverStopHandle, read_output, resolver_command, stop_resolver, write_input,
+    ResolverProcess, ResolverStopHandle, read_output, resolver_command, write_input,
 };
-
-const PYTHON_DUCKDB_EXTENSION_RESOLVER_SOURCE: &str = include_str!("programs/duckdb_extensions.py");
 
 const MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE: &str = include_str!("programs/duckdb_extensions.R");
 
@@ -21,6 +18,9 @@ pub(crate) fn resolve_duckdb_extensions(
     extensions: &[String],
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(), String> {
+    let input = serde_json::to_vec(&ResolverInput { extensions })
+        .expect("DuckDB extension resolver input should serialize as JSON");
+
     let rscript = managed_r.rscript();
     let mut command = resolver_command(rscript);
     command
@@ -29,31 +29,6 @@ pub(crate) fn resolve_duckdb_extensions(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     managed_r.configure_worker(&mut command)?;
-    resolve_extensions(command, rscript, extensions, on_started)
-}
-
-pub(crate) fn resolve_python_duckdb_extensions(
-    python: &super::ManagedPython,
-    extensions: &[String],
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<(), String> {
-    let mut command = resolver_command(python.python());
-    command
-        .args(["-c", PYTHON_DUCKDB_EXTENSION_RESOLVER_SOURCE])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    resolve_extensions(command, python.python(), extensions, on_started)
-}
-
-fn resolve_extensions(
-    mut command: Command,
-    rscript: &Path,
-    extensions: &[String],
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<(), String> {
-    let input = serde_json::to_vec(&ResolverInput { extensions })
-        .expect("DuckDB extension resolver input should serialize as JSON");
     // DuckDB performs its normal extension installation outside the sandbox.
     // Names are JSON input, never R or SQL source.
     let mut child = command.spawn().map_err(|error| {
@@ -66,11 +41,13 @@ fn resolve_extensions(
     let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
     let stdin = child.stdin.take().expect("resolver stdin is piped");
     let resolver = ResolverProcess::new();
+    resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
-        let _ = stop_resolver(&mut child, rscript, "DuckDB extension");
+        resolver
+            .abort(&mut child, rscript, "DuckDB extension")
+            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
-    resolver.watch_exit(child.id());
     let output = resolver.wait(
         &mut child,
         write_input(stdin, input),
