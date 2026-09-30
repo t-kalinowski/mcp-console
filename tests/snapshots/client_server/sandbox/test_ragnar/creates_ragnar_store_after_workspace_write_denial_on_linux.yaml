@@ -21,10 +21,7 @@ result:
   content:
     - type: text
       text: |
-        Error in file(con, "w") : cannot open the connection
-        In addition: Warning message:
-        In file(con, "w") :
-          cannot open file 'knowledge.ragnar.duckdb': Read-only file system
+        Cannot create knowledge.ragnar.duckdb: Read-only file system
   isError: false
 ---
 send:
