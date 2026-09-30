@@ -37,19 +37,27 @@ result:
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is
-        built in. Managed defaults include SQLite; attach the database read-only
-        with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare
-        additional extensions with
-        `requirements={"action":"add","duckdb":["fts"]}`. SQL results include
-        bounded table previews that abbreviate long text cells; return focused
-        queries and summaries for inspection.
+        built in. Built-in managed defaults include SQLite when dependency
+        preparation is available; sessions without DuckDB preparation require
+        preinstalled extensions. For SQLite, use an available sqlite extension
+        and attach the database read-only with `ATTACH 'path' AS name (TYPE
+        sqlite, READ_ONLY)`. When preparation is supported, prepare additional
+        extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL
+        results include bounded table previews that abbreviate long text cells;
+        return focused queries and summaries for inspection.
 
 
-        Reuse live state when switching: Python reads R globals through
-        `r.name`, R reads Python globals through `py$name`, and managed DuckDB
-        SQL can query R data frames by name. R accesses its SQL connection
+        Language fields describe the configured interface, not installed
+        runtimes. With both runtimes and their bridge available, Python reads R
+        globals through `r.name` and R reads Python globals through `py$name`.
+        R-owned managed DuckDB SQL can query R data frames by name; without R,
+        Python-owned DuckDB requires explicit frame registration with
+        `sql_connection().register(name, frame)`. R accesses its SQL connection
         through `sql_connection()`; R or Python can select a user-owned
-        connection with `console_sql_connection(connection)`.
+        connection with `console_sql_connection(connection)`. Managed dependency
+        preparation requires resolver support on the execution host; bare
+        runtimes require preinstalled packages, and explicitly selected Python
+        uses its preinstalled Python packages.
 
 
         Send one complete `r`, `python`, or `sql` cell per call. Code-bearing
@@ -107,9 +115,9 @@ result:
               or call `install.packages()`. Resolution makes a package available but attaches it only
               through the original `library()` or `require()` call. In a bare runtime, packages must
               already be installed and these operations keep their ordinary R behavior. R source is not
-              scanned in advance. Read Python globals through `py$name`. With managed DuckDB active, R data
-              frames are directly queryable by name from later SQL cells. `sql_connection()` returns the
-              R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
+              scanned in advance. When both runtimes and their bridge are available, read Python globals
+              through `py$name`. With R-owned managed DuckDB active, R data frames are directly queryable
+              by name from later SQL cells. `sql_connection()` returns the R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
               cells with `console_sql_connection(connection)` and restore managed DuckDB with
               `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
               selected connection before disconnecting it. Default-device plots return as PNG images. Keep
@@ -130,12 +138,14 @@ result:
               Use `requirements.python` when the distribution differs from the inferred name, exact registry
               metadata is needed, or the package should be prepared before the cell. A user-selected Python
               environment or bare runtime disables both automatic resolution and managed requirements;
-              import packages already installed there directly. Read R globals and call R functions through
-              `r.name`. Select a user-owned DB-API connection for later SQL cells with
-              `console_sql_connection(connection)` and restore managed DuckDB with
-              `console_sql_connection(None)`. Python data frames are not automatically visible to managed
-              DuckDB SQL; bind them to an R name before querying them there. At cell end, including after a
-              Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
+              import packages already installed there directly. When both runtimes and their bridge are
+              available, read R globals and call R functions through `r.name`. Select a user-owned DB-API
+              connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
+              `console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
+              before querying them. Without R, `sql_connection()` returns the Python-owned connection;
+              register frames explicitly with `sql_connection().register(name, frame)`. At cell end,
+              including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG
+              image and is closed.
               `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
               polling or stdin-only calls.
             type:
@@ -144,13 +154,15 @@ result:
           sql:
             description: |-
               One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
-              active by default and keeps a persistent catalog. A result with columns returns a bounded
-              preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
-              state, and a DuckDB table or view with the same name takes precedence. A user-selected R
-              connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
+              used by default when its adapter and packages are available and keeps a persistent catalog.
+              A result with columns returns a bounded preview. With R-owned managed DuckDB, an unqualified
+              relation name can query a data frame in R global state, and a DuckDB table or view with the
+              same name takes precedence. A user-selected R connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
               them through its connection or cursor protocol. The selected driver supplies its own SQL
               dialect and type mappings. Use DBI from an R cell for commands that require the statement
-              interface. Managed DuckDB conveniences and extension requirements apply only to the managed
+              interface. Without R, managed DuckDB uses Python and requires explicit frame registration
+              through `sql_connection().register(name, frame)`; it does not scan Python globals.
+              Managed DuckDB conveniences and extension requirements apply only to the managed
               backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
               databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
               default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
@@ -183,7 +195,8 @@ result:
               live worker. Empty set means no optional requirements; bare {} is invalid.
               Requirements alone perform standalone preparation. With one cell, they are preconditions of
               that cell. With `control = "restart"`, they are part of the restart transaction, with or
-              without a cell. Only add can accompany interrupt, and only when a cell follows.
+              without a cell. Only add can accompany interrupt, and only when a cell follows; Python-only
+              sessions reject requirements with interrupt before signaling or queuing input.
               Preparation does not import, attach, or load dependencies. On a code-bearing call without
               control, preparation completes before same-call nonempty stdin is queued. Standalone
               preparation cannot queue nonempty stdin. With restart, failure leaves the current worker

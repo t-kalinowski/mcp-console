@@ -53,7 +53,7 @@ send:
 result:
   content:
     - type: text
-      text: "`requirements` with `control = \"interrupt\"` requires a code cell"
+      text: '`requirements` with `control = "interrupt"` requires a code cell'
   isError: true
 ---
 send:

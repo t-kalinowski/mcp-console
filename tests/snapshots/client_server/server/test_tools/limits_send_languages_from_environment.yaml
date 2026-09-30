@@ -68,18 +68,18 @@ result:
         properties:
           r:
             description: >-
-              One complete R cell, if supported by the custom worker.
-              Evaluation, display, packages, graphics, and bridges are supplied
-              by that worker. Omit for polling or stdin-only calls.
+              One complete R cell, if supported by the custom worker. Evaluation,
+              display, packages, graphics, and bridges are supplied by that worker.
+              Omit for polling or stdin-only calls.
             type:
               - string
               - "null"
           sql:
             description: >-
-              One complete SQL cell, if supported by the custom worker. Its
-              selected connection supplies the dialect, packages, and result
-              display. Console does not create a default database for a custom
-              worker. Omit for polling or stdin-only calls.
+              One complete SQL cell, if supported by the custom worker. Its selected
+              connection supplies the dialect, packages, and result display. Console
+              does not create a default database for a custom worker. Omit for polling
+              or stdin-only calls.
             type:
               - string
               - "null"
