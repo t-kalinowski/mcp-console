@@ -299,6 +299,18 @@ class ReleaseScriptTests(unittest.TestCase):
                 }
                 if os.environ.get("FAKE_MCP_STARTUP_HANG"):
                     signal.pause()
+                if failed := os.environ.get("FAKE_MCP_STARTUP_RESULT"):
+                    print(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": startup["id"],
+                                "result": json.loads(failed),
+                            }
+                        ),
+                        flush=True,
+                    )
+                    signal.pause()
                 print(
                     json.dumps(
                         {
@@ -584,6 +596,36 @@ class ReleaseScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("MCP response timed out after 0.01 seconds", result.stderr)
+
+    def test_smoke_wheel_reports_startup_response(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            environment, wheel, cargo_bin = self.smoke_environment(directory)
+            payload = {
+                "content": [{"type": "text", "text": "startup failed: café"}],
+                "isError": True,
+            }
+            environment["FAKE_MCP_STARTUP_RESULT"] = json.dumps(payload)
+            result = self.run_script(
+                "smoke-wheel",
+                str(wheel),
+                str(cargo_bin),
+                "--target",
+                "aarch64-apple-darwin",
+                "--startup-timeout-seconds",
+                "1",
+                "--response-timeout-seconds",
+                "1",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 1)
+            response = {"jsonrpc": "2.0", "id": 2, "result": payload}
+            self.assertIn(
+                "unexpected runtime startup response: "
+                + json.dumps(response, ensure_ascii=False),
+                result.stderr,
+            )
 
     def test_smoke_wheel_bounds_runtime_startup_separately(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
