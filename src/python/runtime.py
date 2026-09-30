@@ -497,6 +497,7 @@ def _mcp_console_eval_cell(
     _exec=_builtins.exec,
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
+    _SystemExit=_builtins.SystemExit,
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _sys=_sys,
@@ -514,8 +515,9 @@ def _mcp_console_eval_cell(
         else:
             statements = _compile(module, filename, "exec")
             expression = None
-
     except _BaseException as error:
+        if _isinstance(error, _SystemExit):
+            raise
         if "\0" in source and _isinstance(error, _ValueError):
             error = _SyntaxError("source code string cannot contain null bytes")
         _print_exception(error, source_error=_isinstance(error, _SyntaxError))
@@ -526,6 +528,8 @@ def _mcp_console_eval_cell(
             if expression is not None:
                 _sys.displayhook(_eval(expression, _main.__dict__))
         except _BaseException as error:
+            if _isinstance(error, _SystemExit):
+                raise
             _print_exception(error)
     try:
         for image in _collect_plots():
@@ -635,12 +639,8 @@ def _mcp_console_activate_process_environment(
 
 
 _mcp_console = _types.ModuleType("_mcp_console")
-
-# Native startup configures the import finder through CPython. Reticulate
-# supplies its converted callback without executing Python source here.
-# Keep the embedded-source lines below stable: public traceback transcripts
-# record their line numbers, including the SQL dispatch wrapper following
-# this setup boundary.
+# Native startup uses CPython; reticulate supplies its converted callback.
+# Keep the following embedded-source lines stable for public SQL tracebacks.
 
 
 def _mcp_console_without_automatic_resolution(
