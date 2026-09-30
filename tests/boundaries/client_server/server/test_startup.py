@@ -176,6 +176,9 @@ def test_reports_discovery_failure_without_losing_mcp(binary: Path) -> Transcrip
         assert "fixture R discovery failed" in str(pending), pending
         assert pending["result"]["isError"] is True, pending
         assert client.send(r="stop('must not retry discovery')") == pending["result"]
+        inspected = client.send(requirements={"action": "get"})
+        assert inspected["isError"] is True, inspected
+        assert "fixture R discovery failed" in str(inspected), inspected
         assert client.request("tools/list")["result"] == client.transcript[2]["result"]
         transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
         assert "fixture R discovery failed" in errors, errors
@@ -189,6 +192,32 @@ def test_failed_handshake_cancels_discovery_with_input_open(binary: Path) -> Tra
         errors = client.stderr.read()
         assert errors, "invalid handshake must report its failure"
         return [{"stderr": errors, "input_remained_open": not client.stdin.closed}]
+
+
+def test_bounds_discovery_failure_during_requirement_inspection(
+    binary: Path,
+) -> Transcript:
+    with discovery_environment() as (environment, reached, release, alive):
+        probe = reached.path.parent / "R"
+        probe.write_text(
+            probe.read_text().replace(
+                "fixture R discovery failed",
+                "fixture R discovery failed " + "x" * (32 * 1024),
+            )
+        )
+        with McpClient(binary, ("serve", "--no-sandbox"), environment) as client:
+            reached.wait("runtime discovery is blocked")
+            assert os.read(alive, 1) == b"1"
+            client.initialize_and_list_tools()
+            release.release()
+            failure = client.send(requirements={"action": "get"})
+            assert failure["isError"] is True, failure
+            content = failure["content"][0]["text"]
+            assert "fixture R discovery failed" in content, failure
+            assert len(content.encode()) <= 8192, len(content.encode())
+            _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+            assert "fixture R discovery failed" in stderr
+            return [{"inspection_error": "bounded to 8 KiB", "isError": True}]
 
 
 def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transcript:

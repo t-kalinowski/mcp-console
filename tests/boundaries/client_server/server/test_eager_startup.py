@@ -3,7 +3,7 @@
 import os
 import sys
 import tempfile
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -18,6 +18,7 @@ from boundaries.client_server.python.test_startup import (
     selected_python,
 )
 from support.assertions import last_result_text
+from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -332,6 +333,108 @@ def test_early_requirements_select_candidate_before_default_preparation(
                 return client.finish()
             finally:
                 proceed.release()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_idle_stdin_preserves_used_worker_and_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        initial = client.send(requirements={"action": "get"})["structuredContent"]
+        client.send(stdin="retained input\n")
+        changed = client.send(requirements={"action": "set"})
+        assert changed["isError"] is True, changed
+        assert "explicit restart" in str(changed), changed
+        assert (
+            client.send(requirements={"action": "get"})["structuredContent"] == initial
+        )
+        client.send(python="input()")
+        assert last_result_text(client) == (
+            "[input requested: \"\"]\n'retained input'\n"
+        ), last_result_text(client)
+        return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(R, PROCESS_EVENTS, command("ir"), command("uv"))
+def test_deferred_requirements_cell_allows_startup_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        site = Path(directory)
+        (site / "sitecustomize.py").write_text(
+            code("""
+            import os
+            import sys
+
+            if sys.argv[0] != "-c" and os.environ.get(
+                "R_SESSION_INITIALIZED", ""
+            ).startswith(f"PID={os.getpid()}:"):
+                assert input("warmup> ") == "warmup input"
+            """)
+        )
+        with startup_fixture(
+            binary,
+            execution,
+            phase="none",
+            server_environment={
+                "PYTHONPATH": str(site),
+                "RETICULATE_PYTHONPATH": str(site),
+            },
+        ) as fixture:
+            client = fixture.client
+            client.response_timeout = 600
+            client.initialize_and_list_tools()
+            client.send(timeout_ms=600_000)
+            assert last_result_text(client) == (
+                '[input requested: "warmup> "]\n[waiting for stdin]'
+            ), last_result_text(client)
+            client.send(
+                r='cat(readLines("stdin", n = 1L)); 42L',
+                requirements={"python": ["py-yaml12"]},
+                stdin="cell input\n",
+                timeout_ms=0,
+            )
+            assert not client.transcript[-1]["result"]["isError"]
+            client.send(timeout_ms=0)
+            assert last_result_text(client) == "[waiting for stdin]", last_result_text(
+                client
+            )
+            client.send(stdin="warmup input\n", timeout_ms=0)
+            client.send(timeout_ms=600_000)
+            assert "cell input[1] 42" in last_result_text(client), last_result_text(
+                client
+            )
+            assert not client.transcript[-1]["result"]["isError"]
+            return client.finish()[3:]
+
+
+@requires(NATIVE_FIXTURES)
+def test_failed_discovery_discards_pending_recording(binary: Path) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        closing(AllocationProfile(Path(directory))) as profile,
+        discovery_environment() as (environment, reached, release, alive),
+    ):
+        environment.update(profile.environment)
+        with McpClient(binary, DIRECT.serve(), environment) as client:
+            reached.wait("runtime discovery is blocked")
+            assert os.read(alive, 1) == b"1"
+            client.initialize_and_list_tools()
+            release.release()
+            failure = client.send(r="stop('must not execute')")
+            assert failure["isError"] is True, failure
+            profile.start()
+            for _ in range(1024):
+                assert client.send(r="stop('must not execute')") == failure
+            client.request("ping")
+            _, largest = profile.stop()
+            # No growing vector of requests survives a retained startup failure.
+            assert largest <= 256 * 1024, largest
+            _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+            assert "fixture R discovery failed" in stderr, stderr
+            return [{"failed_send_count": 1024, "result": failure}, {"stderr": stderr}]
 
 
 if __name__ == "__main__":
