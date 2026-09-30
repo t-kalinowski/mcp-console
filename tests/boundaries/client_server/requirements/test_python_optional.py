@@ -12,7 +12,8 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.python import write_test_wheel
+from support.python import build_test_extension, write_test_wheel
+from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import recording_uv_environment, uv_tool_run_requirements
 from support.suites import run_this_suite
 
@@ -153,6 +154,76 @@ def test_local_module_shadowing_installed_package_resolves_missing_imports(
                     assert Path(package.__file__).samefile("mcp_console_test_shadowed_package.py")
                     package.answer
                     """),
+            )
+            assert last_result_text(client) == "42\n", last_result_text(client)
+            runs = uv_tool_run_requirements(record)
+            assert len(runs) == len(before) + 1, runs
+            assert dependency in runs[-1], runs
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_installed_initializer_leaves_local_module_imports_eligible(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        package = "mcp_console_test_plugin_framework"
+        dependency = "mcp_console_test_settings_dependency"
+        index = write_test_wheel(
+            directory,
+            package,
+            "import local_settings\nanswer = local_settings.answer\n",
+        )
+        write_test_wheel(directory, dependency, "answer = 42\n")
+        (directory / "local_settings.py").write_text(
+            f"import {dependency}\nanswer = {dependency}.answer\n"
+        )
+        environment, record = managed_environment(directory)
+        environment["UV_INDEX"] = index.as_uri()
+        environment["UV_INDEX_STRATEGY"] = "first-index"
+        with McpClient(
+            binary, execution.serve(), environment, current_directory=directory
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "set", "python": [package]})
+            before = uv_tool_run_requirements(record)
+            client.send(
+                python="import mcp_console_test_plugin_framework; mcp_console_test_plugin_framework.answer"
+            )
+            assert last_result_text(client) == "42\n", last_result_text(client)
+            runs = uv_tool_run_requirements(record)
+            assert len(runs) == len(before) + 1, runs
+            assert dependency in runs[-1], runs
+            return client.finish()
+
+
+@requires(NATIVE_FIXTURES)
+@executions(DIRECT, SANDBOXED)
+def test_installed_extension_optional_import_observes_absence(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        package = "mcp_console_test_native_optional"
+        dependency = "mcp_console_test_native_optional_dependency"
+        extension = build_test_extension(directory, "python_optional_import")
+        index = write_test_wheel(directory, package, None, native_module=extension)
+        write_test_wheel(directory, dependency, "answer = 42\n")
+        environment, record = managed_environment(directory)
+        environment["UV_INDEX"] = index.as_uri()
+        environment["UV_INDEX_STRATEGY"] = "first-index"
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "set", "python": [package]})
+            before = uv_tool_run_requirements(record)
+            client.send(
+                python="import mcp_console_test_native_optional as package; bool(package.fallback)"
+            )
+            assert last_result_text(client) == "True\n", last_result_text(client)
+            assert uv_tool_run_requirements(record) == before
+            client.send(
+                python="import mcp_console_test_native_optional_dependency; mcp_console_test_native_optional_dependency.answer"
             )
             assert last_result_text(client) == "42\n", last_result_text(client)
             runs = uv_tool_run_requirements(record)

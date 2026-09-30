@@ -286,7 +286,9 @@ Availability queries such as `importlib.util.find_spec()` report the current env
 Missing imports reached while an installed distribution is initializing use ordinary Python behavior instead of starting host resolution.
 This lets packages catch `ImportError` for optional dependencies without silently adding them to the retained manifest; installed distributions are responsible for declaring their required dependencies.
 A later direct import or a library call after initialization can still resolve a missing dependency, and an explicit `requirements.python` entry can prepare it earlier.
-The finder checks the initializing module's origin against current distribution file metadata; local modules remain eligible for automatic resolution even when their names shadow installed packages.
+The finder checks the nearest initializing module's origin against current distribution file metadata, for both Python modules and native extensions.
+Local modules remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer imports them.
+If an installation's metadata does not record the selected module file, its missing imports remain eligible for automatic resolution; package names alone do not establish ownership.
 
 The finder infers one PyPI distribution from the top-level import name.
 A curated table covers established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.

@@ -115,6 +115,7 @@ class _McpConsoleImportFinder:
         self._psutil_loader = psutil_loader
         self._psutil_callback = None
         self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
+        self._load_code = importlib._bootstrap._load_unlocked.__code__
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
         self._pid = None
@@ -296,31 +297,34 @@ class _McpConsoleImportFinder:
         )
 
     def _is_installed_package_initialization(self):
-        modules = set()
+        # Importlib holds the selected spec throughout both Python and native
+        # initialization, including PyInit before _initializing is set. The
+        # nearest load owns the miss; an installed ancestor cannot own a local
+        # module's imports.
         frame = self._sys._getframe(1)
         while frame is not None:
-            specification = frame.f_globals.get("__spec__")
-            if getattr(specification, "_initializing", False):
-                module = frame.f_globals.get("__name__", "")
-                modules.add((module.partition(".")[0], specification.origin))
+            if frame.f_code is self._load_code:
+                specification = frame.f_locals["spec"]
+                break
             frame = frame.f_back
+        else:
+            return False
+        if specification.origin is None:
+            return False
+        root = specification.name.partition(".")[0]
+        origin = self._os.path.realpath(specification.origin)
         # Consult current metadata rather than caching it across activation:
         # explicit and automatic preparation can add distributions mid-session.
-        if not modules:
-            return False
         distributions = self._metadata.packages_distributions()
-        for root, origin in modules:
-            if origin is None:
-                continue
-            origin = self._os.path.realpath(origin)
-            for name in distributions.get(root, ()):
-                distribution = self._metadata.distribution(name)
-                # A local module can shadow an installed import root. Only the
-                # distribution's recorded files establish ownership.
-                for file in distribution.files or ():
-                    installed = distribution.locate_file(file)
-                    if origin == self._os.path.realpath(str(installed)):
-                        return True
+        for name in distributions.get(root, ()):
+            distribution = self._metadata.distribution(name)
+            # A local module can shadow an installed import root. Only recorded
+            # files establish ownership; file-less or indirect editable metadata
+            # does not identify the selected module and remains eligible.
+            for file in distribution.files or ():
+                installed = distribution.locate_file(file)
+                if origin == self._os.path.realpath(str(installed)):
+                    return True
         return False
 
     def _is_availability_probe(self):

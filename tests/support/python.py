@@ -1,5 +1,8 @@
 """Local Python distributions for public preparation and runtime tests."""
 
+import subprocess
+import sys
+import sysconfig
 import zipfile
 from pathlib import Path
 
@@ -17,23 +20,34 @@ def runtime_source_line(statement: str) -> int:
 
 
 def write_test_wheel(
-    root: Path, name: str, module_source: str | None, *, command: str | None = None
+    root: Path,
+    name: str,
+    module_source: str | None,
+    *,
+    command: str | None = None,
+    native_module: Path | None = None,
 ) -> Path:
     wheels = root / "wheels"
     wheels.mkdir(exist_ok=True)
-    wheel = wheels / f"{name}-1.0.0-py3-none-any.whl"
+    tag = "py3-none-any"
+    if native_module is not None:
+        platform = sysconfig.get_platform().replace("-", "_").replace(".", "_")
+        tag = f"cp39-abi3-{platform}"
+    wheel = wheels / f"{name}-1.0.0-{tag}.whl"
     dist_info = f"{name}-1.0.0.dist-info"
-    entries = {
+    entries: dict[str, str | bytes] = {
         f"{dist_info}/METADATA": (
             f"Metadata-Version: 2.3\nName: {name.replace('_', '-')}\nVersion: 1.0.0\n"
         ),
         f"{dist_info}/WHEEL": (
             "Wheel-Version: 1.0\nGenerator: mcp-console test\n"
-            "Root-Is-Purelib: true\nTag: py3-none-any\n"
+            f"Root-Is-Purelib: {str(native_module is None).lower()}\nTag: {tag}\n"
         ),
     }
     if module_source is not None:
         entries[f"{name}/__init__.py"] = module_source
+    if native_module is not None:
+        entries[f"{name}.abi3.so"] = native_module.read_bytes()
     if command is not None:
         entries[f"{dist_info}/entry_points.txt"] = (
             f"[console_scripts]\n{command} = {name}:main\n"
@@ -46,3 +60,33 @@ def write_test_wheel(
     index.mkdir(parents=True)
     (index / "index.html").write_text(f'<a href="{wheel.as_uri()}">{wheel.name}</a>\n')
     return index.parent
+
+
+def build_test_extension(directory: Path, fixture: str) -> Path:
+    source = (
+        Path(__file__).resolve().parents[1] / "fixtures" / "native" / f"{fixture}.c"
+    )
+    library = directory / f"{fixture}.abi3.so"
+    linker = (
+        ["-bundle", "-undefined", "dynamic_lookup"]
+        if sys.platform == "darwin"
+        else ["-shared"]
+    )
+    subprocess.run(
+        [
+            "cc",
+            *linker,
+            "-fPIC",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            sysconfig.get_path("include"),
+            "-o",
+            str(library),
+            str(source),
+        ],
+        check=True,
+    )
+    return library
