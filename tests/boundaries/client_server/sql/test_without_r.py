@@ -96,13 +96,18 @@ def test_managed_python_requires_home_for_default_extensions(
             env,
             record_in_project=False,
         ) as client:
-            client.process.wait(timeout=60)
-            diagnostic = client.stderr.read()
-            assert client.process.returncode != 0
-            assert (
-                "DuckDB extension preparation requires an absolute HOME" in diagnostic
+            client.initialize_and_list_tools()
+            failure = client.send(sql="SELECT 42 AS answer")
+            assert failure.get("isError"), failure
+            diagnostic = "DuckDB extension preparation requires an absolute HOME at server startup"
+            assert last_result_text(client) == diagnostic, failure
+            assert client.send(requirements={"action": "get"}) == failure
+            client.request("ping")
+            transcript, errors = client.finish_with_standard_error(
+                expected_exit_status=1
             )
-            return [{"stderr": diagnostic}]
+            assert errors == diagnostic + "\n", errors
+            return transcript[3:] + [{"stderr": errors}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -128,15 +133,22 @@ def test_default_extension_failure_preserves_close_failure(
             env,
             record_in_project=False,
         ) as client:
-            assert client.process.wait(timeout=60) != 0
-            assert not client.stdout.read()
-            diagnostic = client.stderr.read()
-            assert marker.exists(), ("resolver did not receive Close", diagnostic)
-            assert diagnostic.strip() == (
+            client.initialize_and_list_tools()
+            failure = client.send(sql="SELECT 42 AS answer")
+            assert failure.get("isError"), failure
+            diagnostic = (
                 "DuckDB extension preparation requires an absolute HOME at server startup; "
                 "resolver input closed"
-            ), diagnostic
-            return [{"stderr": diagnostic}]
+            )
+            assert last_result_text(client) == diagnostic, failure
+            assert marker.exists(), ("resolver did not receive Close", diagnostic)
+            assert client.send(requirements={"action": "get"}) == failure
+            client.request("ping")
+            transcript, errors = client.finish_with_standard_error(
+                expected_exit_status=1
+            )
+            assert errors == diagnostic + "\n", errors
+            return transcript[3:] + [{"stderr": errors}]
 
 
 @executions(DIRECT, SANDBOXED)
