@@ -188,6 +188,8 @@ exec "{shutil.which("uv")}" "$@"
         )
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
             assert marker.read_text() == "host resolver ran"
             marker.unlink()
             client.send(
@@ -1776,6 +1778,12 @@ def test_shutdown_cancels_sans_r_python_preparation(
             try:
                 with McpClient(binary, execution.serve(), env, workspace) as client:
                     client.initialize_and_list_tools()
+                    # MCP readiness precedes discovery. Wait for its retained
+                    # result before measuring the operation's resolver checkpoint.
+                    client.send(requirements={"action": "get"})
+                    assert not client.transcript[-1]["result"].get("isError", False), (
+                        client.transcript[-1]
+                    )
                     if restart:
                         client.send(
                             # fmt: python
@@ -2036,17 +2044,13 @@ False
 def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         (Path(directory) / "python3").symlink_to(sys.executable)
-        result = subprocess.run(
-            [binary, *execution.serve()],
-            env=environment(Path(directory)),
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode != 0
-        assert "require `uv` on PATH" in result.stderr, result.stderr
-        return [{"stderr": result.stderr}]
+        with McpClient(
+            binary, execution.serve(), environment(Path(directory))
+        ) as client:
+            error = client.startup_error()
+            assert "require `uv` on PATH" in error, error
+            client.finish_with_standard_error(expected_exit_status=1)
+            return [{"error": error}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -2059,15 +2063,11 @@ def test_resolver_failure_does_not_fall_back(
         uv.write_text("#!/bin/sh\necho 'fixture uv resolution failed' >&2\nexit 47\n")
         uv.chmod(0o755)
         (path / "python3").symlink_to(sys.executable)
-        env = environment(path)
-        # Keep MCP input open: the resolver failure, rather than input-owner
-        # cancellation, must determine the outcome.
-        with McpClient(binary, execution.serve(), env) as client:
-            client.process.wait(timeout=30)
-            diagnostic = client.stderr.read()
-            assert client.process.returncode != 0
-            assert "fixture uv resolution failed" in diagnostic, diagnostic
-            return [{"stderr": diagnostic}]
+        with McpClient(binary, execution.serve(), environment(path)) as client:
+            error = client.startup_error()
+            assert "fixture uv resolution failed" in error, error
+            client.finish_with_standard_error(expected_exit_status=1)
+            return [{"error": error}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -2079,16 +2079,11 @@ def test_rejects_broken_r_instead_of_selecting_python(
         (path / "python3").symlink_to(sys.executable)
         env = environment(path)
         env["R_HOME"] = str(path / "missing-r")
-        result = subprocess.run(
-            [binary, *execution.serve()],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode != 0 and "Rscript" in result.stderr, result.stderr
-        explicit = result.stderr.replace(str(path), "<fixture>")
+        with McpClient(binary, execution.serve(), env) as client:
+            error = client.startup_error()
+            assert "Rscript" in error, error
+            explicit = error.replace(str(path), "<fixture>")
+            client.finish_with_standard_error(expected_exit_status=1)
         env.pop("R_HOME")
         broken = path / "R"
         broken.write_text(
@@ -2099,18 +2094,11 @@ def test_rejects_broken_r_instead_of_selecting_python(
             """)
         )
         broken.chmod(0o755)
-        result = subprocess.run(
-            [binary, *execution.serve()],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-        assert result.returncode != 0 and "broken discovered R" in result.stderr, (
-            result.stderr
-        )
-        return [{"invalid_R_HOME": explicit}, {"broken_R": result.stderr}]
+        with McpClient(binary, execution.serve(), env) as client:
+            error = client.startup_error()
+            assert "broken discovered R" in error, error
+            client.finish_with_standard_error(expected_exit_status=1)
+            return [{"invalid_R_HOME": explicit}, {"broken_R": error}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -2384,6 +2372,8 @@ def test_inspection_excludes_workspace_and_pythonpath(
         env["PYTHONPATH"] = str(poisoned_path)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
             assert not (workspace / "host-import-executed").exists()
             # Workload imports keep their ordinary semantics inside the worker.
             (workspace / "ctypes.py").unlink()

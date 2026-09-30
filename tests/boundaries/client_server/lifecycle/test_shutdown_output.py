@@ -92,7 +92,10 @@ def test_eof_preserves_output_after_cell_completion(
 def test_eof_preserves_first_send_response(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
+    # Exercise response delivery without racing unrelated runtime discovery,
+    # which MCP EOF is now allowed to cancel before this malformed call runs.
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    client = McpClient(binary, execution.serve("--worker", str(zod)))
     try:
         client.initialize_and_list_tools()
         waiting = client.start_send(r="1", python="1")

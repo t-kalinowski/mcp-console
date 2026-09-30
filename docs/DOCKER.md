@@ -8,7 +8,8 @@ Ordinary Docker retains native provider selection by default; its `external-sand
 
 The MCP server and recordings stay on the controller.
 Each worker generation gets a fresh Console-owned container containing both the relay and built-in worker.
-Docker image setup happens once before MCP readiness.
+Docker image setup happens once in background runtime preparation; MCP initialization and tool discovery can complete while it runs.
+`send` waits for the captured image and its runtime probe before admitting workload operations.
 Console, at least one of R or Python, analysis packages, and any required native companion must come from the image; this mode never prepares packages dynamically.
 
 ## Build an image and start a session

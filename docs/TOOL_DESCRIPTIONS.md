@@ -6,7 +6,7 @@ The security paragraph reflects captured target configuration and the selected p
 Tool construction does not inspect interpreters, create a worker client, or read discovery results.
 For the same explicit configuration, the schema is stable across managed, bare, R-present, and sans-R environments.
 `MCP_CONSOLE_LANGUAGES` filters direct code fields only; execution still checks discovered runtime and preparation capabilities.
-This separation does not change synchronous startup discovery, preparation, or worker lifecycle.
+MCP discovery does not wait for runtime discovery or dependency preparation; the configured tool interface remains stable when that background work completes.
 Review changes in the snapshot and regenerate it intentionally using the [boundary test guide](../tests/boundaries/README.md).
 Ordinary tests check the committed expectation; they do not regenerate it.
 
@@ -26,10 +26,10 @@ Runtime selection is captured for each server session.
 After installing or configuring a missing runtime, start a new MCP Console server session.
 `control="restart"` replaces the worker while retaining the server's runtime selection.
 
-Configuration-only presentation removes a dependency on discovery results, but does not itself defer discovery.
-Server construction still performs discovery and applicable initial preparation before answering `initialize` or `tools/list`.
-A host with no viable runtime can therefore still fail before advertising tools.
-Moving that work off the handshake path is separate startup work.
+Server startup captures and validates launch configuration, including applicable local native-policy preflight, before serving MCP.
+Runtime discovery and applicable initial preparation then run independently of `initialize`, `tools/list`, and `ping`.
+A host with no viable runtime can still advertise the configured interface; `send` reports the retained preparation failure.
+See [server readiness](SEND_OPERATIONS.md#server-readiness) for waiting, cancellation, and recovery.
 
 ## Writing guidance
 

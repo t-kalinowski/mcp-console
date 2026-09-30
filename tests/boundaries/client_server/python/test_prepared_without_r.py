@@ -475,6 +475,8 @@ def inspection_boundary(binary: Path, provider: str) -> list:
         binary, provider, setup=lambda root, value: probe_setup(root, value, "noisy")
     ) as (client, root):
         client.initialize_and_list_tools()
+        discovery = client.send(requirements={"action": "get"})
+        assert not discovery.get("isError", False), discovery
         assert (root / "probe-observed").exists(), client._diagnostics()
         assert not (root / "worker-started").exists(), (
             "probe started the analysis worker"
@@ -549,11 +551,14 @@ def unusable_library_client(binary: Path, provider: str):
 )
 def test_rejects_unusable_python_library(binary: Path, execution: Execution) -> list:
     with unusable_library_client(binary, execution.name) as client:
+        error = client.startup_error()
+        assert "selected Python embedding library is unusable" in error, error
+        client.stdin.close()
         assert client.stdout.read(timeout=40) == ""
         errors = client.stderr.read(timeout=40)
         assert "selected Python embedding library is unusable" in errors, errors
         assert client.process.wait(timeout=5) != 0
-    return [{"unusable_library_rejected_before_mcp_readiness": True}]
+    return [{"unusable_library_rejected_before_worker_startup": True}]
 
 
 def rejected_probes(binary: Path, provider: str) -> list:
@@ -598,6 +603,8 @@ def rejected_probes(binary: Path, provider: str) -> list:
         with prepared(
             binary, provider, python=selected, workload=workload, setup=setup
         ) as (client, root):
+            client.startup_error()
+            client.stdin.close()
             assert client.stdout.read(timeout=40) == ""
             errors = client.stderr.read(timeout=40)
             assert expected in errors, errors
@@ -606,7 +613,7 @@ def rejected_probes(binary: Path, provider: str) -> list:
             records.append(
                 {
                     "mode": mode,
-                    "rejected_before_mcp_readiness": True,
+                    "rejected_before_worker_startup": True,
                     "owned_probe_retired": True,
                 }
             )

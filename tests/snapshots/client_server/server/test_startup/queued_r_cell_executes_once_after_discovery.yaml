@@ -1,0 +1,24 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+---
+send:
+  r: started <- get0("started", ifnotfound = 0L) + 1L; started
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false
+---
+input:
+  method: ping
+result: {}
+---
+send:
+  r: started
+result:
+  content:
+    - type: text
+      text: |
+        [1] 1
+  isError: false

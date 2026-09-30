@@ -63,6 +63,8 @@ def test_command_selection_and_ordinary_failures(
                 configure(root, root, prefix)
                 log.write_text("")
                 with McpClient(binary, ("serve",), environment, root) as client:
+                    client.startup_error()
+                    client.stdin.close()
                     assert client.process.wait(timeout=12) != 0
                     assert not client.stdout.read()
                     errors = client.stderr.read()

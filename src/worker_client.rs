@@ -12,8 +12,6 @@ mod output;
 mod child_exit;
 #[cfg(unix)]
 mod events;
-#[cfg(unix)]
-mod startup;
 
 #[cfg(unix)]
 #[path = "worker_client/unix.rs"]
@@ -384,19 +382,6 @@ impl Client {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
-    ) -> Result<Self, String> {
-        #[cfg(unix)]
-        return startup::with_input_owner(|on_started| {
-            Self::builtin_with(no_sandbox, sandbox_settings, python, on_started)
-        });
-        #[cfg(not(unix))]
-        Self::builtin_with(no_sandbox, sandbox_settings, python, &|_| Ok(()))
-    }
-
-    fn builtin_with(
-        no_sandbox: bool,
-        sandbox_settings: crate::settings::SandboxSettings,
-        python: Option<PathBuf>,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         #[cfg(not(unix))]
@@ -600,6 +585,7 @@ impl Client {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         if matches!(target.compute, crate::settings::Compute::Host {}) {
             return Self::ssh(
@@ -607,18 +593,17 @@ impl Client {
                 no_sandbox,
                 policy,
                 python,
+                started,
             );
         }
-        let session = startup::with_input_owner(|started| {
-            crate::target_session::Session::setup_compute(
-                target,
-                roots,
-                &policy,
-                no_sandbox,
-                python.as_deref(),
-                started,
-            )
-        })?;
+        let session = crate::target_session::Session::setup_compute(
+            target,
+            roots,
+            &policy,
+            no_sandbox,
+            python.as_deref(),
+            started,
+        )?;
         let mut client = Self::with_arguments(
             std::env::current_exe().map_err(|error| error.to_string())?,
             Vec::new(),
@@ -659,9 +644,10 @@ impl Client {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         configured_python: Option<PathBuf>,
+        started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         #[cfg(unix)]
-        let (discovery, duckdb_extensions) = startup::with_input_owner(|started| {
+        let (discovery, duckdb_extensions) = (|| {
             let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
             let extensions = if let Some(native) = &discovery.native {
                 native.selection.prepare_default_duckdb_extensions(
@@ -679,7 +665,7 @@ impl Client {
                 Default::default()
             };
             Ok((discovery, extensions))
-        })
+        })()
         .map_err(|error| {
             // No Client owns shutdown if startup fails after discovery.
             if let Some(preparation) = &session.preparation
@@ -690,7 +676,7 @@ impl Client {
             error
         })?;
         #[cfg(not(unix))]
-        let discovery = session.discover(&policy, configured_python.as_deref(), &|_| Ok(()))?;
+        let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
         #[cfg(not(unix))]
         let duckdb_extensions = Default::default();
         let preparation = session

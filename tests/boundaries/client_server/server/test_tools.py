@@ -280,7 +280,13 @@ def _initializes_and_lists_tools(
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
-            transcript = client.finish()
+            # Preserve the handshake-only snapshot, then verify the same tools
+            # after background preparation has completed.
+            transcript = list(client.transcript)
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
+            assert client.request("tools/list")["result"] == transcript[2]["result"]
+            client.finish()
             if ssh:
                 transcript = json.loads(
                     json.dumps(transcript).replace(

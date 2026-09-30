@@ -170,6 +170,8 @@ def test_pull_policies_and_tag_capture(binary: Path) -> Transcript:
             try:
                 with McpClient(binary, ("serve",), environment, root) as client:
                     if policy == "never" and not present:
+                        client.startup_error()
+                        client.stdin.close()
                         assert client.stdout.read(timeout=20) == ""
                         diagnostics = client.stderr.read(timeout=20)
                         assert "No such image" in diagnostics
@@ -283,14 +285,9 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["filesystem"] = {"kind": "native-runner-must-validate"}
             config.write_text(json.dumps(value))
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.start_request(
-                    "initialize",
-                    protocolVersion="2025-11-25",
-                    capabilities={},
-                    clientInfo={"name": "docker-setup-test", "version": "1"},
-                )
-                response = client.stdout.readline(timeout=30)
-                assert response == "", (case, response)
+                client.startup_error()
+                client.stdin.close()
+                assert client.stdout.read(timeout=30) == "", case
                 error = client.stderr.read(timeout=30)
                 assert expected in error, error
                 assert client.process.wait(timeout=5) != 0
@@ -306,7 +303,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
             assert not (root / "missing-bind").exists()
             records.append(
                 {
-                    "rejected_before_readiness": case,
+                    "rejected_before_worker_startup": case,
                     "container_absent": True,
                     "stderr": error.replace(str(root), "<controller>"),
                 }
