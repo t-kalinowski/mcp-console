@@ -94,7 +94,7 @@ With R present, managed preparation retains the existing reticulate and SQL adap
 An explicit Python path disables managed Python additions and automatic Python imports, while managed R and DuckDB remain available.
 
 When R is absent, Console starts the native Python and SQL runtime.
-With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB, and the remote host prepares the default SQLite extension before MCP readiness; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
+With no explicit `python`, remote uv prepares NumPy, pandas, and DuckDB, and the remote host prepares the default SQLite extension before runtime readiness; missing uv and resolution failures are reported without selecting a PATH interpreter instead.
 The native worker uses its Python and DB-API adapters without starting R, reticulate, or R DBI.
 An explicit `python` path bypasses uv and uses packages, DuckDB, and custom DB-API connections already available in that environment.
 R cells and R requirements are unavailable.
@@ -131,7 +131,7 @@ Version 7 removes the separate native preparation request and carries live-inter
 Version 6 accepts Python activation-failure receipts during preparation and idle callbacks as well as cells; older servers would stop that worker.
 Launch and preparation also require a matching Console package version.
 The optional `selected_python` field constrains live managed Python preparation to the running executable, locally or over SSH.
-Older peers fail compatibility checks before MCP readiness or worker startup.
+Older peers fail compatibility checks before runtime readiness or worker startup.
 Resolver programs, temporary files, interpreter checks, Matplotlib preparation, and caches belong to the execution host.
 Python resolution retains the existing treatment of `UV_OFFLINE` and `UV_NO_CACHE`.
 Sans-R preparation selects remote uv from startup `PATH` and ignores `RETICULATE_UV`; R-present selection retains its existing behavior.
@@ -168,7 +168,8 @@ Dependency installation, including during discovery, has no 30-second deadline; 
 An ordinary cell may return running while defaults or automatic dependencies resolve; explicit preparation retains its ordering and wait semantics.
 `send.timeout_ms` never cancels a resolver.
 Interrupt and cancellation messages identify the preparation operation and reach its remote resolver process group, independently of the worker connection.
-Closing MCP input cancels discovery before readiness and active preparation during shutdown.
+MCP initialization and tool discovery do not wait for remote discovery; `send` waits for its result.
+Closing MCP input cancels pending discovery and active preparation during shutdown.
 The remote preparation owner observes input closure independently of blocked protocol output and cancels and reaps its resolver groups.
 
 Evaluation, polling, stdin, output, images, interrupts, shutdown, and replacement use the existing relay protocol and generation rules.

@@ -129,13 +129,14 @@ def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
             with McpClient(binary, ("serve",), environment, root) as client:
                 client.initialize_and_list_tools()
                 tools.append(client.transcript[-1]["result"]["tools"])
+                client.send(requirements={"action": "get"})
                 client.finish()
     assert tools[0] == tools[1]
     return [{"same_configured_tools_for_r_and_python_targets": True}]
 
 
 @requires(POSIX)
-def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list:
+def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> list:
     records = []
     for mode, expected in (
         ("probe-version", "expected protocol 7"),
@@ -161,6 +162,9 @@ def test_invalid_probe_results_retire_before_mcp_readiness(binary: Path) -> list
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
+                tool_error = client.startup_error()
+                assert expected in tool_error, tool_error
+                client.stdin.close()
                 assert client.stdout.read(timeout=30) == ""
                 diagnostics = client.stderr.read(timeout=30)
                 assert expected in diagnostics, diagnostics

@@ -1,8 +1,9 @@
 mod execution;
+mod startup;
 use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
@@ -84,8 +85,7 @@ impl Languages {
 
 #[derive(Clone)]
 struct ConsoleServer {
-    worker: crate::worker_client::Client,
-    transcript: crate::transcript::Transcript,
+    startup: startup::Startup,
     deliveries: crate::server_transport::ResponseDeliveries,
     languages: Languages,
     tool_router: ToolRouter<Self>,
@@ -299,6 +299,7 @@ fn default_timeout_ms() -> u64 {
 
 impl ConsoleServer {
     fn new(
+        input_closed: InputClosed,
         worker: Option<PathBuf>,
         relay: Option<PathBuf>,
         no_sandbox: bool,
@@ -308,6 +309,9 @@ impl ConsoleServer {
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
+        if worker.is_none() && relay.is_some() {
+            return Err("a custom relay requires a custom worker".into());
+        }
         // Presentation has no dependency on the client or its discovered capabilities.
         let tool_router = Self::configured_tool_router(
             languages,
@@ -316,40 +320,40 @@ impl ConsoleServer {
             no_sandbox,
             target.as_ref().map(|(target, _)| target),
         );
-        let worker = if let Some((target, roots)) = target {
-            crate::worker_client::Client::target(
-                target,
-                roots,
-                no_sandbox,
-                sandbox_settings,
-                python,
-            )?
-        } else {
-            match (worker, relay) {
-                (Some(program), relay) => {
-                    crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
-                }
-                (None, None) => {
-                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings, python)?
-                }
-                (None, Some(_)) => {
-                    return Err("a custom relay requires a custom worker".to_string());
-                }
-            }
-        };
-        let target = worker.target_metadata();
-        let dynamic_resolution = worker.dynamic_resolution();
-        let transcript = crate::transcript::Transcript::with_target(
-            recording_directory,
-            dynamic_resolution,
-            worker.python_preparation(),
-            !worker.python_only(),
-            target.clone(),
-        );
-        worker.record_with(transcript.clone());
+        let startup = startup::Startup::new(input_closed, move |started| {
+            let worker = if let Some((target, roots)) = target {
+                crate::worker_client::Client::target(
+                    target,
+                    roots,
+                    no_sandbox,
+                    sandbox_settings,
+                    python,
+                    started,
+                )?
+            } else if let Some(program) = worker {
+                crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
+            } else {
+                crate::worker_client::Client::builtin(
+                    no_sandbox,
+                    sandbox_settings,
+                    python,
+                    started,
+                )?
+            };
+            let target = worker.target_metadata();
+            let dynamic_resolution = worker.dynamic_resolution();
+            let transcript = crate::transcript::Transcript::with_target(
+                recording_directory,
+                dynamic_resolution,
+                worker.python_preparation(),
+                !worker.python_only(),
+                target.clone(),
+            );
+            worker.record_with(transcript.clone());
+            Ok(startup::Runtime { worker, transcript })
+        });
         Ok(Self {
-            worker,
-            transcript,
+            startup,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
             languages,
             tool_router,
@@ -493,6 +497,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
     )]
     async fn send(
         &self,
+        Extension(runtime): Extension<Arc<startup::Runtime>>,
         Extension(call): Extension<crate::transcript::Call>,
         Extension(delivery): Extension<crate::server_transport::ResponseDeliveryCall>,
         Parameters(SendArguments {
@@ -524,10 +529,10 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
             }
         };
         if let Some(cell) = cell.as_ref() {
-            if self.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
+            if runtime.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
                 return Err("R cells are unavailable in Python sessions without R".into());
             }
-            if !self.worker.python_available()
+            if !runtime.worker.python_available()
                 && matches!(cell.language, crate::cell::Language::Python)
             {
                 return Err(
@@ -562,7 +567,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                             .into(),
                     );
                 }
-                let snapshot = self.worker.inspect_requirements();
+                let snapshot = runtime.worker.inspect_requirements();
                 let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");
                 let text = if json.len() <= 8 * 1024 {
                     json
@@ -595,7 +600,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                 }
             },
         );
-        let response = self
+        let response = runtime
             .worker
             .send(crate::worker_client::SendRequest {
                 cell,
@@ -606,7 +611,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                     SendControl::Restart => crate::worker_client::SendControl::Restart,
                 }),
                 timeout: Duration::from_millis(timeout_ms),
-                transcript: self.transcript.clone(),
+                transcript: runtime.transcript.clone(),
                 call_id: call.id(),
             })
             .await
@@ -614,7 +619,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
         Ok(response_to_tool_result(
             response,
             &call,
-            &self.transcript,
+            &runtime.transcript,
             &self.deliveries,
             &delivery,
         ))
@@ -707,7 +712,33 @@ impl ServerHandler for ConsoleServer {
             }
         };
         context.extensions.insert(delivery.clone());
-        let transcript = self.transcript.clone();
+        let runtime = tokio::select! {
+            biased;
+            _ = context.ct.cancelled() => {
+                return Err(ErrorData::internal_error("request cancelled before execution", None));
+            }
+            runtime = self.startup.ready() => runtime,
+        };
+        let runtime = match runtime {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                let (content, _, _) =
+                    crate::worker_client::Response::tool_error(error).into_parts();
+                let content = content
+                    .into_iter()
+                    .map(|content| {
+                        let crate::worker_client::Content::Text(text) = content else {
+                            unreachable!("preparation errors contain only text");
+                        };
+                        ContentBlock::text(text)
+                    })
+                    .collect();
+                operation.complete();
+                return Ok(CallToolResult::error(content).into());
+            }
+        };
+        let transcript = runtime.transcript.clone();
+        context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
         let request = Arc::new(request);
         let recording_request = Arc::clone(&request);
@@ -772,56 +803,105 @@ pub async fn run(
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target, python)
-        .map_err(std::io::Error::other)?;
-    let worker = server.worker.clone();
-    let deliveries = server.deliveries.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
+    let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
+    let server = ConsoleServer::new(
+        input_closed.clone(),
+        worker,
+        relay,
+        no_sandbox,
+        sandbox_settings,
+        target,
+        python,
+    )
+    .map_err(std::io::Error::other)?;
+    let startup = server.startup.clone();
+    let deliveries = server.deliveries.clone();
     let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
     let transport = crate::server_transport::ServerTransport::new(
         input,
         tokio::io::stdout(),
         server.deliveries.clone(),
     );
-    let service = server.serve(transport).await?;
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
             .await
             .unwrap_or_else(|_| Instant::now());
         let deadline = shutdown_started + WORKER_SHUTDOWN_GRACE;
-        let result = worker.shutdown(deadline).await;
+        let cancellation = startup.cancel().await;
+        let result = match startup.ready().await {
+            Ok(runtime) => runtime.worker.shutdown(deadline).await,
+            Err(error) => startup.finish_failed_preparation(error),
+        };
         deliveries
             .settle_before_close(Instant::now() + WORKER_SHUTDOWN_GRACE)
             .await;
+        cancellation?;
         result?;
         Ok::<(), String>(())
     };
 
-    let (result, shutdown) = tokio::join!(service.waiting(), shutdown);
-    shutdown.map_err(std::io::Error::other)?;
-    result?;
+    tokio::pin!(shutdown);
+    const CLOSED_BEFORE_INITIALIZATION: &str = "server startup cancelled because MCP input closed";
+    let service = tokio::select! {
+        result = server.serve(transport) => match result {
+            Ok(service) => service,
+            Err(error) => {
+                shutdown.await.map_err(std::io::Error::other)?;
+                return Err(match error {
+                    rmcp::service::ServerInitializeError::ConnectionClosed(_) =>
+                        std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
+                    error => error.into(),
+                });
+            }
+        },
+        result = &mut shutdown => {
+            result.map_err(std::io::Error::other)?;
+            return Err(std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into());
+        }
+    };
+    // Once owned preparation/worker retirement and response settling finish,
+    // a blocked protocol write must not keep the process alive.
+    tokio::select! {
+        result = service.waiting() => {
+            shutdown.await.map_err(std::io::Error::other)?;
+            result?;
+        },
+        result = &mut shutdown => result.map_err(std::io::Error::other)?,
+    }
     Ok(())
 }
 
-/// Reports EOF to the worker owner while otherwise behaving like its input.
-/// Dropping the reader also wakes the owner by closing the one-shot channel.
+#[derive(Clone)]
+struct InputClosed(Arc<Mutex<Option<oneshot::Sender<Instant>>>>);
+
+impl InputClosed {
+    fn close(&self) {
+        if let Some(sender) = self.0.lock().expect("input closure lock").take() {
+            let _ = sender.send(Instant::now());
+        }
+    }
+}
+
+/// Reports EOF or reader loss to the owner, sharing one notification with the
+/// non-consuming startup observer.
 struct ShutdownReader<R> {
     inner: R,
-    input_closed: Option<oneshot::Sender<Instant>>,
+    input_closed: InputClosed,
 }
 
 impl<R> ShutdownReader<R> {
-    fn new(inner: R, input_closed: oneshot::Sender<Instant>) -> Self {
+    fn new(inner: R, input_closed: InputClosed) -> Self {
         Self {
             inner,
-            input_closed: Some(input_closed),
+            input_closed,
         }
     }
+}
 
-    fn report_input_closed(&mut self) {
-        if let Some(input_closed) = self.input_closed.take() {
-            let _ = input_closed.send(Instant::now());
-        }
+impl<R> Drop for ShutdownReader<R> {
+    fn drop(&mut self) {
+        self.input_closed.close();
     }
 }
 
@@ -836,11 +916,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for ShutdownReader<R> {
         let poll = Pin::new(&mut self.inner).poll_read(context, buffer);
         match poll {
             Poll::Ready(Ok(())) if had_capacity && buffer.filled().len() == filled => {
-                self.report_input_closed();
+                self.input_closed.close();
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(error)) => {
-                self.report_input_closed();
+                self.input_closed.close();
                 Poll::Ready(Err(error))
             }
             poll => poll,

@@ -145,6 +145,8 @@ def test_provider_reports_missing_paths_and_runtime_readiness(binary: Path) -> l
                 options["command"] = ["/console-executable-does-not-exist"]
             configure(root, **options)
             with McpClient(binary, ("serve",), environment, root) as client:
+                client.startup_error()
+                client.stdin.close()
                 assert client.stdout.read(timeout=35) == ""
                 errors = client.stderr.read(timeout=20)
                 assert client.process.wait(timeout=5) != 0

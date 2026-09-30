@@ -57,10 +57,11 @@ def creates_ragnar_store_after_workspace_write_denial(
             output = normalize_duckdb_progress(client)
             assert "knowledge.ragnar.duckdb" in output
             assert denial in output
-            for directory in (str(workspace.resolve()), str(workspace)):
-                output = output.replace(directory, "<workspace>")
-            client.transcript[-1]["result"]["content"][0]["text"] = output
             assert not (workspace / "knowledge.ragnar.duckdb").exists()
+            # Record the denied operation without ragnar/DuckDB error formatting.
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                f"Cannot create knowledge.ragnar.duckdb: {denial}\n"
+            )
 
             # fmt: r
             r = code(r"""

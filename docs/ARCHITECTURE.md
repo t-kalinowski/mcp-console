@@ -76,7 +76,7 @@ It reports operation completion only after its resolver groups retire.
 The local server retains requirements, candidates, and activation decisions; remote execution never enters controller runtime discovery or resolver processes.
 See [SSH execution](SSH.md) for configuration and prerequisites.
 
-For a Docker target, the controller resolves an immutable image once and probes a disposable container before MCP readiness.
+For a Docker target, the controller resolves an immutable image once and probes a disposable container before runtime readiness.
 Every generation then follows:
 
 ```text
@@ -93,7 +93,7 @@ Image setup is separate from generation lifetime and does not reread a build con
 See [Docker execution](DOCKER.md).
 
 For `compute.kind: docker_sandbox`, `sandbox.provider` resolves to `compute` independently of the user's `no_sandbox` flag.
-The controller captures a prepared digest-qualified template and probes it in a disposable owned VM before MCP readiness:
+The controller captures a prepared digest-qualified template and probes it in a disposable owned VM before runtime readiness:
 
 ```text
 controller MCP server → local ownership helper → sbx create / exec -i
@@ -135,7 +135,18 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
 The [capability-advertising decision](TOOL_DESCRIPTIONS.md#supported-capabilities-and-host-availability) keeps supported, configured capabilities visible even when the execution host lacks a runtime.
 Tool construction uses captured configuration, while operation validation uses discovered availability.
-`ConsoleServer::new` still constructs the worker client and completes discovery and applicable initial preparation before serving MCP; configuration-only presentation is not yet a fast-handshake implementation.
+`ConsoleServer::new` captures the tool router and starts one background runtime-preparation task in `src/server/startup.rs`.
+Launch configuration and applicable local native-policy preflight remain synchronous; `initialize`, `tools/list`, and `ping` do not wait for interpreter, resolver, or target discovery.
+All `send` calls await the same retained preparation result before entering runtime operation handling; there is no second initialization path or automatic preparation retry.
+Worker startup and language initialization remain demand-driven.
+
+The MCP input owner cancels background preparation on EOF or failed handshake using the active resolver/provider stop handle.
+During preparation, a non-consuming pipe/socket observer detects closure even when queued input or a blocked initialization response prevents the protocol reader from reaching EOF.
+After owned cleanup and response settling, a blocked protocol write cannot hold the server open.
+A cancelled tool request stops only its own wait, not the shared preparation task.
+The existing resolver and target owners retain their retirement allowances; a worker SIGTERM grace is not a deadline for microVM retirement.
+Preparation failures remain available as bounded tool errors, while failed preparation and unconfirmed retirement retain shutdown diagnostics.
+The runtime transcript is created after successful discovery, so failed initial preparation and calls cancelled while awaiting it have no runtime transcript.
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.
@@ -355,10 +366,10 @@ The GIL and a Rust mutex cannot serialize arbitrary native threads with these mu
 Local discovery uses `src/local_runtime.rs`; SSH discovery uses the remote preparation owner and returns structured native configuration to the controller.
 When R is absent, the preparation owner resolves the default Python manifest, including DuckDB; an explicit `python` setting instead selects an existing environment without uv.
 When `HOME` is absolute, the managed path captures DuckDB's shared home extension directory and passes it to the host resolver and worker through internal configuration.
-Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before MCP readiness.
+Managed Python startup requires an absolute `HOME` to prepare the default SQLite extension before runtime readiness.
 The Python DB-API adapter uses that directory when captured and otherwise leaves DuckDB's default, while keeping spill and stored secrets in the worker's private temporary directory.
 Without either selection or uv, startup reports an error rather than searching PATH for Python.
-The execution-host preparation owner inspects the selected executable before MCP readiness and each candidate before retirement or live activation.
+The execution-host preparation owner inspects the selected executable before runtime readiness and each candidate before retirement or live activation.
 The session retains the managed result and inspected environment identity, independently of reticulate's user-selection variable.
 The same coordinator constructs an absent R integration, native Python runtime, and SQL router without an R DBI backend.
 Native CPython path initialization follows the selected executable's virtualenv configuration; shared setup verifies its prefixes and configures child-process selection.

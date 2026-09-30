@@ -31,6 +31,8 @@ static atomic_flag waiters_lock = ATOMIC_FLAG_INIT;
 static atomic_uintptr_t contended_mutex = 0;
 static atomic_bool completion_claimed = false;
 static atomic_bool paused = false;
+static atomic_bool replacement_unlocked = false;
+static _Thread_local bool acquired_contended_mutex = false;
 static _Thread_local bool released = false;
 
 static void notify(const char *name);
@@ -123,6 +125,7 @@ static void observe_contention(struct Waiter *waiter, uintptr_t mutex) {
 
 static void after_contention(struct Waiter *waiter) {
     if (waiter->mutex == 0) return;
+    if (waiter->mutex == atomic_load(&contended_mutex)) acquired_contended_mutex = true;
     lock_waiters();
     struct Waiter **entry = &waiters;
     while (*entry != waiter) entry = &(*entry)->next;
@@ -144,7 +147,19 @@ static void await_release(const char *name) {
 
 static void after_unlock(uintptr_t mutex) {
     if (getpid() != server_pid ||
-        mutex != atomic_load(&contended_mutex) || atomic_exchange(&paused, true)) return;
+        mutex != atomic_load(&contended_mutex) || atomic_load(&paused)) return;
+    // Let the restart acquire and release the worker before the cancelling
+    // evaluation returns from its native unlock. Both schedules are valid.
+    if (!acquired_contended_mutex) {
+        await_release("MCP_CONSOLE_TEST_COMPLETION_UNLOCK_RETURN");
+    }
+    // The thread that acquired the contended lock is the restart. Only the
+    // previous owner may claim the old evaluation's return checkpoint.
+    bool pause = !acquired_contended_mutex && !atomic_exchange(&paused, true);
+    if (acquired_contended_mutex && !atomic_exchange(&replacement_unlocked, true)) {
+        notify("MCP_CONSOLE_TEST_COMPLETION_REPLACEMENT_UNLOCKED");
+    }
+    if (!pause) return;
     notify("MCP_CONSOLE_TEST_COMPLETION_UNLOCKED");
     await_release("MCP_CONSOLE_TEST_COMPLETION_RELEASE");
     released = true;

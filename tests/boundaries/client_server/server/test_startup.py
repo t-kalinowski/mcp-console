@@ -1,0 +1,267 @@
+#!/usr/bin/env -S uv run --script
+
+import json
+import os
+import select
+import shlex
+import subprocess
+import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from support.checkpoints import FifoCheckpoint
+from support.assertions import last_result_text
+from support.client import McpClient
+from support.normalization import code
+from support.records import Transcript
+from support.r import r_test_environment
+from support.requirements import R, requires
+from support.resolvers import bare_runtime_environment
+from support.suites import run_this_suite
+
+
+@contextmanager
+def discovery_environment(
+    *, r_home: Path | None = None
+) -> Iterator[tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, int]]:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        reached = FifoCheckpoint.create(root / "reached")
+        release = FifoCheckpoint.create(root / "release")
+        alive = root / "alive"
+        os.mkfifo(alive)
+        alive_reader = os.open(alive, os.O_RDONLY | os.O_NONBLOCK)
+        probe = root / "R"
+        probe.write_text(
+            code(r"""
+                #!/bin/sh
+                exec 3>ALIVE
+                printf 1 >&3
+                printf 1 > REACHED
+                /bin/dd bs=1 count=1 < RELEASE > /dev/null 2>&1
+                RESULT
+                """)
+            .replace(
+                "RESULT",
+                "printf '%s\\n' " + shlex.quote(str(r_home))
+                if r_home is not None
+                else "printf 'fixture R discovery failed\\n' >&2\nexit 17",
+            )
+            .replace("ALIVE", shlex.quote(str(alive)))
+            .replace("REACHED", shlex.quote(str(reached.path)))
+            .replace("RELEASE", shlex.quote(str(release.path)))
+        )
+        probe.chmod(0o755)
+        environment = bare_runtime_environment(os.environ.copy(), root / "library")
+        environment["R_PROFILE_USER"] = os.devnull
+        environment.pop("R_HOME", None)
+        environment["PATH"] = str(root)
+        try:
+            yield environment, reached, release, alive_reader
+            assert select.select([alive_reader], [], [], 5)[0], (
+                "discovery survived MCP closure"
+            )
+            assert os.read(alive_reader, 1) == b"", "probe lifetime pipe must close"
+        finally:
+            os.close(alive_reader)
+            release.close()
+            reached.close()
+
+
+@contextmanager
+def gated_discovery(
+    binary: Path, *, r_home: Path | None = None
+) -> Iterator[tuple[McpClient, FifoCheckpoint]]:
+    with discovery_environment(r_home=r_home) as (environment, reached, release, alive):
+        with McpClient(
+            binary, ("serve", "--no-sandbox"), environment, response_timeout=5
+        ) as client:
+            reached.wait("runtime discovery is blocked")
+            assert os.read(alive, 1) == b"1"
+            yield client, release
+
+
+def test_closed_input_cancels_discovery_with_blocked_stdout(binary: Path) -> Transcript:
+    with discovery_environment() as (environment, reached, release, alive):
+        read_output, write_output = os.pipe()
+        os.set_blocking(write_output, False)
+        try:
+            while True:
+                os.write(write_output, b"x" * 4096)
+        except BlockingIOError:
+            pass
+        os.set_blocking(write_output, True)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                environment["MCP_CONSOLE_HOME"] = directory
+                process = subprocess.Popen(
+                    [binary, "serve", "--no-sandbox"],
+                    env=environment,
+                    cwd=directory,
+                    stdin=subprocess.PIPE,
+                    stdout=write_output,
+                    stderr=subprocess.PIPE,
+                )
+                assert process.stdin is not None and process.stderr is not None
+                try:
+                    reached.wait("runtime discovery is blocked")
+                    assert os.read(alive, 1) == b"1"
+                    process.stdin.write(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": 1,
+                                "method": "initialize",
+                                "params": {
+                                    "protocolVersion": "2025-03-26",
+                                    "capabilities": {},
+                                    "clientInfo": {
+                                        "name": "startup-test",
+                                        "version": "1",
+                                    },
+                                },
+                            }
+                        ).encode()
+                        + b"\n"
+                    )
+                    process.stdin.close()
+                    assert process.wait(timeout=5) != 0
+                    assert (
+                        b"server startup cancelled because MCP input closed"
+                        in process.stderr.read()
+                    )
+                finally:
+                    if process.poll() is None:
+                        release.release()
+                        process.kill()
+                        process.wait(timeout=5)
+                    process.stderr.close()
+        finally:
+            os.close(write_output)
+            os.close(read_output)
+    return [{"closed_input_retired_discovery_with_blocked_stdout": True}]
+
+
+def test_closed_input_before_handshake_reports_cancelled_preparation(
+    binary: Path,
+) -> Transcript:
+    with gated_discovery(binary) as (client, _):
+        client.stdin.close()
+        assert client.process.wait(timeout=5) != 0
+        assert client.stdout.read() == ""
+        errors = client.stderr.read()
+        assert errors == "server startup cancelled because MCP input closed\n", errors
+        return [{"stderr": errors}]
+
+
+def test_initializes_while_runtime_discovery_is_blocked(binary: Path) -> Transcript:
+    with gated_discovery(binary) as (client, _):
+        client.initialize_and_list_tools()
+        client.request("ping")
+        return client.finish()
+
+
+def test_reports_discovery_failure_without_losing_mcp(binary: Path) -> Transcript:
+    with gated_discovery(binary) as (client, release):
+        client.initialize_and_list_tools()
+        pending = client.start_send(r="stop('must not execute')")
+        ping = client.start_request("ping")
+        client.receive(ping)
+        release.release()
+        client.receive(pending)
+        assert "fixture R discovery failed" in str(pending), pending
+        assert pending["result"]["isError"] is True, pending
+        assert client.send(r="stop('must not retry discovery')") == pending["result"]
+        assert client.request("tools/list")["result"] == client.transcript[2]["result"]
+        transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
+        assert "fixture R discovery failed" in errors, errors
+        return transcript + [{"stderr": errors}]
+
+
+def test_failed_handshake_cancels_discovery_with_input_open(binary: Path) -> Transcript:
+    with gated_discovery(binary) as (client, _):
+        client.start_request("tools/list")
+        assert client.process.wait(timeout=5) != 0
+        errors = client.stderr.read()
+        assert errors, "invalid handshake must report its failure"
+        return [{"stderr": errors, "input_remained_open": not client.stdin.closed}]
+
+
+def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transcript:
+    with gated_discovery(binary) as (client, release):
+        client.initialize_and_list_tools()
+        pending = client.start_send(r="stop('cancelled request must not execute')")
+        client.notify("notifications/cancelled", requestId=pending["id"])
+        client.request("ping")
+        release.release()
+        result = client.send(r="stop('failed discovery must not execute')")
+        assert result["isError"], result
+        assert "fixture R discovery failed" in str(result), result
+        transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
+        assert "fixture R discovery failed" in errors, errors
+        return transcript + [{"stderr": errors}]
+
+
+@requires(R)
+def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    with gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
+        client,
+        release,
+    ):
+        client.initialize_and_list_tools()
+        pending = client.start_send(
+            r='started <- get0("started", ifnotfound = 0L) + 1L; started'
+        )
+        client.request("ping")
+        release.release()
+        client.receive(pending)
+        assert pending["result"]["content"] == [{"type": "text", "text": "[1] 1\n"}], (
+            pending
+        )
+        client.send(r="started")
+        assert last_result_text(client) == "[1] 1\n", last_result_text(client)
+        return client.finish()
+
+
+@requires(R)
+def test_cancelled_cell_is_not_replayed_after_discovery(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    with gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
+        client,
+        release,
+    ):
+        client.initialize_and_list_tools()
+        pending = client.start_send(r="cancelled_cell_ran <- TRUE")
+        client.notify("notifications/cancelled", requestId=pending["id"])
+        client.request("ping")
+        release.release()
+        client.send(r='exists("cancelled_cell_ran", inherits = FALSE)')
+        assert last_result_text(client) == "[1] FALSE\n", last_result_text(client)
+        return client.finish()
+
+
+def test_first_send_uses_background_runtime(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment = os.environ.copy()
+        environment.pop("R_HOME", None)
+        environment["PATH"] = temporary
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox", "-c", "python=" + json.dumps(sys.executable)),
+            environment,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(python="started = globals().get('started', 0) + 1\nstarted")
+            assert last_result_text(client) == "1\n", last_result_text(client)
+            client.send(python="started")
+            assert last_result_text(client) == "1\n", last_result_text(client)
+            return client.finish()
+
+
+if __name__ == "__main__":
+    run_this_suite(__file__)

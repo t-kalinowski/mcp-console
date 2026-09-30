@@ -9,13 +9,29 @@ A control-only interrupt may overlap a pending call, including requirement prepa
 `requirements.action="get"` may also overlap active evaluation or resolution; it reads a committed server snapshot and consumes no output.
 An empty `stdin` string contributes no bytes; the table refers to nonempty input.
 
+## Server readiness
+
+After launch configuration and applicable local native-policy validation, MCP initialization, tool discovery, and pings can complete while runtime discovery and initial environment preparation run in the background.
+The tool schema and descriptions come from captured configuration and do not change when that work finishes.
+An advertised language is not proof that its runtime is installed.
+
+Every `send`, including requirement inspection and control-only calls, waits for the same initial preparation result.
+This wait precedes the operation ordering below and is outside `timeout_ms`.
+A waiting call does not start a worker, enqueue its stdin, or evaluate its cell.
+MCP cancellation discards that call without cancelling shared preparation; the client may submit another call.
+Closing the MCP connection cancels preparation and waits for its existing ownership and retirement protocol.
+
+A failed initial preparation is retained: subsequent `send` calls report the same failure rather than retrying setup, and tool discovery remains available.
+Correct the execution-host setup and start a new MCP server session to retry.
+Once preparation succeeds, the ordinary worker-startup and restart rules below apply.
+
 ## Validation before actions
 
 Request decoding and structural checks precede interruption, preparation, stdin enqueue, and evaluation.
 These checks reject incompatible `get` fields, payloads with `reset`, replacement actions with interrupt, unknown fields, wrong field types, multiple code fields, disabled languages, unavailable requirements, standalone preparation with nonempty stdin, and interrupt plus requirements without a cell.
 
-[SSH targets](SSH.md) discover capability on the execution host before advertising the schema.
-Managed targets use the same preparation ordering below; bare targets expose only `requirements.action="get"` and reject supplied preparation before control, stdin, or evaluation side effects.
+[SSH targets](SSH.md) discover capability on the execution host in the same background preparation phase.
+Managed targets use the preparation ordering below; bare targets allow only `requirements.action="get"` at execution and reject supplied preparation before control, stdin, or evaluation side effects.
 
 Local and SSH sans-R sessions managed through uv on the execution host expose Python and DuckDB extension requirements and the ordinary action/version/cutoff fields; R requirements remain unavailable.
 They support standalone preparation and preparation with a Python or SQL cell before first worker startup, and explicit restart preparation with or without a cell.
@@ -61,7 +77,7 @@ For `set` and `reset`, a changed declaration with a live worker requires explici
 Without a live worker, standalone replacement resolves and retains the complete candidate without starting a worker.
 Omitted `set` fields are empty; `reset` restores startup defaults.
 An unchanged replacement skips preparation, while an explicit restart still takes effect.
-`get` bypasses evaluation and preparation admission, reads the committed snapshot, and returns immediately without starting a worker or collecting output.
+`get` waits for initial runtime discovery, then bypasses evaluation and preparation admission, reads the committed snapshot, and returns without starting a worker or collecting output.
 It rejects code, stdin, control, and requirement payloads.
 See [requirements actions](REQUIREMENTS.md#inspecting-and-replacing-requirements).
 

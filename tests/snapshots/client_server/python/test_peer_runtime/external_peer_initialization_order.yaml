@@ -3,6 +3,7 @@ send:
   python: |
     import os
     from pathlib import Path
+
     hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
     hooks.mkdir(exist_ok=True)
     _ = (hooks / "sitecustomize.py").write_text(
@@ -129,6 +130,7 @@ send:
   python: |
     import os
     from pathlib import Path
+
     hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
     hooks.mkdir(exist_ok=True)
     _ = (hooks / "sitecustomize.py").write_text(

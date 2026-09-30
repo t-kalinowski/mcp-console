@@ -24,9 +24,12 @@ from support.suites import run_this_suite
 
 def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) -> list:
     with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
-        assert client.stdout.readline(timeout=20) == "", (
-            "invalid R_HOME reached readiness"
+        tool_error = client.startup_error()
+        assert "R_HOME" in tool_error and str(root / "missing-r") in tool_error, (
+            tool_error
         )
+        client.stdin.close()
+        assert client.stdout.read(timeout=20) == ""
         error = client.stderr.read(timeout=20)
         assert "R_HOME" in error and str(root / "missing-r") in error, error
         assert client.process.wait(timeout=5) != 0
@@ -78,6 +81,8 @@ def test_retains_discovered_r_home_across_generations(
         environment["RETICULATE_PYTHON"] = sys.executable
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
+            # MCP readiness precedes runtime discovery; wait for the captured selection.
+            client.send(requirements={"action": "get"})
             r.write_text(
                 code("""
                     #!/bin/sh
@@ -107,6 +112,8 @@ def test_retains_r_absence_across_generations(
         environment.update(PATH=str(commands), RETICULATE_PYTHON=sys.executable)
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
+            # MCP readiness precedes runtime discovery; wait for the captured selection.
+            client.send(requirements={"action": "get"})
             r = commands / "R"
             r.write_text(
                 code(f"""

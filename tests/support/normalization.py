@@ -42,7 +42,7 @@ def normalize_python_resolution_error(
 def normalize_python_traceback_paths(error: str) -> str:
     replacements = (
         (
-            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/loader\.py")',
+            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/(?:loader|call)\.py")',
             r"\1<reticulate>/python/\2",
         ),
         (
