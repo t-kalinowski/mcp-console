@@ -1778,6 +1778,12 @@ def test_shutdown_cancels_sans_r_python_preparation(
             try:
                 with McpClient(binary, execution.serve(), env, workspace) as client:
                     client.initialize_and_list_tools()
+                    # MCP readiness precedes discovery. Wait for its retained
+                    # result before measuring the operation's resolver checkpoint.
+                    client.send(requirements={"action": "get"})
+                    assert not client.transcript[-1]["result"].get("isError", False), (
+                        client.transcript[-1]
+                    )
                     if restart:
                         client.send(
                             # fmt: python
