@@ -9,8 +9,96 @@ from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+def test_launches_r_children_from_interpreter_identity(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code(r"""
+                arguments <- commandArgs()
+                stopifnot(
+                  file.exists(arguments[[1L]]),
+                  identical(arguments[-1L], c("--quiet", "--interactive", "--vanilla")),
+                  identical(commandArgs(TRUE), character())
+                )
+                environment_names <- c(
+                  "R_HOME",
+                  "R_ARCH",
+                  "R_SHARE_DIR",
+                  "R_INCLUDE_DIR",
+                  "R_DOC_DIR"
+                )
+                script <- tempfile("identity λ ", fileext = ".R")
+                result <- tempfile("identity result λ ", fileext = ".rds")
+                writeLines(
+                  c(
+                    "arguments <- commandArgs()",
+                    "saveRDS(list(arguments = arguments, user = commandArgs(TRUE),",
+                    "  environment = Sys.getenv(c('R_HOME', 'R_ARCH', 'R_SHARE_DIR',",
+                    "    'R_INCLUDE_DIR', 'R_DOC_DIR'))), commandArgs(TRUE)[[1L]])"
+                  ),
+                  script,
+                  useBytes = TRUE
+                )
+                user <- c(result, "two words", "λ", "--literal")
+                for (command in c(
+                  file.path(R.home("bin"), "R"),
+                  file.path(R.home("bin"), "Rscript"),
+                  arguments[[1L]]
+                )) {
+                  options <- if (basename(command) == "Rscript") {
+                    c("--vanilla", script)
+                  } else {
+                    c("--slave", "--vanilla", paste0("--file=", script), "--args")
+                  }
+                  output <- system2(
+                    command,
+                    shQuote(c(options, user)),
+                    stdout = TRUE,
+                    stderr = TRUE
+                  )
+                  stopifnot(is.null(attr(output, "status")), identical(output, character()))
+                  child <- readRDS(result)
+                  # The frontends encode spaces in --file; direct exec/R does not.
+                  file_argument <- paste0(
+                    "--file=",
+                    if (identical(command, arguments[[1L]])) {
+                      script
+                    } else {
+                      gsub(" ", "~+~", script, fixed = TRUE)
+                    }
+                  )
+                  expected <- if (basename(command) == "Rscript") {
+                    c("--no-echo", "--no-restore", "--vanilla", file_argument, "--args", user)
+                  } else {
+                    c("--slave", "--vanilla", file_argument, "--args", user)
+                  }
+                  stopifnot(
+                    identical(child$arguments[[1L]], arguments[[1L]]),
+                    identical(child$arguments[-1L], expected),
+                    identical(child$user, user),
+                    identical(child$environment, Sys.getenv(environment_names))
+                  )
+                }
+                unlink(c(script, result))
+                cat(
+                  "R interpreter and children retain executable, arguments, and environment\n"
+                )
+                """),
+        )
+        assert last_tool_text(client) == (
+            "R interpreter and children retain executable, arguments, and environment\n"
+        ), last_tool_text(client)
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
