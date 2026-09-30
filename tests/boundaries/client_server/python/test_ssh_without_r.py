@@ -563,6 +563,8 @@ def test_connection_loss_blocks_replacement_and_retires_native_worker(
 ) -> Transcript:
     with ssh_session(binary, execution) as (client, remote, _):
         client.initialize_and_list_tools()
+        discovery = client.send(requirements={"action": "get"})
+        assert not discovery.get("isError", False), discovery
         path = remote / "worker-alive"
         gate = remote / "worker-gate"
         os.mkfifo(path)
