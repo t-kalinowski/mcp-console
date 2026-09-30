@@ -1,0 +1,3 @@
+---
+protocol_available_during_setup: true
+container_creation_started: false

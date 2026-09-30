@@ -3,6 +3,30 @@
 use std::io::{self, PipeReader, Read};
 use std::os::fd::AsRawFd;
 use std::process::ChildStdout;
+use std::sync::Arc;
+
+/// Session-owned diagnostic bytes. An empty publication closes this producer.
+pub(crate) type Diagnostics = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
+pub(crate) fn forward<T: Read + AsRawFd>(
+    source: T,
+    exited: PipeReader,
+    output: Diagnostics,
+) -> io::Result<()> {
+    let mut source = RelayOutput::new(source, exited);
+    let result = (|| {
+        let mut buffer = [0; 8192];
+        loop {
+            let count = source.read(&mut buffer)?;
+            if count == 0 {
+                return Ok(());
+            }
+            output(&buffer[..count]);
+        }
+    })();
+    output(&[]);
+    result
+}
 
 pub(crate) struct RelayOutput<T = ChildStdout> {
     stdout: T,

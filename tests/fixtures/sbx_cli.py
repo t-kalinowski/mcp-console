@@ -54,6 +54,9 @@ signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 if args == ["version"]:
+    if mode == "diagnostics-gate":
+        print("provider startup\n" * 20000, end="", file=sys.stderr, flush=True)
+        gate()
     print(
         "sbx version: v0.42.0 fixture"
         if mode == "unsupported-version"

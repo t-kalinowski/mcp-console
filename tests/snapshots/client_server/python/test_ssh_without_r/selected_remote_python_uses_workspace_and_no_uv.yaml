@@ -1,5 +1,13 @@
 ---
 send:
+  r: 42L
+result:
+  content:
+    - type: text
+      text: "[R cells are unavailable in Python sessions without R]"
+  isError: true
+---
+send:
   sql: SELECT 42 AS value
 result:
   content:

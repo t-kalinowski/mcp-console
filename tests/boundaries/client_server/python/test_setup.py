@@ -334,7 +334,7 @@ def test_rejects_startup_environment_mutation(
         assert result["isError"] is True, result
         traceback = (
             "Traceback (most recent call last):\n"
-            '  File "<string>", line 705, in _mcp_console_configure_environment\n'
+            '  File "<string>", line 709, in _mcp_console_configure_environment\n'
             "RuntimeError: embedded Python prefix differs from the selected environment: "
             f"'changed-by-startup-hook' != {sys.prefix!r}\n"
         )

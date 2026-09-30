@@ -23,7 +23,9 @@ send:
 result:
   content:
     - type: text
-      text: "[worker sideband read failed: worker sideband closed]"
+      text: >-
+        [runtime initialization failed: worker sideband read failed: worker
+        sideband closed; restart required]
   isError: true
 ---
 send:
@@ -46,7 +48,9 @@ send:
 result:
   content:
     - type: text
-      text: "[worker sideband read failed: worker sideband closed]"
+      text: >-
+        [runtime initialization failed: worker sideband read failed: worker
+        sideband closed; restart required]
   isError: true
 ---
 send:

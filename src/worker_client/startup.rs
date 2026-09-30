@@ -24,6 +24,7 @@ pub(super) struct Discovered {
 
 pub(super) fn local(
     python: Option<PathBuf>,
+    diagnostics: crate::process_output::Diagnostics,
     on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
 ) -> Result<Discovered, String> {
     #[cfg(not(unix))]
@@ -39,6 +40,7 @@ pub(super) fn local(
         if !crate::local_runtime::Selection::r_is_present() {
             let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
                 crate::resolver::preparation::Mode::PythonOnly,
+                diagnostics,
                 on_started,
             )?;
             let resolver = crate::resolver::execution::PythonConfiguration::Local {
@@ -80,6 +82,7 @@ pub(super) fn local(
         } else {
             let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
                 crate::resolver::preparation::Mode::R,
+                diagnostics,
                 on_started,
             )?;
             use std::os::unix::ffi::OsStringExt;
@@ -152,12 +155,14 @@ pub(super) fn ssh(
     mut session: crate::ssh::Session,
     policy: crate::settings::SandboxSettings,
     configured_python: Option<PathBuf>,
+    diagnostics: crate::process_output::Diagnostics,
     on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
 ) -> Result<Discovered, String> {
     #[cfg(unix)]
     let (discovery, duckdb_extensions) =
         (|started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>| {
-            let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
+            let discovery =
+                session.discover(&policy, configured_python.as_deref(), diagnostics, started)?;
             let extensions = if let Some(native) = &discovery.native {
                 native.selection.prepare_default_duckdb_extensions(
                     native.python.as_ref(),
@@ -185,7 +190,10 @@ pub(super) fn ssh(
             error
         })?;
     #[cfg(not(unix))]
-    let discovery = session.discover(&policy, configured_python.as_deref(), &|_| Ok(()))?;
+    let discovery =
+        session.discover(&policy, configured_python.as_deref(), diagnostics, &|_| {
+            Ok(())
+        })?;
     #[cfg(not(unix))]
     let duckdb_extensions = Default::default();
     let preparation = session
@@ -331,7 +339,9 @@ impl Client {
             .as_ref()
             .expect("built-in startup configuration")
         {
-            Configuration::Local { python } => local(python.clone(), &started),
+            Configuration::Local { python } => {
+                local(python.clone(), self.0.output.diagnostics(), &started)
+            }
             Configuration::Target {
                 target,
                 roots,
@@ -342,6 +352,7 @@ impl Client {
                         crate::ssh::Session::new(target.as_ref().clone(), roots.clone()),
                         self.0.sandbox_settings.clone(),
                         python.clone(),
+                        self.0.output.diagnostics(),
                         &started,
                     )
                 } else {
@@ -351,6 +362,7 @@ impl Client {
                         &self.0.sandbox_settings,
                         self.0.no_sandbox,
                         python.as_deref(),
+                        self.0.output.diagnostics(),
                         &started,
                     )
                     .map(|target| Discovered {

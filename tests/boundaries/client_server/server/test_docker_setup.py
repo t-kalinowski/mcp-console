@@ -169,14 +169,14 @@ def test_pull_policies_and_tag_capture(binary: Path) -> Transcript:
             )
             try:
                 with McpClient(binary, ("serve",), environment, root) as client:
+                    client.initialize_and_list_tools()
                     if policy == "never" and not present:
-                        assert client.stdout.read(timeout=20) == ""
-                        diagnostics = client.stderr.read(timeout=20)
-                        assert "No such image" in diagnostics
-                        transcript = []
-                        assert client.process.wait(timeout=5) != 0
+                        result = client.send(r="stop('missing image ran code')")
+                        assert result["isError"], result
+                        assert "No such image" in last_result_text(client)
+                        transcript, diagnostics = client.finish_with_standard_error()
+                        transcript = transcript[3:]
                     else:
-                        client.initialize_and_list_tools()
                         client.send(r="42")
                         assert last_result_text(client) == "[1] 42\n"
                         # Removing the mutable name cannot invalidate captured generations.
@@ -283,17 +283,14 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["filesystem"] = {"kind": "native-runner-must-validate"}
             config.write_text(json.dumps(value))
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.start_request(
-                    "initialize",
-                    protocolVersion="2025-11-25",
-                    capabilities={},
-                    clientInfo={"name": "docker-setup-test", "version": "1"},
-                )
-                response = client.stdout.readline(timeout=30)
-                assert response == "", (case, response)
-                error = client.stderr.read(timeout=30)
+                client.initialize_and_list_tools()
+                result = client.send(r="stop('invalid setup ran code')")
+                assert result["isError"], result
+                error = last_result_text(client)
+                client.request("ping")
+                _, diagnostic = client.finish_with_standard_error()
+                error += diagnostic
                 assert expected in error, error
-                assert client.process.wait(timeout=5) != 0
             assert not any(
                 line.startswith("Docker command failed") and line.endswith(": ")
                 for line in error.splitlines()
@@ -308,7 +305,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 {
                     "rejected_before_readiness": case,
                     "container_absent": True,
-                    "stderr": error.replace(str(root), "<controller>"),
+                    "startup_error": error.replace(str(root), "<controller>"),
                 }
             )
     return records

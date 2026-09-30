@@ -67,6 +67,17 @@ impl OutputTape {
         }
     }
 
+    pub(in crate::worker_client) fn diagnostics(&self) -> crate::process_output::Diagnostics {
+        let output = self.direct_stderr();
+        Arc::new(move |bytes| {
+            if bytes.is_empty() {
+                output.close();
+            } else {
+                output.push(bytes);
+            }
+        })
+    }
+
     pub(in crate::worker_client) fn push_console_text(
         &self,
         channel: crate::worker_protocol::ConsoleChannel,

@@ -339,6 +339,7 @@ impl Client {
                 } else {
                     let opened = crate::resolver::preparation::Preparation::open_local(
                         crate::resolver::preparation::Mode::Custom,
+                        self.0.output.diagnostics(),
                         &|handle| self.register_resolver_stop_handle(generation, handle),
                     );
                     self.clear_resolver_stop_handle(generation)

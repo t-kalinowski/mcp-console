@@ -166,17 +166,20 @@ def sql_first(binary: Path, provider: str) -> list:
         client.initialize_and_list_tools()
         tool = client.transcript[-1]["result"]["tools"][0]
         fields = tool["inputSchema"]["properties"]
-        assert "r" not in fields
+        assert "r" in fields
+        assert (
+            "do not guarantee that an interpreter is installed" in tool["description"]
+        )
         assert fields["requirements"]["properties"]["action"]["enum"] == ["get"]
         assert "Console-owned" in tool["description"]
         assert "preinstalled" in tool["description"]
-        client.send(requirements={"action": "get"})
-        snapshot = client.transcript[-1]["result"]["structuredContent"]
-        assert snapshot["requirements"]["python"] == []
         client.send(
             sql="CREATE TABLE retained AS SELECT 42 AS answer; SELECT * FROM retained"
         )
         assert "42" in last_result_text(client), last_result_text(client)
+        client.send(requirements={"action": "get"})
+        snapshot = client.transcript[-1]["result"]["structuredContent"]
+        assert snapshot["requirements"]["python"] == []
         client.send(
             # fmt: python
             python=code("""
@@ -465,15 +468,10 @@ def inspection_boundary(binary: Path, provider: str) -> list:
         binary, provider, setup=lambda root, value: probe_setup(root, value, "noisy")
     ) as (client, root):
         client.initialize_and_list_tools()
-        assert (root / "probe-observed").exists(), client._diagnostics()
-        assert not (root / "worker-started").exists(), (
-            "probe started the analysis worker"
-        )
-        observed = json.loads((root / "probe-observed").read_text())
         client.send(
-            python="import os; from pathlib import Path; print(Path("
-            + repr(observed["storage"])
-            + ").exists())"
+            python="import json; from pathlib import Path; observed = json.loads(Path("
+            + repr(str(root / "probe-observed"))
+            + ").read_text()); print(Path(observed['storage']).exists())"
         )
         assert last_result_text(client) == "False\n", (
             "probe storage survived disposable resource retirement"
@@ -533,15 +531,20 @@ def rejected_probes(binary: Path, provider: str) -> list:
         with prepared(
             binary, provider, python=selected, workload=workload, setup=setup
         ) as (client, root):
-            assert client.stdout.read(timeout=40) == ""
-            errors = client.stderr.read(timeout=40)
+            client.initialize_and_list_tools()
+            result = client.send(
+                python="raise AssertionError('invalid probe launched worker')"
+            )
+            assert result["isError"], result
+            errors = last_result_text(client)
             assert expected in errors, errors
-            assert client.process.wait(timeout=5) != 0
             assert not (root / "worker-started").exists()
+            client.request("ping")
+            client.finish_with_standard_error()
             records.append(
                 {
                     "mode": mode,
-                    "rejected_before_mcp_readiness": True,
+                    "protocol_available_after_probe_failure": True,
                     "owned_probe_retired": True,
                 }
             )
@@ -787,11 +790,8 @@ def cancelled_probe(binary: Path, provider: str) -> list:
             peer_mode="create-gate" if provider == "docker" else "probe-gate",
         ) as (client, root):
             gate.wait("owned resource created before probe completion", timeout=30)
-            client.stdin.close()
-            assert client.stdout.read(timeout=20) == ""
-            errors = client.stderr.read(timeout=20)
-            assert "cancel" in errors, errors
-            assert client.process.wait(timeout=5) != 0
+            client.initialize_and_list_tools()
+            client.finish_with_standard_error()
             assert not (root / "target-invoked").exists()
     finally:
         if gate is not None:

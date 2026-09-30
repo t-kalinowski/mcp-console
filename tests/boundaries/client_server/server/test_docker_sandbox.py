@@ -66,8 +66,8 @@ def test_native_selection_is_enforced_or_rejected(binary: Path) -> Transcript:
             environment,
             root,
         ) as client:
+            client.initialize_and_list_tools()
             if capable:
-                client.initialize_and_list_tools()
                 client.send(
                     # fmt: python
                     python=code("""
@@ -89,10 +89,14 @@ def test_native_selection_is_enforced_or_rejected(binary: Path) -> Transcript:
                 )
                 client.finish()
             else:
-                assert client.stdout.read(timeout=30) == ""
-                error = client.stderr.read(timeout=30)
+                result = client.send(
+                    python="raise AssertionError('native setup was bypassed')"
+                )
+                assert result["isError"], result
+                error = last_result_text(client)
+                _, diagnostic = client.finish_with_standard_error()
+                error += diagnostic
                 assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
-                assert client.process.wait(timeout=5) != 0
                 print(error, file=sys.stderr, end="")
         for call in peer_calls(root):
             args = call["args"]
@@ -296,28 +300,20 @@ def test_explicit_proxy_uses_native_setup(binary: Path) -> Transcript:
         }
         config.write_text(json.dumps(policy))
         with McpClient(binary, ("serve",), current_directory=root) as client:
-            entry = client.start_request(
-                "initialize",
-                protocolVersion="2025-11-25",
-                capabilities={},
-                clientInfo={"name": "docker-proxy-test", "version": "1"},
+            client.initialize_and_list_tools()
+            result = client.send(
+                python='import os; assert os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"); print("native proxy configured")'
             )
-            line = client.stdout.readline(timeout=30)
-            if line:
-                response = json.loads(line)
-                assert response["id"] == entry["id"] and "result" in response, response
-                client.notify("notifications/initialized")
-                client.send(
-                    python='import os; assert os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"); print("native proxy configured")'
-                )
+            if not result.get("isError"):
                 assert last_result_text(client) == "native proxy configured\n", (
                     last_result_text(client)
                 )
                 client.finish()
             else:
-                error = client.stderr.read(timeout=15)
+                error = last_result_text(client)
+                _, diagnostic = client.finish_with_standard_error()
+                error += diagnostic
                 assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
-                assert client.process.wait(timeout=5) != 0
                 print(error, file=sys.stderr, end="")
         return [
             {

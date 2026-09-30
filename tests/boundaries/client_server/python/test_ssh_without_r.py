@@ -187,11 +187,17 @@ def test_managed_sql_first_and_live_python(
 @requires(SSH)
 def test_remote_missing_uv_does_not_select_path_python(binary: Path) -> Transcript:
     with ssh_session(binary, DIRECT, with_uv=False) as (client, _, _):
-        assert client.process.wait(timeout=15) != 0
-        assert not client.stdout.read()
-        errors = client.stderr.read()
-        assert "Python sessions without R require `uv` on PATH" in errors, errors
-        return [{"standard_error": errors}]
+        client.initialize_and_list_tools()
+        initial_tools = client.transcript[-1]["result"]
+        result = client.send(python="raise AssertionError('PATH Python was selected')")
+        assert result["isError"], result
+        assert "Python sessions without R require `uv` on PATH" in last_result_text(
+            client
+        ), result
+        client.request("ping")
+        client.request("tools/list")
+        assert client.transcript[-1]["result"] == initial_tools
+        return client.finish()[3:]
 
 
 @requires(SSH)
@@ -205,8 +211,15 @@ def test_selected_remote_python_uses_workspace_and_no_uv(
         _,
     ):
         client.initialize_and_list_tools()
-        schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
-        assert "r" not in schema["properties"]
+        tool = client.transcript[-1]["result"]["tools"][0]
+        assert "r" in tool["inputSchema"]["properties"]
+        assert (
+            "do not guarantee that an interpreter is installed" in tool["description"]
+        )
+        result = client.send(r="42L")
+        assert result["isError"] and "R cells are unavailable" in last_result_text(
+            client
+        )
         client.send(sql="SELECT 42 AS value")
         assert last_result_text(client).startswith("Error: DuckDB is unavailable;")
         client.send(
@@ -333,15 +346,15 @@ def test_combined_additions_extensions_and_requirement_actions(
 ) -> Transcript:
     with ssh_session(binary, execution) as (client, remote, _):
         client.initialize_and_list_tools()
+        client.send(sql="SET autoinstall_known_extensions = false; LOAD sqlite")
+        assert last_result_text(client) == "Success\n-------\n[0 rows]\n", (
+            last_result_text(client)
+        )
         initial = client.send(requirements={"action": "get"})["structuredContent"][
             "requirements"
         ]
         assert initial["r"] == [] and initial["duckdb"] == ["sqlite"]
         assert set(initial["python"]) == {"duckdb", "numpy", "pandas"}
-        client.send(sql="SET autoinstall_known_extensions = false; LOAD sqlite")
-        assert last_result_text(client) == "Success\n-------\n[0 rows]\n", (
-            last_result_text(client)
-        )
         client.send(python="import os; identity = object(); identity_id = id(identity)")
         client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
         client.send(
@@ -438,6 +451,15 @@ def test_failed_and_interrupted_remote_preparation_keeps_committed_state(
                 {
                     "executable": str(invalid),
                     "libpython": str(remote_bin / "missing-libpython"),
+                    "metadata": {
+                        "base_executable": sys.executable,
+                        "pythonpath": "",
+                        "version": sys.version.replace("\n", " "),
+                        "version_number": f"{sys.version_info.major}.{sys.version_info.minor}",
+                        "architecture": "64bit",
+                        "conda": False,
+                        "numpy": None,
+                    },
                     **{
                         name: str(remote_bin)
                         for name in (
@@ -510,7 +532,9 @@ def test_failed_and_interrupted_remote_preparation_keeps_committed_state(
                     python="raise AssertionError('failed inspection retired the worker')",
                 )
                 assert failed_inspection["isError"]
-                assert "embedding library is missing" in last_result_text(client)
+                assert "embedding library is missing" in last_result_text(client), (
+                    failed_inspection
+                )
                 (remote_bin / "mode").write_text("inspection-interrupt")
                 inspecting = client.start_send(requirements={"python": ["py-yaml12"]})
                 started.wait("remote inspector entered")
@@ -640,8 +664,11 @@ def test_external_r_free_execution_host(
         with McpClient(binary, execution.serve(), environment, local) as client:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
-            assert "Persistent remote Python and SQL workbench" in tool["description"]
-            assert "r" not in tool["inputSchema"]["properties"]
+            assert (
+                "do not guarantee that an interpreter is installed"
+                in tool["description"]
+            )
+            assert "r" in tool["inputSchema"]["properties"]
             client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
             assert not client.transcript[-1]["result"]["isError"], (
                 last_result_text(client),

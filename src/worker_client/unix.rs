@@ -81,6 +81,7 @@ struct RelayTasks {
     dispatcher: WorkerEventDispatcher,
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
+    diagnostic_reader: thread::JoinHandle<()>,
     relay_stdout_observer: OwnedFd,
 }
 
@@ -222,7 +223,7 @@ impl WorkerRuntime {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
@@ -254,6 +255,19 @@ impl WorkerRuntime {
             .as_fd()
             .try_clone_to_owned()
             .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
+        let relay_stderr = child.child.stderr.take().expect("piped launcher stderr");
+        let diagnostic_exit = output_exit.try_clone().map_err(|error| error.to_string())?;
+        let diagnostic_events = worker_events.clone();
+        let diagnostics = output.diagnostics();
+        let diagnostic_reader = thread::spawn(move || {
+            if let Err(error) =
+                crate::process_output::forward(relay_stderr, diagnostic_exit, diagnostics)
+            {
+                let _ = diagnostic_events.send(WorkerEvent::TransportFailure(format!(
+                    "worker launcher stderr read failed: {error}"
+                )));
+            }
+        });
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new();
@@ -298,6 +312,7 @@ impl WorkerRuntime {
                 dispatcher,
                 command_writer,
                 event_reader,
+                diagnostic_reader,
                 relay_stdout_observer,
             })),
         };
@@ -1394,37 +1409,48 @@ impl RelayConnection {
             (Some(tasks), Ok(false)) if reaped => {
                 drop(tasks.command_writer.stop());
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
-                event_reader.and(tasks.dispatcher.join())
+                let diagnostics =
+                    join_worker_thread(tasks.diagnostic_reader, "launcher diagnostics");
+                event_reader.and(diagnostics).and(tasks.dispatcher.join())
             }
             (Some(tasks), Ok(false)) => {
                 let RelayTasks {
                     dispatcher,
                     command_writer,
                     event_reader,
+                    diagnostic_reader,
                     relay_stdout_observer: _,
                 } = *tasks;
                 drop(command_writer.stop());
                 drop(dispatcher);
                 drop(event_reader);
+                drop(diagnostic_reader);
                 Ok(None)
             }
             (Some(tasks), Ok(true)) => {
                 let command_writer =
                     join_worker_thread(tasks.command_writer.stop(), "relay command writer");
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
+                let diagnostics =
+                    join_worker_thread(tasks.diagnostic_reader, "launcher diagnostics");
                 let outcome = tasks.dispatcher.join();
-                command_writer.and(event_reader).and(outcome)
+                command_writer
+                    .and(event_reader)
+                    .and(diagnostics)
+                    .and(outcome)
             }
             (Some(tasks), Err(error)) => {
                 let RelayTasks {
                     dispatcher,
                     command_writer,
                     event_reader,
+                    diagnostic_reader,
                     relay_stdout_observer: _,
                 } = *tasks;
                 drop(command_writer.stop());
                 drop(dispatcher);
                 drop(event_reader);
+                drop(diagnostic_reader);
                 Err(error)
             }
             (None, _) => Ok(None),

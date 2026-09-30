@@ -48,6 +48,7 @@ impl Session {
         policy: &SandboxSettings,
         no_sandbox: bool,
         python: Option<&std::path::Path>,
+        diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let profile = match target.compute {
@@ -55,7 +56,7 @@ impl Session {
             Compute::DockerSandbox(_) => &crate::docker_sandbox::PROFILE,
             Compute::Host {} => unreachable!("host compute has its own runtime discovery"),
         };
-        let cancel = process::Cancel::new(profile.protocol)?;
+        let cancel = process::Cancel::new(profile.protocol)?.with_diagnostics(diagnostics);
         started(crate::resolver::ResolverStopHandle::new(cancel.clone()))?;
         let state = ComputeState {
             profile,

@@ -165,9 +165,24 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
-                assert client.stdout.read(timeout=15) == ""
-                errors = client.stderr.read(timeout=15)
-                assert client.process.wait(timeout=5) != 0
+                client.initialize_and_list_tools()
+                result = client.send(r="stop('invalid provider ran code')")
+                assert result["isError"], result
+                errors = last_result_text(client)
+                client.request("ping")
+                if mode == "create-failed":
+                    retry = client.send(
+                        control="restart", r="stop('unsafe replacement')"
+                    )
+                    assert retry["isError"], retry
+                    assert "start a new server session" in last_result_text(client), (
+                        retry
+                    )
+                _, diagnostics = client.finish_with_standard_error()
+                if mode == "create-failed":
+                    assert "retirement is unconfirmed" in diagnostics, diagnostics
+                else:
+                    assert diagnostics == "", diagnostics
             assert expected in errors, errors
             invoked = calls(root)
             assert not any(call["args"][0] in ("exec", "rm") for call in invoked), (
@@ -177,7 +192,14 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
                 mode == "create-failed"
             )
             records += normalize_recording(
-                [{"fake_provider": mode, "stderr": errors}], root
+                [
+                    {
+                        "fake_provider": mode,
+                        "startup_error": errors,
+                        "stderr": diagnostics,
+                    }
+                ],
+                root,
             )
     return records
 
@@ -219,6 +241,35 @@ def test_argument_arrays_and_unrelated_ownership(binary: Path) -> list:
                 )
         assert json.loads((root / "peer/vms").read_text()) == unrelated
         return [{"argv_values_preserved": True, "unrelated_resource_untouched": True}]
+
+
+@requires(POSIX)
+def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("diagnostics-gate")
+        with closing(FifoCheckpoint.create(root / "peer/reached")) as reached:
+            with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
+                reached.wait("provider output drained without a send", timeout=15)
+                client.request("ping")
+                client.finish()
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        assert (
+            session / "outputs/session.log"
+        ).read_text() == "provider startup\n" * 20000
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        assert not any(
+            event["event"] in ("tool_call", "cell_output") for event in events
+        )
+        assert [call["args"] for call in calls(root)] == [["version"]]
+        return [
+            {"recorded_provider_bytes": 340000, "tool_calls": 0, "setup_retired": True}
+        ]
 
 
 @requires(POSIX)

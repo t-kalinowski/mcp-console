@@ -22,6 +22,7 @@ struct Connection {
     closed: AtomicBool,
     blocked: Arc<Mutex<Option<String>>>,
     local: bool,
+    owner: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Drop for Connection {
@@ -136,6 +137,7 @@ impl Preparation {
     pub(crate) fn open(
         session: &crate::ssh::Session,
         selections: Selections,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         let command = session.command_for("ssh-prepare")?;
@@ -146,11 +148,19 @@ impl Preparation {
             selections,
             mode: Mode::Auto,
         };
-        Self::open_with(command, session.blocked.clone(), open, false, on_started)
+        Self::open_with(
+            command,
+            session.blocked.clone(),
+            open,
+            false,
+            diagnostics,
+            on_started,
+        )
     }
 
     pub(crate) fn open_local(
         mode: Mode,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         let mut command =
@@ -163,7 +173,7 @@ impl Preparation {
             selections: Selections::default(),
             mode,
         };
-        Self::open_with(command, Arc::default(), open, true, on_started)
+        Self::open_with(command, Arc::default(), open, true, diagnostics, on_started)
     }
 
     fn open_with(
@@ -171,12 +181,13 @@ impl Preparation {
         blocked: Arc<Mutex<Option<String>>>,
         open: Input,
         local: bool,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
         let mut child = command.spawn().map_err(|error| {
             format!(
@@ -189,6 +200,18 @@ impl Preparation {
         let (aborted, abort) = io::pipe().map_err(|e| e.to_string())?;
         let stdout = child.stdout.take().expect("preparation stdout");
         let stdin = child.stdin.take().expect("preparation stdin");
+        let stderr = child.stderr.take().expect("preparation stderr");
+        let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
+        let diagnostic_events = events.clone();
+        let diagnostic_reader = thread::spawn(move || {
+            if let Err(error) = crate::process_output::forward(stderr, diagnostic_exit, diagnostics)
+            {
+                let _ = diagnostic_events.send(Event::Received(Err(format!(
+                    "{} stderr read failed: {error}",
+                    label(local)
+                ))));
+            }
+        });
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
         let read_events = events.clone();
         let reader = thread::spawn(move || {
@@ -236,6 +259,7 @@ impl Preparation {
         let exit_events = events.clone();
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
+                drop(notify_diagnostic_exit);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
@@ -246,6 +270,7 @@ impl Preparation {
             closed: AtomicBool::new(false),
             blocked: blocked.clone(),
             local,
+            owner: Mutex::default(),
         }));
         let pending = Pending {
             id: 0,
@@ -253,7 +278,7 @@ impl Preparation {
             reply,
             chunks: None,
         };
-        thread::spawn(move || {
+        let owner = thread::spawn(move || {
             let _ = run(received, &outgoing, pending, open, &blocked, local);
             drop(outgoing);
             drop(abort);
@@ -263,7 +288,9 @@ impl Preparation {
                 let _ = child.kill();
             }
             let _ = child.wait();
+            let _ = diagnostic_reader.join();
         });
+        *connection.0.owner.lock().expect("preparation owner lock") = Some(owner);
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
@@ -353,13 +380,20 @@ impl Preparation {
             return Ok(());
         }
         let (reply, response) = mpsc::channel();
-        self.0
+        let result = self
+            .0
             .events
             .send(Event::Close(Some(reply)))
-            .map_err(|_| format!("{} owner stopped", label(self.0.local)))?;
-        response
-            .recv()
-            .map_err(|_| format!("{} shutdown lost its acknowledgment", label(self.0.local)))?
+            .map_err(|_| format!("{} owner stopped", label(self.0.local)))
+            .and_then(|()| {
+                response.recv().map_err(|_| {
+                    format!("{} shutdown lost its acknowledgment", label(self.0.local))
+                })?
+            });
+        if let Some(owner) = self.0.owner.lock().expect("preparation owner lock").take() {
+            owner.join().map_err(|_| "preparation owner panicked")?;
+        }
+        result
     }
 }
 
