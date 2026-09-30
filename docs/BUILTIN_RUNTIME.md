@@ -439,8 +439,9 @@ Same-name resolution emits no notice.
 The private runtime appends a finder to `sys.meta_path` after Python's existing finders.
 Built-in, frozen, standard-library, local, already-installed, and already-loaded modules therefore resolve normally before MCP Console sees an import.
 Ordinary `import` statements, `from ... import ...`, and `importlib.import_module()` all use this machinery.
-Missing optional imports reached while the default NumPy or pandas package is initializing stay on Python's ordinary path, so importing either available default does not start host resolution.
-Import an optional dependency directly after initialization, or declare it through `requirements.python`, when it is needed.
+Missing imports reached while an installed distribution is initializing stay on Python's ordinary path, so packages can catch `ImportError` for optional dependencies without starting host resolution.
+Import a dependency directly after initialization, call a library function that imports it later, or declare it through `requirements.python`, when it is needed.
+Current distribution file metadata identifies installed modules; local modules remain eligible for automatic resolution even when their names shadow installed packages.
 When every earlier finder misses, MCP Console takes the top-level name from the requested import.
 A curated table maps established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.
 For other conservative ASCII identifiers, it assumes that the PyPI distribution has the same name as the top-level module.

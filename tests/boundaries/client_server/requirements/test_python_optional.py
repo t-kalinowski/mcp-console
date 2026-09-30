@@ -123,6 +123,45 @@ def test_installed_package_probes_leave_resolution_to_explicit_imports(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_local_module_shadowing_installed_package_resolves_missing_imports(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        package = "mcp_console_test_shadowed_package"
+        dependency = "mcp_console_test_shadowed_dependency"
+        index = write_test_wheel(directory, package, "answer = -1\n")
+        write_test_wheel(directory, dependency, "answer = 42\n")
+        (directory / f"{package}.py").write_text(
+            f"import {dependency}\nanswer = {dependency}.answer\n"
+        )
+        environment, record = managed_environment(directory)
+        environment["UV_INDEX"] = index.as_uri()
+        environment["UV_INDEX_STRATEGY"] = "first-index"
+        with McpClient(
+            binary, execution.serve(), environment, current_directory=directory
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "set", "python": [package]})
+            before = uv_tool_run_requirements(record)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import mcp_console_test_shadowed_package as package
+                    from pathlib import Path
+
+                    assert Path(package.__file__).samefile("mcp_console_test_shadowed_package.py")
+                    package.answer
+                    """),
+            )
+            assert last_result_text(client) == "42\n", last_result_text(client)
+            runs = uv_tool_run_requirements(record)
+            assert len(runs) == len(before) + 1, runs
+            assert dependency in runs[-1], runs
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_default_package_imports_do_not_prepare_optional_dependencies(
     binary: Path, execution: Execution
 ) -> Transcript:

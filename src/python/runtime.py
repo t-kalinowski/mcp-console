@@ -296,19 +296,32 @@ class _McpConsoleImportFinder:
         )
 
     def _is_installed_package_initialization(self):
-        roots = set()
+        modules = set()
         frame = self._sys._getframe(1)
         while frame is not None:
             specification = frame.f_globals.get("__spec__")
             if getattr(specification, "_initializing", False):
                 module = frame.f_globals.get("__name__", "")
-                roots.add(module.partition(".")[0])
+                modules.add((module.partition(".")[0], specification.origin))
             frame = frame.f_back
         # Consult current metadata rather than caching it across activation:
         # explicit and automatic preparation can add distributions mid-session.
-        return bool(
-            roots and roots.intersection(self._metadata.packages_distributions())
-        )
+        if not modules:
+            return False
+        distributions = self._metadata.packages_distributions()
+        for root, origin in modules:
+            if origin is None:
+                continue
+            origin = self._os.path.realpath(origin)
+            for name in distributions.get(root, ()):
+                distribution = self._metadata.distribution(name)
+                # A local module can shadow an installed import root. Only the
+                # distribution's recorded files establish ownership.
+                for file in distribution.files or ():
+                    installed = distribution.locate_file(file)
+                    if origin == self._os.path.realpath(str(installed)):
+                        return True
+        return False
 
     def _is_availability_probe(self):
         probe_code = getattr(self._importlib_util.find_spec, "__code__", None)
