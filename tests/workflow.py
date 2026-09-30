@@ -562,9 +562,9 @@ class WorkflowTests(unittest.TestCase):
                     self.assertTrue(receipt[-1].startswith("stubborn ready "), receipt)
                     group = int(receipt[-1].rsplit(" ", 1)[1])
                     process.terminate()
-                    self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
                     # EOF also proves the stubborn writer has retired.
-                    process.communicate(timeout=10)
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 128 + signal.SIGTERM, output)
                 finally:
                     if group is not None:
                         try:
@@ -578,6 +578,82 @@ class WorkflowTests(unittest.TestCase):
                     "scripts/with-checkout", sys.executable, "-c", "pass"
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
+    def test_cancellation_preserves_status_with_only_zombie_group_members(self) -> None:
+        ready = FifoCheckpoint.create(self.directory / "zombie-ready")
+        release = FifoCheckpoint.create(self.directory / "reap-zombie")
+        for checkpoint in (ready, release):
+            self.addCleanup(checkpoint.close)
+        self.write_script(
+            "reaper.py",
+            # fmt: python
+            """
+            import os
+            import sys
+
+            group = int(sys.argv[1])
+            os.setpgid(0, 0)
+            child = os.fork()
+            if child == 0:
+                os.setpgid(0, group)
+                os._exit(0)
+            os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)
+            with open(os.environ["ZOMBIE_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            with open(os.environ["REAP_ZOMBIE"], "rb", buffering=0) as release:
+                assert release.read(1) == b"1"
+            os.waitpid(child, 0)
+            """,
+        )
+        self.write_script(
+            "parent.py",
+            # fmt: python
+            """
+            import os
+            import signal
+            import subprocess
+            import sys
+
+            reaper = subprocess.Popen(
+                [sys.executable, "reaper.py", str(os.getpgrp())],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"reaper ready {reaper.pid}", flush=True)
+            signal.pause()
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "parent.py"],
+            cwd=self.root,
+            env=self.environment
+            | {"ZOMBIE_READY": str(ready.path), "REAP_ZOMBIE": str(release.path)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        with Events() as events:
+            reaper = None
+            try:
+                assert process.stdout is not None
+                receipt = read_lines(process.stdout, 1, "zombie reaper setup")
+                reaper = int(receipt[-1].rsplit(" ", 1)[1])
+                events.watch_process(reaper)
+                ready.wait("exited child remains unreaped in the phase group")
+                process.terminate()
+                output, _ = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 128 + signal.SIGTERM, output)
+            finally:
+                release.release()
+                try:
+                    if reaper is not None:
+                        self.assertIn(reaper, events.wait(3))
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.communicate(timeout=10)
 
     def test_quit_retires_phase_before_releasing_ownership(self) -> None:
         self.write_script(

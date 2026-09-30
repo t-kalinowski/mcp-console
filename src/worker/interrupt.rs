@@ -243,13 +243,19 @@ fn observe_native_input_watch() -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn pending() -> bool {
+pub(crate) fn pending() -> bool {
+    if PYTHON_COMMITS.with_borrow(|stack| !stack.is_empty()) {
+        return false;
+    }
     R_STATE
         .get()
         .map_or_else(native_pending, |state| (state.pending)())
 }
 
 pub(crate) fn acknowledge_python_interrupt() -> bool {
+    if PYTHON_COMMITS.with_borrow(|stack| !stack.is_empty()) {
+        return false;
+    }
     R_STATE
         .get()
         .map_or_else(acknowledge_native_interrupt, |state| (state.acknowledge)())
@@ -314,4 +320,28 @@ pub(crate) fn inspect_python(
         }
         result
     })
+}
+
+thread_local! {
+    static PYTHON_COMMITS: std::cell::RefCell<Vec<Option<libr::Rboolean>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn begin_python_commit() {
+    let previous = if super::r_integration::initialized() {
+        let previous = unsafe { libr::get(libr::R_interrupts_suspended) };
+        unsafe { libr::set(libr::R_interrupts_suspended, libr::Rboolean_TRUE) };
+        Some(previous)
+    } else {
+        None
+    };
+    PYTHON_COMMITS.with_borrow_mut(|stack| stack.push(previous));
+}
+
+pub(crate) fn finish_python_commit() -> bool {
+    let previous =
+        PYTHON_COMMITS.with_borrow_mut(|stack| stack.pop().expect("Python commit started"));
+    if let Some(previous) = previous {
+        unsafe { libr::set(libr::R_interrupts_suspended, previous) };
+    }
+    acknowledge_python_interrupt()
 }

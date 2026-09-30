@@ -95,6 +95,15 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !super::library::configure_import_resolution(import_policy(managed))? {
         return Ok(false);
     }
+    if managed
+        && !super::environment::initialize(
+            libpython
+                .to_str()
+                .ok_or("Python library path is not UTF-8")?,
+        )?
+    {
+        return Ok(false);
+    }
     super::library::mark_runtime_configured()?;
     Ok(true)
 }
@@ -147,7 +156,10 @@ pub(super) fn initialize_native(
     let finished = finish_initialization();
     let configured = result?;
     finished?;
-    if managed && !super::requirements::initialized() {
+    if !configured && managed {
+        super::requirements::interrupt_initialization();
+    }
+    if configured && managed && !super::requirements::initialized() {
         let manifest = super::requirements::declaration()?;
         super::requirements::initialize(configuration, manifest)?;
     }

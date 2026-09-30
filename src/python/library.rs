@@ -543,6 +543,39 @@ pub(super) fn activate_environment(script: &str, executable: &str) -> Result<boo
     })
 }
 
+pub(super) fn install_environment() -> Result<(), String> {
+    let source = CString::new(include_str!("environment.py")).unwrap();
+    api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_environment", &source) })
+}
+
+pub(super) fn environment_call(name: &CStr, request: &str) -> Result<Option<String>, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_environment", name)?;
+        let argument =
+            (api.unicode_from_string_and_size)(request.as_ptr().cast(), request.len() as isize);
+        if argument.is_null() {
+            api.display_pending_exception();
+            return Err("failed to create Python environment request".to_string());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        if result.is_null() {
+            if services::take_interrupt() {
+                return Ok(None);
+            }
+            api.display_pending_exception();
+            return Err(python_function_error(c"_mcp_console_environment", name));
+        }
+        let response = services::response_text(result).map(Some);
+        if response.is_err() {
+            api.display_pending_exception();
+        }
+        (api.dec_ref)(result);
+        response
+    })
+}
+
 pub(super) fn configure_module_defaults() -> Result<bool, String> {
     api()?.with_gil(|api| unsafe {
         let function = api.function(c"_mcp_console", c"configure_module_defaults")?;

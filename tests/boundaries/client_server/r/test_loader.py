@@ -26,6 +26,10 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
     environment, _ = r_test_environment()
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
+        # Native loader coverage needs only base R, without package resolution.
+        library = root / "library"
+        library.mkdir()
+        environment = bare_runtime_environment(environment, library)
         gate = FifoCheckpoint.create(root / "loader-release")
         resources.callback(gate.close)
         selected = isolated_r_home(root, environment)

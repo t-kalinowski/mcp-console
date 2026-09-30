@@ -27,6 +27,7 @@ struct Services {
     set_none: unsafe extern "C" fn(*mut PyObject),
     set_string: unsafe extern "C" fn(*mut PyObject, *const c_char),
     set_interrupt: unsafe extern "C" fn(),
+    exception_matches: unsafe extern "C" fn(*mut PyObject) -> c_int,
     none: usize,
     runtime_error: usize,
     keyboard_interrupt: usize,
@@ -65,6 +66,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             set_none: unsafe { load_symbol(&library, path, b"PyErr_SetNone\0")? },
             set_string: unsafe { load_symbol(&library, path, b"PyErr_SetString\0")? },
             set_interrupt: unsafe { load_symbol(&library, path, b"PyErr_SetInterrupt\0")? },
+            exception_matches: unsafe { load_symbol(&library, path, b"PyErr_ExceptionMatches\0")? },
             none: unsafe { load_symbol::<*mut PyObject>(&library, path, b"_Py_NoneStruct\0")? }
                 as usize,
             runtime_error: exception(b"PyExc_RuntimeError\0")?,
@@ -90,6 +92,15 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             method(c"resolve_import_request", resolve_import_request, 8),
             method(c"attach_r", attach_r, 4),
             method(c"interrupt", interrupt, 1), // METH_VARARGS: signal number and frame
+            method(c"inspect_python", inspect_python, 8),
+            method(
+                c"activate_python_environment",
+                activate_python_environment,
+                4,
+            ),
+            method(c"publish_python_activation", publish_python_activation, 8),
+            method(c"begin_python_commit", begin_python_commit, 4),
+            method(c"finish_python_commit", finish_python_commit, 4),
             Method {
                 name: std::ptr::null(),
                 callback: None,
@@ -127,6 +138,11 @@ fn method(name: &'static CStr, callback: Callback, flags: c_int) -> Method {
 }
 
 impl Services {
+    fn string(&self, text: &str) -> *mut PyObject {
+        unsafe {
+            (self.api.unicode_from_string_and_size)(text.as_ptr().cast(), text.len() as isize)
+        }
+    }
     fn text(&self, object: *mut PyObject) -> Result<String, String> {
         let mut length = 0;
         let bytes = unsafe { (self.unicode_utf8)(object, &mut length) };
@@ -272,4 +288,84 @@ unsafe extern "C" fn interrupt(_: *mut PyObject, _: *mut PyObject) -> *mut PyObj
             Ok(services.none())
         }
     })
+}
+
+unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        let executable = services.text(executable)?;
+        let result = services.without_gil(|| super::super::probe::inspect(&executable));
+        if worker::acknowledge_python_interrupt() {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            return Ok(std::ptr::null_mut());
+        }
+        let result = result.map_err(|error| error.to_string())?;
+        Ok(services.string(&result.to_string()))
+    })
+}
+
+// Called only with the GIL held at the environment-call boundary.
+pub(super) fn take_interrupt() -> bool {
+    let services = SERVICES.get().expect("Python services initialized");
+    unsafe {
+        if (services.exception_matches)(services.keyboard_interrupt as *mut PyObject) == 0 {
+            return false;
+        }
+        (services.api.err_clear)();
+    }
+    true
+}
+
+unsafe extern "C" fn activate_python_environment(
+    _: *mut PyObject,
+    _: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        match services.without_gil(super::super::requirements::activate_pending_selection) {
+            Ok(()) => Ok(services.none()),
+            Err(super::super::ActivationFailure::PythonException) => unsafe {
+                let function = services
+                    .api
+                    .function(c"builtins", c"_mcp_console_raise_setup_error")?;
+                Ok((services.api.call_no_args)(function))
+            },
+            Err(error) => Err(error.to_string()),
+        }
+    })
+}
+
+unsafe extern "C" fn publish_python_activation(
+    _: *mut PyObject,
+    activation: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        let activation: super::super::environment::Activation =
+            serde_json::from_str(&services.text(activation)?).map_err(|error| error.to_string())?;
+        services.without_gil(|| super::super::requirements::publish_activation(activation))?;
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn begin_python_commit(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        worker::begin_python_commit();
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn finish_python_commit(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        if worker::finish_python_commit() {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            Ok(std::ptr::null_mut())
+        } else {
+            Ok(services.none())
+        }
+    })
+}
+
+pub(super) fn response_text(value: *mut PyObject) -> Result<String, String> {
+    SERVICES
+        .get()
+        .expect("Python services initialized")
+        .text(value)
 }

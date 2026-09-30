@@ -390,8 +390,12 @@ The R adapter preserves field presence and ordering, NA values, string bytes and
 R declarations retain reticulate's argument validation, warnings, live version/package checks, conditions, and add-only restrictions.
 Reached imports resolve and activate through the common owner, projecting R metadata before mutation and publishing it after success when the adapter exists.
 The host-inspected identity supplies the candidate library and prefixes.
-Reticulate's exact-executable inspection supplies only additional conversion metadata; generic `python_config()` discovery is not used for activation.
-Compatibility rejection precedes conversion metadata and interpreter mutation.
+Worker-side inspection of that selected executable supplies site paths, installed distribution versions, and additional conversion metadata; generic `python_config()` discovery is not used for activation.
+Library compatibility rejection precedes conversion metadata and interpreter mutation.
+The environment adapter rejects incompatible loaded distribution versions, replaces environment-owned paths while preserving user paths, and sets candidate identity before running site hooks.
+Its transaction restores Console-owned paths, prefixes, executable, and process environment after interrupted activation.
+Publication and the local commit defer interrupts, preserving an environment accepted before an interrupt is delivered.
+The native requirement owner retains the exact pending candidate and optional R projection across this transaction.
 An unsafe activation failure marks the generation restart-required even when reported through an R condition.
 A successfully published activation remains accepted when the subsequent import or cell fails.
 Idle tool preparation uses the same worker request and native owner with or without R.
@@ -400,7 +404,7 @@ The owner resolves a candidate, projects optional R metadata, mutates only an in
 Lazy declarations and snapshot restoration do not publish activation.
 Successful pre-initialization preparation materializes the declaration and commits its inspected launch identity through the existing preparation receipt.
 The live interpreter pin is resolver input, separate from retained user version constraints.
-R activation retains a transient matching key until reticulate accepts its configuration and writes the declaration; initial interpreter setup publishes through its own hook without that key.
+R activation commits its prepared configuration and declaration through the active binding inside the publication transaction; initial interpreter setup publishes through its own hook without that transient matching key.
 The initial hook records the running inspected identity directly, including R-side selections that did not require a managed resolver candidate.
 If a startup package already initialized reticulate, adapter installation records its managed state after registering that running identity and before common setup, without waiting for another initialization event.
 Worker readiness precedes interpreter initialization.
