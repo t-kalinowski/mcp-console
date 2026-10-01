@@ -20,9 +20,40 @@ send:
 result:
   content:
     - type: text
-      text: |
-        Cannot create knowledge.ragnar.duckdb: Read-only file system
+      text: <error output identical to live sandboxed Rscript --vanilla>
   isError: false
+transcript_normalization:
+  target: result.content[0].text
+  comparison: exact equality with live sandboxed Rscript --vanilla
+  reference_adjustments: >-
+    interactive error display; remove Execution halted footer
+---
+send:
+  r: |
+    reference <- suppressWarnings(system2(
+      file.path(R.home("bin"), "Rscript"),
+      c("--vanilla", "reference.R"),
+      stdout = TRUE,
+      stderr = TRUE
+    ))
+    stopifnot(
+      identical(attr(reference, "status"), 1L),
+      identical(tail(reference, 1L), "Execution halted")
+    )
+    writeLines(jsonlite::toJSON(
+      paste0(paste(head(reference, -1L), collapse = "\n"), "\n"),
+      auto_unbox = TRUE
+    ))
+result:
+  content:
+    - type: text
+      text: <error output identical to live sandboxed Rscript --vanilla>
+  isError: false
+transcript_normalization:
+  target: result.content[0].text
+  comparison: exact equality with live sandboxed Rscript --vanilla
+  reference_adjustments: >-
+    interactive error display; remove Execution halted footer
 ---
 send:
   r: |

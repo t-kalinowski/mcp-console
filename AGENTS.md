@@ -32,7 +32,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.
 - `docs/RELAY_PROTOCOL.md` defines the exact private server-relay transport.
 - `docs/TOOL_DESCRIPTIONS.md` gives editorial guidance for registered MCP tool and property prose and links to the canonical handshake snapshot.
-  The actual `tools/list` result and the registered strings and Rust doc comments in `src/server.rs` are authoritative.
+  The actual `tools/list` result, registered strings, and schema doc comments in `src/server.rs` and `src/server/arguments.rs` are authoritative.
 - `tests/boundaries/README.md` describes process boundaries, selectors, normalization, and snapshot updates.
 - `design-sketches/` contains intended or exploratory future design only.
 
@@ -99,15 +99,7 @@ External SSH tests automatically use a reachable optional host, with selection a
 Keep Python SDK integration test dependencies free of exact version pins, retain the published dependency lower bounds, and constrain MCP to the supported major using `==2.*`.
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same OS version, architecture, toolchain, applicable R version, and UTC week, with incremental compilation enabled.
-Use `ImageOS` in cache keys; log the full `ImageVersion` without including it in cache identities.
-Keep every GitHub Actions cache key and restore prefix within the current UTC ISO week, including uv, IR/renv, R package libraries, downloads, source archives, and finished build outputs.
-The first CI run with a fresh weekly uv cache resolves current SDK releases; later runs may reuse that environment.
-Skip runner staging only when both its finished artifacts and build data are exact cache hits.
-Ordinary source edits reuse one cached baseline per dependency set rather than saving another target-directory snapshot.
-Keep `main` caches reusable by PRs and remove caches for closed PRs.
-Cargo determines which crates need rebuilding.
-An exact match of compiled and packaging inputs additionally lets CI skip the release build and reuse a finished wheel and native bundle; it still runs the current tests.
-Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when build inputs outside the hashed files change, such as workflow build flags or native dependency setup; unrelated workflow edits must not invalidate build caches.
+Follow the [CI build and cache contract](RELEASE.md#private-sandbox-executable) for cache keys and weekly resets, runner staging, finished-output reuse, SDK resolution, and cache invalidation and cleanup.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
 
@@ -220,7 +212,7 @@ Keep these invariants intact:
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
 - `src/resolver/preparation.rs`, `src/resolver/preparation/{client,host}.rs` — typed local and SSH preparation connections, JSON transports, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
-- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from captured target/provider configuration, stdio transport, and response-delivery ownership.
+- `src/server.rs`, `src/server/arguments.rs`, `src/server/presentation.rs`, `src/server_transport.rs` — MCP request execution, wire arguments, tool presentation derived from captured launch configuration, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
   The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.
@@ -232,11 +224,14 @@ Keep these invariants intact:
 - `src/server/startup.rs` — shared background runtime preparation and connection-owned cancellation; MCP discovery does not wait for it.
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
+- `src/jsonl.rs` — incremental byte framing shared by relay command input and worker sideband readers; I/O and retirement policy remain with those readers.
 - `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup, Python probes, and compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
-- `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
+- `src/worker_relay.rs`, `src/worker_relay/{supervisor,commands,streams,io,event_writer}.rs` — relay platform facade, direct-worker supervision and reaping, command input and writers, output and retirement draining, cancellation descriptors, and ordered event publication.
 - `src/worker_client/output.rs`, `src/worker_client/output/{tape,preview,terminal}.rs` — canonical response composition, streaming output cuts, bounded 8 KiB text previews, independent image admission, raw-file receipts, and progress projection.
-- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and shared Unix relay transport.
+- `src/worker_client.rs`, `src/worker_client/` — live session state and readiness facade, server-owned environment, evaluation and response ownership, lifecycle, ordinary launcher child ownership, output tape, and shared Unix relay transport.
+- `src/worker_client/{configuration,send,control,execution}.rs` — configuration preparation, ordinary send orchestration and polling, inline control and follow-up cells, and evaluation admission and launch.
+- `src/worker_client/events.rs`, `src/worker_client/events/operation.rs` — ordered event dispatch and runtime-candidate callbacks, and operation admission, routing, completion, and commits.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.
@@ -247,7 +242,7 @@ Keep these invariants intact:
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/local_runtime.rs` — independent captured R home and inspected Python identity, retained host-resolved environments, and direct-worker temporary storage.
+- `src/local_runtime.rs` — captured R installation paths and inspected Python identity, retained host-resolved environments, and direct-worker temporary storage.
 - `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — common interpreter bootstrap and process environment, complete inspected identity of an already-selected executable, shared setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
 - `src/python/requirements.rs`, `src/python/requirements/r.rs` — shared live managed selection, resolved candidates and import control, R declaration values and transitions, shared CPython activation, and R binding conversion and history.
 - `src/python/environment.{rs,py}`, `src/python/probe.{rs,py}` — managed activation transactions, loaded-distribution compatibility, environment-owned path bookkeeping, and cancellable worker-side inspection of a selected environment.

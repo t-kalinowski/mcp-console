@@ -1,11 +1,12 @@
 use super::{core, embedded_r, interrupt};
 
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-static R_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
+use crate::local_runtime::RInstallation;
+
+static R_INSTALLATION: OnceLock<Option<RInstallation>> = OnceLock::new();
 thread_local! {
     static RUNTIME: RefCell<Option<Rc<embedded_r::Runtime>>> = const { RefCell::new(None) };
     static STARTED: Cell<bool> = const { Cell::new(false) };
@@ -23,7 +24,7 @@ pub(crate) fn initialized() -> bool {
 }
 
 pub(crate) fn available() -> bool {
-    R_HOME.get().is_some_and(Option::is_some)
+    R_INSTALLATION.get().is_some_and(Option::is_some)
 }
 
 pub(crate) fn ensure_initialized() -> Result<(), String> {
@@ -33,20 +34,20 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
     if initialized() {
         return Ok(());
     }
-    let home = R_HOME
+    let installation = R_INSTALLATION
         .get()
         .and_then(Option::as_ref)
         .ok_or("R is unavailable in this session")?;
     if STARTED.with(|started| started.replace(true)) {
         return Err("R initialization is incomplete; restart required".into());
     }
-    let result = initialize(home);
+    let result = initialize(installation);
     FAILED.with(|failed| failed.set(result.is_err()));
     result
 }
 
-fn initialize(home: &std::path::Path) -> Result<(), String> {
-    let deferred = embedded_r::initialize_r(home).map_err(|error| error.to_string())?;
+fn initialize(installation: &RInstallation) -> Result<(), String> {
+    let deferred = embedded_r::initialize_r(installation).map_err(|error| error.to_string())?;
     crate::python::configure_r_environment().map_err(|error| error.to_string())?;
     let runtime = Rc::new(embedded_r::Runtime::initialize().map_err(|error| error.to_string())?);
     RUNTIME.with(|slot| *slot.borrow_mut() = Some(runtime.clone()));
@@ -76,9 +77,9 @@ pub(crate) fn ensure_bridge() -> Result<(), String> {
 pub(super) struct Integration;
 
 impl Integration {
-    pub(super) fn new(home: Option<PathBuf>) -> std::io::Result<Self> {
-        R_HOME
-            .set(home)
+    pub(super) fn new(installation: Option<RInstallation>) -> std::io::Result<Self> {
+        R_INSTALLATION
+            .set(installation)
             .map_err(|_| std::io::Error::other("R capability already configured"))?;
         interrupt::initialize_native()?;
         Ok(Self)

@@ -45,6 +45,7 @@ type PyErrNormalizeException =
 type PyErrDisplay = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject);
 type PyErrClear = unsafe extern "C" fn();
 type PyErrPrint = unsafe extern "C" fn();
+type PyErrExceptionMatches = unsafe extern "C" fn(*mut PyObject) -> libc::c_int;
 type PyExceptionSetTraceback = unsafe extern "C" fn(*mut PyObject, *mut PyObject) -> libc::c_int;
 
 const PY_FILE_INPUT: libc::c_int = 257;
@@ -115,6 +116,8 @@ struct PythonApi {
     err_display: PyErrDisplay,
     err_clear: PyErrClear,
     err_print: PyErrPrint,
+    err_exception_matches: PyErrExceptionMatches,
+    system_exit: usize,
     exception_set_traceback: PyExceptionSetTraceback,
 }
 
@@ -675,7 +678,13 @@ pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
         (api.dec_ref)(source);
         (api.dec_ref)(filename);
         if result.is_null() {
-            api.display_pending_exception();
+            // Only an uncaught cell exit reaches CPython's REPL exit handler.
+            // Adapter and service calls retain their handled-exception boundary.
+            if (api.err_exception_matches)(api.system_exit as *mut PyObject) != 0 {
+                (api.err_print)();
+            } else {
+                api.display_pending_exception();
+            }
         } else {
             (api.dec_ref)(result);
         }
@@ -1092,9 +1101,8 @@ impl PythonApi {
     }
 
     fn display_pending_exception(&self) {
-        // PyErr_Print exits the process for SystemExit. Fetch and display the
-        // pending exception directly so every Python language exception remains
-        // ordinary worker output.
+        // Adapter and service failures are handled here, including SystemExit.
+        // Fetch and display them without invoking CPython's process exit handler.
         unsafe {
             let mut exception_type = std::ptr::null_mut();
             let mut exception_value = std::ptr::null_mut();
@@ -1193,6 +1201,12 @@ impl PythonApi {
             err_display: unsafe { load_symbol(library, path, b"PyErr_Display\0")? },
             err_clear: unsafe { load_symbol(library, path, b"PyErr_Clear\0")? },
             err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
+            err_exception_matches: unsafe {
+                load_symbol(library, path, b"PyErr_ExceptionMatches\0")?
+            },
+            system_exit: unsafe {
+                *load_symbol::<*const *mut PyObject>(library, path, b"PyExc_SystemExit\0")?
+            } as usize,
             exception_set_traceback: unsafe {
                 load_symbol(library, path, b"PyException_SetTraceback\0")?
             },

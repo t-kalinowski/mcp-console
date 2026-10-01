@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -46,11 +48,14 @@ def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
         for entry in (original / name).iterdir():
             target = destination / entry.name
             if name == "bin" and entry.name == "R":
-                target.write_text(
-                    entry.read_text().replace(
-                        f'R_HOME_DIR="{original}"', f'R_HOME_DIR="{selected}"', 1
-                    )
+                source, count = re.subn(
+                    r"(?m)^R_HOME_DIR=.*$",
+                    f"R_HOME_DIR={shlex.quote(str(selected))}",
+                    entry.read_text(),
+                    count=1,
                 )
+                assert count == 1, "R launcher must declare R_HOME_DIR"
+                target.write_text(source)
                 target.chmod(entry.stat().st_mode)
             elif name == "etc" and entry.name == "Renviron":
                 shutil.copyfile(entry, target)

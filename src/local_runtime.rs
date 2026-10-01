@@ -232,24 +232,76 @@ impl Selection {
     }
 }
 
-pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub(crate) struct RInstallation {
+    pub(crate) home: PathBuf,
+    resources: [OsString; 3],
+}
+
+impl RInstallation {
+    pub(crate) fn configure_environment(&self) {
+        unsafe { std::env::set_var("R_HOME", &self.home) };
+        for (name, value) in ["R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR"]
+            .into_iter()
+            .zip(&self.resources)
+        {
+            unsafe { std::env::set_var(name, value) };
+        }
+    }
+}
+
+pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
+    use std::os::unix::ffi::OsStringExt;
+
     // Harp's setup reads R_HOME with env::var and mistakes non-UTF-8 values
     // for absence. Preserve its validation using the native path in that case.
-    let Some(home) = std::env::var_os("R_HOME").filter(|home| home.to_str().is_none()) else {
-        return Ok(harp::command::r_home_setup()?);
-    };
-    let home = PathBuf::from(home);
-    if !home
-        .try_exists()
-        .map_err(|error| format!("Can't check if `R_HOME` path exists: {error}"))?
+    let home = if let Some(home) = std::env::var_os("R_HOME").filter(|home| home.to_str().is_none())
     {
-        return Err(format!("The `R_HOME` path '{}' does not exist.", home.display()).into());
+        let home = PathBuf::from(home);
+        if !home
+            .try_exists()
+            .map_err(|error| format!("Can't check if `R_HOME` path exists: {error}"))?
+        {
+            return Err(format!("The `R_HOME` path '{}' does not exist.", home.display()).into());
+        }
+        home
+    } else {
+        harp::command::r_home_setup()?
+    };
+    // Read the selected launcher's resource paths without starting R. Capture
+    // them before either interpreter starts; R's install paths can be split.
+    let resources = harp::command::r_command(&home, |command| {
+        command
+            .args([
+                "CMD",
+                "/bin/sh",
+                "-c",
+                r#"printf '%s\000' "$R_SHARE_DIR" "$R_INCLUDE_DIR" "$R_DOC_DIR""#,
+            ])
+            .stdin(std::process::Stdio::null());
+    })?;
+    if !resources.status.success() {
+        return Err(format!(
+            "Can't read R resource directories: {}: {}",
+            resources.status,
+            String::from_utf8_lossy(&resources.stderr)
+        )
+        .into());
     }
-    harp::command::r_command(&home, |command| {
-        command.arg("RHOME");
-    })
-    .map_err(|error| format!("Can't run R: {error}"))?;
-    Ok(home)
+    let values = resources
+        .stdout
+        .strip_suffix(b"\0")
+        .ok_or("R launcher did not terminate its resource directories")?
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if values.len() != 3 || values.iter().any(|value| value.is_empty()) {
+        return Err("R launcher did not supply three resource directories".into());
+    }
+    let installation = RInstallation {
+        home,
+        resources: std::array::from_fn(|index| OsString::from_vec(values[index].to_vec())),
+    };
+    installation.configure_environment();
+    Ok(installation)
 }
 
 /// Direct launches have no runner-owned private TMPDIR. The relay lifetime

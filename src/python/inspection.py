@@ -75,6 +75,8 @@ def describe() -> dict[str, str]:
         "PyErr_Display",
         "PyErr_Clear",
         "PyErr_Print",
+        "PyErr_ExceptionMatches",
+        "PyExc_SystemExit",
         "PyException_SetTraceback",
     ):
         try:

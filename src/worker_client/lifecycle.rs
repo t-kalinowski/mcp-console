@@ -1372,14 +1372,14 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_failure_preserves_an_unclaimed_assembled_response() {
-        let client = Client::with_arguments(
+        let client = Client::pending();
+        client.configure(crate::worker_client::ClientConfiguration::new(
             std::path::PathBuf::from("unused-worker"),
-            Vec::new(),
             None,
             false,
             crate::settings::SandboxSettings::default(),
-            None,
-        );
+        ));
+        client.finish_startup(Ok(()));
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),
             None,
@@ -1422,14 +1422,14 @@ mod tests {
 
     #[tokio::test]
     async fn failed_restart_excludes_a_delivered_response_but_keeps_later_output() {
-        let client = Client::with_arguments(
+        let client = Client::pending();
+        client.configure(crate::worker_client::ClientConfiguration::new(
             std::path::PathBuf::from("unused-worker"),
-            Vec::new(),
             None,
             false,
             crate::settings::SandboxSettings::default(),
-            None,
-        );
+        ));
+        client.finish_startup(Ok(()));
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),
             None,

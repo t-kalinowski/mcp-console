@@ -7,7 +7,7 @@ use super::requirements::push_duckdb_r_target;
 
 impl super::super::Client {
     pub(in crate::worker_client) fn record_accepted_python(&self, environment: &Environment) {
-        if !self.python_preparation() {
+        if !self.0.python_preparation {
             return;
         }
         let selected = environment

@@ -221,17 +221,12 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
 }
 
 pub(super) fn initialize_r(
-    r_home: &std::path::Path,
+    installation: &crate::local_runtime::RInstallation,
 ) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+    let r_home = &installation.home;
     // Let the selected R launcher choose its configured default architecture
     // when users start subprocesses through commandArgs()[1].
     let executable = r_home.join("bin/R");
-    unsafe {
-        std::env::set_var("R_HOME", r_home);
-        std::env::set_var("R_SHARE_DIR", r_home.join("share"));
-        std::env::set_var("R_INCLUDE_DIR", r_home.join("include"));
-        std::env::set_var("R_DOC_DIR", r_home.join("doc"));
-    }
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
@@ -251,6 +246,9 @@ pub(super) fn initialize_r(
         .map(|argument| argument.as_ptr() as *mut c_char)
         .collect::<Vec<_>>();
 
+    // Python cells and startup hooks can mutate these paths before late R
+    // initialization. Restore the captured installation immediately before R starts.
+    installation.configure_environment();
     unsafe {
         libr::Rf_initialize_R(
             argument_pointers.len() as c_int,

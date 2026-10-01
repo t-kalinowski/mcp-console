@@ -18,6 +18,133 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+def test_uses_selected_r_resource_directories(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        selected = isolated_r_home(root, environment)
+        launcher = selected / "bin/R"
+        source = launcher.read_text()
+        resources = subprocess.check_output(
+            [
+                launcher,
+                "--vanilla",
+                "--slave",
+                "-e",
+                'cat(vapply(c("share", "include", "doc"), R.home, ""), sep="\\n")',
+            ],
+            env=environment,
+            text=True,
+        ).splitlines()
+        for (name, suffix), resource in zip(
+            (
+                ("R_SHARE_DIR", "share"),
+                ("R_INCLUDE_DIR", "include"),
+                ("R_DOC_DIR", "doc"),
+            ),
+            resources,
+            strict=True,
+        ):
+            configured = root / f"configured {suffix} λ"
+            configured.symlink_to(Path(resource).resolve())
+            (selected / suffix).unlink(missing_ok=True)
+            source, count = re.subn(
+                rf"(?m)^{name}=.*$", f'{name}="{configured}"', source
+            )
+            assert count == 1, name
+            # The selected launcher must supply its own paths, not inherited ones.
+            environment[name] = str(root / f"stale-{suffix}")
+        launcher.write_text(source)
+        environment["RETICULATE_PYTHON"] = sys.executable
+        # fmt: r
+        r = code(r"""
+            names <- c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")
+            directories <- Sys.getenv(names)
+            stopifnot(
+              identical(Sys.getenv("R_HOME"), R.home()),
+              all(dir.exists(directories)),
+              identical(
+                unname(directories),
+                vapply(
+                  c("share", "include", "doc"),
+                  R.home,
+                  "",
+                  USE.NAMES = FALSE
+                )
+              ),
+              file.exists(file.path(R.home("include"), "R.h")),
+              length(readLines(file.path(R.home("doc"), "AUTHORS"))) > 0L
+            )
+            child <- system2(
+              commandArgs()[1L],
+              c(
+                "--vanilla",
+                "--slave",
+                "-e",
+                shQuote(
+                  'cat(Sys.getenv(c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")), sep = "\n")'
+                )
+              ),
+              stdout = TRUE,
+              stderr = TRUE
+            )
+            stopifnot(is.null(attr(child, "status")), identical(child, unname(directories)))
+            cat("R and its children use the selected resource directories\n")
+            """)
+        reference = subprocess.check_output(
+            [launcher, "--vanilla", "--slave", "-e", r],
+            env=environment,
+            text=True,
+        )
+        expected = "R and its children use the selected resource directories\n"
+        assert reference == expected, reference
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import ctypes
+                    import os
+
+                    try:
+                        initialized = bool(ctypes.c_void_p.in_dll(ctypes.CDLL(None), "R_GlobalEnv").value)
+                    except ValueError:
+                        initialized = False
+                    assert not initialized, "R initialized before Python demand"
+                    r_paths = {
+                        name: os.environ[name]
+                        for name in ("R_HOME", "R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")
+                    }
+                    os.environ.pop("R_HOME")
+                    os.environ["R_SHARE_DIR"] = "/missing-r-share"
+                    os.environ.pop("R_INCLUDE_DIR")
+                    os.environ["R_DOC_DIR"] = "/missing-r-doc"
+                    print("Python changed R paths before R initialization")
+                    """),
+            )
+            assert last_tool_text(client) == (
+                "Python changed R paths before R initialization\n"
+            ), last_tool_text(client)
+            client.send(r=r)
+            assert last_tool_text(client) == expected, last_tool_text(client)
+            client.send(
+                # fmt: python
+                python=code("""
+                    native = ctypes.CDLL(None)
+                    native.getenv.argtypes = [ctypes.c_char_p]
+                    native.getenv.restype = ctypes.c_char_p
+                    assert all(
+                        native.getenv(name.encode()) == os.fsencode(path) for name, path in r_paths.items()
+                    )
+                    """),
+            )
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_uses_selected_r_launcher_default_architecture(
     binary: Path, execution: Execution
 ) -> Transcript:

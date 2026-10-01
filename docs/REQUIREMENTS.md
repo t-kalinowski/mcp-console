@@ -291,7 +291,7 @@ Availability queries such as `importlib.util.find_spec()` report the current env
 Missing imports reached during an installed distribution's eager importlib initialization use ordinary Python behavior instead of starting host resolution.
 This lets packages catch `ImportError` for optional dependencies without silently adding them to the retained manifest; installed distributions are responsible for declaring their required dependencies.
 A later direct import or a library call after initialization can still resolve a missing dependency, and an explicit `requirements.python` entry can prepare it earlier.
-The finder checks that the importing module and active importlib initializer belong to the same distribution's recorded files, for both Python modules and native extensions.
+The finder checks that the importing module and active importlib initializer belong to the same distribution's wheel `RECORD`, for both Python modules and native extensions.
 It reads metadata at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`.
 Local modules and Python callbacks remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer calls them.
 If an installation's metadata does not record the selected module file, its missing imports remain eligible for automatic resolution; package names alone do not establish ownership.
