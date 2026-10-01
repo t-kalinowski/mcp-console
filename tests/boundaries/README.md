@@ -167,6 +167,11 @@ The DuckDB resolver failure case captures the selected native `Rscript --vanilla
 It requires exact equality with the tool error after the Console exit-status prefix and outer-whitespace trimming, including the condition, candidate extensions, and backtrace.
 Its snapshot records that comparison so upstream package releases can change the native diagnostic without fixing a version-specific rendering in YAML.
 
+The Ragnar workspace-write denial cases compare the complete Console error with the same source in a native `Rscript --vanilla` subprocess under the worker's sandbox and managed R library.
+The reference matches Console's interactive error display and removes only Rscript's `Execution halted` footer.
+The filename, platform denial, absent workspace file, and successful worker-tempdir creation remain explicit assertions.
+After exact equality, the snapshots record the verified comparison so unpinned Ragnar, DuckDB, and rlang releases can change their diagnostic formatting.
+
 The initialization, initialized notification, and tool-list exchange have full references in `client_server/server/test_tools::initializes_and_lists_tools`.
 Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
 The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
