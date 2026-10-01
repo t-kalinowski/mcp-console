@@ -31,7 +31,7 @@ from support.requirements import UNPRIVILEGED, requires
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.r import r_test_environment
-from support.python import write_test_wheel
+from support.python import runtime_source_line, write_test_wheel
 
 
 def environment(path: Path) -> dict[str, str]:
@@ -2399,6 +2399,7 @@ def test_inspection_excludes_workspace_and_pythonpath(
 
 
 def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
+    error_line = runtime_source_line("raise RuntimeError(")
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory).resolve()
         probe = build_interposer(workspace, "python_exit_state")
@@ -2450,7 +2451,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             content = records[-1]["result"]["content"][0]
             diagnostic = (
                 "Traceback (most recent call last):\n"
-                '  File "<string>", line 705, in _mcp_console_configure_environment\n'
+                f'  File "<string>", line {error_line}, in _mcp_console_configure_environment\n'
                 "RuntimeError: embedded Python prefix differs from the selected environment: "
                 f"'changed-by-startup-hook' != {str(venv)!r}\n"
             )

@@ -284,9 +284,17 @@ The built-in server-managed Python environment resolves a missing import when Py
 The private runtime appends a last-chance finder to `sys.meta_path`, after the existing built-in, frozen, path, and other finders.
 Already-installed, local, standard-library, and already-loaded modules therefore resolve without a host request.
 Availability queries such as `importlib.util.find_spec()` report the current environment without adding a requirement.
-If a missing optional import is reached while the default NumPy or pandas package is initializing, the finder leaves it to ordinary Python behavior instead of starting host resolution.
-Importing either available default therefore does not add optional modules encountered during its initialization to the retained manifest.
-A later direct import can resolve such a dependency after initialization finishes; an explicit `requirements.python` entry can prepare it earlier.
+Missing imports reached during an installed distribution's eager importlib initialization use ordinary Python behavior instead of starting host resolution.
+This lets packages catch `ImportError` for optional dependencies without silently adding them to the retained manifest; installed distributions are responsible for declaring their required dependencies.
+A later direct import or a library call after initialization can still resolve a missing dependency, and an explicit `requirements.python` entry can prepare it earlier.
+The finder checks that the importing module and active importlib initializer belong to the same distribution's recorded files, for both Python modules and native extensions.
+It reads metadata at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`.
+Local modules and Python callbacks remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer calls them.
+If an installation's metadata does not record the selected module file, its missing imports remain eligible for automatic resolution; package names alone do not establish ownership.
+The initialization boundary includes ordinary importlib loading and `importlib.reload()`.
+Module bodies deferred by `importlib.util.LazyLoader` until later attribute access fall outside that boundary and remain eligible for automatic resolution.
+A call into an already-loaded C extension does not expose its own Python frame, so a missing import inside that callback inherits the visible initializer's context.
+Calls to that extension after initialization remain eligible for automatic resolution.
 
 The finder infers one PyPI distribution from the top-level import name.
 A curated table covers established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.

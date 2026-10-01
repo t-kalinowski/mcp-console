@@ -443,8 +443,15 @@ Same-name resolution emits no notice.
 The private runtime appends a finder to `sys.meta_path` after Python's existing finders.
 Built-in, frozen, standard-library, local, already-installed, and already-loaded modules therefore resolve normally before MCP Console sees an import.
 Ordinary `import` statements, `from ... import ...`, and `importlib.import_module()` all use this machinery.
-Missing optional imports reached while the default NumPy or pandas package is initializing stay on Python's ordinary path, so importing either available default does not start host resolution.
-Import an optional dependency directly after initialization, or declare it through `requirements.python`, when it is needed.
+Missing imports reached during an installed distribution's eager importlib initialization stay on Python's ordinary path, so packages can catch `ImportError` for optional dependencies without starting host resolution.
+Import a dependency directly after initialization, call a library function that imports it later, or declare it through `requirements.python`, when it is needed.
+Distribution file metadata must identify the initializer and importing module as files of the same installed distribution, for both Python modules and native extensions.
+The finder reads metadata at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`.
+Local modules and Python callbacks remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer calls them.
+Installations whose metadata does not record the selected module file also remain eligible; package names alone do not establish ownership.
+The initialization boundary includes ordinary importlib loading and `importlib.reload()`; module bodies deferred until later attribute access by `importlib.util.LazyLoader` remain eligible for automatic resolution.
+A call into an already-loaded C extension does not expose its own Python frame, so a missing import inside that callback inherits the visible initializer's context.
+Calls to that extension after initialization remain eligible for automatic resolution.
 When every earlier finder misses, MCP Console takes the top-level name from the requested import.
 A curated table maps established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.
 For other conservative ASCII identifiers, it assumes that the PyPI distribution has the same name as the top-level module.

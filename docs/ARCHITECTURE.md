@@ -596,7 +596,14 @@ Ordinary resolver and activation errors leave an otherwise healthy worker availa
 
 Automatic Python resolution is also a callback from an active built-in worker.
 The private finder runs only after Python's existing import finders have failed, so available standard-library, local, and installed modules do not enter this path.
-It also yields without a callback for optional-dependency misses reached while the default NumPy or pandas package is initializing, so importing those available defaults does not change the managed environment.
+It also yields without a callback when the importing Python module or native extension and the active eager importlib initializer belong to the same installed distribution's recorded files.
+Ordinary loading and reload share that ownership check; frames inside the current import entrypoint, including an R adapter's wrapper, are import machinery.
+Metadata is read at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`, without a cache.
+This preserves ordinary optional-dependency handling; later calls and local modules, including cached Python callbacks invoked by installed initializers, remain eligible for automatic resolution.
+An installation without a recorded file matching the selected origin does not establish ownership and remains eligible for automatic resolution.
+Malformed installed file metadata is unsupported; parsing errors from corrupted records propagate instead of silently skipping the distribution.
+Deferred module bodies, including `importlib.util.LazyLoader` execution on later attribute access, fall outside this ordinary importlib initialization boundary.
+Cached C callbacks expose no Python frame of their own and inherit the visible initializer's context; calls after initialization remain eligible.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
 
 The Python finder calls the shared native requirement owner, which forms an additive request from its retained manifest.
