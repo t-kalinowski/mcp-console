@@ -3,7 +3,6 @@
 import json
 import os
 import select
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -36,24 +35,31 @@ def discovery_environment(
         os.mkfifo(alive)
         alive_reader = os.open(alive, os.O_RDONLY | os.O_NONBLOCK)
         probe = root / "R"
+        # The blocked descendant must exist before discovery reports readiness.
+        # A shell spawning dd after the checkpoint can race cancellation.
         probe.write_text(
-            code(r"""
-                #!/bin/sh
-                exec 3>ALIVE
-                printf 1 >&3
-                printf 1 > REACHED
-                /bin/dd bs=1 count=1 < RELEASE > /dev/null 2>&1
-                RESULT
+            code(f"""
+                #!{sys.executable} -S
+                import os
+                import sys
+                from pathlib import Path
+
+                home = {str(r_home) if r_home is not None else None!r}
+                with Path({str(alive)!r}).open("wb", buffering=0) as lifetime:
+                    child = os.fork()
+                    if child == 0:
+                        assert lifetime.write(b"1") == 1
+                        with Path({str(reached.path)!r}).open("wb", buffering=0) as reached:
+                            assert reached.write(b"1") == 1
+                        with Path({str(release.path)!r}).open("rb", buffering=0) as release:
+                            assert release.read(1) == b"1"
+                        os._exit(0)
+                    assert os.waitpid(child, 0) == (child, 0)
+                    if home is None:
+                        print("fixture R discovery failed", file=sys.stderr)
+                        raise SystemExit(17)
+                    print(home)
                 """)
-            .replace(
-                "RESULT",
-                "printf '%s\\n' " + shlex.quote(str(r_home))
-                if r_home is not None
-                else "printf 'fixture R discovery failed\\n' >&2\nexit 17",
-            )
-            .replace("ALIVE", shlex.quote(str(alive)))
-            .replace("REACHED", shlex.quote(str(reached.path)))
-            .replace("RELEASE", shlex.quote(str(release.path)))
         )
         probe.chmod(0o755)
         environment = bare_runtime_environment(os.environ.copy(), root / "library")
