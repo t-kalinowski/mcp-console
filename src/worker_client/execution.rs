@@ -414,7 +414,7 @@ impl Client {
                 sandbox_settings: &self.0.sandbox_settings,
                 python,
                 managed_r,
-                dynamic_resolution: self.dynamic_resolution(),
+                dynamic_resolution: self.0.dynamic_resolution,
                 callbacks: WorkerCallbacks {
                     client: self.clone(),
                     generation,

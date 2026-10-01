@@ -1,11 +1,11 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
 
-use super::{Client, Environment, PythonEnvironment, WorkerState, platform};
+use super::{Environment, PythonEnvironment, WorkerState, platform};
 
-pub(super) struct ClientConfiguration {
+pub(crate) struct ClientConfiguration {
     pub(super) runtime: platform::WorkerRuntime,
     pub(super) program: PathBuf,
     pub(super) arguments: Vec<OsString>,
@@ -40,14 +40,14 @@ pub(super) struct BuiltinSetup {
     pub(super) configured_python: Option<OsString>,
 }
 
-impl Client {
+impl ClientConfiguration {
     pub(crate) fn new(
         program: PathBuf,
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-    ) -> Result<Self, String> {
-        Ok(Self::with_arguments(
+    ) -> Self {
+        Self::with_arguments(
             program,
             Vec::new(),
             relay,
@@ -62,7 +62,7 @@ impl Client {
                 r: None,
                 r_resolver: RResolver::Discover,
             }),
-        ))
+        )
     }
 
     pub(crate) fn builtin(
@@ -182,7 +182,7 @@ impl Client {
             )?),
             RResolver::Discover,
         );
-        let mut client = Self::with_arguments(
+        let mut configuration = Self::with_arguments(
             program,
             vec![OsString::from("worker")],
             None,
@@ -198,16 +198,11 @@ impl Client {
                 r_resolver,
             }),
         );
-        let inner = Arc::get_mut(&mut client.0)
-            .expect("new client")
-            .configuration
-            .get_mut()
-            .expect("configured client");
-        inner.local_preparation = Mutex::new(local_preparation);
-        Ok(client)
+        configuration.local_preparation = Mutex::new(local_preparation);
+        Ok(configuration)
     }
 
-    pub(super) fn with_arguments(
+    fn with_arguments(
         program: PathBuf,
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
@@ -232,46 +227,37 @@ impl Client {
                     .and_then(PythonEnvironment::managed)
                     .is_some()
             });
-        let client = Self::pending();
-        assert!(
-            client
-                .0
-                .configuration
-                .set(ClientConfiguration {
-                    runtime: platform::WorkerRuntime,
-                    program,
-                    arguments,
-                    relay,
-                    no_sandbox,
-                    sandbox_settings,
-                    worker: Mutex::new(WorkerState::Initial),
-                    requirements_snapshot: Mutex::new(
-                        environment
-                            .as_ref()
-                            .map(Environment::inspection)
-                            .unwrap_or(serde_json::Value::Null),
-                    ),
-                    runtime_r_requirements: environment
-                        .as_ref()
-                        .map(|env| {
-                            env.runtime_r_requirements()
-                                .iter()
-                                .map(|s| (*s).into())
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                    environment: environment.map(Mutex::new),
-                    dynamic_resolution,
-                    python_only,
-                    python_preparation,
-                    local_preparation: Mutex::new(None),
-                    target: None,
-                    unused_default: AtomicBool::new(false),
+        Self {
+            runtime: platform::WorkerRuntime,
+            program,
+            arguments,
+            relay,
+            no_sandbox,
+            sandbox_settings,
+            worker: Mutex::new(WorkerState::Initial),
+            requirements_snapshot: Mutex::new(
+                environment
+                    .as_ref()
+                    .map(Environment::inspection)
+                    .unwrap_or(serde_json::Value::Null),
+            ),
+            runtime_r_requirements: environment
+                .as_ref()
+                .map(|env| {
+                    env.runtime_r_requirements()
+                        .iter()
+                        .map(|s| (*s).into())
+                        .collect()
                 })
-                .is_ok()
-        );
-        client.finish_startup(Ok(()));
-        client
+                .unwrap_or_default(),
+            environment: environment.map(Mutex::new),
+            dynamic_resolution,
+            python_only,
+            python_preparation,
+            local_preparation: Mutex::new(None),
+            target: None,
+            unused_default: AtomicBool::new(false),
+        }
     }
 
     pub(crate) fn target(
@@ -299,7 +285,7 @@ impl Client {
             python.as_deref(),
             started,
         )?;
-        let mut client = Self::with_arguments(
+        let mut configuration = Self::with_arguments(
             std::env::current_exe().map_err(|error| error.to_string())?,
             Vec::new(),
             None,
@@ -315,26 +301,21 @@ impl Client {
                 r_resolver: RResolver::Disabled,
             }),
         );
-        let inner = Arc::get_mut(&mut client.0)
-            .expect("new client")
-            .configuration
-            .get_mut()
-            .expect("configured client");
-        inner.python_only = session.python_only();
-        inner.target = Some(session);
-        Ok(client)
+        configuration.python_only = session.python_only();
+        configuration.target = Some(session);
+        Ok(configuration)
     }
 
     pub(crate) fn target_metadata(&self) -> Option<serde_json::Value> {
-        let target = self.0.target.as_ref()?;
+        let target = self.target.as_ref()?;
         let mut metadata = target.metadata();
         let provider = target.provider();
         metadata["provider"] = serde_json::json!(provider);
-        metadata["inner_native_runner"] = provider.needs_native_runner(self.0.no_sandbox).into();
+        metadata["inner_native_runner"] = provider.needs_native_runner(self.no_sandbox).into();
         Some(metadata)
     }
 
-    pub(crate) fn ssh(
+    fn ssh(
         mut session: crate::ssh::Session,
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
@@ -362,7 +343,7 @@ impl Client {
             Ok((discovery, extensions))
         })()
         .map_err(|error| {
-            // No Client owns shutdown if startup fails after discovery.
+            // No installed configuration owns shutdown if discovery fails.
             if let Some(preparation) = &session.preparation
                 && let Err(cleanup) = preparation.close()
             {
@@ -416,7 +397,7 @@ impl Client {
                 r_selection,
             )
         };
-        let mut client = Self::with_arguments(
+        let mut configuration = Self::with_arguments(
             std::env::current_exe().map_err(|error| error.to_string())?,
             Vec::new(),
             None,
@@ -432,31 +413,25 @@ impl Client {
                 r_resolver,
             }),
         );
-        Arc::get_mut(&mut client.0)
-            .expect("new client has one owner")
-            .configuration
-            .get_mut()
-            .expect("configured client")
-            .target = Some(crate::target_session::Session::Ssh(session));
-        Ok(client)
+        configuration.target = Some(crate::target_session::Session::Ssh(session));
+        Ok(configuration)
     }
 
-    pub(crate) fn python_available(&self) -> bool {
-        self.0
-            .target
+    pub(super) fn python_available(&self) -> bool {
+        self.target
             .as_ref()
             .is_none_or(|target| target.python_available())
     }
 
     pub(crate) fn python_only(&self) -> bool {
-        self.0.python_only
+        self.python_only
     }
 
     pub(crate) fn python_preparation(&self) -> bool {
-        self.0.python_preparation
+        self.python_preparation
     }
 
     pub(crate) fn dynamic_resolution(&self) -> bool {
-        self.0.dynamic_resolution
+        self.dynamic_resolution
     }
 }

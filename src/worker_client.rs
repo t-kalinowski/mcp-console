@@ -23,7 +23,8 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use configuration::{ClientConfiguration, RResolver};
+pub(crate) use configuration::ClientConfiguration;
+use configuration::RResolver;
 use environment::{Environment, PythonEnvironment, RuntimeRResolutionFailure};
 pub(crate) use environment::{Requirements, RequirementsAction};
 use evaluation::Evaluation;
@@ -298,17 +299,8 @@ impl Client {
         }))
     }
 
-    pub(crate) fn configure(&self, configured: Self) {
-        let inner = match Arc::try_unwrap(configured.0) {
-            Ok(inner) => inner,
-            Err(_) => panic!("runtime configuration must have one owner"),
-        };
-        assert!(
-            self.0
-                .configuration
-                .set(inner.configuration.into_inner().expect("configured client"))
-                .is_ok()
-        );
+    pub(crate) fn configure(&self, configuration: ClientConfiguration) {
+        assert!(self.0.configuration.set(configuration).is_ok());
         self.0.unused_default.store(
             self.0.environment.as_ref().is_some_and(|environment| {
                 !environment

@@ -66,8 +66,8 @@ impl ConsoleServer {
         });
         let prelaunch = worker.is_none();
         let startup = startup::Startup::new(input_closed, runtime, prelaunch, move |started| {
-            let worker = if let Some((target, roots)) = target {
-                crate::worker_client::Client::target(
+            let configuration = if let Some((target, roots)) = target {
+                crate::worker_client::ClientConfiguration::target(
                     target,
                     roots,
                     no_sandbox,
@@ -76,25 +76,32 @@ impl ConsoleServer {
                     started,
                 )?
             } else if let Some(program) = worker {
-                crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
+                crate::worker_client::ClientConfiguration::new(
+                    program,
+                    relay,
+                    no_sandbox,
+                    sandbox_settings,
+                )
             } else {
-                crate::worker_client::Client::builtin(
+                crate::worker_client::ClientConfiguration::builtin(
                     no_sandbox,
                     sandbox_settings,
                     python,
                     started,
                 )?
             };
-            let target = worker.target_metadata();
-            let dynamic_resolution = worker.dynamic_resolution();
+            let target = configuration.target_metadata();
             let transcript = crate::transcript::Transcript::with_target(
                 recording_directory,
-                dynamic_resolution,
-                worker.python_preparation(),
-                !worker.python_only(),
-                target.clone(),
+                configuration.dynamic_resolution(),
+                configuration.python_preparation(),
+                !configuration.python_only(),
+                target,
             );
-            Ok(startup::Runtime { worker, transcript })
+            Ok(startup::PreparedRuntime {
+                configuration,
+                transcript,
+            })
         });
         Ok(Self {
             startup,

@@ -126,7 +126,7 @@ impl Client {
         if let Some(cell) = &request.cell {
             self.validate_cell(cell)?;
         }
-        request.validate(self.dynamic_resolution() || self.python_preparation())?;
+        request.validate(self.0.dynamic_resolution || self.0.python_preparation)?;
         if let Some(control) = request.control {
             return self.send_controlled(control, request).await;
         }
@@ -443,10 +443,10 @@ impl Client {
     }
 
     pub(super) fn validate_language(&self, language: crate::cell::Language) -> Result<(), String> {
-        if self.python_only() && matches!(language, crate::cell::Language::R) {
+        if self.0.python_only && matches!(language, crate::cell::Language::R) {
             return Err("R cells are unavailable in Python sessions without R".into());
         }
-        if !self.python_available() && matches!(language, crate::cell::Language::Python) {
+        if !self.0.python_available() && matches!(language, crate::cell::Language::Python) {
             return Err("Python cells are unavailable: the target has no Python runtime".into());
         }
         Ok(())
@@ -496,8 +496,8 @@ impl Client {
                 target.protocol().0
             ));
         }
-        if self.python_only() {
-            if !self.python_preparation() {
+        if self.0.python_only {
+            if !self.0.python_preparation {
                 if !requirements.duckdb.is_empty() {
                     return Err("DuckDB extension preparation is unavailable with a user-selected Python environment; install extensions before starting the session".into());
                 }
@@ -507,7 +507,7 @@ impl Client {
                 return Err("R requirements are unavailable in Python sessions without R".into());
             }
         }
-        if !self.dynamic_resolution() && !self.python_preparation() {
+        if !self.0.dynamic_resolution && !self.0.python_preparation {
             return Err("dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console".into());
         }
         Ok(())

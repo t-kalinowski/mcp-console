@@ -85,7 +85,7 @@ impl Client {
                 return Ok(PrepareResult::Prepared);
             }
             self.require_explicit_restart(&delta)?;
-            if self.python_only() {
+            if self.0.python_only {
                 self.validate_live_native_delta(&environment, &delta)?;
             }
             if matches!(intent, PreparationIntent::Standalone)
@@ -164,7 +164,7 @@ impl Client {
             .unused_default
             .load(std::sync::atomic::Ordering::Acquire)
             && matches!(&*worker, WorkerState::Running(_));
-        if self.python_only() && !replace_default {
+        if self.0.python_only && !replace_default {
             match &*worker {
                 WorkerState::Initial => {}
                 WorkerState::Running(_) => {
@@ -221,7 +221,7 @@ impl Client {
             } else {
                 None
             };
-            if self.python_only() && duckdb_changed && python_candidate.is_none() {
+            if self.0.python_only && duckdb_changed && python_candidate.is_none() {
                 let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
                 if let Err(failure) = self.resolve_python_duckdb_extensions_for_environment(
                     generation,
@@ -230,7 +230,7 @@ impl Client {
                 ) {
                     return self.finish_environment_resolution_failure(generation, intent, failure);
                 }
-            } else if !self.python_only()
+            } else if !self.0.python_only
                 && !duckdb_extensions.is_empty()
                 && (duckdb_changed || managed_r.is_some())
             {
@@ -454,7 +454,8 @@ impl Client {
             let result = running.prepare_python(
                 python_packages,
                 includes_r,
-                self.python_only()
+                self.0
+                    .python_only
                     .then(|| duckdb_extensions.clone())
                     .flatten(),
                 commit,
