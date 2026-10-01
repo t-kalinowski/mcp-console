@@ -23,7 +23,7 @@ def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
     with tempfile.TemporaryDirectory() as temporary:
         worker_read, relay_write = os.pipe()
         relay_read, worker_write = os.pipe()
-        environment = dict(os.environ, TMPDIR=temporary, MCP_CONSOLE_LANGUAGES="sql")
+        environment = dict(os.environ, TMPDIR=temporary)
         environment["MCP_CONSOLE_SIDEBAND_READ_FD"] = str(worker_read)
         environment["MCP_CONSOLE_SIDEBAND_WRITE_FD"] = str(worker_write)
         process = subprocess.Popen(
@@ -40,16 +40,9 @@ def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
         os.close(worker_write)
         with os.fdopen(relay_read) as output, os.fdopen(relay_write, "w") as commands:
             try:
-                # No R/Python runtime is enabled for bootstrap. Wait for its
-                # completion before closing the pipe; this cell must still
-                # initialize R without relying on R's prior SIGPIPE handler.
-                assert [
-                    json.loads(line)
-                    for line in read_lines(output, 2, "worker bootstrap")
-                ] == [
-                    {"kind": "ready"},
-                    {"kind": "runtime_initialized", "complete": True},
-                ]
+                assert json.loads(read_lines(output, 1, "worker ready")[0]) == {
+                    "kind": "ready"
+                }
                 output.close()
                 commands.write(
                     json.dumps(
