@@ -13,6 +13,7 @@ from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
+from support.r import isolated_r_home
 from support.records import Transcript
 from support.suites import run_this_suite
 from support.requirements import command, requires
@@ -287,6 +288,34 @@ def test_r_duckdb_replacement_failure_and_reset(
         environment, record = recording_fixture_r_environment(
             Path(directory), ("mcpcleared",)
         )
+        native_rscript = (Path(environment["R_HOME"]) / "bin/Rscript").resolve()
+        selected = isolated_r_home(Path(directory), environment)
+        rscript = selected / "bin/Rscript"
+        rscript.unlink()
+        native_stderr = Path(directory) / "rscript.stderr"
+        environment["MCP_CONSOLE_TEST_REAL_RSCRIPT"] = str(native_rscript)
+        environment["MCP_CONSOLE_TEST_RSCRIPT_STDERR"] = str(native_stderr)
+        # Capture the native resolver diagnostic before Console receives it.
+        # fmt: python
+        capture = code("""
+            import os
+            import subprocess
+            import sys
+            from pathlib import Path
+
+            result = subprocess.run(
+                [os.environ["MCP_CONSOLE_TEST_REAL_RSCRIPT"], *sys.argv[1:]],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            if result.returncode != 0:
+                Path(os.environ["MCP_CONSOLE_TEST_RSCRIPT_STDERR"]).write_bytes(result.stderr)
+            sys.stdout.buffer.write(result.stdout)
+            sys.stderr.buffer.write(result.stderr)
+            raise SystemExit(result.returncode)
+            """)
+        rscript.write_text(f"#!{sys.executable}\n{capture}")
+        rscript.chmod(0o755)
         environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = "missing.fixture"
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
@@ -317,23 +346,21 @@ def test_r_duckdb_replacement_failure_and_reset(
             )
             assert failure.get("isError"), failure
             error = failure["content"][0]["text"]
-            assert error.startswith(
-                "DuckDB extension resolution failed with exit status: 1: "
-            ), error
+            prefix = "DuckDB extension resolution failed with exit status: 1: "
+            expected = prefix + native_stderr.read_text().strip()
+            assert error == expected, {"actual": error, "expected": expected}
             assert (
                 'Failed to download extension "not_a_real_duckdb_extension"' in error
             ), error
             assert "(HTTP 404)" in error, error
-            for pattern, replacement in (
-                (r'(?<= at URL )"https?://[^"]+"', '"<DuckDB extension URL>"'),
-                (
-                    r"https://duckdb\.org/docs/stable/extensions/troubleshooting\?\S+",
-                    "<DuckDB extension troubleshooting URL>",
-                ),
-            ):
-                error, count = re.subn(pattern, replacement, error, count=1)
-                assert count == 1, error
-            failure["content"][0]["text"] = error
+            failure["content"][0]["text"] = (
+                prefix + "<stderr identical to live Rscript --vanilla>"
+            )
+            client.transcript[-1]["transcript_normalization"] = {
+                "target": "result.content[0].text",
+                "reference": "native Rscript --vanilla stderr captured before forwarding",
+                "comparison": "exact equality after exit-status prefix; outer whitespace trimmed",
+            }
             assert inspect(client) == empty
             client.send(r="stopifnot(marker == 42L, pid == Sys.getpid())")
             assert last_tool_text(client) == "[done]"
