@@ -99,15 +99,7 @@ External SSH tests automatically use a reachable optional host, with selection a
 Keep Python SDK integration test dependencies free of exact version pins, retain the published dependency lower bounds, and constrain MCP to the supported major using `==2.*`.
 Keep one CI job per platform.
 CI restores Cargo build data across source and dependency changes within the same OS version, architecture, toolchain, applicable R version, and UTC week, with incremental compilation enabled.
-Use `ImageOS` in cache keys; log the full `ImageVersion` without including it in cache identities.
-Keep every GitHub Actions cache key and restore prefix within the current UTC ISO week, including uv, IR/renv, R package libraries, downloads, source archives, and finished build outputs.
-The first CI run with a fresh weekly uv cache resolves current SDK releases; later runs may reuse that environment.
-Skip runner staging only when both its finished artifacts and build data are exact cache hits.
-Ordinary source edits reuse one cached baseline per dependency set rather than saving another target-directory snapshot.
-Keep `main` caches reusable by PRs and remove caches for closed PRs.
-Cargo determines which crates need rebuilding.
-An exact match of compiled and packaging inputs additionally lets CI skip the release build and reuse a finished wheel and native bundle; it still runs the current tests.
-Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when build inputs outside the hashed files change, such as workflow build flags or native dependency setup; unrelated workflow edits must not invalidate build caches.
+Follow the [CI build and cache contract](RELEASE.md#private-sandbox-executable) for cache keys and weekly resets, runner staging, finished-output reuse, SDK resolution, and cache invalidation and cleanup.
 Source installation checks run after the other checks because they replace and hide the shared Cargo target directory.
 Python package builds and installations require Python 3.11 or later.
 
