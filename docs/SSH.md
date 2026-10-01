@@ -125,7 +125,7 @@ Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 Mi
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
 SSH launch protocol version 7 and preparation version 5 carry independent R and Python selections and inspection operations.
-An R-present payload can carry a complete inspected Python identity or leave Python selection lazy.
+An R-present payload can carry a complete inspected Python identity or leave selection to the R compatibility adapter during bootstrap.
 Docker and Docker Sandbox also use launch version 7.
 Version 7 removes the separate native preparation request and carries live-interpreter status for shared tool resolution; preparation protocol version 5 is unchanged.
 Version 6 accepts Python activation-failure receipts during preparation and idle callbacks as well as cells; older servers would stop that worker.

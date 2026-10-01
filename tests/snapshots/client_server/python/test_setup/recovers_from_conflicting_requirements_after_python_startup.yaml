@@ -10,11 +10,21 @@ result:
   isError: false
 ---
 send:
+  python: >-
+    import sys; retained_object = object(); retained_object_id =
+    id(retained_object); print(sys.executable)
+result:
+  content:
+    - type: text
+      text: |
+        <running Python>
+  isError: false
+---
+send:
   python: raise AssertionError('failed preparation ran the cell')
   requirements:
     python:
-      - numpy<1
-      - numpy>=2
+      - py-yaml12<0
 result:
   content:
     - type: text
@@ -22,23 +32,21 @@ result:
         managed Python resolution failed:
         resolver input:
         {
-          "python": "3.12.XX (reticulate default)",
+          "python": "<running Python>",
           "packages": [
             "numpy",
             "pandas",
-            "numpy<1",
-            "numpy>=2"
+            "py-yaml12<0"
           ]
         }
         uv output:
         × No solution found when resolving tool dependencies:
-          ╰─▶ Because you require numpy<1 and numpy>=2, we can conclude that your
-              requirements are unsatisfiable.
+          ╰─▶ you require py-yaml12<0, which does not allow any versions
   isError: true
 ---
 send:
   r: |
-    stopifnot(!reticulate::py_available(initialize = FALSE))
+    stopifnot(isTRUE(reticulate::py_eval("id(retained_object) == retained_object_id")))
     startup_marker + 1L
 result:
   content:
@@ -48,10 +56,10 @@ result:
   isError: false
 ---
 send:
-  python: r.startup_marker + 1
+  python: assert id(retained_object) == retained_object_id; r.startup_marker + 1
   requirements:
     python:
-      - numpy
+      - py-yaml12
 result:
   content:
     - type: text

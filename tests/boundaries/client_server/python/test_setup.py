@@ -25,7 +25,11 @@ from support.native import build_interposer
 from support.python import runtime_source_line
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
-from support.resolvers import send_and_collect_runtime_python_resolution
+from support.resolvers import (
+    bare_runtime_environment,
+    send_and_collect_runtime_python_resolution,
+)
+from support.r import r_test_environment
 from support.suites import run_this_suite
 
 
@@ -51,6 +55,80 @@ def startup_client(
             yield client
 
 
+@contextmanager
+def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
+    """Arrange the public retryable, uninitialized state for selection tests."""
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, rscript = r_test_environment()
+        libraries = subprocess.check_output(
+            [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
+            env=environment,
+            text=True,
+        ).splitlines()
+        library_paths = ", ".join(json.dumps(path) for path in libraries)
+        package = directory / "package"
+        (package / "R").mkdir(parents=True)
+        (package / "DESCRIPTION").write_text(
+            "Package: consoleselectionfixture\nVersion: 0.0.0\n"
+            "Title: Deferred Selection Fixture\nDescription: Interrupt eager selection.\n"
+            "License: MIT\nAuthor: Test Fixture\nMaintainer: Test Fixture <test@example.org>\n"
+        )
+        (package / "NAMESPACE").write_text("")
+        (package / "R/startup.R").write_text(
+            # fmt: r
+            code(f"""
+                .onAttach <- function(libname, pkgname) {{
+                  if (interactive()) {{
+                    .libPaths(c({library_paths}, .libPaths()))
+                    if (!file.exists({json.dumps(str(directory / "interrupted"))})) {{
+                      options(reticulate.python.beforeInitialized = function() {{
+                        options(reticulate.python.beforeInitialized = NULL)
+                        readline("defer selection> ")
+                        stop(structure(
+                          list(message = "fixture bootstrap interrupt", call = NULL),
+                          class = c("interrupt", "condition")
+                        ))
+                      }})
+                    }}
+                  }}
+                }}
+                """)
+        )
+        library = directory / "library"
+        library.mkdir()
+        subprocess.run(
+            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", package],
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        environment = bare_runtime_environment(environment, library)
+        environment["R_DEFAULT_PACKAGES"] = (
+            "datasets,utils,grDevices,graphics,stats,methods,consoleselectionfixture"
+        )
+        with McpClient(binary, serve, environment, directory) as client:
+            client.initialize_and_list_tools()
+            initialized = client.transcript.copy()
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "defer selection> "]\n[waiting for stdin]',
+                "deferred selection fixture",
+                python="raise AssertionError('interrupted bootstrap ran setup cell')",
+                timeout_ms=0,
+            )
+            client.send(stdin="\n")
+            assert client.transcript[-1]["result"].get("isError") is not True
+            assert "AssertionError" not in last_result_text(client)
+            client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            # Mark from the controller so the sentinel survives private sandbox storage.
+            (directory / "interrupted").touch()
+            # Bootstrap arrangement is shared fixture setup, not this case's transcript.
+            client.transcript[:] = initialized
+            yield client
+
+
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_preserves_queued_inspection_interrupt(
@@ -65,8 +143,7 @@ def test_preserves_queued_inspection_interrupt(
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with deferred_selection_client(binary, serve) as client:
             client.send(
                 # fmt: r
                 r=code(f"""
@@ -150,8 +227,7 @@ def test_cancels_native_inspection_and_retries(
                 if execution == SANDBOXED
                 else execution.serve()
             )
-            with McpClient(binary, serve) as client:
-                client.initialize_and_list_tools()
+            with deferred_selection_client(binary, serve) as client:
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -223,8 +299,7 @@ def test_cancels_native_inspection_and_retries(
 def test_retries_failed_native_inspection(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         client.send(
             # fmt: r
             r=code("""
@@ -327,8 +402,7 @@ def test_console_configures_selected_python(
                 if execution == SANDBOXED
                 else execution.serve()
             )
-            with McpClient(binary, serve) as client:
-                client.initialize_and_list_tools()
+            with deferred_selection_client(binary, serve) as client:
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -409,8 +483,7 @@ def test_python_first_initializes_before_reticulate_attaches(
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -498,8 +571,7 @@ def test_r_first_initializes_before_reticulate_attaches(
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -545,8 +617,7 @@ def test_r_first_initializes_before_reticulate_attaches(
 def test_r_first_runs_selection_callback_once(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
             Sys.unsetenv("RETICULATE_PYTHON")
@@ -581,8 +652,7 @@ def test_retries_attachment_without_reinitializing_python(
             if execution == SANDBOXED
             else execution.serve()
         )
-        with McpClient(binary, serve) as client:
-            client.initialize_and_list_tools()
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -643,8 +713,7 @@ def test_retries_attachment_without_reinitializing_python(
 def test_partial_attachment_requires_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         client.send(
             python="attachment_object = object(); attachment_identity = id(attachment_object)"
         )
@@ -677,8 +746,7 @@ def test_partial_attachment_requires_restart(
 def test_retries_selection_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code(r"""
             r_marker <- 41L
@@ -723,8 +791,7 @@ def test_retries_selection_after_interrupt(
 def test_restores_selection_environment_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code(r"""
             Sys.setenv(PYTHONPATH = "selection-original")
@@ -800,10 +867,10 @@ def test_restores_selection_environment_after_interrupt(
 def test_restores_virtualenv_after_selection_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
+            reticulate::use_python(normalizePath(Sys.which("python3")), required = TRUE)
             interrupted <- TRUE
             invisible(suppressMessages(base::trace(
               "py_discover_config",
@@ -847,32 +914,43 @@ def test_restores_virtualenv_after_selection_interrupt(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_recovers_from_conflicting_requirements_before_python_startup(
+def test_recovers_from_conflicting_requirements_after_python_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
         client.send(r="startup_marker <- 41L")
         assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(
+            python="import sys; retained_object = object(); retained_object_id = id(retained_object); print(sys.executable)"
+        )
+        running_python = last_result_text(client).strip()
+        assert Path(running_python).is_file(), client.transcript[-1]
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
         result = client.send(
             python="raise AssertionError('failed preparation ran the cell')",
-            requirements={"python": ["numpy<1", "numpy>=2"]},
+            requirements={"python": ["py-yaml12<0"]},
         )
         assert result["isError"] is True, result
         output = last_result_text(client)
         assert "No solution found" in output, client.transcript[-1]
         client.transcript[-1]["result"]["content"][0]["text"] = (
-            normalize_python_resolution_error(output)
+            normalize_python_resolution_error(output, executable=running_python)
         )
         client.send(
             # fmt: r
             r=code("""
-                stopifnot(!reticulate::py_available(initialize = FALSE))
+                stopifnot(isTRUE(reticulate::py_eval(
+                  "id(retained_object) == retained_object_id"
+                )))
                 startup_marker + 1L
                 """)
         )
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
-        client.send(python="r.startup_marker + 1", requirements={"python": ["numpy"]})
+        client.send(
+            python="assert id(retained_object) == retained_object_id; r.startup_marker + 1",
+            requirements={"python": ["py-yaml12"]},
+        )
         assert last_result_text(client) == "42\n", client.transcript[-1]
         return client.finish()
 
@@ -881,8 +959,7 @@ def test_recovers_from_conflicting_requirements_before_python_startup(
 def test_serializes_selected_python_once_inside_interrupt_boundary(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code(r"""
             original_environment <- Sys.getenv(
@@ -938,12 +1015,9 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
         # fmt: python
         python = code("""
-            import importlib.util
-
-            assert importlib.util.find_spec("yaml12") is not None
             42
             """)
-        client.send(python=python, requirements={"python": ["py-yaml12"]})
+        client.send(python=python)
         assert last_result_text(client) == "42\n", client.transcript[-1]
         client.send(r="stopifnot(selection_serializations == 2L); 42L")
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
