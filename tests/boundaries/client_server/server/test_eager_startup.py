@@ -207,8 +207,9 @@ def ready_without_send(
                 if close:
                     try:
                         client.close()
-                        assert not live_processes(descendants), (
-                            "prelaunch resources survived MCP closure"
+                        survivors = live_processes(descendants)
+                        assert not survivors, (
+                            f"prelaunch resources survived MCP closure: {survivors}"
                         )
                         return [*client.finish(), {"prelaunch_resources_retired": True}]
                     finally:
