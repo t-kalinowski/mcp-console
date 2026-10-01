@@ -27,6 +27,9 @@ send:
         sys.base_exec_prefix,
     ]
     program = Path("identity_module.py").read_text(encoding="utf-8")
+    native_program_name = json.loads(
+        Path("native_program_name.json").read_text(encoding="utf-8")
+    )
     user = ["two words", "λ", "--literal"]
     invocations = [
         ([], [""], program),
@@ -45,7 +48,7 @@ send:
         )
         assert child["identity"] == identity, (child, identity)
         assert child["argv"] == expected_argv, child
-        assert child["orig_argv"] == [sys.executable, *arguments], child
+        assert child["orig_argv"] == [native_program_name, *arguments], child
         assert child["virtualenv"] == sys.prefix, child
     sys.argv[:] = ["user script.py", *user]
     sys.orig_argv[:] = [sys.executable, "user script.py", *user]
@@ -104,6 +107,9 @@ send:
         sys.base_exec_prefix,
     ]
     program = Path("identity_module.py").read_text(encoding="utf-8")
+    native_program_name = json.loads(
+        Path("native_program_name.json").read_text(encoding="utf-8")
+    )
     user = ["two words", "λ", "--literal"]
     invocations = [
         ([], [""], program),
@@ -122,7 +128,7 @@ send:
         )
         assert child["identity"] == identity, (child, identity)
         assert child["argv"] == expected_argv, child
-        assert child["orig_argv"] == [sys.executable, *arguments], child
+        assert child["orig_argv"] == [native_program_name, *arguments], child
         assert child["virtualenv"] == sys.prefix, child
     sys.argv[:] = ["user script.py", *user]
     sys.orig_argv[:] = [sys.executable, "user script.py", *user]
@@ -197,6 +203,9 @@ send:
         sys.base_exec_prefix,
     ]
     program = Path("identity_module.py").read_text(encoding="utf-8")
+    native_program_name = json.loads(
+        Path("native_program_name.json").read_text(encoding="utf-8")
+    )
     user = ["two words", "λ", "--literal"]
     invocations = [
         ([], [""], program),
@@ -215,7 +224,7 @@ send:
         )
         assert child["identity"] == identity, (child, identity)
         assert child["argv"] == expected_argv, child
-        assert child["orig_argv"] == [sys.executable, *arguments], child
+        assert child["orig_argv"] == [native_program_name, *arguments], child
         assert child["virtualenv"] == sys.prefix, child
     sys.argv[:] = ["user script.py", *user]
     sys.orig_argv[:] = [sys.executable, "user script.py", *user]
