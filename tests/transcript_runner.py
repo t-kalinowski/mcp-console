@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import select
 import shlex
 import shutil
@@ -2244,6 +2245,8 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
             f"{suite}::selected",
             f"{suite}::unselected",
         ]
+        source = self.suite.relative_to(self.root)
+        snapshots = self.snapshots.relative_to(self.root)
 
         listed = self.run_runner("--full", "--list")
         self.assertEqual(listed.returncode, 0, listed.stderr)
@@ -2253,11 +2256,11 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
         self.assertEqual(located.returncode, 0, located.stderr)
         self.assertEqual(located.stdout.splitlines()[0], f"{suite}::selected")
         self.assertIn(
-            "source: tests/boundaries/client_server/server/test_tools.py:",
+            f"source: {source}:",
             located.stdout,
         )
         self.assertIn(
-            "snapshot: tests/snapshots/client_server/server/test_tools/selected.yaml",
+            f"snapshot: {snapshots / 'selected.yaml'}",
             located.stdout,
         )
 
@@ -2270,12 +2273,11 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
             self.assertEqual(located_lines[3 * index], case)
             self.assertRegex(
                 located_lines[3 * index + 1],
-                r"^  source: tests/boundaries/client_server/server/test_tools\.py:\d+$",
+                rf"^  source: {re.escape(str(source))}:\d+$",
             )
             self.assertEqual(
                 located_lines[3 * index + 2],
-                "  snapshot: "
-                f"tests/snapshots/client_server/server/test_tools/{case_name}.yaml",
+                f"  snapshot: {snapshots / (case_name + '.yaml')}",
             )
 
 

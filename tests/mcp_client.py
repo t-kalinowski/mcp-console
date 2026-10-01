@@ -241,6 +241,7 @@ class McpClientTests(unittest.TestCase):
                 text=True,
                 start_new_session=True,
                 cwd=root,
+                env=os.environ | {"MCP_CONSOLE_TEST_BINARY": str(binary)},
             )
             try:
                 yield process, root, checkpoints
