@@ -1,322 +1,44 @@
 # Boundary tests
 
-For embedded programs, execution modes, and lifecycle receipts, start with the [authoring recipe](AUTHORING.md).
+Tests capture behavior at process interfaces.
+Use the outermost boundary that can observe a regression; private-boundary tests should cover their seam rather than repeat public result text.
 
-`scripts/test` and its `--quick` alias run the explicit smoke selection in [`_profiles.py`](_profiles.py), using existing cases, execution modes, and snapshots.
-The selection uses exact case names so new cases do not silently expand the local gate.
-`scripts/test --full` includes all capability-applicable cases; CI explicitly uses this full profile.
-Explicit selectors retain their scope with any profile flag.
-Use `scripts/test --list` to inspect the smoke selection or `scripts/test --full --list` to discover all cases.
-Only full runs without a case, suite, or `--locate` selector audit orphan snapshots globally; use `scripts/test --full --update` for a complete snapshot update and orphan cleanup.
-Smoke and focused updates preserve unselected snapshots.
-The development wrapper records completed per-mode durations in `case-timings.jsonl` beside its completion record, including cases too fast for the progress reporter's slow-case messages.
+| Boundary        | Contract                                                            |
+| --------------- | ------------------------------------------------------------------- |
+| `client_server` | MCP negotiation, tool schema, results, errors, and delivery.        |
+| `server_relay`  | Private JSONL framing, ordering, and generation ownership.          |
+| `relay_worker`  | Worker sideband, standard streams, EOF, crash, and shutdown.        |
+| `cli`           | Arguments, exit status, signals, terminals, and sandbox guarantees. |
 
-Each case gets a private `MCP_CONSOLE_HOME` for fallback configuration and records.
-Cases also run from a temporary workspace, so an existing checkout `.agents/console` cannot capture their recordings or supply configuration.
-The runner removes the workspace and Console home after the case exits.
-`HOME` and the caller's R, Python, uv, and Docker environment remain unchanged; test discovery does not probe runtimes to reconstruct their storage paths.
-`McpClient` also isolates Console home when used outside the runner and creates no project config file.
-Cases that exercise home discovery pass their chosen `HOME` or `MCP_CONSOLE_HOME` explicitly and use `use_home_configuration=True`; remove the inherited `MCP_CONSOLE_HOME` when testing the default `~/.agents/console` location.
+Security and liveness cases may need causal or process assertions in addition to a snapshot.
+Do not assert incidental internal sequencing.
+Keep a combined case when the interaction itself is a plausible failure mode.
 
-The `client_server/server/test_no_r_ssh` cases use real OpenSSH and a fixture-owned remote PATH without R executables, including on R-enabled hosts.
+## Running cases
 
-The unusable-library case in `client_server/python/test_prepared_without_r` shares its public startup rejection check across local Python, Docker, and SBX.
-The prepared modes use the existing Python-only image and template capabilities.
-
-Docker cases use the shared Linux daemon capability in `tests/support/docker.py` and the reproducible `examples/docker/Dockerfile`.
-Build the fixture before running tests and set `MCP_CONSOLE_TEST_DOCKER_IMAGE` to its tag or ID; see `docs/DOCKER.md` for commands.
-Missing Docker access or an unselected fixture skips integration cases; it is not Docker validation.
-Cases run on macOS and Linux controllers and keep process observations in the container namespace.
-
-Docker Sandbox cases separately require standalone `sbx`, usable virtualization/login/policy, and `MCP_CONSOLE_TEST_SBX_TEMPLATE`; see `docs/DOCKER_SANDBOX.md` for template preparation and optional network/inner-Docker capabilities.
-`tests/support/docker_sandbox.py` owns capability discovery and serializes real microVM fixtures.
-Its controller-isolation fixture relocates Console without its companion and installs sentinels for forbidden native/runtime/resolver calls; fake-provider and real-runtime cases retain separate coverage.
-Fake peers establish orchestration contracts, not real container or VM cleanup.
-
-R-free prepared acceptance uses `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE` and `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE`, built with the corresponding `Dockerfile.python` examples.
-Run `scripts/test client_server/python/test_prepared_without_r` after selecting these fixtures.
-The shared public MCP cases exercise real containers/microVMs with target-only interpreter paths and controller/target resolver sentinels.
-They cover SQL-first startup, Python and catalog persistence, custom connections, plotting, input, interruption, debugger continuation, recording, restart/crash replacement, attachment loss, explicit selection and missing dependencies, and resource retirement.
-Offline extension cases disconnect the owned Docker container or deny network access for the owned SBX VM; they leave global provider policy unchanged.
-Prepared protocol rejection cases use a separate deterministic CLI peer and do not establish provider acceptance.
-
-SSH cases use a private localhost OpenSSH server, pinned temporary host and client keys, and a test alias.
-The shared `SSH` capability requires `sshd` and `ssh-keygen`; CI installs the Linux server and prepares `/run/sshd`.
-`MCP_CONSOLE_TEST_SSH_R_LIBS` can supply preinstalled R libraries to this fixture without adding dependency setup to SSH execution.
-Deterministic peers cover wire failures, while real SSH covers remote-shell quoting, runtime state, policy, cancellation, and shared connection ownership.
-
-Cross-host policy validation automatically probes the optional host selected in `tests/support/ssh_external.py` using batch SSH with a bounded connection timeout.
-Set `MCP_CONSOLE_TEST_SSH_HOST` to another OpenSSH destination, or to an empty string to disable automatic remote coverage.
-An unavailable host skips the external case; localhost SSH cases still run, including in CI.
-Once connected, setup and test failures fail the case.
-The host needs Python, `uv`, R, native build prerequisites, and a supported sandbox environment; its login shell must expose the build tools.
-The test uploads the current working-tree source to `~/.cache/mcp-console-tests/`, retaining build data across runs and serializing source updates and installation.
-Each run installs into its own temporary remote workspace, so overlapping runs retain their selected source revision.
-It prepends that installation to the remote command's `PATH` to exercise default command discovery.
-It removes the workspace and installation when the test finishes and leaves ordinary user installations unchanged.
-
-To use an already provisioned target instead, set `MCP_CONSOLE_TEST_SSH_EXTERNAL` to a JSON object with `target` (the documented target shape), `environment` (remote worker environment strings), `ssh_config` (an absolute controller OpenSSH configuration path), and `platform` (the expected R `Sys.info()[['sysname']]`).
-That target must provide a compatible build, R, and an existing workspace with `results`, `cli`, and `denied` subdirectories.
-Run `scripts/test client_server/server/test_ssh_policy::external_execution_host_policy`.
-
-Sans-R cross-host acceptance uses `MCP_CONSOLE_TEST_SSH_NO_R_EXTERNAL`, with `target` and an absolute controller `ssh_config` path in the same JSON shape.
-Provide a compatible installed build, an existing writable `target.workspace`, remote uv, an absolute startup `HOME`, and an SSH host with no R installation.
-A container with its own OpenSSH server is suitable; native-sandbox coverage also needs the documented Linux capabilities.
-Run `scripts/test client_server/python/test_ssh_without_r::external_r_free_execution_host`.
-The case runs direct and native-sandbox sessions, uses remote interpreter paths unavailable on the controller, poisons controller interpreter and resolver commands, and checks retained packages, offline extension loading, replacement, explicit relative Python selection, recordings, and private-storage retirement.
-The ordinary localhost SSH cases additionally cover failed and interrupted resolution and inspection with deterministic checkpoints.
-
-A boundary suite is a Python file under one of four directories whose relative path has no component beginning with `_`:
-
-- `client_server` records the public MCP JSON-RPC boundary.
-- `server_relay` records the private JSONL boundary between the server and relay.
-- `relay_worker` records the worker sideband and standard-stream boundary owned by the relay.
-- `cli` records direct command-line invocations.
-
-## Contract ownership
-
-Give each behavior one primary owner and test it at the outermost boundary that can observe the regression:
-
-| Contract                                                                         | Primary owner                                          |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| MCP negotiation, schemas, descriptions, result text, errors, and output ordering | `client_server` snapshots                              |
-| CLI syntax, exit status, terminal behavior, and signal behavior                  | `cli` snapshots                                        |
-| Sandbox security and process-lifetime guarantees                                 | `cli`, with only necessary MCP integration smoke tests |
-| Server-to-relay frame shape, correlation, ordering, and generation ownership     | `server_relay` snapshots                               |
-| Relay-to-worker stream routing, framing, EOF, crash, and shutdown behavior       | `relay_worker` snapshots                               |
-| Pure parsing or validation policy that cannot usefully be reached externally     | Small table-driven unit tests                          |
-
-Classify a proposed case as a public snapshot, architecture-boundary test, security-or-liveness test, or incidental-implementation test.
-Private-boundary tests cover only the architectural seam they observe and do not repeat public result language.
-Security and liveness cases may add causal or process assertions for facts a snapshot cannot represent.
-Do not test exact internal sequencing unless it is itself an observable contract.
-
-Sandbox contracts live in a `sandbox/` directory within their owning boundary.
-Linux namespace and subreaper contracts live in `cli/sandbox/test_linux`; Seatbelt and kqueue fixtures require `MACOS_SANDBOX`.
-Fixture process IDs must be resolved through `support.processes.host_process_id` before host observation or signaling when they originate inside a PID namespace.
-In particular, namespace process-group ID 1 must never reach host group signaling: Linux interprets `kill(-1, ...)` as a broadcast.
-Ordinary runtime, protocol, and lifecycle cases stay with those subjects, including cases that also run sandboxed.
-Direct-launch host access and recovery live under `client_server/lifecycle`; plot-session isolation lives under `client_server/r`.
-
-The direct CLI sandbox cases own setup cancellation, large-frame startup, original-stdin identity and closure, argument and standard-stream fidelity, job control, signal and exit status, security policy, and runner-owned retirement.
-The public MCP sandbox cases cover sandbox-dependent runtime workflows, startup failure and gating, worker replacement, caller loss, restart, and shutdown.
-The lifecycle suites own the inherited-descriptor launch matrix in direct and sandboxed modes.
-The relay wrapper workflow verifies MCP restart and shutdown when the relay is below the sandbox root and a worker descendant retains its streams.
-The direct relay CLI case compares the complete protocol through ordinary direct launch and the public sandbox command, without requiring the relay to be a process-group leader.
-
-Map each non-generic sandbox allowance to the real workflow that requires it and the test that owns that workflow:
-
-| Sandbox allowance           | Motivating workflow                               | Owning test                                                                                |
-| --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `hw.logicalcpu`             | `parallel::detectCores()`                         | `client_server/r/test_runtime::detects_cpu_cores`                                          |
-| `kern.sysv.semmns`          | joblib `loky`                                     | `client_server/python/test_processes::runs_joblib_process_backend`                         |
-| POSIX semaphores            | Python spawn multiprocessing                      | `client_server/python/test_processes::runs_spawn_process_after_live_resolution`            |
-| PTYs and `kern.boottime`    | `processx`                                        | `cli/sandbox/test_execution::allows_processx_pty_processes` and MCP process-lifetime cases |
-| Quarto device/sysctl access | Render generated `ir` document inside the sandbox | `client_server/sandbox/test_quarto::renders_generated_document`                            |
-| `__KMP_REGISTERED_LIB_*`    | PyTorch/libomp                                    | Supplied by the pinned native base; no local extension                                     |
-| uv platform services        | Offline wheel installation in private storage     | `cli/sandbox/test_uv::installs_a_local_wheel_into_private_storage`                         |
-
-Scikit-learn workflows with `n_jobs=-1`, including grid search over memory-mapped inputs, random forests, cross-validation, and permutation importance, are covered by `client_server/python/test_processes::runs_sklearn_parallel_search` in direct and sandboxed execution.
-
-The [policy audit](../../docs/SANDBOX.md#policy-extensions-and-compatibility) distinguishes redundant base-policy rules from local exceptions whose current necessity or precise caller is unconfirmed.
-Runner protocol parsing belongs to the pinned executable tests; `tests/sandbox_installation.py` covers installation verification, one-shot resource closure, and startup without setup EOF.
-The CLI execution suite verifies frontend exec with PID and binary standard-stream preservation.
-The [integration record](../../docs/SANDBOX_RUNNER_INTEGRATION.md) separately inventories topology-only fixture changes and obsolete supervisor-death recovery cases.
-
-`cli/sandbox/test_pytorch::matches_unsandboxed_autograd` runs one CPU autograd script outside and inside the default sandbox with the same freshly resolved PyTorch environment.
-It compares the loss, full gradient, and thread count against the live unsandboxed run; the snapshot records that comparison without dependency warnings or fixed numerical values.
-This is an intentional exception to exact-output snapshots: warnings and other non-result output may change across releases, while nonzero exits and numerical differences still fail with captured stdout and stderr.
-Portable Matplotlib image and cache-activation cases live under `client_server/python`; `client_server/sandbox/test_matplotlib` owns host-file write denials and macOS system-font discovery.
-The Ragnar SQL workflows remain under `client_server/sql`; `client_server/sandbox/test_ragnar` preserves workspace-write denial followed by successful creation in the worker directory.
-The native base policy's `__KMP_REGISTERED_LIB_*` registration allowance remains an unverified compatibility exception.
-This comparison does not establish a need for that permission.
-
-When reviewing deletion candidates, separate tests may replace a combined test only when the interaction between those behaviors is not itself a plausible failure mode.
-
-Each `test_` function in a suite is a transcript case.
-The runner passes the built binary path to each case, followed by the execution fixture when the case declares execution modes.
-Each case returns a `Transcript`: an ordered list of transcript entries.
-The runner serializes each entry as one document in the matching YAML 1.2 stream under `tests/snapshots/BOUNDARY/SUITE/CASE.yaml`.
-The snapshot hierarchy exactly parallels the suite hierarchy under `tests/boundaries/`.
-
-Use YAML mappings and sequences when the payload's values are what the reader needs to understand.
-Keep serialized JSON when its emitted form matters to the test, including quoting, escaping, and literal argument or stdin preservation.
-Keep source code, literal parser inputs, and exact runtime output as strings.
-Choose the representation in the owning case; the snapshot serializer must not infer it from whether a string parses as JSON.
-
-A case may return `TranscriptWithCompanions` to place named sibling files beside that stream.
-YAML companions use names such as `CASE.events.yaml` and are compared as YAML 1.2 values, so equivalent scalar spellings and layouts are accepted.
-Markdown and Quarto companions use `CASE.md` and `CASE.qmd` and are compared as exact UTF-8 text.
-Server cases record each JSON-RPC client message and any matching response as one YAML document.
-They omit the invariant `jsonrpc: "2.0"` field and request-response IDs from the rendered snapshot.
-The client still requires every issued request ID to be unique and validates the response ID before recording each exchange.
-Tool calls show the tool name and arguments directly, so a `tools/call` request for `send` is recorded as `send: ARGUMENTS`.
-The response's `result` or `error`, when present, appears directly at the document root after the request.
-Some cases add `transcript_normalization` after the response.
-This is structured harness metadata, never a field or text observed at the captured boundary.
-Its `target` identifies the normalized value, and its remaining fields describe information omitted or replaced in the snapshot.
-
-The R missing-package fidelity cases compare condition classes, fields, and complete error output against the same source in a live `Rscript --vanilla` process.
-Unhandled reference errors exit naturally; only Rscript's `Execution halted` footer is removed because Console remains running after a cell error.
-The Console display cases enable `showErrorCalls` to match Rscript's default, so call chains remain part of the exact comparison.
-After equality succeeds, these cases record the live comparison with `transcript_normalization` metadata instead of fixing the host R version's wording in YAML.
-An equality failure reports both complete outputs.
-This is a narrow exception to preserving literal runtime errors in snapshots: native R behavior, rather than one platform or R version's output, is the contract.
-
-The DuckDB resolver failure case captures the selected native `Rscript --vanilla` process's stderr before forwarding it to Console.
-It requires exact equality with the tool error after the Console exit-status prefix and outer-whitespace trimming, including the condition, candidate extensions, and backtrace.
-Its snapshot records that comparison so upstream package releases can change the native diagnostic without fixing a version-specific rendering in YAML.
-
-The Ragnar workspace-write denial cases compare the complete Console error with the same source in a native `Rscript --vanilla` subprocess under the worker's sandbox and managed R library.
-The reference matches Console's interactive error display and removes only Rscript's `Execution halted` footer.
-The filename, platform denial, absent workspace file, and successful worker-tempdir creation remain explicit assertions.
-After exact equality, the snapshots record the verified comparison so unpinned Ragnar, DuckDB, and rlang releases can change their diagnostic formatting.
-
-The initialization, initialized notification, and tool-list exchange have full references in `client_server/server/test_tools::initializes_and_lists_tools`.
-Its primary snapshot records the sandboxed handshake; its `.direct.yaml` companion records the direct handshake.
-The `.bare.yaml` and `.bare.direct.yaml` companions preserve the corresponding interfaces when resolver commands are unavailable.
-The `.python-only.yaml` and `.python-only.direct.yaml` companions record local Python sessions without R.
-`client_server/server/test_no_r` and `test_r_selection` cover local catalog retention, input, interruption, recording, captured R selection, and temporary-storage cleanup.
-Their no-R cases use a fixture-owned `PATH` so they also run on hosts with R installed.
-The `.proxy.yaml` companion records the sandboxed interface with a project-configured network proxy.
-The `.workspace.yaml` companion records the native workspace profile.
-The `.ssh.yaml` and `.ssh.direct.yaml` companions record bare SSH targets with that profile, using a deterministic preparation peer without starting a remote worker.
-The `.r-sql.direct.yaml` companion records the interface with Python cells disabled.
-When selected, this reference case runs before the other cases, including during updates.
-At each position in a transcript, the runner compares the complete exchange against the appropriate reference before abbreviating it.
-This includes multiple client sessions in one case.
-A differing or incomplete handshake stays in full.
-For a case with declared execution modes, an exact match becomes `!same-as MCP initialization for this execution mode`, with a variant prefix such as `bare` or `python-only` for that reference family.
-Portable behavior shares one snapshot while each mode verifies its own complete handshake.
-Only the canonical reference case's YAML companions define additional handshake variants; an unmatched exchange stays in full.
-For other cases, each matching exchange becomes `!same-as PATH`, naming the reference it actually matched; mixed sessions retain their separate references.
-The tag documents a verified comparison and does not load the file.
-When accepting a handshake change, update the reference case before the abbreviated transcripts.
-The `cli/interface/test_help` suite records command lines and stdout in one stream with color disabled.
-It adds the exit code for failures and stderr when nonempty.
-The `server_relay` suites launch a deterministic scripted relay through an internal development seam.
-The execution fixture launches it directly or through the sandbox; it communicates only through the same fd 0/1/2 boundary as the production relay.
-Each fixture generation owns its capture directory, independently of sandbox directory layout or process-group ownership.
-In sandboxed mode, the native executable owns the process group and the relay is its child.
-The suite records complete parsed JSONL frames under `server` and `relay` direction labels.
-The truncated-frame case instead records the exact incomplete bytes as base64 under `relay_raw`.
-Its snapshots show flat commands and semantic events, operation results without acknowledgments, readable UTF-8 raw chunks and base64 byte fallbacks, interrupt results, structured worker outcomes, and complete stream drainage.
-The cross-source case records serialized observation order without claiming chronology between the worker sideband, stdout, and stderr transports.
-Server-side response-cut, pending-output-budget, and truncation cases assert the public MCP result while their wire snapshots verify that no cut, budget, or acknowledgment field enters the relay protocol.
-The fixture uses explicit filesystem and FIFO release gates so completion, cancellation, retirement, and failure captures do not depend on sleeps, and tests keep capture descriptors open across generation cleanup when necessary.
-The `relay_worker` suites drive the public MCP server through a transparent worker proxy.
-The proxy starts the built-in worker in the selected execution mode, forwards sideband messages and standard streams, and writes parsed events to its own capture directory for the test to read before shutdown.
-The restart case keeps the old generation's capture descriptor open across generation cleanup and records the sideband shutdown frame, worker-stdin EOF, and worker-sideband EOF.
-The crash-recovery case does the same across an unexpected worker exit and records the observed worker-sideband EOF before the replacement starts.
-The suite asserts the public `send` result and records relay-to-worker and worker-to-relay frames under `relay` and `worker` direction labels in approximate order.
-Pending standard-output and standard-error chunks are grouped into one event without defining their relative order.
-The `client_server/r`, `client_server/python`, and `client_server/sql` directories exercise the built-in worker through the public `send` tool.
-The Zod materialization case verifies that initialization and unknown tool calls create no run, while a first `send` call does.
-The authoritative recording-failure cases verify that recording disables itself with one standard-error diagnostic while console calls and images continue normally.
-Projection failures disable both derived documents while JSONL events and artifacts continue.
-The Zod recording case projects `events.jsonl` and the literal generated `transcript.md` and `transcript.qmd` into `records_tool_calls_and_images.events.yaml`, followed by the produced session root and file list.
-The live-recording case uses causal fixture gates to verify that each Markdown snapshot retains the prior bytes as an exact prefix while calls complete, artifacts arrive, and later polls collect them; the server regenerates the Quarto document for source-bearing calls and leaves it unchanged for results, artifacts, and polls.
-The Markdown suite's real mixed-language recording case snapshots the public stdio transcript and literal generated documents as sibling `.yaml`, `.md`, and `.qmd` files.
-It exercises the built-in R, Python, and SQL runtimes in one session and verifies that the recorded R image artifact is byte-identical to a reference plot.
-The suite also verifies both documents with Yamark, and the optional Quarto suite executes generated R and Python cells through `ir` inside the standalone sandbox when `ir` and `quarto` are installed.
-
-## Test support map
-
-Shared helpers under `tests/support/` are grouped by responsibility:
-
-- `requirements.py` centralizes capability availability and skip reasons; `execution.py` defines explicit direct and sandboxed launch fixtures.
-- `client.py` owns the public stdio MCP client.
-- `cases.py` runs individual cases and their snapshot checks with deadlines and captures their diagnostic output.
-- `snapshots.py` formats and compares primary and companion snapshots.
-- `normalization.py` contains source-text and diagnostic normalization.
-- `checkpoints.py`, `capture.py`, and `processes.py` contain reusable synchronization, stream-reading (including the JSONL reader used by provider call logs), and cleanup mechanics.
-- `ssh.py`, `docker.py`, and `docker_sandbox.py` contain provider capabilities and concrete fixtures; standalone peer scripts remain self-contained.
-- `macos.py` contains shared Darwin process inspection and native fixture compilation.
-- `assertions.py` contains transcript result assertions and public-output collection.
-- `r.py` and `resolvers.py` contain runtime-specific fixture setup.
-- `records.py` defines transcript record types, and `suites.py` supports direct suite execution.
-
-Each boundary keeps its concrete launch and capture mechanics in its local `_harness.py`.
-Scenarios and their assertions remain in the `test_*.py` suite files.
-Large fixture programs live in searchable files under `tests/fixtures/native/`, `tests/fixtures/server_relay/`, and `tests/fixtures/relay_worker/`.
-
-Run commands from the repository root:
-
-```bash
-scripts/test
-scripts/test --full
-scripts/test client_server/server/test_tools
-scripts/test client_server/server/test_tools::initializes_and_lists_tools
-scripts/test --list
+```sh
 scripts/test --full --list
 scripts/test --locate client_server/server/test_tools
-scripts/test --locate client_server/server/test_tools::initializes_and_lists_tools
-scripts/test --jobs 1 client_server/python/test_runtime
-scripts/test --timeout 1800 client_server/requirements/test_r
+scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
-`scripts/test` handles help, listing, location lookup, and invalid arguments before preparing the executable.
-Metadata commands do not claim build ownership or require an existing binary.
-Help and syntax-only validation run before `uv`, so they also work without a cached dependency environment.
-Listing, location lookup, and semantic selector validation may prepare that environment.
-Execution builds and uses `target/release/mcp-console`.
-The Python SDK integration dependencies retain the published lower bounds without exact version pins; `==2.*` also keeps MCP within the supported major.
-CI resolves current SDK releases when the weekly uv cache is empty and can reuse them for the rest of that UTC ISO week.
-Local runs reuse their uv environment until it needs updating; use `uv run --upgrade --script tests/boundaries/_run.py client_server/integrations/test_python` to refresh the SDKs explicitly after building the executable.
-CI also uses this release executable for the R package and installed-wheel integration checks; `scripts/check-core` keeps Rust unit tests in debug so their debug assertions remain enabled.
-With no selectors, `scripts/test` runs the smoke selection; `scripts/test --full` runs all capability-applicable cases.
-Each selected case runs in a separate process, with at least two concurrent cases and otherwise one per available CPU by default.
-Pass `--jobs N` to set the maximum concurrency or `--jobs 1` to run serially.
-Each case has a 600-second deadline that starts when its supervisor launches.
-The deadline includes snapshot formatting, comparison, and updates, which run in the supervised case process so the coordinator can keep handling signals and sibling failures.
-Use `--timeout SECONDS` to allow longer runs, such as slow resolver workflows.
-On timeout, the runner names the case and requests cleanup from its supervisor process.
-The supervisor sends the case `SIGINT`, allowing 15 seconds for `finally` blocks and fixture cleanup before forcibly killing that process by PID.
-Fixtures remain responsible for their subprocesses; forcibly killing a case cannot guarantee that all its descendants have exited.
-After a failure, Ctrl-C, SIGTERM, or SIGHUP, the runner cancels queued cases and gives running cases two seconds to finish before requesting the same bounded cleanup.
-Cases observed to exit with `SIGINT` after cleanup was requested are labelled `cancelled`; their captured output is still printed, including errors interrupted during cleanup.
-An independent `SIGINT` racing that request can receive the same label: the exit status does not identify which signal caused it.
-This affects reporting during an already unsuccessful run; deadlines and other unsuccessful exits remain failures.
-Each supervisor watches an ownership pipe, so loss of the runner also requests cleanup, including when the runner is killed with SIGKILL.
-The case interpreter has no monitoring thread: fixtures can use `fork` and `preexec_fn`, and forced cleanup still works if native code holds the case's GIL.
-Normal runs emit one flushed `.` for every passing case and end the progress line with a newline.
-A case that runs for one minute is named with its current status.
-The runner reports it again at two-minute elapsed intervals through ten minutes, then once every five minutes, and names it when it finishes.
-On failure, the runner prints the fully qualified selector and an exact `scripts/test` rerun command before the error or diff.
-Use the [development routes and validation ladder](../../docs/DEVELOPMENT.md) to choose a focused iteration loop.
-Snapshot updates retain their named `updated ...` and `removed ...` records instead of dots.
-This output belongs only to the test-runner user interface; it is not captured transcript data or part of the MCP or relay protocol.
-A `BOUNDARY/SUITE` selector runs every case in that file; a `BOUNDARY/SUITE::CASE` selector runs one named function.
-`--locate SELECTOR` does not run cases.
-It prints every matching case, its source file and definition line, and its mechanically derived primary snapshot path.
-With selector-free `--full`, collection fails before listing or running cases when a snapshot has no matching suite and case.
-Companion snapshots remain owned by the case-name prefix.
-Use `--update` only to accept an intentional transcript change.
-`scripts/test --full --update` also removes snapshots for deleted suites and cases, as well as obsolete companion snapshots for cases that ran; selected updates leave other snapshots alone.
-Skipped cases retain all their primary and companion snapshots during full updates, even when another case in the same suite runs.
+A selector names `BOUNDARY/SUITE` or `BOUNDARY/SUITE::CASE`.
+Default runs use the explicit smoke profile; `--full` includes every capability-applicable case.
+Selectors retain their scope under either profile.
+See the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) for the full workflow, installed-binary override, and build ownership.
+
+Cases run in separate processes.
+`--jobs N` controls concurrency; `--timeout
+SECONDS` changes the default 600-second case deadline, including snapshot work.
+On cancellation or timeout, the supervisor requests cleanup and allows 15 seconds before forcibly killing the case.
+Fixtures must retire their own subprocesses; killing a case cannot guarantee descendant cleanup.
+Runner progress and rerun messages are UI output, not captured protocol records.
 
 ## Requirements and execution modes
 
-Modes are declared by the suite with `@executions(DIRECT, SANDBOXED)`; the runner has no `--execution` option.
-Use `execution.serve()` to compose common arguments and let the fixture select `--no-sandbox`.
-Sandbox-only policy arguments belong in a sandbox fixture, for example `SANDBOXED.serve("--writable-root", str(path))`.
-The direct fixture rejects writable roots with that example in its error.
-
-Selected cases run by default.
-Declare only the capabilities a case needs, beside its definition, with `@requires(...)` from `support.requirements`.
-For example, `@requires(SANDBOX)` identifies a sandbox contract, `@requires(PROCESS_EVENTS)` identifies a test using shared process observation, and `@requires(command("quarto"))` identifies an optional executable.
-All platform availability decisions belong in test support.
-`WORKER`, `PROCESS_EVENTS`, and `NATIVE_FIXTURES` support macOS and Linux.
-Linux process-observation fixtures require procfs, inotify, and pidfds (kernel 5.3 or later); this is a test-host requirement, not a worker runtime requirement.
-Linux descriptor compatibility cases use seccomp to reproduce unavailable `close_range` and CLOEXEC-flag support.
-R null-fault recovery uses mutually exclusive diagnostic cases: ARM macOS reports `SEGV_ACCERR`, while Linux and Intel macOS report `SEGV_MAPERR`.
-Both cases use the same crash and recovery sequence and retain the full R diagnostic, with only libc's null-pointer formatting normalized.
-Sandbox contracts remain gated by `SANDBOX`.
-Native checkpoint requirements describe the fixture facility, not ownership of the tested runtime contract.
-Do not mark a portable case as sandbox-only because its fixture previously launched sandboxed.
-
-Use the shared execution fixture explicitly:
+Declare capabilities beside cases with `@requires(...)` from `support.requirements`; platform detection belongs in test support.
+Use explicit execution fixtures:
 
 ```python
 @executions(DIRECT, SANDBOXED)
@@ -328,49 +50,77 @@ def test_persistent_state(binary: Path, execution: Execution) -> Transcript:
         return client.finish()
 ```
 
-`DIRECT.serve(...)` supplies `--no-sandbox`; `SANDBOXED.serve(...)` selects the default sandbox.
-`execution.command(binary, ...)` makes the same choice for a CLI command.
-`McpClient` executes the arguments it receives and does not choose a mode based on the OS.
-Fixed-mode contracts use the same fixtures explicitly and declare their requirements beside the case.
-Core detection and multiprocessing run in both modes, retaining explicit coverage of their motivating sandbox allowances without duplicate cases.
-The deterministic Zod worker and wire proxy execute the runner's Python through `MCP_CONSOLE_TEST_PYTHON`, so each interpreter is the relay's direct child.
+`DIRECT.serve()` supplies `--no-sandbox`; `SANDBOXED.serve()` uses the default sandbox.
+There is no runner `--execution` flag.
+Keep sandbox-only arguments in sandbox fixtures and policy contracts in the owning boundary's `sandbox/` directory.
+Ordinary runtime cases stay with their subject even when sandboxed.
 
-The runner checks each mode's requirements separately, then runs available modes sequentially within the case's existing deadline.
-All modes compare against one primary snapshot and the same companions.
-During an update, the first available mode writes the snapshot and subsequent modes must match it.
-This preserves differences as failures instead of letting the last mode overwrite the result.
-The canonical initialization case is the exception: each available mode updates its own full and bare-runtime references (`.direct.yaml` and `.bare.direct.yaml` for direct mode).
-Full updates retain initialization references for unavailable modes.
-Multi-session transcripts reuse the same mode-aware handshake compaction.
-All cases remain discoverable with `scripts/test --full --list` and `scripts/test --locate SELECTOR`; execution and updates report the selector, mode when applicable, and each missing capability's reason.
-An explicitly selected unavailable case is reported as skipped.
+Available modes run sequentially within one case deadline and compare against one snapshot.
+During updates, the first mode writes and later modes must match, not overwrite differences.
+Unavailable modes report a skip, not validation.
+Test-host requirements such as Linux process-observation facilities do not imply the same runtime requirements.
 
-Server cases create an `McpClient`, call `initialize_and_list_tools()`, perform their `send()` interactions, and return `client.finish()`.
-Use `with McpClient(...) as client:` so an assertion also closes the input and reaps the server.
-Response reads have a 600-second ceiling, shortened to leave 14 seconds before the runner's case deadline for cleanup and diagnostics.
-This uses the remaining case time even for requests made later in a case.
-Client shutdown allows 11 seconds for server retirement and reserves two more seconds for a server-only kill and reap, within the supervisor's 15-second cleanup window.
-Constructor arguments `response_timeout` and `shutdown_timeout` can override these waits; under the runner, the case deadline and 11-second shutdown cap still apply.
-Deadline errors include the server's stderr tail.
-To make interleavings explicit, `start_send()` returns a pending transcript entry; `receive(entry)` fills in its response, and `receive_many(entries)` matches responses by request ID regardless of arrival order.
-Protocol cases can use `request()`, `start_request()`, `notify()`, and `send_message()` directly.
-Use `finish_with_standard_error()` when the case needs to assert server diagnostics alongside its transcript.
-Other cases may invoke the binary directly and return their transcript entries.
+Each case uses a temporary workspace and private `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's R/Python/uv/provider environment.
+Home-discovery cases supply their environment explicitly with `use_home_configuration=True`; remove inherited `MCP_CONSOLE_HOME` when testing the default home location.
+Remove fixture-owned directories only after processes exit.
 
-Each suite is also directly runnable:
+## Snapshots
 
-```bash
-./tests/boundaries/client_server/server/test_tools.py
-```
+A `test_` function returns a `Transcript`.
+Its YAML 1.2 snapshot lives at `tests/snapshots/BOUNDARY/SUITE/CASE.yaml`.
+`TranscriptWithCompanions` adds named siblings: YAML companions compare as values; Markdown and Quarto compare as exact UTF-8 text.
+Suite paths with an underscore-prefixed component are not discovered.
 
-Suite files use an `uv run --script` shebang.
-Their `__main__` blocks delegate to `scripts/test`, so direct runs build the binary and run every case in that suite.
+Never edit snapshots by hand.
+Regenerate intentional changes with `scripts/test --update SELECTOR`, review them, and rerun without `--update`.
+Only a full unscoped run audits orphan snapshots; a successful full update can remove them.
+Focused updates preserve unselected snapshots, and skipped cases retain their snapshots even during full updates.
 
-The Python checkers invoked by `scripts/check-core` are executable uv scripts.
-Run the runner and MCP client regressions with `tests/transcript_runner.py` and `tests/mcp_client.py`, or together through `scripts/check-core`.
-These scripts prepare their Python dependencies before tests begin, then launch fixture runners with the same interpreter so package resolution does not consume test deadlines.
+Preserve complete errors, tracebacks, output, and meaningful ordering.
+Normalize only incidental values such as temporary paths.
+Use mappings for data, but retain serialized JSON when quoting or escaping is the contract; code and literal output remain strings.
+The case chooses the representation, not the serializer.
 
-Synthetic stress output may use `support.evidence.compact_text()` after checking the complete response.
-Its `text_bytes` and ordered `concat` entries represent the exact text: literal strings concatenate with each `repeat` string multiplied by its `count`.
-Choose fixture-specific repeat strings explicitly; retain diagnostics, head and tail text, omission markers, paths, totals, images, and final states.
-This notation changes only snapshot evidence, never the MCP response or recorded session.
+Narrow exceptions require stronger evidence, not weaker assertions:
+
+- Native-runtime fidelity cases may compare complete output and conditions with a live reference, then record the verified comparison.
+  Remove only explicitly irrelevant frontend differences, such as Rscript's `Execution halted` footer.
+- Synthetic stress output may use `support.evidence.compact_text()` after full assertions.
+  Its literal text and repeat/count entries are lossless; retain diagnostics, boundaries, omissions, paths, images, and final states.
+
+`transcript_normalization` is harness metadata, never a wire field.
+MCP request IDs and the invariant JSON-RPC version are abbreviated only after validation.
+
+### Canonical handshake
+
+`client_server/server/test_tools::initializes_and_lists_tools` owns full handshake snapshots and their configured/direct/bare/runtime variants.
+Update it before other affected cases.
+The runner compares the complete exchange before replacing an exact match with `!same-as`; the tag records that comparison and does not load a file.
+Different or incomplete handshakes remain in full.
+The canonical case's mode-specific companions are the exception to shared-mode snapshots.
+
+## Fixtures and providers
+
+Use `McpClient` as a context manager, then `initialize_and_list_tools()`, `send()`, and `finish()`.
+For overlapping calls, use `start_send()` and `receive()` / `receive_many()`; responses are matched by request ID.
+Use `finish_with_standard_error()` when diagnostics are part of the contract.
+
+Shared capability, execution, client, snapshot, checkpoint, and process helpers live in `tests/support/`.
+Each boundary's `_harness.py` owns its concrete launch and capture mechanics.
+Keep large fixture programs in searchable files under `tests/fixtures/`; see [authoring](AUTHORING.md) for examples and causal gates.
+
+Real provider coverage requires explicit fixtures:
+
+| Provider       | Fixture selection                                                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Docker         | `MCP_CONSOLE_TEST_DOCKER_IMAGE` or `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE`; see [Docker](../../docs/DOCKER.md).                       |
+| Docker Sandbox | `MCP_CONSOLE_TEST_SBX_TEMPLATE` or `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE`; see [SBX](../../docs/DOCKER_SANDBOX.md).                  |
+| Localhost SSH  | Private `sshd`, temporary pinned keys, and the shared SSH capability.                                                                |
+| External SSH   | `MCP_CONSOLE_TEST_SSH_HOST`; an empty value disables the optional probe. See `support/ssh_external.py` and [SSH](../../docs/SSH.md). |
+
+Unavailable services skip their cases; connected setup failures fail.
+Fake provider peers establish orchestration contracts, not real container/VM cleanup.
+SBX fixtures serialize real VMs and must not change global provider policy.
+
+For namespace PIDs, use `support.processes.host_process_id` before host observation or signaling.
+**Never send a namespace process-group ID of 1 to host group signaling: `kill(-1, ...)` is a broadcast.** Fixture cleanup must identify only its own resources.
