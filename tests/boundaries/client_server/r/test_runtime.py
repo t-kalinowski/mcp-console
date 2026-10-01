@@ -27,14 +27,29 @@ def test_uses_selected_r_resource_directories(
         selected = isolated_r_home(root, environment)
         launcher = selected / "bin/R"
         source = launcher.read_text()
-        for name, suffix in (
-            ("R_SHARE_DIR", "share"),
-            ("R_INCLUDE_DIR", "include"),
-            ("R_DOC_DIR", "doc"),
+        resources = subprocess.check_output(
+            [
+                launcher,
+                "--vanilla",
+                "--slave",
+                "-e",
+                'cat(vapply(c("share", "include", "doc"), R.home, ""), sep="\\n")',
+            ],
+            env=environment,
+            text=True,
+        ).splitlines()
+        for (name, suffix), resource in zip(
+            (
+                ("R_SHARE_DIR", "share"),
+                ("R_INCLUDE_DIR", "include"),
+                ("R_DOC_DIR", "doc"),
+            ),
+            resources,
+            strict=True,
         ):
             configured = root / f"configured {suffix} λ"
-            configured.symlink_to((selected / suffix).resolve())
-            (selected / suffix).unlink()
+            configured.symlink_to(Path(resource).resolve())
+            (selected / suffix).unlink(missing_ok=True)
             source, count = re.subn(
                 rf"(?m)^{name}=.*$", f'{name}="{configured}"', source
             )
