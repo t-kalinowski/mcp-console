@@ -75,6 +75,8 @@ def test_idle_stdin_startup_blocks_preparation(
         passed = False
         try:
             client.initialize_and_list_tools()
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
             idle_stdin = client.start_send(stdin="queued\n")
             wait_for_marker(
                 temporary_path,
