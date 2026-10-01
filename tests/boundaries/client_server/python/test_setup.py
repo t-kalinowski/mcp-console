@@ -114,6 +114,7 @@ def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
                 client,
                 '[input requested: "defer selection> "]\n[waiting for stdin]',
                 "deferred selection fixture",
+                completion_timeout_seconds=client.response_timeout,
                 python="raise AssertionError('interrupted bootstrap ran setup cell')",
                 timeout_ms=0,
             )
