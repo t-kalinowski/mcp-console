@@ -101,24 +101,25 @@ impl Client {
             )));
         }
         if !matches!(request.control, Some(SendControl::Restart)) || !self.is_configured() {
-            if tokio::time::timeout(
+            match tokio::time::timeout(
                 request.deadline.saturating_duration_since(Instant::now()),
                 self.ready(),
             )
             .await
-            .is_err()
             {
-                let mut response = output::render_response(SendResponse::ReplacementStarting(
-                    self.0.output.take(),
-                ));
-                if request.cell.is_some() {
-                    response.push_tool_error(
-                        "startup is pending; control was not applied and cell was not run",
-                    );
+                Ok(readiness) => readiness?,
+                Err(_) => {
+                    let mut response = output::render_response(SendResponse::ReplacementStarting(
+                        self.0.output.take(),
+                    ));
+                    if request.cell.is_some() {
+                        response.push_tool_error(
+                            "startup is pending; control was not applied and cell was not run",
+                        );
+                    }
+                    return Ok(response);
                 }
-                return Ok(response);
             }
-            self.ready().await?;
         }
         if let Some(requirements) = &request.requirements {
             self.validate_requirements(requirements)?;

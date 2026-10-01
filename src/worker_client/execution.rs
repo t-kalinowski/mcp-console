@@ -247,20 +247,7 @@ impl Client {
         // Only an established worker can publish idle output in the admission
         // gap. A new worker's startup output remains part of this call.
         let capture_idle_prelude = matches!(worker, WorkerState::Running(_));
-        if let Err(mut failure) = self.start_worker(
-            worker,
-            generation.clone(),
-            true,
-            |stop_handle| self.register_stop_handle(&generation, stop_handle),
-            || Ok(()),
-        ) {
-            if let Err(clear_error) = self.clear_worker_stop_handle(&generation) {
-                failure.message.push_str(&format!(
-                    "; additionally failed to clear the worker shutdown handle: {clear_error}"
-                ));
-            }
-            return Err(failure);
-        }
+        self.start_ordinary_worker(worker, &generation)?;
         let WorkerState::Running(running) = worker else {
             return Err(SendFailure::from("worker is not running".to_string()));
         };
@@ -284,22 +271,7 @@ impl Client {
 
         let replacement_startup = self.0.preparation.blocking_read();
         evaluation.start_replacement(failure.worker_stopped());
-        let replacement = self
-            .start_worker(
-                worker,
-                generation.clone(),
-                true,
-                |stop_handle| self.register_stop_handle(&generation, stop_handle),
-                || Ok(()),
-            )
-            .map_err(|mut failure| {
-                if let Err(clear_error) = self.clear_worker_stop_handle(&generation) {
-                    failure.message.push_str(&format!(
-                        "; additionally failed to clear the worker shutdown handle: {clear_error}"
-                    ));
-                }
-                failure
-            });
+        let replacement = self.start_ordinary_worker(worker, &generation);
         // A delivered replacement result must admit the next preparation.
         drop(replacement_startup);
         evaluation.finish_replacement(replacement);
@@ -322,20 +294,7 @@ impl Client {
         self.ensure_generation(generation)
             .map_err(SendFailure::from)?;
 
-        if let Err(mut failure) = self.start_worker(
-            &mut worker,
-            generation.clone(),
-            true,
-            |stop_handle| self.register_stop_handle(generation, stop_handle),
-            || Ok(()),
-        ) {
-            if let Err(clear_error) = self.clear_worker_stop_handle(generation) {
-                failure.message.push_str(&format!(
-                    "; additionally failed to clear the worker shutdown handle: {clear_error}"
-                ));
-            }
-            return Err(failure);
-        }
+        self.start_ordinary_worker(&mut worker, generation)?;
         let WorkerState::Running(running) = &mut *worker else {
             unreachable!("worker should be running");
         };
@@ -349,6 +308,28 @@ impl Client {
                 Err(stop_error) => Err(stop_error.attach_to(failure)),
             },
         }
+    }
+
+    fn start_ordinary_worker(
+        &self,
+        worker: &mut WorkerState,
+        generation: &WorkerGeneration,
+    ) -> Result<(), SendFailure> {
+        self.start_worker(
+            worker,
+            generation.clone(),
+            true,
+            |stop_handle| self.register_stop_handle(generation, stop_handle),
+            || Ok(()),
+        )
+        .map_err(|mut failure| {
+            if let Err(clear_error) = self.clear_worker_stop_handle(generation) {
+                failure.message.push_str(&format!(
+                    "; additionally failed to clear the worker shutdown handle: {clear_error}"
+                ));
+            }
+            failure
+        })
     }
 
     pub(super) fn start_worker(

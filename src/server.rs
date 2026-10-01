@@ -186,31 +186,33 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                             .into(),
                     );
                 }
-                if tokio::time::timeout(
+                match tokio::time::timeout(
                     Duration::from_millis(timeout_ms).saturating_sub(started.elapsed()),
                     runtime.worker.ready(),
                 )
                 .await
-                .is_err()
                 {
-                    let mut response = crate::worker_client::Response::default();
-                    response.push_notice("worker starting");
-                    return Ok(response_to_tool_result(
-                        response,
-                        &call,
-                        &runtime.transcript,
-                        &self.deliveries,
-                        &delivery,
-                    ));
-                }
-                if let Err(error) = runtime.worker.ready().await {
-                    return Ok(response_to_tool_result(
-                        crate::worker_client::Response::tool_error(error),
-                        &call,
-                        &runtime.transcript,
-                        &self.deliveries,
-                        &delivery,
-                    ));
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        return Ok(response_to_tool_result(
+                            crate::worker_client::Response::tool_error(error),
+                            &call,
+                            &runtime.transcript,
+                            &self.deliveries,
+                            &delivery,
+                        ));
+                    }
+                    Err(_) => {
+                        let mut response = crate::worker_client::Response::default();
+                        response.push_notice("worker starting");
+                        return Ok(response_to_tool_result(
+                            response,
+                            &call,
+                            &runtime.transcript,
+                            &self.deliveries,
+                            &delivery,
+                        ));
+                    }
                 }
                 let snapshot = runtime.worker.inspect_requirements();
                 let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");
