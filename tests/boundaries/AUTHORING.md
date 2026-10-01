@@ -35,6 +35,9 @@ See [modes and requirements](README.md#requirements-and-execution-modes).
 Establish the observable state an assertion needs before releasing a fixture.
 Use `FifoCheckpoint` (`support.checkpoints`), `read_lines` (`support.capture`), and `Events` (`support.events`) for blocking gates, complete stream receipts, and process transitions.
 Keep cleanup in context managers or `finally` blocks.
+Use `wait_for_path()` for known marker paths and worker-file discovery only for worker-owned directories whose names are initially unknown.
+`FifoCheckpoint.release()` buffers an early token; `release_fixture_checkpoint()` instead waits for a real reader with a bounded rendezvous.
+Pass the client when its exit should end that wait.
 
 ```python
 client.send(python=program, timeout_ms=0)
@@ -47,6 +50,10 @@ A fixture marker alone does not prove public evaluation admission.
 Process startup does not prove a cell log has closed.
 For shutdown output, establish cell completion and its recorded `cell_output` event before asserting which file owns later bytes.
 Sleeps, broader matching, and longer timeouts do not establish ordering.
+
+`wait_for_evaluation_output()` submits once, accumulates every text delta, and bounds transport receives with its completion budget.
+Give cold preparation an explicit longer budget.
+Retain raw exchanges when delivery or polling is the contract being tested.
 
 See the [Python lifecycle cases](client_server/python/test_lifecycle.py) and [retention cases](client_server/output/test_spools.py).
 Preserve complete output assertions and use the [snapshot rules](README.md#snapshots) for normalization.

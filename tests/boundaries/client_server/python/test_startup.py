@@ -298,10 +298,13 @@ def interrupted_initialization(
                     "[1] <worker pid>\n"
                 )
             cell = "never_run = True" if language == "python" else "SELECT 42"
-            client.send(**{language: cell}, timeout_ms=10_000)
-            assert last_result_text(client) == (
-                '[input requested: "startup interrupt> "]\n[waiting for stdin]'
-            ), last_result_text(client)
+            # Interpreter discovery/bootstrap precedes arrival at the hook.
+            # The input notice, rather than the first response cut, admits SIGINT.
+            client.expect(
+                '[input requested: "startup interrupt> "]\n[waiting for stdin]',
+                **{language: cell},
+                timeout_ms=10_000,
+            )
             worker = int(marker.read_text())
             client.send(control="interrupt", timeout_ms=10_000)
             interrupted = last_result_text(client)

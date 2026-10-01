@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import Execution
@@ -412,9 +412,7 @@ def resolve_public_python_version(
     # fmt: r
     r = code(rf"""
         reticulate::py_require(
-          python_version = {
-            constraints_r
-          },
+          python_version = {constraints_r},
           action = "set"
         )
         result <- tryCatch(
@@ -532,33 +530,11 @@ def send_and_collect_runtime_python_resolution(
     client: McpClient,
     **arguments: object,
 ) -> str:
-    call_start = len(client.transcript)
-    client.send(**arguments)
-    chunks = []
-    for attempt in range(8):
-        output = last_result_text(client)
-        if output.endswith("\n[running; poll with an empty send]"):
-            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
-            if attempt == 7:
-                raise AssertionError(
-                    "automatic Python resolution remained running after eight "
-                    f"responses: collected={''.join(chunks)!r}, last={output!r}"
-                )
-            client.send(timeout_ms=30_000)
-            continue
-
-        # Empty running polls do not replace a silent cell's completion marker.
-        if output != "[done]" or not any(chunks):
-            chunks.append(output)
-        collected = "".join(chunks)
-
-        calls = client.transcript[call_start:]
-        submitted = calls[0]
-        final_result = calls[-1]["result"]
-        content = final_result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        content[0]["text"] = collected
-        submitted["result"] = final_result
-        client.transcript[call_start:] = [submitted]
-        return collected
-    raise AssertionError("unreachable")
+    return wait_for_evaluation_output(
+        client,
+        None,
+        "automatic Python resolution",
+        expected_error=None,
+        completion_timeout_seconds=240,
+        **arguments,
+    )

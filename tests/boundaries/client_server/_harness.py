@@ -472,7 +472,9 @@ def expose_idle_input_request(client: McpClient, temporary_path: Path) -> None:
     client.receive(requested)
     assert last_result_text(client) == "[done]"
 
-    release_fixture_checkpoint(completed.parent / "zod-release-idle-input-request")
+    release_fixture_checkpoint(
+        completed.parent / "zod-release-idle-input-request", client=client
+    )
     wait_for_marker(
         temporary_path,
         "zod-idle-input-request-processed",

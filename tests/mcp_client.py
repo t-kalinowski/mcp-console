@@ -14,12 +14,22 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
+from support.assertions import wait_for_evaluation_output
+from support.checkpoints import (
+    FifoCheckpoint,
+    release_fixture_checkpoint,
+    release_partial_sideband,
+    wait_for_path,
+    wait_for_worker_file,
+)
 from support.client import McpClient
 from support.events import Events
 from support.normalization import code
@@ -309,6 +319,26 @@ class McpClientTests(unittest.TestCase):
             self.assertIn("response", str(result))
             self.assertIn("partial response diagnostic", str(result))
 
+    def test_collector_deadline_bounds_transport_and_restores_budget(self) -> None:
+        with self.fake_client("partial", response_timeout=60) as (client, _):
+            started = time.monotonic()
+            result = self.call_bounded(
+                client,
+                lambda: wait_for_evaluation_output(
+                    client,
+                    "ready",
+                    "partial cell",
+                    completion_timeout_seconds=0.05,
+                    r="once",
+                ),
+            )
+            self.assertIsInstance(result, TimeoutError)
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertEqual(client.response_timeout, 60)
+            self.assertEqual(
+                [entry["send"] for entry in client.transcript], [{"r": "once"}]
+            )
+
     def test_finish_times_out_with_server_diagnostics(self) -> None:
         with self.fake_client("finish", shutdown_timeout=1) as (client, _):
             result = self.call_bounded(client, client.finish)
@@ -381,6 +411,205 @@ class McpClientTests(unittest.TestCase):
             self.assertIn("timed out waiting for response", stderr)
             self.assertIn("partial response diagnostic", stderr)
             self.assertNotIn("timed out after 16 seconds", stderr)
+
+
+class ScriptedClient:
+    response_timeout = 600
+
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self.responses = iter(responses)
+        self.calls = []
+        self.transcript = []
+
+    def send(self, **arguments: object) -> dict[str, object]:
+        result = next(self.responses)
+        self.calls.append(arguments)
+        self.transcript.append({"send": arguments, "result": result})
+        return result
+
+
+class EvaluationCollectorTests(unittest.TestCase):
+    def test_exact_deltas_terminal_states_and_single_submission(self) -> None:
+        running = "\n[running; poll with an empty send]"
+        rows = (
+            (["one" + running, "two" + running, "[done]"], "onetwo", False),
+            ([running, "[done]"], "[done]", False),
+            (["one" + running, "two"], "onetwo", False),
+            (
+                ["prompt\n" + running, "\n[waiting for stdin]"],
+                "prompt\n[waiting for stdin]",
+                False,
+            ),
+            (["one" + running], "one" + running, False),
+            (["exact resolver error\n"], "exact resolver error\n", True),
+        )
+        source = {"python": "once", "control": "restart", "stdin": "payload"}
+        for deltas, expected, error in rows:
+            with self.subTest(expected=expected):
+                client = ScriptedClient(
+                    [
+                        {"content": [{"type": "text", "text": delta}], "isError": error}
+                        for delta in deltas
+                    ]
+                )
+                actual = wait_for_evaluation_output(
+                    client, expected, "scripted cell", expected_error=error, **source
+                )
+                self.assertEqual(actual, expected)
+                self.assertEqual(client.calls[0], source)
+                self.assertTrue(
+                    all(call.keys() == {"timeout_ms"} for call in client.calls[1:])
+                )
+                result = {
+                    "content": [{"type": "text", "text": expected}],
+                    "isError": error,
+                }
+                self.assertEqual(
+                    client.transcript, [{"send": source, "result": result}]
+                )
+                self.assertEqual(client.response_timeout, 600)
+
+    def test_rejects_multipart_without_collapsing_raw_exchange(self) -> None:
+        result = {
+            "content": [
+                {"type": "text", "text": "text"},
+                {"type": "image", "data": "bytes"},
+            ]
+        }
+        client = ScriptedClient([result])
+        with self.assertRaises(AssertionError):
+            wait_for_evaluation_output(client, "text", "multipart", python="once")
+        self.assertEqual(len(client.transcript), 1)
+        self.assertEqual(len(result["content"]), 2)
+
+    def test_retains_initial_output_cuts_and_exact_error_flags(self) -> None:
+        client = ScriptedClient(
+            [
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "second\n[running; poll with an empty send]",
+                        }
+                    ]
+                },
+                {
+                    "content": [{"type": "text", "text": "final error\n"}],
+                    "isError": True,
+                },
+            ]
+        )
+        cuts = []
+        self.assertEqual(
+            wait_for_evaluation_output(
+                client,
+                None,
+                "existing evaluation",
+                expected_error=None,
+                initial_cuts=("first",),
+                output_cuts=cuts,
+            ),
+            "firstsecondfinal error\n",
+        )
+        self.assertEqual(cuts, ["first", "second", "final error\n"])
+        self.assertTrue(client.transcript[-1]["result"]["isError"])
+        self.assertTrue(
+            all("python" not in call and "r" not in call for call in client.calls)
+        )
+
+
+class MarkerTests(unittest.TestCase):
+    def test_exact_generation_path_and_missing_marker_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "old").mkdir()
+            (root / "old/ready").touch()
+            current = root / "new/ready"
+            with self.assertRaisesRegex(TimeoutError, "current generation.*new"):
+                wait_for_path(current, "current generation", timeout=0.02)
+            current.parent.mkdir()
+            current.touch()
+            wait_for_path(current, "current generation", timeout=0.02)
+
+
+@unittest.skipUnless(POSIX.available, POSIX.reason)
+class CheckpointTests(unittest.TestCase):
+    def test_early_release_and_repeated_close_preserve_descriptor_ownership(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with closing(FifoCheckpoint.create(Path(directory) / "gate")) as checkpoint:
+                checkpoint.release()
+                checkpoint.wait("already released")
+                checkpoint.close()
+                other = os.open(os.devnull, os.O_RDONLY)
+                try:
+                    checkpoint.close()
+                    os.fstat(other)
+                finally:
+                    os.close(other)
+
+    def test_rendezvous_requires_a_reader_and_preserves_each_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, release, token in (
+                ("gate", release_fixture_checkpoint, b"1"),
+                (
+                    "zod-release-partial-sideband",
+                    lambda path, **args: release_partial_sideband(
+                        path.with_name("marker"), **args
+                    ),
+                    b"x",
+                ),
+            ):
+                path = root / name
+                os.mkfifo(path)
+                with self.assertRaisesRegex(TimeoutError, name):
+                    release(path, timeout=0.02)
+                with subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import pathlib,sys; print(pathlib.Path(sys.argv[1]).read_bytes().decode())",
+                        str(path),
+                    ],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                ) as reader:
+                    try:
+                        release(path, timeout=2)
+                        self.assertEqual(
+                            reader.communicate(timeout=2), (token.decode() + "\n", None)
+                        )
+                        self.assertEqual(reader.returncode, 0)
+                    finally:
+                        if reader.poll() is None:
+                            reader.kill()
+                            reader.wait(timeout=2)
+
+    def test_scoped_marker_rejects_stale_generation_and_reports_peer_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "old").mkdir()
+            (root / "old/ready").touch()
+            (root / "new").mkdir()
+            with subprocess.Popen([sys.executable, "-c", "pass"]) as owner:
+                owner.wait(timeout=2)
+                client = SimpleNamespace(
+                    process=owner,
+                    transcript=[{"result": "last response"}],
+                    stderr=SimpleNamespace(buffer=b"bounded diagnostic"),
+                )
+                with self.assertRaisesRegex(
+                    AssertionError, "ready.*last response.*bounded diagnostic"
+                ):
+                    wait_for_worker_file(root / "new", "ready", client)
+                fifo = root / "unread"
+                os.mkfifo(fifo)
+                with self.assertRaisesRegex(
+                    AssertionError, "unread.*bounded diagnostic"
+                ):
+                    release_fixture_checkpoint(fifo, client=client)
 
 
 if __name__ == "__main__":
