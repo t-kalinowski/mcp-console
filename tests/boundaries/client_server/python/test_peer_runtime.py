@@ -11,6 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from boundaries.client_server.python.test_setup import deferred_selection_client
+
 from support.assertions import (
     assert_result_content,
     last_result_text,
@@ -793,7 +795,7 @@ def test_python_contract_with_and_without_r(
             with McpClient(binary, execution.serve(), environment, workspace) as client:
                 client.initialize_and_list_tools()
                 if mode == "r-first":
-                    # R execution itself must not force CPython initialization.
+                    # R execution alone does not require reticulate bridge attachment.
                     client.send(
                         r="stopifnot(!reticulate::py_available(initialize = FALSE))"
                     )
@@ -1038,8 +1040,9 @@ def test_r_does_not_initialize_python(binary: Path, execution: Execution) -> Tra
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         probe = build_interposer(root, "python_initialized")
-        with McpClient(binary, execution.serve(), current_directory=root) as client:
-            client.initialize_and_list_tools()
+        # Use the public interrupted-selection state, before CPython loads.
+        # R evaluation must not independently retry the optional Python setup.
+        with deferred_selection_client(binary, execution.serve()) as client:
             # fmt: r
             source = code("""
                 probe <- dyn.load(PROBE_PATH)
