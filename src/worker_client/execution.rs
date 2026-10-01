@@ -387,6 +387,7 @@ impl Client {
                 builtin: environment
                     .as_ref()
                     .is_some_and(|environment| !environment.custom_worker),
+                languages: self.0.languages,
                 target: self.0.target.as_ref(),
                 local_runtime: environment
                     .as_ref()

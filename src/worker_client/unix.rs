@@ -143,6 +143,7 @@ impl WorkerRuntime {
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             builtin,
+            languages,
             target,
             local_runtime,
             executable,
@@ -212,6 +213,9 @@ impl WorkerRuntime {
                 "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
                 if dynamic_resolution { "1" } else { "0" },
             );
+            if let Some(languages) = languages {
+                languages.configure(&mut command);
+            }
             if !no_sandbox {
                 let mut settings = sandbox_settings.clone();
                 crate::settings::preserve_environment(&mut settings, command.get_envs())?;

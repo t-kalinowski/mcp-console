@@ -21,6 +21,8 @@ pub(crate) struct ClientConfiguration {
     pub(super) python_preparation: bool,
     pub(super) local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
     pub(super) target: Option<crate::target_session::Session>,
+    /// Local built-in workers retain the controller selection across generations.
+    pub(super) languages: Option<crate::cell::Languages>,
     /// A default worker may be replaced without discarding user runtime state.
     pub(super) unused_default: AtomicBool,
 }
@@ -71,6 +73,7 @@ impl ClientConfiguration {
         python: Option<PathBuf>,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
+        let languages = crate::cell::Languages::from_environment()?;
         #[cfg(not(unix))]
         let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = python
@@ -199,6 +202,7 @@ impl ClientConfiguration {
             },
         );
         configuration.local_preparation = Mutex::new(local_preparation);
+        configuration.languages = Some(languages);
         Ok(configuration)
     }
 
@@ -241,6 +245,7 @@ impl ClientConfiguration {
             python_preparation,
             local_preparation: Mutex::new(None),
             target: None,
+            languages: None,
             unused_default: AtomicBool::new(false),
         }
     }

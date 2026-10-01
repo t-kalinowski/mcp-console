@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import subprocess
 import sys
@@ -315,6 +316,48 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
             MCP_CONSOLE_TEST_BOOTSTRAP_REACHED=str(reached.path),
             MCP_CONSOLE_TEST_BOOTSTRAP_RELEASE=str(release.path),
         )
+        python, site = isolated_python(root)
+        python_started = root / "disabled-python-started"
+        (site / "sitecustomize.py").write_text(
+            # fmt: python
+            code(f"""
+                import sys
+                from pathlib import Path
+
+                if sys.argv[0] != "-c":
+                    Path({str(python_started)!r}).write_text("Python initialized")
+                """)
+        )
+        environment.update(RETICULATE_PYTHON=str(python), PYTHONPATH=str(site))
+        if execution == SANDBOXED:
+            # Preserve the fixture's workload inputs, but leave language selection
+            # solely in the controller environment. Native inheritance removes it.
+            workload = {
+                name: environment[name]
+                for name in (
+                    "HOME",
+                    "PATH",
+                    "R_HOME",
+                    "R_PROFILE_USER",
+                    "R_LIBS",
+                    "R_DEFAULT_PACKAGES",
+                    "PYTHONPATH",
+                    "MCP_CONSOLE_TEST_BOOTSTRAP_REACHED",
+                    "MCP_CONSOLE_TEST_BOOTSTRAP_RELEASE",
+                )
+            }
+            configuration = root / ".agents/console/config.yaml"
+            configuration.parent.mkdir(parents=True)
+            configuration.write_text(
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "inherit_environment": False,
+                            "environment": workload,
+                        }
+                    }
+                )
+            )
         with McpClient(
             binary,
             execution.serve(
@@ -326,6 +369,10 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
             try:
                 reached.wait("R startup package before initialize or send")
                 client.initialize_and_list_tools()
+                schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
+                assert "r" in schema["properties"]
+                assert "python" not in schema["properties"]
+                assert "sql" not in schema["properties"]
                 client.request("ping")
                 client.send(r="bootstrap_value", timeout_ms=0)
                 assert last_result_text(client).endswith(RUNNING)
@@ -343,6 +390,7 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
                     r='stopifnot(!"duckdb" %in% loadedNamespaces()); bootstrap_value'
                 )
                 assert last_result_text(client) == '[1] "R state"\n'
+                assert not python_started.exists(), "disabled Python initialized"
                 return client.finish()[3:]
             finally:
                 release.release()
