@@ -53,7 +53,7 @@ impl ClientConfiguration {
             relay,
             no_sandbox,
             sandbox_settings,
-            Some(Environment {
+            Environment {
                 local_runtime: None,
                 custom_worker: true,
                 duckdb_extensions: Default::default(),
@@ -61,7 +61,7 @@ impl ClientConfiguration {
                 python: None,
                 r: None,
                 r_resolver: RResolver::Discover,
-            }),
+            },
         )
     }
 
@@ -188,7 +188,7 @@ impl ClientConfiguration {
             None,
             no_sandbox,
             sandbox_settings,
-            Some(Environment {
+            Environment {
                 local_runtime,
                 custom_worker: false,
                 duckdb_extensions,
@@ -196,7 +196,7 @@ impl ClientConfiguration {
                 python,
                 r,
                 r_resolver,
-            }),
+            },
         );
         configuration.local_preparation = Mutex::new(local_preparation);
         Ok(configuration)
@@ -208,25 +208,19 @@ impl ClientConfiguration {
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        environment: Option<Environment>,
+        environment: Environment,
     ) -> Self {
-        let dynamic_resolution = environment
+        let dynamic_resolution = !matches!(environment.r_resolver, RResolver::Disabled);
+        let python_only = environment
+            .local_runtime
             .as_ref()
-            .is_some_and(|environment| !matches!(environment.r_resolver, RResolver::Disabled));
-        let python_only = environment.as_ref().is_some_and(|environment| {
-            environment
-                .local_runtime
-                .as_ref()
-                .is_some_and(crate::local_runtime::Selection::python_only)
-        });
+            .is_some_and(crate::local_runtime::Selection::python_only);
         let python_preparation = python_only
-            && environment.as_ref().is_some_and(|environment| {
-                environment
-                    .python
-                    .as_ref()
-                    .and_then(PythonEnvironment::managed)
-                    .is_some()
-            });
+            && environment
+                .python
+                .as_ref()
+                .and_then(PythonEnvironment::managed)
+                .is_some();
         Self {
             runtime: platform::WorkerRuntime,
             program,
@@ -235,22 +229,13 @@ impl ClientConfiguration {
             no_sandbox,
             sandbox_settings,
             worker: Mutex::new(WorkerState::Initial),
-            requirements_snapshot: Mutex::new(
-                environment
-                    .as_ref()
-                    .map(Environment::inspection)
-                    .unwrap_or(serde_json::Value::Null),
-            ),
+            requirements_snapshot: Mutex::new(environment.inspection()),
             runtime_r_requirements: environment
-                .as_ref()
-                .map(|env| {
-                    env.runtime_r_requirements()
-                        .iter()
-                        .map(|s| (*s).into())
-                        .collect()
-                })
-                .unwrap_or_default(),
-            environment: environment.map(Mutex::new),
+                .runtime_r_requirements()
+                .iter()
+                .map(|s| (*s).into())
+                .collect(),
+            environment: Some(Mutex::new(environment)),
             dynamic_resolution,
             python_only,
             python_preparation,
@@ -291,7 +276,7 @@ impl ClientConfiguration {
             None,
             no_sandbox,
             policy,
-            Some(Environment {
+            Environment {
                 local_runtime: None,
                 custom_worker: false,
                 duckdb_extensions: Default::default(),
@@ -299,7 +284,7 @@ impl ClientConfiguration {
                 python: Some(PythonEnvironment::bare(None)),
                 r: None,
                 r_resolver: RResolver::Disabled,
-            }),
+            },
         );
         configuration.python_only = session.python_only();
         configuration.target = Some(session);
@@ -403,7 +388,7 @@ impl ClientConfiguration {
             None,
             no_sandbox,
             policy,
-            Some(Environment {
+            Environment {
                 local_runtime,
                 custom_worker: false,
                 duckdb_extensions,
@@ -411,7 +396,7 @@ impl ClientConfiguration {
                 python,
                 r: None,
                 r_resolver,
-            }),
+            },
         );
         configuration.target = Some(crate::target_session::Session::Ssh(session));
         Ok(configuration)
