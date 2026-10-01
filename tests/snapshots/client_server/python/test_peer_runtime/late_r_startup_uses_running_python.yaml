@@ -19,7 +19,7 @@ send:
   r: |
     stopifnot(
       "mcpconsoleearlypython" %in% getOption("defaultPackages"),
-      !isTRUE(reticulate::py_config()$ephemeral),
+      identical(isTRUE(reticulate::py_config()$ephemeral), FALSE),
       identical(search()[[2L]], "tools:mcp-console"),
       identical(find("py")[[1L]], "tools:mcp-console"),
       identical(find("sql_connection")[[1L]], "tools:mcp-console"),

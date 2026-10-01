@@ -96,7 +96,7 @@ DEFER_R_STARTUP = code("""
     import builtins
     import sys
 
-    if sys.argv[0] == "":
+    if sys.argv[0] == "" and "_mcp_console_services" in sys.modules:
         if not getattr(builtins, "peer_bootstrap_interrupted", False):
             builtins.peer_bootstrap_interrupted = True
             input("defer R startup> ")
@@ -114,6 +114,7 @@ def defer_r_bootstrap(client: McpClient) -> None:
         "Python bootstrap before R attachment",
         python="raise AssertionError('interrupted bootstrap ran fixture cell')",
         timeout_ms=0,
+        completion_timeout_seconds=client.response_timeout,
     )
     client.send(control="interrupt", timeout_ms=10_000)
     output = last_result_text(client)
@@ -1342,18 +1343,18 @@ def test_r_commands_follow_managed_python_activation(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-def test_attaches_to_python_initialized_during_r_startup(
+def test_r_startup_uses_initialized_python(
     binary: Path, execution: Execution
 ) -> Transcript:
-    return attach_python_initialized_during_r_startup(binary, execution, managed=False)
+    return r_startup_with_python(binary, execution, managed=False)
 
 
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
-def test_managed_import_after_python_initialized_during_r_startup(
+def test_managed_import_after_r_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
-    return attach_python_initialized_during_r_startup(binary, execution, managed=True)
+    return r_startup_with_python(binary, execution, managed=True)
 
 
 @requires(R)
@@ -1361,9 +1362,7 @@ def test_managed_import_after_python_initialized_during_r_startup(
 def test_late_r_startup_uses_running_python(
     binary: Path, execution: Execution
 ) -> Transcript:
-    return attach_python_initialized_during_r_startup(
-        binary, execution, managed=False, python_first=True
-    )
+    return r_startup_with_python(binary, execution, managed=False, python_first=True)
 
 
 @requires(R)
@@ -1374,7 +1373,7 @@ def test_late_r_startup_captures_package_plots(
     records = []
     for trigger in ("r-cell", "python-access"):
         records.extend(
-            attach_python_initialized_during_r_startup(
+            r_startup_with_python(
                 binary,
                 execution,
                 managed=False,
@@ -1393,7 +1392,7 @@ def test_system_default_packages_survive_late_r_startup(
 ) -> Transcript:
     records = []
     for python_first in (False, True):
-        records += attach_python_initialized_during_r_startup(
+        records += r_startup_with_python(
             binary,
             execution,
             managed=False,
@@ -1403,7 +1402,7 @@ def test_system_default_packages_survive_late_r_startup(
     return records
 
 
-def attach_python_initialized_during_r_startup(
+def r_startup_with_python(
     binary: Path,
     execution: Execution,
     *,
@@ -1463,22 +1462,14 @@ def attach_python_initialized_during_r_startup(
             environment["MCP_CONSOLE_TEST_STARTUP_RELEASE"] = str(release.path)
         if managed:
             environment.pop("RETICULATE_PYTHON")
-            # The startup package selects a prepared environment without
-            # running reticulate's resolver inside the worker sandbox.
-            virtualenv = root / "early-python"
-            subprocess.run(
-                [sys.executable, "-m", "venv", "--without-pip", str(virtualenv)],
-                check=True,
-                capture_output=True,
-            )
-            early_python = virtualenv / "bin/python"
-            subprocess.run(
-                ["uv", "pip", "install", "--python", str(early_python), "numpy"],
-                check=True,
-                capture_output=True,
-            )
-            environment["MCP_CONSOLE_TEST_EARLY_PYTHON"] = str(early_python)
+            # Eager bootstrap selects the prepared managed interpreter before
+            # R packages run. The package attaches to that same identity.
             version = "==" + ".".join(map(str, sys.version_info[:3]))
+        if python_first:
+            modules = root / "modules"
+            modules.mkdir()
+            (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
+            environment["RETICULATE_PYTHONPATH"] = str(modules)
         serve = (
             execution.serve("--writable-root", str(root))
             if system_default_packages and execution == SANDBOXED
@@ -1490,13 +1481,14 @@ def attach_python_initialized_during_r_startup(
                 client.send(requirements={"python_version": [version]})
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]
             if python_first:
+                defer_r_bootstrap(client)
                 collected = send_and_collect_runtime_python_resolution(
                     client,
                     python="before_r = object(); before_r_identity = id(before_r)",
                 )
                 assert collected == "[done]", client.transcript[-1]
-            # R-first startup adopts external CPython. With Python already live,
-            # the same startup package must attach to Console's interpreter.
+            # The startup package attaches to the interpreter selected by
+            # bootstrap, including after an interrupted Python-first setup.
             if system_default_packages:
                 # Package startup supplies the readiness boundary. Dependency
                 # preparation may outlive a send's response timeout in CI.
@@ -1523,13 +1515,13 @@ def attach_python_initialized_during_r_startup(
                 r=code("""
                 stopifnot(
                   "mcpconsoleearlypython" %in% getOption("defaultPackages"),
-                  !isTRUE(reticulate::py_config()$ephemeral),
+                  identical(isTRUE(reticulate::py_config()$ephemeral), MANAGED_PYTHON),
                   identical(search()[[2L]], "tools:mcp-console"),
                   identical(find("py")[[1L]], "tools:mcp-console"),
                   identical(find("sql_connection")[[1L]], "tools:mcp-console"),
                   identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
                 )
-                """)
+                """).replace("MANAGED_PYTHON", "TRUE" if managed else "FALSE")
             )
             assert last_result_text(client) == "[done]", client.transcript[-1]
             if python_first:
