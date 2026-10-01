@@ -1,8 +1,0 @@
----
-!same-as MCP initialization for this execution mode
----
-input:
-  method: ping
-result: {}
----
-initializing_worker_retired: true
