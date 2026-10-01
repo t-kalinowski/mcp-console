@@ -56,9 +56,20 @@ def test_idle_stdin_startup_blocks_preparation(
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        environment["ZOD_STARTUP_STARTED"] = str(
+            temporary_path / "initial-waiting-ready"
+        )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                "--worker",
+                str(zod),
+                *(
+                    ("--writable-root", str(temporary_path))
+                    if execution == SANDBOXED
+                    else ()
+                ),
+            ),
             environment,
         )
         passed = False
@@ -67,7 +78,7 @@ def test_idle_stdin_startup_blocks_preparation(
             idle_stdin = client.start_send(stdin="queued\n")
             wait_for_marker(
                 temporary_path,
-                "zod-replacement-waiting-ready",
+                "initial-waiting-ready",
                 client,
             )
 

@@ -65,7 +65,9 @@ def discovery_environment(
         environment = bare_runtime_environment(os.environ.copy(), root / "library")
         environment["R_PROFILE_USER"] = os.devnull
         environment.pop("R_HOME", None)
-        environment["PATH"] = str(root)
+        # Keep resolver discovery isolated while retaining the shell utilities
+        # used by the selected stock R launcher's resource-directory query.
+        environment["PATH"] = os.pathsep.join([str(root), "/usr/bin", "/bin"])
         try:
             yield environment, reached, release, alive_reader
             assert select.select([alive_reader], [], [], 5)[0], (
@@ -298,7 +300,7 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
         client.request("ping")
         release.release()
         client.send()
-        assert last_result_text(client) == "[done]"
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         client.send(r='exists("cancelled_cell_ran", inherits = FALSE)')
         assert last_result_text(client) == "[1] TRUE\n", last_result_text(client)
         return client.finish()
