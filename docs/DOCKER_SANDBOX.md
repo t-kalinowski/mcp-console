@@ -66,18 +66,18 @@ sandbox:
 Run `mcp-console serve` through an MCP client.
 To expose no project, omit `mounts` and use a directory already present in the template, such as `/workspace`.
 
-| Field | Contract |
-| --- | --- |
-| `target.transport` | Omitted or `{kind: local}`. |
-| `target.workspace` | Required absolute VM directory, existing after shares are established. |
-| `target.command` | Optional in-VM Console argv prefix, default `[mcp-console]`; not an SBX launcher command. |
-| `target.compute.template` | Required prepared digest-qualified registry reference, captured for the session. |
-| `target.compute.mounts` | Explicit shares, default `[]`. |
-| `mounts[].source` | Host path; relative values resolve against the controller launch directory. |
-| `mounts[].target` | Must equal the resolved absolute source; remapping is unsupported. |
-| `mounts[].access` | `read_only` (default) or `read_write`. |
-| `sandbox.provider` | `compute`, also the default for this target. |
-| `sandbox.environment` | Optional string-to-string workload overrides. |
+| Field                         | Contract                                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------------------------- |
+| `target.transport`            | Omitted or `{kind: local}`.                                                               |
+| `target.workspace`            | Required absolute VM directory, existing after shares are established.                    |
+| `target.command`              | Optional in-VM Console argv prefix, default `[mcp-console]`; not an SBX launcher command. |
+| `target.compute.template`     | Required prepared digest-qualified registry reference, captured for the session.          |
+| `target.compute.mounts`       | Explicit shares, default `[]`.                                                            |
+| `mounts[].source`             | Host path; relative values resolve against the controller launch directory.               |
+| `mounts[].target`             | Must equal the resolved absolute source; remapping is unsupported.                        |
+| `mounts[].access`             | `read_only` (default) or `read_write`.                                                    |
+| `sandbox.provider`            | `compute`, also the default for this target.                                              |
+| `sandbox.environment`         | Optional string-to-string workload overrides.                                             |
 | `sandbox.inherit_environment` | Boolean, default `true`; inherits the template environment, not controller runtime paths. |
 
 Those are the complete compute-provider sandbox fields.

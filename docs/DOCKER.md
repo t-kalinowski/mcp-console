@@ -47,20 +47,20 @@ The writable project bind includes metadata and recordings beneath it: external 
 [Configuration discovery](CONFIGURATION.md) runs only on the controller.
 Paths are captured once; there is no container-side configuration discovery, synchronization, interpolation, or reload.
 
-| Field | Contract |
-| --- | --- |
-| `target.transport` | Omitted or `{kind: local}`. SSH plus Docker is unsupported. |
-| `target.workspace` | Required absolute directory that exists in the container after binds. Console does not create it. |
-| `target.command` | Nonempty in-image Console argv prefix; default `[mcp-console]`. No shell or implicit installation. |
-| `target.compute.kind` | `docker`. |
-| `target.compute.image` | Image reference; mutually exclusive with `build`. |
-| `target.compute.pull` | `never`, `if_missing` (default), or `always`; applies only during initial image setup. |
-| `target.compute.build` | Mapping with required `context` directory and `dockerfile` file on the controller. Both resolve independently against the launch directory. |
-| `target.compute.mounts` | Explicit binds, default `[]`; no implicit project, home, credential, or Docker socket mount. |
-| `mounts[].source` | Required source, made absolute against the controller launch directory; Docker checks it on the daemon host. |
-| `mounts[].target` | Required absolute container path. |
-| `mounts[].access` | `read_only` (default) or `read_write`. |
-| `target.compute.user` | Optional Docker user/group string; otherwise use the image user. |
+| Field                   | Contract                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target.transport`      | Omitted or `{kind: local}`. SSH plus Docker is unsupported.                                                                                 |
+| `target.workspace`      | Required absolute directory that exists in the container after binds. Console does not create it.                                           |
+| `target.command`        | Nonempty in-image Console argv prefix; default `[mcp-console]`. No shell or implicit installation.                                          |
+| `target.compute.kind`   | `docker`.                                                                                                                                   |
+| `target.compute.image`  | Image reference; mutually exclusive with `build`.                                                                                           |
+| `target.compute.pull`   | `never`, `if_missing` (default), or `always`; applies only during initial image setup.                                                      |
+| `target.compute.build`  | Mapping with required `context` directory and `dockerfile` file on the controller. Both resolve independently against the launch directory. |
+| `target.compute.mounts` | Explicit binds, default `[]`; no implicit project, home, credential, or Docker socket mount.                                                |
+| `mounts[].source`       | Required source, made absolute against the controller launch directory; Docker checks it on the daemon host.                                |
+| `mounts[].target`       | Required absolute container path.                                                                                                           |
+| `mounts[].access`       | `read_only` (default) or `read_write`.                                                                                                      |
+| `target.compute.user`   | Optional Docker user/group string; otherwise use the image user.                                                                            |
 
 To build during initial setup, replace `image` and `pull` with:
 

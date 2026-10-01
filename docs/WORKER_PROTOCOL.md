@@ -43,39 +43,39 @@ Every frame has a string `kind` plus exactly the fields listed below.
 
 ### Server to worker
 
-| Kind | Fields |
-| --- | --- |
-| `evaluate` | `language`: `r`, `python`, or `sql`; `source`: string |
-| `prepare_r`, `r_resolved` | `library`: string |
-| `r_resolution_failed` | `failure`: `host`, `interrupted`, or `operation`; `message`: string |
-| `prepare_python` | `packages`: string[] |
-| `python_resolved` | `python`: string; optional `native`: inspected activation candidate |
-| `python_resolution_failed`, `python_version_resolution_failed` | `message`: string |
-| `python_version_resolved` | `version`: string |
-| `shutdown` | — |
+| Kind                                                           | Fields                                                              |
+| -------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `evaluate`                                                     | `language`: `r`, `python`, or `sql`; `source`: string               |
+| `prepare_r`, `r_resolved`                                      | `library`: string                                                   |
+| `r_resolution_failed`                                          | `failure`: `host`, `interrupted`, or `operation`; `message`: string |
+| `prepare_python`                                               | `packages`: string[]                                                |
+| `python_resolved`                                              | `python`: string; optional `native`: inspected activation candidate |
+| `python_resolution_failed`, `python_version_resolution_failed` | `message`: string                                                   |
+| `python_version_resolved`                                      | `version`: string                                                   |
+| `shutdown`                                                     | —                                                                   |
 
 ### Worker to server
 
-| Kind | Fields |
-| --- | --- |
-| `ready`, `completed`, `python_prepared` | — |
-| `console_output`, `console_diagnostic` | `data`: string |
-| `image` | `data`: valid base64 string; `mime_type`: string |
-| `input_requested` | `prompt`: string |
-| `input_received`, `input_cancelled` | — |
-| `r_prepared`, `r_activated` | `library`: string |
-| `r_preparation_failed` | `message`: string |
-| `resolve_r` | `packages`: string[] |
-| `r_activation_failed` | `library`: string; `message`: string |
-| `resolve_python` | `request`: Python resolution request |
-| `resolve_python_version` | `request`: object with required `constraints`: string[] |
-| `python_activated`, `python_activation_failed` | `requirements`: complete Python manifest |
-| `python_preparation_failed`, `python_preparation_rejected` | `message`: string |
+| Kind                                                       | Fields                                                  |
+| ---------------------------------------------------------- | ------------------------------------------------------- |
+| `ready`, `completed`, `python_prepared`                    | —                                                       |
+| `console_output`, `console_diagnostic`                     | `data`: string                                          |
+| `image`                                                    | `data`: valid base64 string; `mime_type`: string        |
+| `input_requested`                                          | `prompt`: string                                        |
+| `input_received`, `input_cancelled`                        | —                                                       |
+| `r_prepared`, `r_activated`                                | `library`: string                                       |
+| `r_preparation_failed`                                     | `message`: string                                       |
+| `resolve_r`                                                | `packages`: string[]                                    |
+| `r_activation_failed`                                      | `library`: string; `message`: string                    |
+| `resolve_python`                                           | `request`: Python resolution request                    |
+| `resolve_python_version`                                   | `request`: object with required `constraints`: string[] |
+| `python_activated`, `python_activation_failed`             | `requirements`: complete Python manifest                |
+| `python_preparation_failed`, `python_preparation_rejected` | `message`: string                                       |
 
 For example:
 
 ```json
-{"kind":"evaluate","language":"python","source":"2 + 2"}
+{ "kind": "evaluate", "language": "python", "source": "2 + 2" }
 ```
 
 The worker reports ordinary language output and then `{"kind":"completed"}`.
@@ -118,12 +118,12 @@ For the built-in worker, readiness means command admission is available, not tha
 The server admits one evaluation or explicit preparation at a time.
 Each ordinary operation has exactly one matching terminal result:
 
-| Command | Successful result | Ordinary failure result |
-| --- | --- | --- |
-| `evaluate` | `completed` | Language error text followed by `completed`, when the worker remains usable |
-| `prepare_r` | `r_prepared` with the requested normalized path | `r_preparation_failed` |
-| `prepare_python` | `python_prepared` | `python_preparation_rejected` or `python_preparation_failed` |
-| `shutdown` | Process exit | No sideband reply |
+| Command          | Successful result                               | Ordinary failure result                                                     |
+| ---------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `evaluate`       | `completed`                                     | Language error text followed by `completed`, when the worker remains usable |
+| `prepare_r`      | `r_prepared` with the requested normalized path | `r_preparation_failed`                                                      |
+| `prepare_python` | `python_prepared`                               | `python_preparation_rejected` or `python_preparation_failed`                |
+| `shutdown`       | Process exit                                    | No sideband reply                                                           |
 
 A result without its matching active operation, a wrong result kind, or a different R library receipt is a protocol violation.
 All semantic output and images belonging to an operation must precede its result; later frames are idle activity.

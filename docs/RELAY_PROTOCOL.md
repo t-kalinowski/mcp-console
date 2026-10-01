@@ -30,25 +30,25 @@ SSH preparation has its own protocol and connection.
 
 Controller input begins with a four-byte unsigned big-endian length and at most 1 MiB of UTF-8 JSON bootstrap:
 
-| Field | Meaning |
-| --- | --- |
-| `version`, `build` | Launch version and Console package version. |
-| `workspace` | Existing absolute execution-host directory. |
-| `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection. |
-| `provider` | `native` by default, or `compute` for SBX. |
-| `environment` | Optional discovered capabilities and retained R/Python selections; required for prepared-target worker launch. |
-| `python` | Optional Python selection for Docker/SBX probes only; rejected by SSH. |
+| Field                                    | Meaning                                                                                                        |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `version`, `build`                       | Launch version and Console package version.                                                                    |
+| `workspace`                              | Existing absolute execution-host directory.                                                                    |
+| `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection.                                                      |
+| `provider`                               | `native` by default, or `compute` for SBX.                                                                     |
+| `environment`                            | Optional discovered capabilities and retained R/Python selections; required for prepared-target worker launch. |
+| `python`                                 | Optional Python selection for Docker/SBX probes only; rejected by SSH.                                         |
 
 Consume exactly the bootstrap, forwarding every subsequent byte to relay stdin, including bytes received in the same read.
 Validate compatibility before worker startup; relay `ready` does not substitute for this check.
 
 Helper stdout frames contain a one-byte tag, four-byte unsigned big-endian length, and at most 64 KiB of payload:
 
-| Tag | Payload and phase |
-| --- | --- |
-| `1` | JSON hello: `version`, `build`, optional authoritative `container_id` or `sandbox: {name, id}`. |
-| `2` | Raw relay stdout bytes; chunks need not align with JSONL frames. Invalid during probes. |
-| `3` | Terminal JSON `{confirmed: boolean, error: string or null}`, followed by EOF. Setup rejection may send this without a hello. |
+| Tag | Payload and phase                                                                                                               |
+| --- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `1` | JSON hello: `version`, `build`, optional authoritative `container_id` or `sandbox: {name, id}`.                                 |
+| `2` | Raw relay stdout bytes; chunks need not align with JSONL frames. Invalid during probes.                                         |
+| `3` | Terminal JSON `{confirmed: boolean, error: string or null}`, followed by EOF. Setup rejection may send this without a hello.    |
 | `4` | Typed prepared-runtime result, exactly once after compatible hello during a Docker/SBX probe. Invalid for SSH or worker launch. |
 
 The prepared descriptor rejects managed state, contradictory selections, unknown fields, and relative native paths.
@@ -82,25 +82,25 @@ There is no line buffering or coalescing timer.
 
 All semantic commands and events from the [worker schema](WORKER_PROTOCOL.md#message-schemas) appear flat and unchanged on this boundary, with these transport controls:
 
-| Command | Fields and effect |
-| --- | --- |
-| `stdin` | `data`: string; append exact UTF-8 bytes to worker fd 0. |
-| `interrupt` | `request_id`: integer; attempt SIGINT delivery to the live direct worker. |
-| `shutdown` | `grace_millis`: integer; close stdin and request bounded worker exit. This replaces payload-free worker `shutdown`. |
+| Command     | Fields and effect                                                                                                   |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| `stdin`     | `data`: string; append exact UTF-8 bytes to worker fd 0.                                                            |
+| `interrupt` | `request_id`: integer; attempt SIGINT delivery to the live direct worker.                                           |
+| `shutdown`  | `grace_millis`: integer; close stdin and request bounded worker exit. This replaces payload-free worker `shutdown`. |
 
 There is no nested `worker_message`, result acknowledgment, or inline-control-specific wire frame.
 The relay additionally emits:
 
-| Event | Fields and meaning |
-| --- | --- |
-| `stdout`, `stderr` | `data`: valid UTF-8 chunk. |
-| `stdout_bytes`, `stderr_bytes` | `data`: padded standard base64 chunk. |
-| `stdout_closed`, `stderr_closed`, `worker_sideband_closed` | No payload; that stream's retirement boundary. |
-| `interrupt_result` | Matching `request_id`, optional string `error`. |
-| `shutdown_started` | No payload; acceptance of the one registered shutdown request. |
-| `worker_exited` | `code`: direct-worker exit status. |
-| `worker_signaled` | `signal`: direct-worker termination signal. |
-| `fatal` | `message`: infrastructure/protocol failure. |
+| Event                                                      | Fields and meaning                                             |
+| ---------------------------------------------------------- | -------------------------------------------------------------- |
+| `stdout`, `stderr`                                         | `data`: valid UTF-8 chunk.                                     |
+| `stdout_bytes`, `stderr_bytes`                             | `data`: padded standard base64 chunk.                          |
+| `stdout_closed`, `stderr_closed`, `worker_sideband_closed` | No payload; that stream's retirement boundary.                 |
+| `interrupt_result`                                         | Matching `request_id`, optional string `error`.                |
+| `shutdown_started`                                         | No payload; acceptance of the one registered shutdown request. |
+| `worker_exited`                                            | `code`: direct-worker exit status.                             |
+| `worker_signaled`                                          | `signal`: direct-worker termination signal.                    |
+| `fatal`                                                    | `message`: infrastructure/protocol failure.                    |
 
 Payload-free frames contain exactly `kind`.
 A successful interrupt result means the OS accepted signal delivery, not that execution stopped.

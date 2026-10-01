@@ -20,12 +20,12 @@ Discovery, preparation, and the default worker start in the background; MCP init
 Early calls follow the [shared readiness rules](SEND_OPERATIONS.md#server-readiness).
 Omitting `extends` retains host reads and private temporary writes, not workspace write access.
 
-| Field | Meaning |
-| --- | --- |
-| `target.transport.host` | Required OpenSSH destination or configured alias. |
-| `target.workspace` | Required absolute existing directory on the execution host. |
-| `target.command` | Optional nonempty argv prefix for a compatible remote Console build. |
-| `target.compute` | Omitted or `{kind: host}`. SSH with Docker or SBX is unsupported. |
+| Field                   | Meaning                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| `target.transport.host` | Required OpenSSH destination or configured alias.                    |
+| `target.workspace`      | Required absolute existing directory on the execution host.          |
+| `target.command`        | Optional nonempty argv prefix for a compatible remote Console build. |
+| `target.compute`        | Omitted or `{kind: host}`. SSH with Docker or SBX is unsupported.    |
 
 Without `command`, remote lookup tries `mcp-console`, then `uvx mcp-console` only if Console is absent.
 A selected command that fails does not trigger fallback.
