@@ -89,6 +89,38 @@ CLI_CHECK = code("""
     """)
 
 
+# fmt: python
+DEFER_R_STARTUP = code("""
+    import builtins
+    import sys
+
+    if sys.argv[0] == "":
+        if not getattr(builtins, "peer_bootstrap_interrupted", False):
+            builtins.peer_bootstrap_interrupted = True
+            input("defer R startup> ")
+        builtins.peer_startups = getattr(builtins, "peer_startups", 0) + 1
+    """)
+
+
+def defer_r_bootstrap(client: McpClient) -> None:
+    # Interrupt Python's retryable site setup before eager bootstrap enters R.
+    # The next Python cell completes setup; R still initializes only at demand.
+    initialized = client.transcript.copy()
+    wait_for_evaluation_output(
+        client,
+        '[input requested: "defer R startup> "]\n[waiting for stdin]',
+        "Python bootstrap before R attachment",
+        python="raise AssertionError('interrupted bootstrap ran fixture cell')",
+        timeout_ms=0,
+    )
+    client.send(control="interrupt", timeout_ms=10_000)
+    output = last_result_text(client)
+    assert "KeyboardInterrupt" in output, output
+    assert "AssertionError" not in output, output
+    assert "[running; poll with an empty send]" not in output, output
+    client.transcript[:] = initialized
+
+
 def without_r(environment: dict[str, str], root: Path) -> None:
     path = root / "empty-path"
     path.mkdir()
@@ -136,12 +168,20 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
     client.send(python=source)
     assert last_result_text(client) == "Python live; R absent\n", client.transcript[-1]
     if trigger == "r-cell":
-        client.send(
-            r="peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))"
+        wait_for_evaluation_output(
+            client,
+            "[done]",
+            "late R cell attachment",
+            r="peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))",
         )
         assert last_result_text(client) == "[done]", client.transcript[-1]
     else:
-        client.send(python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41")
+        wait_for_evaluation_output(
+            client,
+            "[done]",
+            "late Python-side R attachment",
+            python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41",
+        )
         assert last_result_text(client) == "[done]", client.transcript[-1]
     # fmt: python
     source = code("""
@@ -193,10 +233,7 @@ def test_late_r_preserves_python_runtime(
             root = Path(directory)
             modules = root / "modules"
             modules.mkdir()
-            (modules / "sitecustomize.py").write_text(
-                "import builtins\n"
-                "builtins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\n"
-            )
+            (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
             environment = dict(
                 os.environ,
                 RETICULATE_PYTHON=sys.executable,
@@ -204,6 +241,7 @@ def test_late_r_preserves_python_runtime(
             )
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
+                defer_r_bootstrap(client)
                 exercise_late_r(client, trigger)
                 current = client.finish()[3:]
                 if records is None:
@@ -218,6 +256,13 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
     with external_target() as external, tempfile.TemporaryDirectory() as directory:
         local = Path(directory)
         hooks = external["target"]["workspace"] + "/cli/python-hooks"
+        external_hook = DEFER_R_STARTUP.replace(
+            "import sys\n", "import sys\nfrom pathlib import Path\n"
+        ).replace(
+            'if not getattr(builtins, "peer_bootstrap_interrupted", False):',
+            'if not getattr(builtins, "peer_bootstrap_interrupted", False) and Path(__file__).with_suffix(".defer").exists():\n'
+            '        Path(__file__).with_suffix(".defer").unlink()',
+        )
         config = local / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         config.write_text(
@@ -252,19 +297,19 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
                 collected = send_and_collect_runtime_python_resolution(
                     client,
                     # fmt: python
-                    python=code("""
+                    python=code(f"""
                         import os
                         from pathlib import Path
 
                         hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
                         hooks.mkdir(exist_ok=True)
-                        _ = (hooks / "sitecustomize.py").write_text(
-                            "import builtins\\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\\n"
-                        )
+                        _ = (hooks / "sitecustomize.py").write_text({external_hook!r})
+                        (hooks / "sitecustomize.defer").touch()
                         """),
                 )
                 assert collected == "[done]", client.transcript[-1]
                 client.send(control="restart")
+                defer_r_bootstrap(client)
                 exercise_late_r(client)
                 records.extend(client.finish()[3:])
         assert not trap.exists(), (
@@ -281,6 +326,9 @@ def test_late_attachment_preserves_environment_metadata(
     records = []
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        modules = root / "modules"
+        modules.mkdir()
+        (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
         executable = Path(sys._base_executable)
         prefix = root / "virtualenv"
         for kind in ("base", "virtualenv", "conda-marker"):
@@ -304,18 +352,23 @@ def test_late_attachment_preserves_environment_metadata(
             environment = dict(
                 os.environ,
                 RETICULATE_PYTHON=str(executable),
+                RETICULATE_PYTHONPATH=str(modules),
                 MCP_CONSOLE_TEST_PYTHON=str(executable),
                 MCP_CONSOLE_TEST_ENVIRONMENT_KIND=kind,
                 MCP_CONSOLE_TEST_VIRTUALENV="" if kind == "base" else str(prefix),
             )
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
+                defer_r_bootstrap(client)
                 client.send(
                     python="peer_object = object(); peer_identity = id(peer_object)"
                 )
                 assert last_result_text(client) == "[done]", client.transcript[-1]
                 # fmt: r
-                client.send(
+                wait_for_evaluation_output(
+                    client,
+                    "environment metadata retained\n",
+                    "late attachment metadata",
                     r=code("""
                     config <- reticulate::py_config()
                     sys <- reticulate::import("sys")
@@ -334,7 +387,7 @@ def test_late_attachment_preserves_environment_metadata(
                       identical(config$virtualenv_activate, "")
                     )
                     cat("environment metadata retained\\n")
-                    """)
+                    """),
                 )
                 assert last_result_text(client) == "environment metadata retained\n", (
                     kind,
@@ -357,8 +410,15 @@ def test_interrupt_wakes_input_before_and_after_attachment(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        modules = root / "modules"
+        modules.mkdir()
+        (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
         release = FifoCheckpoint.create(root / "interrupt")
-        environment = dict(os.environ, RETICULATE_PYTHON=sys.executable)
+        environment = dict(
+            os.environ,
+            RETICULATE_PYTHON=sys.executable,
+            RETICULATE_PYTHONPATH=str(modules),
+        )
         serve = (
             execution.serve("--writable-root", str(root))
             if execution == SANDBOXED
@@ -367,9 +427,15 @@ def test_interrupt_wakes_input_before_and_after_attachment(
         try:
             with McpClient(binary, serve, environment, root) as client:
                 client.initialize_and_list_tools()
+                defer_r_bootstrap(client)
                 for attached in (False, True):
                     if attached:
-                        client.send(python="assert int(r['42L']) == 42")
+                        wait_for_evaluation_output(
+                            client,
+                            "[done]",
+                            "input interrupt after R attachment",
+                            python="assert int(r['42L']) == 42",
+                        )
                         assert last_result_text(client) == "[done]", client.transcript[
                             -1
                         ]
@@ -492,7 +558,10 @@ def test_idle_preparation_keeps_r_uninitialized(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        environment = dict(os.environ)
+        modules = root / "modules"
+        modules.mkdir()
+        (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
+        environment = dict(os.environ, RETICULATE_PYTHONPATH=str(modules))
         environment.pop("RETICULATE_PYTHON", None)
         arguments = root / "uv-arguments"
         environment.update(
@@ -510,6 +579,7 @@ def test_idle_preparation_keeps_r_uninitialized(
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
+            defer_r_bootstrap(client)
             client.send(
                 python="import sys; from pathlib import Path; sentinel = object(); original = sentinel; _ = Path('running-python').write_text(sys.executable)"
             )
@@ -550,8 +620,11 @@ def test_idle_preparation_keeps_r_uninitialized(
             assert (
                 last_result_text(client) == "idle preparation uses the Python owner\n"
             ), client.transcript[-1]
-            client.send(
-                r='stopifnot("packaging" %in% reticulate::py_require()$packages, isTRUE(reticulate::py_config()$ephemeral))'
+            wait_for_evaluation_output(
+                client,
+                "[done]",
+                "managed R attachment after idle preparation",
+                r='stopifnot("packaging" %in% reticulate::py_require()$packages, isTRUE(reticulate::py_config()$ephemeral))',
             )
             assert last_result_text(client) == "[done]", client.transcript[-1]
             return client.finish()[3:]
