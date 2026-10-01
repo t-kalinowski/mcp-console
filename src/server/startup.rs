@@ -12,6 +12,11 @@ pub(super) struct Runtime {
     pub transcript: crate::transcript::Transcript,
 }
 
+pub(super) struct PreparedRuntime {
+    pub configuration: crate::worker_client::ClientConfiguration,
+    pub transcript: crate::transcript::Transcript,
+}
+
 #[derive(Clone)]
 pub(super) struct Startup {
     runtime: Arc<Runtime>,
@@ -31,7 +36,7 @@ impl Startup {
         prelaunch: bool,
         initialize: impl FnOnce(
             &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-        ) -> Result<Runtime, String>
+        ) -> Result<PreparedRuntime, String>
         + Send
         + 'static,
     ) -> Self {
@@ -54,7 +59,7 @@ impl Startup {
                         control.resolver = Some(resolver.clone());
                         initialize_worker.register_resolver_stop_handle(&generation, resolver)
                     })?;
-                    initialize_worker.configure(prepared.worker);
+                    initialize_worker.configure(prepared.configuration);
                     task_recording.configure(prepared.transcript);
                     initialize_worker.record_with(task_recording);
                     if prelaunch {
@@ -102,7 +107,7 @@ impl Startup {
     }
 
     pub fn finish_failed_preparation(&self, error: String) -> Result<(), String> {
-        // A failed initializer has no Client to own shutdown. Suppress only
+        // A failed initializer has no installed configuration to own shutdown. Suppress only
         // connection cancellation with confirmed cleanup; retain other failures.
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed

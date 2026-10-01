@@ -128,13 +128,14 @@ Spill files and stored secrets live there; preinstalled extension caches and sha
 
 The client and server exchange MCP JSON-RPC over the server's standard input and output.
 The server registers only the `send` tool.
-The MCP adapter in `src/server.rs` decodes arguments, applies language filtering, and translates responses into MCP text and image content.
+The MCP adapter in `src/server.rs` decodes the wire arguments from `src/server/arguments.rs`, applies language filtering, and translates responses into MCP text and image content.
 Argument decoding errors pass through the same bounded response renderer before recording and delivery.
-The session coordinator in `src/worker_client.rs` validates requirements and interprets every `send` combination, including standalone preparation.
+The live session and readiness facade in `src/worker_client.rs` retain the shared state.
+Its `configuration`, `send`, `control`, and `execution` modules own preparation, ordinary sends and polling, inline control, and evaluation admission and launch, respectively.
 One `send` can poll, provide stdin, prepare requirements, evaluate a cell, interrupt, restart, or combine compatible parts under one ordered operation.
-[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
+[`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs`, `src/server/arguments.rs`, and the actual `tools/list` result are authoritative.
 The [capability-advertising decision](TOOL_DESCRIPTIONS.md#supported-capabilities-and-host-availability) keeps supported, configured capabilities visible even when the execution host lacks a runtime.
-Tool construction uses captured configuration, while operation validation uses discovered availability.
+Tool construction in `src/server/presentation.rs` uses captured configuration, while operation validation uses discovered availability.
 `ConsoleServer::new` captures the tool router and starts one background runtime task in `src/server/startup.rs`.
 Launch configuration and applicable local native-policy preflight remain synchronous; `initialize`, `tools/list`, and `ping` do not wait for interpreter, resolver, or target discovery.
 The task configures the existing client, prepares defaults, and launches the built-in worker through actual transport readiness.
