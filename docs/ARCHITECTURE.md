@@ -596,6 +596,7 @@ Ordinary loading and reload share that ownership check; frames inside the curren
 Metadata is read at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`, without a cache.
 This preserves ordinary optional-dependency handling; later calls and local modules, including cached Python callbacks invoked by installed initializers, remain eligible for automatic resolution.
 An installation without a recorded file matching the selected origin does not establish ownership and remains eligible for automatic resolution.
+Malformed installed file metadata is unsupported; parsing errors from corrupted records propagate instead of silently skipping the distribution.
 Deferred module bodies, including `importlib.util.LazyLoader` execution on later attribute access, fall outside this ordinary importlib initialization boundary.
 Cached C callbacks expose no Python frame of their own and inherit the visible initializer's context; calls after initialization remain eligible.
 It derives one bare distribution from the top-level import through a curated mapping or a conservative same-name fallback; the server validates that name through the existing managed-Python requirement validator.
