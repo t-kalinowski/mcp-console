@@ -230,11 +230,7 @@ fn configure_custom(description: &mut String, properties: &mut Map<String, Value
 }
 
 /// Prepared-target restrictions are known from configuration, independent of the probe.
-fn configure_prepared(
-    description: &mut String,
-    properties: &mut Map<String, Value>,
-    source: &str,
-) {
+fn configure_prepared(description: &mut String, properties: &mut Map<String, Value>, source: &str) {
     *description = description.replace("managed DuckDB", "Console-owned DuckDB").replace(
         "Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages.",
         "Dependency preparation is unavailable on this target.",
@@ -270,11 +266,7 @@ fn configure_prepared(
     }
 }
 
-fn description(
-    policy: &SandboxSettings,
-    no_sandbox: bool,
-    target: Option<&Target>,
-) -> String {
+fn description(policy: &SandboxSettings, no_sandbox: bool, target: Option<&Target>) -> String {
     let kind = target.map(|target| match &target.compute {
         Compute::Host {} => "host",
         Compute::Docker(_) => "docker",
