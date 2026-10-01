@@ -441,6 +441,34 @@ def test_rejects_malformed_overrides(binary: Path) -> Transcript:
     return records
 
 
+def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, {"python": "~/.venv/bin/python"})
+        for home in (None, "", "relative/home"):
+            environment = dict(os.environ)
+            environment.pop("HOME", None)
+            if home is not None:
+                environment["HOME"] = home
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox"],
+                cwd=workspace,
+                env=environment,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert (
+                "configured Python home expansion requires an absolute HOME"
+                in result.stderr
+            )
+            records.append({"HOME": home, "stderr": result.stderr})
+    return records
+
+
 def test_validates_effective_configuration(binary: Path) -> Transcript:
     cases = (
         ("extends=true", "boolean"),

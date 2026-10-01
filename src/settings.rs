@@ -183,6 +183,15 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
                 if remote_python {
                     Ok(path)
                 } else {
+                    let path = if let Ok(relative) = path.strip_prefix("~") {
+                        let home = std::env::var_os("HOME")
+                            .map(PathBuf::from)
+                            .filter(|home| home.is_absolute())
+                            .ok_or("configured Python home expansion requires an absolute HOME")?;
+                        home.join(relative)
+                    } else {
+                        path
+                    };
                     std::path::absolute(path)
                         .map_err(|error| format!("cannot locate configured Python: {error}"))
                 }
