@@ -224,6 +224,8 @@ def test_restart_discards_unread_stdin(
         execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
+    client.send(r="echo echo")
+    assert last_tool_text(client) == "zod: echo\n"
     client.send(stdin="stale\n")
     assert last_tool_text(client) == "\n[idle]"
 
