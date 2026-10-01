@@ -16,5 +16,10 @@
   )
   stopifnot(identical(readBin(release, "raw", 1L), charToRaw("1")))
   close(release)
-  assign("bootstrap_value", readline("R startup> "), envir = globalenv())
+  script <- Sys.getenv("MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT")
+  if (nzchar(script)) {
+    sys.source(script, envir = globalenv())
+  } else {
+    assign("bootstrap_value", readline("R startup> "), envir = globalenv())
+  }
 }

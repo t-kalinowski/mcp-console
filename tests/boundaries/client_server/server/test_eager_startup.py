@@ -135,6 +135,8 @@ def ready_without_send(
         resources.callback(release.close)
         if sans_r:
             python, site = isolated_python(root)
+            python_started = FifoCheckpoint.create(root / "python-ready")
+            resources.callback(python_started.close)
             (site / "sitecustomize.py").write_text(
                 # fmt: python
                 code(f"""
@@ -144,6 +146,8 @@ def ready_without_send(
 
                     if sys.argv[0] != "-c":
                         Path({str(root / "python-started")!r}).write_text(str(os.getpid()))
+                        with Path({str(python_started.path)!r}).open("wb", buffering=0) as ready:
+                            assert ready.write(b"1") == 1
                     """),
             )
             environment = selected_python(root, python)
@@ -212,9 +216,7 @@ def ready_without_send(
                 release.release()
                 client.send(requirements={"action": "get"})
                 if sans_r:
-                    assert not (root / "python-started").exists(), (
-                        "prelaunch initialized Python before first use"
-                    )
+                    python_started.wait("prelaunch initialized Python without a cell")
                 cell = (
                     {"python": "import os; worker_pid = os.getpid(); worker_pid"}
                     if sans_r
