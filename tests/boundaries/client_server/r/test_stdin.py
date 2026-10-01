@@ -9,7 +9,6 @@ from support.assertions import (
     collect_running_output,
     last_tool_text,
     wait_for_evaluation_output,
-    wait_for_worker_ready,
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -84,7 +83,6 @@ def test_routes_combined_and_followup_stdin(
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["DBI"]})
     assert last_tool_text(client) == "[prepared]"
-    wait_for_worker_ready(client, "combined stdin worker startup")
 
     # fmt: r
     r = code(r"""
@@ -101,6 +99,9 @@ def test_routes_combined_and_followup_stdin(
 Ada|Lovelace
 """,
         "combined same-call stdin",
+        # The first R cell includes cold interpreter startup; subsequent input
+        # observations use the ordinary arrival budget after this completes.
+        completion_timeout_seconds=client.response_timeout,
         r=r,
         stdin="Ada\nLovelace\n",
     )
