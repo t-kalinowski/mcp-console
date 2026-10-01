@@ -947,6 +947,9 @@ def test_python_input_eof_retires_worker(
                 "[idle]",
                 "Python input EOF retirement",
                 expected_error=True,
+                # Confirmed retirement and replacement startup use the client
+                # lifecycle budget, separate from the input-arrival deadline.
+                completion_timeout_seconds=client.response_timeout,
             )
             client.send(python='"eof_marker" in globals()')
             assert last_result_text(client) == "False\n"
