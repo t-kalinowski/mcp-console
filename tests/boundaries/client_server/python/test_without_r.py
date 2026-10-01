@@ -245,6 +245,54 @@ def test_inspects_and_replaces_managed_requirements(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_configured_python_expands_home(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        home = root / "home with spaces"
+        workspace = root / "workspace"
+        home.mkdir()
+        workspace.mkdir()
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", home / ".venv"],
+            check=True,
+        )
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        env = environment(bin_dir) | {"HOME": str(home)}
+        records = []
+        for source in ("project", "CLI"):
+            config.write_text(
+                "python: ~/.venv/bin/python\n"
+                if source == "project"
+                else "python: missing\n"
+            )
+            arguments = (
+                () if source == "project" else ("-c", "python=~/.venv/bin/python")
+            )
+            with McpClient(
+                binary, execution.serve(*arguments), env, workspace
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(
+                    # fmt: python
+                    python=code("""
+                        import os, sys
+                        from pathlib import Path
+
+                        print(Path(sys.prefix) == Path(os.environ["HOME"]) / ".venv")
+                        """)
+                )
+                assert last_result_text(client) == "True\n", client.transcript[-1]
+                records.append({"configuration": source})
+                records.extend(client.finish()[3:])
+        return records
+
+
+@executions(DIRECT, SANDBOXED)
 def test_configured_python_bypasses_uv(
     binary: Path, execution: Execution
 ) -> Transcript:

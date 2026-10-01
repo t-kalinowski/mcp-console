@@ -30,6 +30,10 @@ python: .venv/bin/python
 ```
 
 Local paths are relative to the launch directory.
+A leading `~` path component in a local `python` selection expands to the controller's absolute `HOME`, for example `python: ~/.venv/bin/python`.
+This also applies to a quoted CLI override such as `-c 'python=~/.venv/bin/python'`; it does not depend on shell expansion.
+Missing, empty, or relative `HOME` is an error when this expansion is requested.
+`~user` and environment-variable references are not expanded.
 SSH, Docker, and Docker Sandbox paths are interpreted on the execution host, relative to `target.workspace`, including a bare filename.
 The equivalent CLI override is `mcp-console serve -c python=.venv/bin/python`.
 This setting takes precedence over inherited `RETICULATE_PYTHON` and is retained across worker restarts.
