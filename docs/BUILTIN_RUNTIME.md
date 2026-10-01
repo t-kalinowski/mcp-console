@@ -46,7 +46,9 @@ Prepared requirements are server-owned and survive restart as described in [Requ
 
 R's `commandArgs()[1]` identifies the selected installation's launcher, `file.path(R.home("bin"), "R")`, so it can start R subprocesses using that installation's configured default architecture.
 The remaining arguments describe Console's interactive R session; `commandArgs(TRUE)` initially has no user arguments.
-The worker supplies the selected installation's `R_HOME`, `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` for R subprocesses and preserves the caller's `R_ARCH` selection.
+The worker captures `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` through the selected installation's launcher before either interpreter starts, including installations with separate resource directories.
+It supplies those paths and `R_HOME` for R subprocesses and preserves the caller's `R_ARCH` selection.
+Before R initialization, it restores the captured paths if earlier Python code changed or removed them.
 
 Only one cell can run at a time.
 Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.
@@ -449,7 +451,7 @@ Built-in, frozen, standard-library, local, already-installed, and already-loaded
 Ordinary `import` statements, `from ... import ...`, and `importlib.import_module()` all use this machinery.
 Missing imports reached during an installed distribution's eager importlib initialization stay on Python's ordinary path, so packages can catch `ImportError` for optional dependencies without starting host resolution.
 Import a dependency directly after initialization, call a library function that imports it later, or declare it through `requirements.python`, when it is needed.
-Distribution file metadata must identify the initializer and importing module as files of the same installed distribution, for both Python modules and native extensions.
+The wheel `RECORD` must identify the initializer and importing module as files of the same installed distribution, for both Python modules and native extensions.
 The finder reads metadata at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`.
 Local modules and Python callbacks remain eligible for automatic resolution even when their names shadow installed packages or an installed initializer calls them.
 Installations whose metadata does not record the selected module file also remain eligible; package names alone do not establish ownership.

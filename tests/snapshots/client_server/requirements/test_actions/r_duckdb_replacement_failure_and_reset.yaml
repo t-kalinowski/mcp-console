@@ -226,8 +226,13 @@ result:
   content:
     - type: text
       text: >-
-        HTTP Error: Failed to download extension "not_a_real_duckdb_extension"
+        DuckDB extension resolution failed with exit status: 1: <stderr
+        identical to live Rscript --vanilla>
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  reference: native Rscript --vanilla stderr captured before forwarding
+  comparison: exact equality after exit-status prefix; outer whitespace trimmed
 ---
 send:
   requirements:

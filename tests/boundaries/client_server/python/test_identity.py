@@ -50,7 +50,9 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
 ) -> Transcript:
     records = []
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        # Framework Python may report /private/var for a /var virtualenv.
+        # Create the fixture at its canonical path to keep identity checks exact.
+        root = Path(directory).resolve()
         selected = root / "selected λ environment"
         subprocess.run(
             [sys.executable, "-m", "venv", "--without-pip", str(selected)], check=True
@@ -69,6 +71,14 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
             ],
             text=True,
         ).strip()
+        native_program_name = subprocess.check_output(
+            [
+                str(executable),
+                "-c",
+                "import json, sys; print(json.dumps(sys.orig_argv[0]))",
+            ],
+            text=True,
+        )
         (Path(site) / "sitecustomize.py").write_text(
             # fmt: python
             code("""
@@ -84,6 +94,10 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
             workspace.mkdir()
             for name in ("identity λ.py", "identity_module.py"):
                 (workspace / name).write_text(CHILD_SOURCE, encoding="utf-8")
+            # Framework launchers can re-exec a separate native executable.
+            (workspace / "native_program_name.json").write_text(
+                native_program_name, encoding="utf-8"
+            )
             environment = dict(os.environ, RETICULATE_PYTHON=str(executable))
             if mode == "without-r":
                 without_r(environment, workspace)
@@ -121,6 +135,9 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
                             sys.base_exec_prefix,
                         ]
                         program = Path("identity_module.py").read_text(encoding="utf-8")
+                        native_program_name = json.loads(
+                            Path("native_program_name.json").read_text(encoding="utf-8")
+                        )
                         user = ["two words", "λ", "--literal"]
                         invocations = [
                             ([], [""], program),
@@ -139,7 +156,7 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
                             )
                             assert child["identity"] == identity, (child, identity)
                             assert child["argv"] == expected_argv, child
-                            assert child["orig_argv"] == [sys.executable, *arguments], child
+                            assert child["orig_argv"] == [native_program_name, *arguments], child
                             assert child["virtualenv"] == sys.prefix, child
                         sys.argv[:] = ["user script.py", *user]
                         sys.orig_argv[:] = [sys.executable, "user script.py", *user]

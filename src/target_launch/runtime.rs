@@ -199,8 +199,9 @@ fn select_python(
 
 fn discover(configured: Option<&Path>) -> Result<WorkerEnvironment, String> {
     let r_home = if Selection::r_is_present() {
-        let home = crate::local_runtime::r_home()
-            .map_err(|error| format!("prepared target R discovery failed: {error}"))?;
+        let home = crate::local_runtime::r_installation()
+            .map_err(|error| format!("prepared target R discovery failed: {error}"))?
+            .home;
         let library = home.join("lib/libR.so");
         if !library.is_file() {
             return Err("prepared target R requires a shared libR.so; install R with shared-library support in the image or template".into());
