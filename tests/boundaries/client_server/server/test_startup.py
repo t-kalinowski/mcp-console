@@ -68,9 +68,7 @@ def discovery_environment(
         environment = bare_runtime_environment(os.environ.copy(), root / "library")
         environment["R_PROFILE_USER"] = os.devnull
         environment.pop("R_HOME", None)
-        # Keep resolver discovery isolated while retaining the shell utilities
-        # used by the selected stock R launcher's resource-directory query.
-        environment["PATH"] = os.pathsep.join([str(root), "/usr/bin", "/bin"])
+        environment["PATH"] = str(root)
         try:
             yield environment, reached, release, alive_reader
             assert select.select([alive_reader], [], [], 5)[0], (
