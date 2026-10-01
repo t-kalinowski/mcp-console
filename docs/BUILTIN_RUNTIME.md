@@ -44,6 +44,7 @@ R's `commandArgs()[1]` identifies the selected installation's launcher, `file.pa
 The remaining arguments describe Console's interactive R session; `commandArgs(TRUE)` initially has no user arguments.
 The worker captures `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` through the selected installation's launcher before either interpreter starts, including installations with separate resource directories.
 It supplies those paths and `R_HOME` for R subprocesses and preserves the caller's `R_ARCH` selection.
+Before R initialization, it restores the captured paths if earlier Python code changed or removed them.
 
 Only one cell can run at a time.
 Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.

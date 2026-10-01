@@ -32,10 +32,13 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         },
     );
     interrupt::normalize_signal()?;
-    let r_home = selection.r.then(crate::local_runtime::r_home).transpose()?;
+    let r_installation = selection
+        .r
+        .then(crate::local_runtime::r_installation)
+        .transpose()?;
     #[cfg(target_os = "linux")]
-    if let Some(home) = &r_home {
-        reexec_with_r_library_path(home, &reader, &writer)?;
+    if let Some(installation) = &r_installation {
+        reexec_with_r_library_path(&installation.home, &reader, &writer)?;
     }
     // The launcher owns this directory through confirmed worker retirement.
     // R's session tempdir is a child, never the owner of Python/SQL storage.
@@ -43,7 +46,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         std::env::var_os("TMPDIR").ok_or("worker launch did not supply temporary storage")?;
     crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
     core::initialize(reader, writer.clone())?;
-    let r = Integration::new(r_home)?;
+    let r = Integration::new(r_installation)?;
     let python = crate::python::Runtime::new(selection)?;
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;

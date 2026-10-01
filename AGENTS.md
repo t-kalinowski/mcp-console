@@ -245,7 +245,7 @@ Keep these invariants intact:
 ### Language adapters
 
 - `src/r_bridge.rs` — shared Rust FFI for process-lifetime private R bridge environments.
-- `src/local_runtime.rs` — independent captured R home and inspected Python identity, retained host-resolved environments, and direct-worker temporary storage.
+- `src/local_runtime.rs` — captured R installation paths and inspected Python identity, retained host-resolved environments, and direct-worker temporary storage.
 - `src/python.rs`, `src/python/startup.rs`, `src/python/inspection.{rs,py}`, `src/python/library.rs`, `src/python/library/services.rs`, `src/python/services.py`, `src/python/runtime.py` — common interpreter bootstrap and process environment, complete inspected identity of an already-selected executable, shared setup and completion, direct CPython cell dispatch, console services, main-thread stream hooks, and the private Python evaluator.
 - `src/python/requirements.rs`, `src/python/requirements/r.rs` — shared live managed selection, resolved candidates and import control, R declaration values and transitions, shared CPython activation, and R binding conversion and history.
 - `src/python/environment.{rs,py}`, `src/python/probe.{rs,py}` — managed activation transactions, loaded-distribution compatibility, environment-owned path bookkeeping, and cancellable worker-side inspection of a selected environment.

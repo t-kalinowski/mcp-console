@@ -232,7 +232,24 @@ impl Selection {
     }
 }
 
-pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub(crate) struct RInstallation {
+    pub(crate) home: PathBuf,
+    resources: [OsString; 3],
+}
+
+impl RInstallation {
+    pub(crate) fn configure_environment(&self) {
+        unsafe { std::env::set_var("R_HOME", &self.home) };
+        for (name, value) in ["R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR"]
+            .into_iter()
+            .zip(&self.resources)
+        {
+            unsafe { std::env::set_var(name, value) };
+        }
+    }
+}
+
+pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
     use std::os::unix::ffi::OsStringExt;
 
     // Harp's setup reads R_HOME with env::var and mistakes non-UTF-8 values
@@ -279,13 +296,12 @@ pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
     if values.len() != 3 || values.iter().any(|value| value.is_empty()) {
         return Err("R launcher did not supply three resource directories".into());
     }
-    for (name, value) in ["R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR"]
-        .into_iter()
-        .zip(values)
-    {
-        unsafe { std::env::set_var(name, OsString::from_vec(value.to_vec())) };
-    }
-    Ok(home)
+    let installation = RInstallation {
+        home,
+        resources: std::array::from_fn(|index| OsString::from_vec(values[index].to_vec())),
+    };
+    installation.configure_environment();
+    Ok(installation)
 }
 
 /// Direct launches have no runner-owned private TMPDIR. The relay lifetime
