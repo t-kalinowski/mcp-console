@@ -134,7 +134,13 @@ fn dispatch_worker_events(
             }
             WorkerEvent::ResumeBootstrap => {}
             WorkerEvent::Relay(event) => {
-                if operation.bootstrap_suspended()? && bootstrap_callback(&event) {
+                if operation.bootstrap_suspended()?
+                    && (bootstrap_callback(&event)
+                        || (!deferred.is_empty() && sideband_semantic(&event)))
+                {
+                    // Once a callback waits, later events from the same worker
+                    // sideband must not overtake its commit. Independent streams
+                    // and relay lifetime observations remain responsive.
                     deferred.push_back(event);
                     continue;
                 }
@@ -371,6 +377,24 @@ fn bootstrap_callback(event: &RelayEvent) -> bool {
             | RelayEvent::PythonActivated { .. }
             | RelayEvent::PythonActivationFailed { .. }
             | RelayEvent::RuntimeInitialized { .. }
+    )
+}
+
+fn sideband_semantic(event: &RelayEvent) -> bool {
+    !matches!(
+        event,
+        RelayEvent::Stdout { .. }
+            | RelayEvent::StdoutBytes { .. }
+            | RelayEvent::Stderr { .. }
+            | RelayEvent::StderrBytes { .. }
+            | RelayEvent::StdoutClosed
+            | RelayEvent::StderrClosed
+            | RelayEvent::WorkerSidebandClosed
+            | RelayEvent::InterruptResult { .. }
+            | RelayEvent::ShutdownStarted
+            | RelayEvent::WorkerExited { .. }
+            | RelayEvent::WorkerSignaled { .. }
+            | RelayEvent::Fatal { .. }
     )
 }
 

@@ -65,7 +65,8 @@ Connection closure cancels startup through the existing preparation/provider own
 It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
 
 Initialization alone does not consume the unused-worker replacement exception.
-Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment; output, input, and retirement remain observable.
+Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
+Once a callback is deferred, later output, images, and input events from that worker sideband wait behind it; independent stdout, stderr, and retirement observations remain responsive.
 Failed preparation resumes the current bootstrap; successful replacement confirms old-worker retirement before starting its successor.
 The accepted first cell retains its admission and is never replayed.
 
