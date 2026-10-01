@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,6 @@ from support.requirements import command, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     ir_run_records,
-    normalize_duckdb_resolution_error,
     recording_uv_environment,
     uv_python_row,
     write_uv_python_inventories,
@@ -324,11 +324,16 @@ def test_r_duckdb_replacement_failure_and_reset(
                 'Failed to download extension "not_a_real_duckdb_extension"' in error
             ), error
             assert "(HTTP 404)" in error, error
-            # Keep the download failure in the transcript; DuckDB's R condition
-            # class and backtrace vary between installed versions.
-            failure["content"][0]["text"] = normalize_duckdb_resolution_error(
-                error, "not_a_real_duckdb_extension"
-            )
+            for pattern, replacement in (
+                (r'(?<= at URL )"https?://[^"]+"', '"<DuckDB extension URL>"'),
+                (
+                    r"https://duckdb\.org/docs/stable/extensions/troubleshooting\?\S+",
+                    "<DuckDB extension troubleshooting URL>",
+                ),
+            ):
+                error, count = re.subn(pattern, replacement, error, count=1)
+                assert count == 1, error
+            failure["content"][0]["text"] = error
             assert inspect(client) == empty
             client.send(r="stopifnot(marker == 42L, pid == Sys.getpid())")
             assert last_tool_text(client) == "[done]"
