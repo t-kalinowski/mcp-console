@@ -142,6 +142,7 @@ impl WorkerRuntime {
         on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
+            builtin,
             target,
             local_runtime,
             executable,
@@ -258,7 +259,7 @@ impl WorkerRuntime {
             .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
         let child = Arc::new(Mutex::new(child));
 
-        let operation = WorkerOperationState::new(local_runtime.is_some());
+        let operation = WorkerOperationState::new(builtin);
         let interrupts = InterruptRequests::new();
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let (ready_commit_sender, ready_commit_receiver) = mpsc::channel();

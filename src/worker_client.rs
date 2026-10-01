@@ -136,6 +136,7 @@ impl std::ops::Deref for ClientInner {
 
 /// Describes one worker launch for the current runtime.
 struct WorkerSpec<'a> {
+    builtin: bool,
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,

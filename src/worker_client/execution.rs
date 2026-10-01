@@ -384,6 +384,9 @@ impl Client {
                 .as_ref()
                 .and_then(|environment| environment.r.as_ref());
             let spec = WorkerSpec {
+                builtin: environment
+                    .as_ref()
+                    .is_some_and(|environment| !environment.custom_worker),
                 target: self.0.target.as_ref(),
                 local_runtime: environment
                     .as_ref()
