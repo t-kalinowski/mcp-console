@@ -115,7 +115,9 @@ def python_bootstrap(
                 release.release()
 
 
-def bootstrap_output(client: McpClient, expected: str) -> None:
+def bootstrap_output(
+    client: McpClient, expected: str, *, terminal: str = "\n[idle]"
+) -> None:
     start = len(client.transcript)
     collected = ""
     deadline = time.monotonic() + 3
@@ -123,13 +125,13 @@ def bootstrap_output(client: McpClient, expected: str) -> None:
         result = client.send(timeout_ms=0)
         assert not result["isError"], result
         output = last_result_text(client)
-        assert output.endswith("\n[idle]"), repr(output)
-        collected += output.removesuffix("\n[idle]")
+        assert output.endswith(terminal), repr(output)
+        collected += output.removesuffix(terminal)
         assert expected.startswith(collected), repr(collected)
         if collected == expected:
             break
         assert time.monotonic() < deadline, "bootstrap output did not reach server"
-    result["content"][0]["text"] = collected + "\n[idle]"
+    result["content"][0]["text"] = collected + terminal
     client.transcript[start:] = [client.transcript[-1]]
 
 
@@ -603,11 +605,7 @@ def check_interrupted_bootstrap_before_evaluator_readiness(
                 assert last_result_text(client) == RUNNING
                 client.send(control="interrupt", timeout_ms=0)
                 checkpoints["interrupt-bootstrap"].release()
-                wait_for_evaluation_output(
-                    client,
-                    "bootstrap interrupted\n" + RUNNING,
-                    "ordered output acknowledges incomplete bootstrap before readiness",
-                )
+                bootstrap_output(client, "bootstrap interrupted\n", terminal=RUNNING)
                 checkpoints["release"].release()
                 checkpoints["parked"].wait("startup outcome returned to blocking pool")
                 wait_for_evaluation_output(

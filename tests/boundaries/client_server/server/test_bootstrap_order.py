@@ -212,6 +212,7 @@ def check_bootstrap_completion_requires_input_termination(
                         "worker completed with an outstanding input request" in output
                     ),
                     "bootstrap completion fails the managed-input boundary",
+                    expected_error=True,
                 )
                 assert not (root / "cell-ran").exists(), (
                     "cell ran with startup input still outstanding"

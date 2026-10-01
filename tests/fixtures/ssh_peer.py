@@ -85,13 +85,7 @@ if (
             "complete": os.environ["CONSOLE_BOOTSTRAP_COMPLETE"] == "1",
         },
     )
-elif mode == "bootstrap-interrupted":
-    root = log.parent
-    with (root / "interrupt-bootstrap").open("rb", buffering=0) as gate:
-        assert gate.read(1) == b"1"
-    frame(2, {"kind": "runtime_initialized", "complete": False})
-    frame(2, {"kind": "console_output", "data": "bootstrap interrupted\n"})
-elif mode != "prior-bootstrap-protocol":
+elif mode not in {"bootstrap-interrupted", "prior-bootstrap-protocol"}:
     frame(2, {"kind": "runtime_initialized", "complete": True})
 for line in sys.stdin.buffer:
     command = json.loads(line)
@@ -129,6 +123,10 @@ for line in sys.stdin.buffer:
         frame(2, {"kind": "completed"})
     elif command["kind"] == "interrupt" and mode == "bootstrap-interrupted":
         frame(2, {"kind": "interrupt_result", "request_id": command["request_id"]})
+        with (log.parent / "interrupt-bootstrap").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+        frame(2, {"kind": "runtime_initialized", "complete": False})
+        frame(2, {"kind": "console_output", "data": "bootstrap interrupted\n"})
     elif command["kind"] == "shutdown":
         frame(2, {"kind": "shutdown_started"})
         frame(2, {"kind": "worker_exited", "code": 0})
