@@ -40,11 +40,12 @@ from support.processes import (
     live_processes,
     host_process_id,
 )
-from support.r import r_test_environment
+from support.r import install_r_startup, r_test_environment
 from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
+R_CHECKPOINT = (FIXTURES / "bootstrap_r/checkpoint.R").read_text()
 
 
 @contextmanager
@@ -280,7 +281,8 @@ def test_selected_python_starts_independently_of_r(
     binary: Path, execution: Execution
 ) -> list:
     with python_bootstrap(binary, execution, sans_r=False) as (client, release):
-        return queued_input(client, release)
+        queued_input(client, release)
+        return [{"selected_python_bootstrap_preserves_queued_input": True}]
 
 
 @requires(R)
@@ -294,27 +296,14 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
         release = resources.enter_context(
             closing(FifoCheckpoint.create(root / "release"))
         )
-        library = root / "library"
-        library.mkdir()
-        environment, rscript = r_test_environment()
-        subprocess.run(
-            [
-                rscript.with_name("R"),
-                "CMD",
-                "INSTALL",
-                f"--library={library}",
-                Path(__file__).resolve().parents[3] / "fixtures/bootstrap_r",
-            ],
-            check=True,
-            capture_output=True,
-            env=environment,
+        environment, _ = r_test_environment()
+        install_r_startup(
+            root,
+            environment,
+            R_CHECKPOINT + 'bootstrap_value <- readline("R startup> ")\n',
         )
         environment.update(
             MCP_CONSOLE_LANGUAGES="r",
-            R_LIBS=os.pathsep.join(
-                filter(None, (str(library), environment.get("R_LIBS")))
-            ),
-            R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolebootstrap",
             MCP_CONSOLE_TEST_BOOTSTRAP_REACHED=str(reached.path),
             MCP_CONSOLE_TEST_BOOTSTRAP_RELEASE=str(release.path),
         )
@@ -346,6 +335,7 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
                     "PYTHONPATH",
                     "MCP_CONSOLE_TEST_BOOTSTRAP_REACHED",
                     "MCP_CONSOLE_TEST_BOOTSTRAP_RELEASE",
+                    "MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT",
                 )
             }
             configuration = root / ".agents/console/config.yaml"
@@ -443,25 +433,14 @@ def test_r_bootstrap_resolves_python_version_and_import(
         environment, resolving, resolved = checkpoint_uv_environment(root, "py-yaml12")
         resources.callback(resolving.close)
         resources.callback(resolved.close)
-        r_environment, rscript = r_test_environment()
+        r_environment, _ = r_test_environment()
         environment.update(r_environment)
         environment["RETICULATE_PYTHON"] = ""
-        library = root / "library"
-        library.mkdir()
-        subprocess.run(
-            [
-                rscript.with_name("R"),
-                "CMD",
-                "INSTALL",
-                f"--library={library}",
-                Path(__file__).resolve().parents[3] / "fixtures/bootstrap_r",
-            ],
-            check=True,
-            capture_output=True,
-            env=environment,
-        )
-        script = root / "startup.R"
-        script.write_text(
+        install_r_startup(
+            root,
+            environment,
+            R_CHECKPOINT
+            +
             # fmt: r
             code("""
                 version <- reticulate:::resolve_python_version(">=3.13")
@@ -484,13 +463,8 @@ def test_r_bootstrap_resolves_python_version_and_import(
         )
         environment.update(
             MCP_CONSOLE_LANGUAGES="r",
-            R_LIBS=os.pathsep.join(
-                filter(None, (str(library), environment.get("R_LIBS")))
-            ),
-            R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolebootstrap",
             MCP_CONSOLE_TEST_BOOTSTRAP_REACHED=str(reached.path),
             MCP_CONSOLE_TEST_BOOTSTRAP_RELEASE=str(release.path),
-            MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT=str(script),
             MCP_CONSOLE_TEST_BOOTSTRAP_COMPLETE=str(complete.path),
         )
         with McpClient(

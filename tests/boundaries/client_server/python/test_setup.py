@@ -29,7 +29,7 @@ from support.resolvers import (
     bare_runtime_environment,
     send_and_collect_runtime_python_resolution,
 )
-from support.r import r_test_environment
+from support.r import install_r_startup, r_test_environment
 from support.suites import run_this_suite
 
 
@@ -60,53 +60,25 @@ def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
     """Arrange the public retryable, uninitialized state for selection tests."""
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        environment, rscript = r_test_environment()
-        libraries = subprocess.check_output(
-            [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
-            env=environment,
-            text=True,
-        ).splitlines()
-        library_paths = ", ".join(json.dumps(path) for path in libraries)
-        package = directory / "package"
-        (package / "R").mkdir(parents=True)
-        (package / "DESCRIPTION").write_text(
-            "Package: consoleselectionfixture\nVersion: 0.0.0\n"
-            "Title: Deferred Selection Fixture\nDescription: Interrupt eager selection.\n"
-            "License: MIT\nAuthor: Test Fixture\nMaintainer: Test Fixture <test@example.org>\n"
-        )
-        (package / "NAMESPACE").write_text("")
-        (package / "R/startup.R").write_text(
+        environment, _ = r_test_environment()
+        library = install_r_startup(
+            directory,
+            environment,
             # fmt: r
             code(f"""
-                .onAttach <- function(libname, pkgname) {{
-                  if (interactive()) {{
-                    .libPaths(c({library_paths}, .libPaths()))
-                    if (!file.exists({json.dumps(str(directory / "interrupted"))})) {{
-                      options(reticulate.python.beforeInitialized = function() {{
-                        options(reticulate.python.beforeInitialized = NULL)
-                        readline("defer selection> ")
-                        stop(structure(
-                          list(message = "fixture bootstrap interrupt", call = NULL),
-                          class = c("interrupt", "condition")
-                        ))
-                      }})
-                    }}
-                  }}
+                if (!file.exists({json.dumps(str(directory / "interrupted"))})) {{
+                  options(reticulate.python.beforeInitialized = function() {{
+                    options(reticulate.python.beforeInitialized = NULL)
+                    readline("defer selection> ")
+                    stop(structure(
+                      list(message = "fixture bootstrap interrupt", call = NULL),
+                      class = c("interrupt", "condition")
+                    ))
+                  }})
                 }}
-                """)
-        )
-        library = directory / "library"
-        library.mkdir()
-        subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", package],
-            env=environment,
-            check=True,
-            capture_output=True,
+                """),
         )
         environment = bare_runtime_environment(environment, library)
-        environment["R_DEFAULT_PACKAGES"] = (
-            "datasets,utils,grDevices,graphics,stats,methods,consoleselectionfixture"
-        )
         with McpClient(binary, serve, environment, directory) as client:
             client.initialize_and_list_tools()
             initialized = client.transcript.copy()

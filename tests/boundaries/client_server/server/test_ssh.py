@@ -23,7 +23,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
-from support.r import r_test_environment
+from support.r import install_r_startup, r_test_environment
 from support.requirements import SANDBOX, WORKER, requires
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
@@ -126,40 +126,16 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
         local, remote = root / "controller", root / "remote"
         local.mkdir()
         remote.mkdir()
-        environment, rscript = r_test_environment()
-        libraries = subprocess.check_output(
-            [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
-            env=environment,
-            text=True,
-        ).splitlines()
-        package = root / "package"
-        (package / "R").mkdir(parents=True)
-        (package / "DESCRIPTION").write_text(
-            "Package: consoleoptionalpython\nVersion: 0.0.0\n"
-            "Title: Optional Python Fixture\nDescription: R startup without Python.\n"
-            "License: MIT\nAuthor: Test Fixture\nMaintainer: Test Fixture <test@example.org>\n"
-        )
-        (package / "NAMESPACE").write_text("")
-        (package / "R/startup.R").write_text(
+        environment, _ = r_test_environment()
+        library = install_r_startup(
+            root,
+            environment,
             # fmt: r
-            code(f"""
-                .onAttach <- function(libname, pkgname) {{
-                  if (interactive()) {{
-                    .libPaths(c({", ".join(json.dumps(path) for path in libraries)}, .libPaths()))
-                    stopifnot(requireNamespace("reticulate", quietly = TRUE))
-                    assign("startup_value", 41L, envir = globalenv())
-                    readline("R before Python discovery> ")
-                  }}
-                }}
-                """)
-        )
-        library = root / "library"
-        library.mkdir()
-        subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", package],
-            env=environment,
-            check=True,
-            capture_output=True,
+            code("""
+                stopifnot(requireNamespace("reticulate", quietly = TRUE))
+                startup_value <- 41L
+                readline("R before Python discovery> ")
+                """),
         )
         commands, home = remote / "commands", remote / "home"
         commands.mkdir()
@@ -174,7 +150,10 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
             "R_LIBS": str(library),
             "R_LIBS_USER": str(library),
             "R_LIBS_SITE": str(library),
-            "R_DEFAULT_PACKAGES": "datasets,utils,grDevices,graphics,stats,methods,consoleoptionalpython",
+            "R_DEFAULT_PACKAGES": environment["R_DEFAULT_PACKAGES"],
+            "MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT": environment[
+                "MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT"
+            ],
             "RETICULATE_USE_MANAGED_VENV": "false",
         }
         prefix = remote / "launch"

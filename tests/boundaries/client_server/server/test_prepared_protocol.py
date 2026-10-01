@@ -116,7 +116,7 @@ def test_prepared_bootstrap_withholds_and_runs_first_cell_once(binary: Path) -> 
             ]
             client.finish()
         assert not (root / "peer/vms").exists()
-        return client.transcript
+        return client.transcript[3:]
 
 
 @requires(POSIX)
