@@ -20,6 +20,7 @@ import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from unittest.mock import patch
 
 from support.capture import read_lines
 from support.events import Events
@@ -208,6 +209,10 @@ def check_recording(*arguments: object, **keywords: object) -> object:
 
 class TranscriptRunnerFixture(unittest.TestCase):
     def setUp(self) -> None:
+        # Copied runners select fixture executables; restore caller overrides
+        # after each test, including when setup or an assertion fails.
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MCP_CONSOLE_TEST_BINARY", None)
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.boundaries = self.root / "tests" / "boundaries"
