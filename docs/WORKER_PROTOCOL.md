@@ -507,6 +507,7 @@ See [`../tests/boundaries/README.md`](../tests/boundaries/README.md) for the cor
 The common worker import callback and optional R declaration projection use the existing `ResolvePython`, `PythonActivated`, and `PythonActivationFailed` exchanges.
 A candidate remains provisional until the current generation accepts its activation; a later import or cell error does not retract acceptance.
 The shared-import refactor leaves wire fields unchanged.
-Launch protocol version 7 uses shared preparation requests and the optional `resolve_python.request.initialized` field.
-It retains activation-failure receipts in preparation and idle contexts; preparation protocol version 5 is unchanged.
+Launch protocol version 8 requires the built-in `runtime_initialized` event after transport readiness and rejects older target executables before evaluation.
+It uses shared preparation requests and the optional `resolve_python.request.initialized` field.
+Activation-failure receipts remain valid in preparation and idle contexts; preparation protocol version 5 is unchanged.
 R `.Call` registration changes are internal to the worker and its compiled-in bridge, not a remote protocol surface.

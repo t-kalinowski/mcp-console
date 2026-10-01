@@ -56,10 +56,22 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(1, {"version": 999 if mode == "incompatible" else 7, "build": bootstrap["build"]})
+frame(
+    1,
+    {
+        "version": 999
+        if mode == "incompatible"
+        else 7
+        if mode == "prior-bootstrap-protocol"
+        else bootstrap["version"],
+        "build": bootstrap["build"],
+    },
+)
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
+if mode != "prior-bootstrap-protocol":
+    frame(2, {"kind": "runtime_initialized", "complete": True})
 for line in sys.stdin.buffer:
     command = json.loads(line)
     with log.open("a") as output:

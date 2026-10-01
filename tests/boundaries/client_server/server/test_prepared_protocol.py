@@ -168,10 +168,36 @@ def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
 
 
 @requires(POSIX)
+def test_rejects_target_without_interpreter_bootstrap_protocol(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("prior-bootstrap-protocol")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            error = client.startup_error()
+            assert "expected protocol 8" in error, error
+            assert "received protocol 7" in error, error
+            client.stdin.close()
+            assert client.stdout.read(timeout=30) == ""
+            diagnostics = client.stderr.read(timeout=30)
+            assert "expected protocol 8" in diagnostics, diagnostics
+            assert client.process.wait(timeout=5) != 0
+        operations = calls(root)
+        executions = [call["args"] for call in operations if call["args"][0] == "exec"]
+        assert len(executions) == 1 and executions[0][-1] == "docker-sandbox-probe", (
+            executions
+        )
+        assert not (root / "peer/vms").exists()
+        return [
+            {"older_target_rejected": True, "probe_retired_before_worker_launch": True}
+        ]
+
+
+@requires(POSIX)
 def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 7"),
+        ("probe-version", "expected protocol 8"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),

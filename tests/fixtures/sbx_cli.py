@@ -123,7 +123,13 @@ elif args[0] == "exec":
     frame(
         1,
         {
-            "version": 3 if mode == "probe-version" else bootstrap["version"],
+            "version": (
+                3
+                if mode == "probe-version"
+                else 7
+                if mode == "prior-bootstrap-protocol"
+                else bootstrap["version"]
+            ),
             "build": "unsupported" if mode == "probe-build" else bootstrap["build"],
         },
     )

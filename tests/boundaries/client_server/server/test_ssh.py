@@ -315,6 +315,7 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
                 "auth": "unconfirmed",
                 "stdout": "unexpected stdout",
                 "incompatible": "incompatible SSH bootstrap",
+                "prior-bootstrap-protocol": "expected protocol 8",
                 "lost": "unconfirmed",
                 "resolver": "dynamic environment resolution is unavailable",
             }[mode]
@@ -347,6 +348,12 @@ def test_unexpected_stdout(binary: Path) -> Transcript:
 
 def test_incompatible_remote_build(binary: Path) -> Transcript:
     return _peer(binary, "incompatible")
+
+
+def test_rejects_remote_without_interpreter_bootstrap_protocol(
+    binary: Path,
+) -> Transcript:
+    return _peer(binary, "prior-bootstrap-protocol")
 
 
 def test_authentication_failure(binary: Path) -> Transcript:

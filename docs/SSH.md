@@ -124,10 +124,11 @@ They carry the configured interpreter selection, and live native preparation car
 Preparation uses a separate versioned, length-prefixed JSON protocol with a 1 MiB message limit; installer output is captured separately from protocol frames.
 Oversized preparation requests are rejected before remote admission and leave the session available for subsequent requests.
 Large results and installer errors use bounded result chunks followed by the cleanup receipt, preserving the complete result without changing its failure classification.
-SSH launch protocol version 7 and preparation version 5 carry independent R and Python selections and inspection operations.
+SSH launch protocol version 8 and preparation version 5 carry independent R and Python selections and inspection operations.
 An R-present payload can carry a complete inspected Python identity or leave selection to the R compatibility adapter during bootstrap.
-Docker and Docker Sandbox also use launch version 7.
-Version 7 removes the separate native preparation request and carries live-interpreter status for shared tool resolution; preparation protocol version 5 is unchanged.
+Docker and Docker Sandbox also use launch version 8.
+Version 8 requires built-in interpreter bootstrap completion after transport readiness, so older target executables are rejected before evaluation.
+Shared tool resolution carries live-interpreter status; preparation protocol version 5 is unchanged.
 Version 6 accepts Python activation-failure receipts during preparation and idle callbacks as well as cells; older servers would stop that worker.
 Launch and preparation also require a matching Console package version.
 The optional `selected_python` field constrains live managed Python preparation to the running executable, locally or over SSH.
