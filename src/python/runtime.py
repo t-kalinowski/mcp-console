@@ -4,6 +4,7 @@ import ast as _ast
 import base64 as _base64
 import builtins as _builtins
 import importlib as _importlib
+import importlib.metadata as _importlib_metadata
 import importlib.util as _importlib_util
 import io as _io
 import json as _json
@@ -46,8 +47,6 @@ _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS = {
     "opentelemetry",
     "zope",
 }
-
-_MCP_CONSOLE_DEFAULT_IMPORT_ROOTS = {"numpy", "pandas"}
 
 
 def _mcp_console_missing_module(fullname, message):
@@ -95,7 +94,8 @@ class _McpConsoleImportFinder:
         threading,
         distributions,
         ambiguous_roots,
-        default_roots,
+        metadata,
+        private_codes,
         missing_module,
         missing_submodule,
         explicit_requirement,
@@ -109,13 +109,25 @@ class _McpConsoleImportFinder:
         self._threading = threading
         self._distributions = distributions
         self._ambiguous_roots = ambiguous_roots
-        self._default_roots = default_roots
+        self._metadata = metadata
+        self._private_codes = private_codes
+        self._id = id
+        self._import_globals = (
+            importlib.__dict__,
+            importlib_util.__dict__,
+            importlib._bootstrap.__dict__,
+            importlib._bootstrap_external.__dict__,
+        )
         self._missing_module = missing_module
         self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
         self._psutil_loader = psutil_loader
         self._psutil_callback = None
         self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
+        self._load_codes = (
+            importlib._bootstrap._load_unlocked.__code__,
+            importlib._bootstrap._exec.__code__,
+        )
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
         self._pid = None
@@ -162,10 +174,10 @@ class _McpConsoleImportFinder:
         # A real import can resolve the distribution if the caller proceeds.
         if self._is_availability_probe():
             return None
-        # The default packages probe for optional dependencies while importing.
-        # Keep those probes from changing the managed environment merely because
-        # a user imported an already-available default package.
-        if self._is_default_package_initialization():
+        # Installed distributions own their dependencies. Their import-time
+        # optional probes must observe absence rather than install a package.
+        # Local modules and calls made after initialization may still resolve.
+        if self._is_installed_package_initialization():
             return None
         # Some libraries append importers after Python initializes. Give only
         # that later suffix its ordinary chance before acting as the last finder.
@@ -296,17 +308,69 @@ class _McpConsoleImportFinder:
             + self._explicit_requirement("correct-distribution-name"),
         )
 
-    def _is_default_package_initialization(self):
+    def _is_installed_package_initialization(self):
+        # Importlib holds the selected spec throughout both Python and native
+        # initialization and reload, including PyInit before _initializing is
+        # set. Deferred execution after this boundary remains eligible.
         frame = self._sys._getframe(1)
+        importing_frame = None
         while frame is not None:
-            specification = frame.f_globals.get("__spec__")
-            module = frame.f_globals.get("__name__", "")
-            root = module.partition(".")[0]
-            if root in self._default_roots and getattr(
-                specification, "_initializing", False
+            if any(frame.f_code is code for code in self._load_codes):
+                specification = frame.f_locals["spec"]
+                break
+            # The current import entrypoint may wrap importlib (as reticulate
+            # does). Frames inside that entrypoint are import machinery.
+            if frame.f_code is self._importlib._bootstrap._find_and_load.__code__:
+                importing_frame = None
+            elif (
+                importing_frame is None
+                and self._id(frame.f_code) not in self._private_codes
+                and all(frame.f_globals is not scope for scope in self._import_globals)
             ):
-                return True
+                importing_frame = frame
             frame = frame.f_back
+        else:
+            return False
+        # Cached helpers within the initializing distribution share its import
+        # context. A local or other library callback owns its own imports.
+        # Native PyInit has no Python frame. A cached C callback also contributes
+        # no Python frame, so it inherits the visible initializer's context.
+        importer = (
+            specification
+            if importing_frame is None
+            else importing_frame.f_globals.get("__spec__")
+        )
+        if importer is None or importer.origin is None or specification.origin is None:
+            return False
+        root = specification.name.partition(".")[0]
+        origins = {
+            self._os.path.realpath(specification.origin),
+            self._os.path.realpath(importer.origin),
+        }
+        module = self._sys.modules.get(root)
+        root_spec = specification if module is None else module.__spec__
+        locations = (
+            root_spec.submodule_search_locations
+            if module is None
+            else getattr(module, "__path__", None)
+        )
+        # Read metadata at the loaded root's locations, not the latest sys.path:
+        # compatible activation retains paths; extend_path can add portions.
+        # The actual package path may differ from the root spec. Do not cache.
+        metadata_paths = (
+            [self._os.path.dirname(path) for path in locations]
+            if locations is not None
+            else [self._os.path.dirname(root_spec.origin)]
+        )
+        for distribution in self._metadata.distributions(path=metadata_paths):
+            # Both selected files must belong to the same distribution. Names,
+            # file-less metadata and indirect editable records cannot own them.
+            installed = {
+                self._os.path.realpath(str(distribution.locate_file(file)))
+                for file in distribution.files or ()
+            }
+            if origins <= installed:
+                return True
         return False
 
     def _is_availability_probe(self):
@@ -367,7 +431,8 @@ if _mcp_console_import_finder is None:
         _threading,
         _MCP_CONSOLE_IMPORT_DISTRIBUTIONS,
         _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS,
-        _MCP_CONSOLE_DEFAULT_IMPORT_ROOTS,
+        _importlib_metadata,
+        _mcp_console_private_codes,
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,

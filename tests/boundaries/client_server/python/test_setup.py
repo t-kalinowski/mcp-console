@@ -22,6 +22,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
+from support.python import runtime_source_line
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import send_and_collect_runtime_python_resolution
@@ -1080,6 +1081,7 @@ def test_preserves_setup_after_r_initialization(
 def test_retries_managed_import_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
+    thread_line = runtime_source_line("self._thread = self._threading.get_ident()")
     # The import finder captures its configuring thread after module defaults.
     # Interrupt that public threading call once, then retry without bootstrap.
     source = code("""
@@ -1107,7 +1109,7 @@ def test_retries_managed_import_setup_after_interrupt(
         wait_for_evaluation_output(
             client,
             "Traceback (most recent call last):\n"
-            '  File "<string>", line 129, in configure\n'
+            f'  File "<string>", line {thread_line}, in configure\n'
             '  File "<setup checkpoint>", line 9, in configuring_thread\n'
             '  File "<string>", line 50, in _console_input\n'
             "KeyboardInterrupt\n",
@@ -1132,6 +1134,11 @@ def test_retries_managed_import_setup_after_interrupt(
 def test_retries_matplotlib_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
+    configuration_line = runtime_source_line("_defaults.apply(name)")
+    apply_line = runtime_source_line("self._disable_show()")
+    show_line = runtime_source_line(
+        '_setattr(pyplot, "show", lambda *args, **kwargs: None)'
+    )
     # A module attribute setter blocks first-cell setup on managed input.
     # Its public input request is the checkpoint for a real interrupt.
     source = code("""
@@ -1174,9 +1181,9 @@ def test_retries_matplotlib_setup_after_interrupt(
         wait_for_evaluation_output(
             client,
             "Traceback (most recent call last):\n"
-            '  File "<string>", line 838, in _mcp_console_configure_module_defaults\n'
-            '  File "<string>", line 802, in apply\n'
-            '  File "<string>", line 404, in _mcp_console_disable_matplotlib_show\n'
+            f'  File "<string>", line {configuration_line}, in _mcp_console_configure_module_defaults\n'
+            f'  File "<string>", line {apply_line}, in apply\n'
+            f'  File "<string>", line {show_line}, in _mcp_console_disable_matplotlib_show\n'
             '  File "<setup checkpoint>", line 13, in __setattr__\n'
             '  File "<string>", line 50, in _console_input\n'
             "KeyboardInterrupt\n",
@@ -1238,6 +1245,7 @@ def test_reports_matplotlib_setup_error_once(
 def test_rejects_startup_environment_mutation(
     binary: Path, execution: Execution
 ) -> Transcript:
+    error_line = runtime_source_line("raise RuntimeError(")
     source = "import sys; sys.prefix = 'changed-by-startup-hook'"
     with startup_client(
         binary, execution, source, selected_python=sys.executable
@@ -1248,7 +1256,7 @@ def test_rejects_startup_environment_mutation(
         assert result["isError"] is True, result
         traceback = (
             "Traceback (most recent call last):\n"
-            '  File "<string>", line 705, in _mcp_console_configure_environment\n'
+            f'  File "<string>", line {error_line}, in _mcp_console_configure_environment\n'
             "RuntimeError: embedded Python prefix differs from the selected environment: "
             f"'changed-by-startup-hook' != {sys.prefix!r}\n"
         )
