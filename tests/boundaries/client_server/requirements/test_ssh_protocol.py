@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import shlex
 import subprocess
 import sys
 from contextlib import closing
@@ -17,14 +18,29 @@ from support.ssh import SSH, configure, localhost, poison_controller
 from support.suites import run_this_suite
 
 
+def preparation_peer_command(binary: Path, root: Path, mode: str, record: Path):
+    peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
+    prefix = root / "peer-command"
+    prefix.write_text(
+        '#!/bin/sh\nif [ "$1" = ssh-prepare ]; then\nexec '
+        + shlex.join([sys.executable, str(peer), mode, str(record)])
+        + ' "$@"\nfi\nexec '
+        + shlex.quote(str(binary))
+        + ' "$@"\n'
+    )
+    prefix.chmod(0o755)
+    return [str(prefix)]
+
+
 @requires(SSH)
 def test_discovery_outlives_connection_setup_timeout(binary):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         record = root / "discovery"
-        peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
         configure(
-            root, root, [sys.executable, str(peer), "delayed-discovery", str(record)]
+            root,
+            root,
+            preparation_peer_command(binary, root, "delayed-discovery", record),
         )
         with (
             closing(FifoCheckpoint.create(record.with_suffix(".started"))) as started,
@@ -60,15 +76,16 @@ def test_python_preparation_preserves_v3_peer_compatibility(binary):
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         record = root / "requests"
-        peer = Path(__file__).resolve().parents[3] / "fixtures/ssh_preparation_peer.py"
-        configure(root, root, [sys.executable, str(peer), "legacy-python", str(record)])
+        configure(
+            root, root, preparation_peer_command(binary, root, "legacy-python", record)
+        )
         with localhost(root / "sshd") as environment:
             trap = poison_controller(root / "sshd", environment)
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
                 client.initialize_and_list_tools()
-                client.send(requirements={"python": ["six"]})
+                client.send(requirements={"action": "set", "python": ["six"]})
                 requests = [
                     json.loads(line) for line in record.read_text().splitlines()
                 ]
@@ -76,14 +93,18 @@ def test_python_preparation_preserves_v3_peer_compatibility(binary):
                     r["operation"]["Python"]
                     for r in requests
                     if "Python" in r["operation"]
+                    and r["operation"]["Python"]["requirements"]["packages"] == ["six"]
                 ]
                 assert set(python) == {"requirements", "r"}, python
-                (inspection,) = [
+                inspections = [
                     r["operation"]["InspectPython"]
                     for r in requests
                     if "InspectPython" in r["operation"]
                 ]
-                assert inspection == {"executable": "/remote-only/python"}
+                assert inspections and all(
+                    inspection == {"executable": str(root / "python")}
+                    for inspection in inspections
+                ), inspections
                 assert last_result_text(client) == "[prepared]", client.transcript[-1]
                 declaration = client.send(requirements={"action": "get"})[
                     "structuredContent"

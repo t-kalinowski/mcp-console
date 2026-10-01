@@ -463,10 +463,8 @@ impl Client {
                     .lock()
                     .map_err(|_| "initial requirements lock poisoned".to_string())?
                     .take();
-                if let Some(requirements) = requirements
-                    && let Err(failure) = self.prepare_cell_requirements(requirements, generation)
-                {
-                    active.evaluation.complete_cell(Err(failure));
+                if let Some(requirements) = requirements {
+                    self.prepare_cell_requirements(requirements, generation)?;
                 }
             }
             let _preparation = self.0.preparation.blocking_read();
@@ -1608,9 +1606,10 @@ impl Client {
     ) -> Result<SendResponse, SendFailure> {
         let mut operation = Some(self.admit_operation()?);
         let generation = self.admit()?;
-        let mut preparation = Some(self.admit_send()?);
+        let mut preparation = None;
         let (evaluation, wait_claim) = match cell {
             Some(cell) => {
+                preparation = Some(self.admit_send()?);
                 let mut prelude = None;
                 self.start_evaluation_admitted(
                     cell,
@@ -1625,6 +1624,8 @@ impl Client {
             }
             None => match self.current_evaluation()? {
                 Some(active) => {
+                    // An accepted early cell may own preparation's write lock.
+                    // Poll its evaluation without reserving another operation.
                     self.ensure_ordinary_generation(&generation)?;
                     if !active.generation.is(&generation) {
                         return Err("session restarted before the operation began"
@@ -1638,6 +1639,7 @@ impl Client {
                     (active.evaluation, wait_claim)
                 }
                 None => {
+                    preparation = Some(self.admit_send()?);
                     self.ensure_ordinary_generation(&generation)?;
                     let mut startup = self.0.startup.subscribe();
                     let mut stdin = stdin;
@@ -1662,6 +1664,8 @@ impl Client {
                                     .into());
                             }
                             let claim = active.evaluation.claim()?;
+                            drop(preparation.take());
+                            drop(operation.take());
                             return Ok(send_response_from_wait(
                                 active
                                     .evaluation
@@ -1670,7 +1674,11 @@ impl Client {
                             ));
                         }
                         if let Some(result) = startup.borrow_and_update().as_ref() {
-                            result.clone()?;
+                            if let Err(error) = result {
+                                return Ok(SendResponse::Failed(Response::tool_error(
+                                    error.clone(),
+                                )));
+                            }
                             break;
                         }
                         if tokio::time::timeout(
@@ -1954,15 +1962,17 @@ impl Client {
         initial_requirements: Arc<Mutex<Option<Requirements>>>,
     ) {
         let result = (|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.ready())
-                .map_err(SendFailure::from)?;
+            let readiness = tokio::runtime::Handle::current().block_on(self.ready());
             self.ensure_generation(&generation)
                 .map_err(SendFailure::from)?;
             if !evaluation.is_interruptible()? {
                 return Ok(());
             }
-            self.validate_cell(&cell)?;
+            if let Err(error) = readiness.and_then(|()| self.validate_cell(&cell)) {
+                Response::tool_error(error).recover_to(self.0.output.clone());
+                evaluation.complete_cell(Ok(()));
+                return Ok(());
+            }
             if self.take_startup_failure(&generation)? {
                 evaluation.complete_cell(Ok(()));
                 return Ok(());

@@ -93,7 +93,7 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
 
 
 @executions(DIRECT, SANDBOXED)
-def test_send_timeout_starts_after_blocked_requirements_resolver(
+def test_send_timeout_includes_blocked_requirements_resolver(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -113,6 +113,10 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
             execution=execution,
         )
         client.start_worker()
+        evaluation_received = FifoCheckpoint.attach(
+            client.relay_root() / IDLE_R_EVALUATION_RECEIVED_NAME
+        )
+        evaluation_release = FifoCheckpoint.attach(client.relay_root() / RELEASE_NAME)
         finished = False
         try:
             evaluation = client.client.start_send(
@@ -127,15 +131,23 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
             )
 
             resolver_release.release()
+            evaluation_received.wait()
             _receive_checkpointed(
                 client.client,
                 evaluation,
                 "the evaluation after requirement resolution",
             )
-            assert _tool_text(evaluation["result"]) == "[done]"
+            assert _tool_text(evaluation["result"]) == (
+                "\n[running; poll with an empty send]"
+            )
+            evaluation_release.release()
+            assert _tool_text(client.send()) == "[done]"
             transcript = client.finish_active()
             finished = True
         finally:
+            evaluation_release.release()
+            evaluation_received.close()
+            evaluation_release.close()
             if not finished:
                 stop_client(client.client)
                 client._temporary.cleanup()

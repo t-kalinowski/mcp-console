@@ -7,8 +7,8 @@ result:
   content:
     - type: text
       text: >-
-        [worker R home discovery failed with exit status: 17: fixture R
-        discovery failed]
+        worker R home discovery failed with exit status: 17: fixture R discovery
+        failed
   isError: true
 ---
 input:
@@ -21,8 +21,8 @@ result:
   content:
     - type: text
       text: >-
-        [worker R home discovery failed with exit status: 17: fixture R
-        discovery failed]
+        worker R home discovery failed with exit status: 17: fixture R discovery
+        failed
   isError: true
 ---
 send:

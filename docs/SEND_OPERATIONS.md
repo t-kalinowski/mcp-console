@@ -38,8 +38,9 @@ A restart after discovery uses the existing retirement and replacement protocol,
 Before discovery completes, a control requiring configuration can exhaust its budget without applying control; a bundled cell is explicitly reported as not run.
 
 MCP cancellation before cell admission leaves no accepted cell.
-After admission, cancellation releases only that call's response wait: the cell remains accepted, including before execution begins, and continues through ordinary empty polling.
-Cancellation after execution begins likewise leaves the evaluation and its effects active.
+For a call admitted while initial startup is pending, cancellation after admission releases only that call's response wait: the cell remains accepted, including before execution begins, and continues through ordinary empty polling.
+If execution has begun, its evaluation and effects remain active.
+Calls admitted after readiness retain the existing response-delivery cancellation behavior.
 A cancelled request may have crossed admission before its caller observed cancellation; an empty poll discovers the retained state safely.
 Neither cancellation nor timeout cancels shared startup.
 Closing the MCP connection cancels discovery, preparation, and worker launch, then joins the existing ownership and retirement protocol.
@@ -49,9 +50,10 @@ The failure uses the ordinary bounded tool-error response, including for require
 Recording metadata is unavailable after discovery fails, so buffered early tool records are discarded and subsequent recording is disabled.
 Correct the execution-host setup and start a new MCP server session to retry.
 Default environment and worker startup failures retain the ordinary later-cell retry boundary; they do not trigger a new retry loop.
+Failure preparing an accepted initial declaration ends that startup attempt and withholds the cell; a later cell owns any retry.
 
 Explicit early requirements are prepared before the accepted cell or its bundled stdin reaches execution.
-If the declaration is already admitted when discovery finishes, the startup owner uses it to select the initial candidate before preparing defaults.
+If the declaration is already admitted when discovery finishes, the startup owner uses it to select the initial candidate before preparing pending defaults.
 Declarations arriving after default preparation begins use the same preparation transaction after shared startup settles.
 An unchanged declaration reuses the default candidate.
 A changed replacement can retire an unused prewarmed candidate after successful resolution, without requiring an explicit restart merely because it was prewarmed.
@@ -92,8 +94,8 @@ Requirement compatibility and resolver errors can arise later during preparation
 Shared initial startup consumes this budget; evaluation does not receive a fresh timeout after readiness.
 Explicit preparation after startup and inline control still finish before observation, as shown below, and can extend the complete call beyond the deadline.
 It does not cancel evaluation, worker startup, or resolution.
-SSH discovery and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
-Remote dependency preparation has no setup deadline; an interrupt or cancellation targets that operation's remote resolver processes.
+SSH connection setup and worker bootstrap have separate 30-second setup deadlines and remain cancellable by session shutdown.
+Runtime discovery after the preparation handshake and remote dependency preparation have no setup deadline; an interrupt or cancellation targets the active remote resolver processes.
 An automatic replacement attempt after worker failure shares the same evaluation wait.
 The table describes operation order after shared initial startup settles; early accepted cells follow the readiness rules above.
 A conflicting operation or generation change can reject admission before the remaining steps.

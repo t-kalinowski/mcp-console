@@ -193,7 +193,9 @@ def test_prepares_with_empty_stdin_then_restarts(
         client.send(stdin="", requirements={"r": ["praise"]})
         assert last_result_text(client) == "[prepared]"
         client.send(control="restart", requirements={"r": ["praise"]})
-        assert last_result_text(client) == "[starting new worker]\n[idle]"
+        assert last_result_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
 
         # fmt: r
         r = code(r"""

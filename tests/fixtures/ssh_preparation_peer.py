@@ -69,6 +69,11 @@ python_identity = {
     "base_prefix": "/remote-only",
     "base_exec_prefix": "/remote-only",
 }
+if mode in ("legacy-python", "delayed-discovery"):
+    selected_python = Path(record).parent / "python"
+    if not selected_python.exists():
+        selected_python.symlink_to(sys.executable)
+    python_identity["embedding"]["python"] = str(selected_python)
 if mode.startswith("default-extension-"):
     discovery["selections"]["r_home"] = None
     discovery["native"] = {
@@ -113,19 +118,21 @@ while (message := read()) is not None:
             }
         )
         continue
-    if mode == "legacy-python":
+    if mode in ("legacy-python", "delayed-discovery"):
         operation = request["operation"]
         if operation == "Bootstrap" or "Duckdb" in operation:
             complete(id, None)
         elif "InspectPython" in operation:
-            assert operation["InspectPython"] == {"executable": "/remote-only/python"}
+            assert operation["InspectPython"] == {"executable": str(selected_python)}
             complete(id, python_identity)
         elif "R" in operation:
+            library = Path(record).parent / "library"
+            library.mkdir(exist_ok=True)
             complete(
                 id,
                 {
-                    "library": "/remote-only/library",
-                    "r_libs": {"Unix": list(b"/remote-only/library")},
+                    "library": str(library),
+                    "r_libs": {"Unix": list(bytes(library))},
                     "requirements": operation["R"]["requirements"],
                 },
             )
@@ -135,7 +142,7 @@ while (message := read()) is not None:
             complete(
                 id,
                 {
-                    "python": "/remote-only/python",
+                    "python": str(selected_python),
                     "requirements": python["requirements"],
                 },
             )
