@@ -55,11 +55,19 @@ frame(
     },
 )
 frame(2, {"kind": "input_requested", "prompt": "startup> "})
+for index in range(int(os.environ.get("CONSOLE_BOOTSTRAP_ORDER_NOISE", "0"))):
+    frame(
+        2,
+        {"kind": "console_output", "data": f"queued {index:06d} " + "x" * 1024 + "\n"},
+    )
 # Direct stdout is an independent producer and may pass deferred sideband
 # semantics; its position is not part of the activation-order assertion.
 frame(2, {"kind": "stdout", "data": "ordered receipt\n"})
 with (root / "published").open("wb", buffering=0) as gate:
     assert gate.write(b"1") == 1
+with (root / "resuming").open("rb", buffering=0) as gate:
+    assert gate.read(1) == b"1"
+frame(2, {"kind": "console_output", "data": "after resumption\n"})
 for line in sys.stdin.buffer:
     command = json.loads(line)
     if command["kind"] == "stdin":

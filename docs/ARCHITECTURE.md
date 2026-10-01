@@ -67,6 +67,8 @@ It joins owned shutdown before retiring relay I/O so the relay can stop and reap
 Initialization alone does not consume the unused-worker replacement exception.
 Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
 Once a callback is deferred, later output, images, and input events from that worker sideband wait behind it; independent stdout, stderr, and retirement observations remain responsive.
+Deferred events use an anonymous mode-0600 temporary spool rather than a growing in-memory queue; the dispatcher resumes them in order before accepting later sideband events.
+Spool I/O failure fails the worker boundary, and retirement releases the spool.
 Failed preparation resumes the current bootstrap; successful replacement confirms old-worker retirement before starting its successor.
 The accepted first cell retains its admission and is never replayed.
 

@@ -1,3 +1,4 @@
+mod deferred;
 mod operation;
 
 pub(super) use operation::{
@@ -120,10 +121,19 @@ fn dispatch_worker_events(
     let mut process_outcome = None;
     let mut relay_closed = false;
 
-    let mut deferred = std::collections::VecDeque::new();
+    let mut deferred = deferred::DeferredEvents::default();
     loop {
         let event = if !operation.bootstrap_suspended()? && !deferred.is_empty() {
-            WorkerEvent::Relay(deferred.pop_front().expect("deferred bootstrap event"))
+            match deferred.pop() {
+                Ok(Some(event)) => WorkerEvent::Relay(event),
+                Ok(None) => unreachable!("nonempty deferred bootstrap spool"),
+                Err(error) => {
+                    deferred.clear();
+                    fail_dispatch(&operation, &mut startup, &interrupts, error);
+                    semantic_failure = true;
+                    continue;
+                }
+            }
         } else {
             let Ok(event) = events.recv() else { break };
             event
@@ -132,16 +142,22 @@ fn dispatch_worker_events(
             WorkerEvent::SuspendBootstrap { admitted } => {
                 let _ = admitted.send(operation.suspend_bootstrap());
             }
-            WorkerEvent::ResumeBootstrap => {}
+            WorkerEvent::ResumeBootstrap => operation.resume_bootstrap()?,
             WorkerEvent::Relay(event) => {
-                if operation.bootstrap_suspended()?
+                if !semantic_failure
+                    && !retiring
+                    && operation.bootstrap_suspended()?
                     && (bootstrap_callback(&event)
                         || (!deferred.is_empty() && sideband_semantic(&event)))
                 {
                     // Once a callback waits, later events from the same worker
                     // sideband must not overtake its commit. Independent streams
                     // and relay lifetime observations remain responsive.
-                    deferred.push_back(event);
+                    if let Err(error) = deferred.push(&event) {
+                        deferred.clear();
+                        fail_dispatch(&operation, &mut startup, &interrupts, error);
+                        semantic_failure = true;
+                    }
                     continue;
                 }
                 if process_outcome.is_some() {

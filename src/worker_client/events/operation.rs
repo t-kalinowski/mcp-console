@@ -121,6 +121,19 @@ impl WorkerOperationState {
         if !matches!(state.bootstrap, Bootstrap::Running) {
             return Err("worker sent an unexpected runtime initialization result".into());
         }
+        if state.idle_input.is_some() {
+            return Err("worker completed with an outstanding input request".into());
+        }
+        if let Some(OperationKind::Cell(evaluation)) =
+            state.operation.as_ref().map(|operation| &operation.kind)
+        {
+            evaluation.input_complete()?;
+        }
+        if state.runtime_r_callback.is_some() {
+            return Err(
+                "worker initialized runtimes before completing runtime R activation".into(),
+            );
+        }
         state.bootstrap = Bootstrap::Finished;
         drop(state);
         self.0.runtime_r_reply.notify_all();
@@ -202,6 +215,11 @@ impl WorkerOperationState {
 
     pub(super) fn bootstrap_suspended(&self) -> Result<bool, String> {
         Ok(self.lock()?.bootstrap_suspended)
+    }
+
+    pub(super) fn resume_bootstrap(&self) -> Result<(), String> {
+        self.lock()?.bootstrap_suspended = false;
+        Ok(())
     }
 
     pub(super) fn suspend_bootstrap(&self) -> Result<(), String> {
@@ -662,7 +680,6 @@ impl Drop for EnvironmentPreparationReservation {
     fn drop(&mut self) {
         if let Ok(mut state) = self.operation.0.state.lock() {
             state.environment_preparation_reserved = false;
-            state.bootstrap_suspended = false;
         }
         if let Some(events) = &self.bootstrap_events {
             let _ = events.send(WorkerEvent::ResumeBootstrap);

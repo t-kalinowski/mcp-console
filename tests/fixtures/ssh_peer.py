@@ -70,7 +70,22 @@ frame(
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
-if mode == "bootstrap-interrupted":
+if (
+    mode == "bootstrap-input-completion"
+    and not (log.parent / "invalid-bootstrap-sent").exists()
+):
+    frame(2, {"kind": "input_requested", "prompt": "startup> "})
+    with (log.parent / "finish-bootstrap").open("rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    (log.parent / "invalid-bootstrap-sent").touch()
+    frame(
+        2,
+        {
+            "kind": "runtime_initialized",
+            "complete": os.environ["CONSOLE_BOOTSTRAP_COMPLETE"] == "1",
+        },
+    )
+elif mode == "bootstrap-interrupted":
     root = log.parent
     with (root / "interrupt-bootstrap").open("rb", buffering=0) as gate:
         assert gate.read(1) == b"1"
@@ -83,7 +98,7 @@ for line in sys.stdin.buffer:
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
     if command["kind"] == "evaluate":
-        if mode == "bootstrap-interrupted":
+        if mode in {"bootstrap-interrupted", "bootstrap-input-completion"}:
             if command["source"] == "never_run = True":
                 (log.parent / "cell-ran").touch()
             frame(2, {"kind": "console_output", "data": "42\n"})

@@ -9,20 +9,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
+from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.normalization import code
-from support.requirements import WORKER, requires
+from support.requirements import WORKER, NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, FIXTURES
 from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
 
 
-@requires(WORKER)
+@requires(WORKER, NATIVE_FIXTURES)
 def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> list:
+    for active in (False, True):
+        for complete in (False, True):
+            check_bootstrap_completion_requires_input_termination(
+                binary, active=active, complete=complete
+            )
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
         root = Path(temporary).resolve()
+        profile = resources.enter_context(closing(AllocationProfile(root)))
         local, remote = root / "controller", root / "remote"
         local.mkdir()
         remote.mkdir()
@@ -32,6 +39,9 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
         )
         published = resources.enter_context(
             closing(FifoCheckpoint.create(root / "published"))
+        )
+        resuming = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "resuming"))
         )
         replacement = "mcp-console-ordering-fixture"
         environment, resolving, resolved = checkpoint_uv_environment(root, replacement)
@@ -64,7 +74,9 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
             RETICULATE_PYTHON="managed",
             CONSOLE_BOOTSTRAP_ORDER_BINARY=str(binary),
             CONSOLE_BOOTSTRAP_ORDER_ROOT=str(root),
+            CONSOLE_BOOTSTRAP_ORDER_NOISE="8192",
         )
+        environment.update(profile.environment)
         peer = FIXTURES / "bootstrap_order_peer.py"
         (root / "ssh").write_text(
             "#!/bin/sh\nexec " + shlex.join([sys.executable, str(peer)]) + ' "$@"\n'
@@ -80,6 +92,7 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
                 resolving.wait(
                     "replacement has reserved bootstrap and environment", timeout=120
                 )
+                profile.start()
                 events.release()
                 published.wait(
                     "startup semantic frames published while replacement is held"
@@ -87,6 +100,9 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
                 client.send(timeout_ms=0)
                 assert last_result_text(client) == "[session is preparing requirements]"
                 resolved.release()
+                # A fresh producer event can reach the dispatcher before the
+                # reservation owner's ResumeBootstrap marker.
+                resuming.release()
                 client.receive(preparation)
                 assert preparation["result"]["isError"], preparation
                 assert (
@@ -103,7 +119,11 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
                     output = "".join(
                         item["text"] for item in content if item["type"] == "text"
                     )
-                    if notice in output and output.endswith("[waiting for stdin]"):
+                    if (
+                        notice in output
+                        and "after resumption\n" in output
+                        and output.endswith("[waiting for stdin]")
+                    ):
                         break
                     assert time.monotonic() < deadline, "startup events did not resume"
                 assert output.index(notice) < output.index("after activation\n"), repr(
@@ -132,8 +152,15 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
                     notice in before_image and "after activation\n" in before_image
                 ), content
                 assert prompt in after_image, content
+                assert output.index(prompt) < output.index("after resumption\n"), repr(
+                    output
+                )
                 images = [item for item in content if item["type"] == "image"]
                 assert len(images) == 1 and images[0]["mimeType"] == "image/png", images
+                _, largest = profile.stop()
+                assert largest < 256 * 1024, (
+                    f"deferred startup allocated a growing queue: {largest}"
+                )
                 client.send(stdin="continue\n", python="42")
                 assert last_result_text(client) == "42\n", client.transcript[-1]
                 client.finish()
@@ -146,6 +173,52 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
             finally:
                 events.release()
                 resolved.release()
+                resuming.release()
+
+
+def check_bootstrap_completion_requires_input_termination(
+    binary: Path, *, active: bool, complete: bool
+) -> None:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary).resolve()
+        local, remote = root / "controller", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        finish = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "finish-bootstrap"))
+        )
+        environment = peer_environment(root, "bootstrap-input-completion")
+        environment["CONSOLE_BOOTSTRAP_COMPLETE"] = str(int(complete))
+        configure(local, remote, [str(binary)])
+        with McpClient(binary, ("serve", "--no-sandbox"), environment, local) as client:
+            try:
+                client.initialize_and_list_tools()
+                if active:
+                    client.send(python="never_run = True")
+                    assert (
+                        last_result_text(client)
+                        == '[input requested: "startup> "]\n[waiting for stdin]'
+                    )
+                else:
+                    wait_for_evaluation_output(
+                        client,
+                        '[input requested: "startup> "]\n[waiting for stdin]',
+                        "idle startup input reaches the controller",
+                    )
+                finish.release()
+                wait_for_evaluation_output(
+                    client,
+                    lambda output: (
+                        "worker completed with an outstanding input request" in output
+                    ),
+                    "bootstrap completion fails the managed-input boundary",
+                )
+                assert not (root / "cell-ran").exists(), (
+                    "cell ran with startup input still outstanding"
+                )
+                client.finish()
+            finally:
+                finish.release()
 
 
 if __name__ == "__main__":
