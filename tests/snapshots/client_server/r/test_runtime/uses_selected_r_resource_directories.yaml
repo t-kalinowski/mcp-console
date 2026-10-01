@@ -1,0 +1,31 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    names <- c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")
+    directories <- Sys.getenv(names)
+    stopifnot(
+      all(dir.exists(directories)),
+      identical(unname(directories), vapply(
+        c("share", "include", "doc"), R.home, "", USE.NAMES = FALSE
+      )),
+      file.exists(file.path(R.home("include"), "R.h")),
+      length(readLines(file.path(R.home("doc"), "AUTHORS"))) > 0L
+    )
+    child <- system2(
+      commandArgs()[1L],
+      c("--vanilla", "--slave", "-e", shQuote(
+        'cat(Sys.getenv(c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")), sep = "\n")'
+      )),
+      stdout = TRUE,
+      stderr = TRUE
+    )
+    stopifnot(is.null(attr(child, "status")), identical(child, unname(directories)))
+    cat("R and its children use the selected resource directories\n")
+result:
+  content:
+    - type: text
+      text: |
+        R and its children use the selected resource directories
+  isError: false

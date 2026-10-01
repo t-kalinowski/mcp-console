@@ -18,6 +18,67 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+def test_uses_selected_r_resource_directories(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        selected = isolated_r_home(root, environment)
+        launcher = selected / "bin/R"
+        source = launcher.read_text()
+        for name, suffix in (
+            ("R_SHARE_DIR", "share"),
+            ("R_INCLUDE_DIR", "include"),
+            ("R_DOC_DIR", "doc"),
+        ):
+            configured = root / f"configured {suffix} λ"
+            configured.symlink_to((selected / suffix).resolve())
+            (selected / suffix).unlink()
+            source, count = re.subn(
+                rf"(?m)^{name}=.*$", f'{name}="{configured}"', source
+            )
+            assert count == 1, name
+            # The selected launcher must supply its own paths, not inherited ones.
+            environment[name] = str(root / f"stale-{suffix}")
+        launcher.write_text(source)
+        r = code(r"""
+            names <- c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")
+            directories <- Sys.getenv(names)
+            stopifnot(
+              all(dir.exists(directories)),
+              identical(unname(directories), vapply(
+                c("share", "include", "doc"), R.home, "", USE.NAMES = FALSE
+              )),
+              file.exists(file.path(R.home("include"), "R.h")),
+              length(readLines(file.path(R.home("doc"), "AUTHORS"))) > 0L
+            )
+            child <- system2(
+              commandArgs()[1L],
+              c("--vanilla", "--slave", "-e", shQuote(
+                'cat(Sys.getenv(c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")), sep = "\n")'
+              )),
+              stdout = TRUE,
+              stderr = TRUE
+            )
+            stopifnot(is.null(attr(child, "status")), identical(child, unname(directories)))
+            cat("R and its children use the selected resource directories\n")
+            """)
+        reference = subprocess.check_output(
+            [launcher, "--vanilla", "--slave", "-e", r],
+            env=environment,
+            text=True,
+        )
+        expected = "R and its children use the selected resource directories\n"
+        assert reference == expected, reference
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(r=r)
+            assert last_tool_text(client) == expected, last_tool_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_uses_selected_r_launcher_default_architecture(
     binary: Path, execution: Execution
 ) -> Transcript:

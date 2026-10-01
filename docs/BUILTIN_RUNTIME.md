@@ -42,7 +42,8 @@ Prepared requirements are server-owned and survive restart as described in [Requ
 
 R's `commandArgs()[1]` identifies the selected installation's launcher, `file.path(R.home("bin"), "R")`, so it can start R subprocesses using that installation's configured default architecture.
 The remaining arguments describe Console's interactive R session; `commandArgs(TRUE)` initially has no user arguments.
-The worker supplies the selected installation's `R_HOME`, `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` for R subprocesses and preserves the caller's `R_ARCH` selection.
+The worker captures `R_SHARE_DIR`, `R_INCLUDE_DIR`, and `R_DOC_DIR` through the selected installation's launcher before either interpreter starts, including installations with separate resource directories.
+It supplies those paths and `R_HOME` for R subprocesses and preserves the caller's `R_ARCH` selection.
 
 Only one cell can run at a time.
 Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.
