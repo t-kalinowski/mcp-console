@@ -302,10 +302,9 @@ class ReleaseScriptTests(unittest.TestCase):
                 )
                 json.loads(sys.stdin.readline())
                 startup = json.loads(sys.stdin.readline())
-                assert startup["params"] == {
-                    "name": "send",
-                    "arguments": {"control": "restart"},
-                }
+                assert startup["params"]["name"] == "send"
+                assert set(startup["params"]["arguments"]) == {"timeout_ms"}
+                assert startup["params"]["arguments"]["timeout_ms"] > 0
                 if os.environ.get("FAKE_MCP_STARTUP_HANG"):
                     signal.pause()
                 if failed := os.environ.get("FAKE_MCP_STARTUP_RESULT"):
@@ -329,7 +328,7 @@ class ReleaseScriptTests(unittest.TestCase):
                                 "content": [
                                     {
                                         "type": "text",
-                                        "text": "[starting new worker]\\n[idle]",
+                                        "text": "\\n[idle]",
                                     }
                                 ],
                                 "isError": False,
