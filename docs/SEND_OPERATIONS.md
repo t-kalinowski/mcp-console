@@ -19,6 +19,8 @@ One startup owner prepares the default environment and launches its real worker 
 R, Python, and SQL initialize on first use, preserving their existing ordering and selection semantics.
 Custom workers retain their existing lazy launch contract.
 Startup and all early cells share the ordinary generation, admission, evaluation, and retirement machinery.
+Default dependency preparation and a worker process are started even if the client submits no code.
+First-use interpreter initialization remains part of the first evaluation.
 
 A structurally valid early cell occupies the existing evaluation slot immediately, including a cell with explicit requirements.
 Its observation deadline starts when the call enters the server and includes waiting for shared startup.
@@ -57,6 +59,7 @@ If the declaration is already admitted when discovery finishes, the startup owne
 Declarations arriving after default preparation begins use the same preparation transaction after shared startup settles.
 An unchanged declaration reuses the default candidate.
 A changed replacement can retire an unused prewarmed candidate after successful resolution, without requiring an explicit restart merely because it was prewarmed.
+Effective additions to an unused candidate also use prestart preparation and retirement, preserving its captured environment and first-use language initialization.
 Once user code or stdin has reached the worker, the ordinary live-change and explicit-restart rules apply.
 This includes idle stdin queued for a later read.
 Resolution failure preserves the committed environment and candidate; uncertain retirement blocks replacement.

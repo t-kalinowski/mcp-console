@@ -34,8 +34,9 @@ from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.records import Transcript
-from support.requirements import POSIX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
@@ -93,6 +94,7 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_send_timeout_includes_blocked_requirements_resolver(
     binary: Path,
     execution: Execution,
@@ -106,6 +108,14 @@ def test_send_timeout_includes_blocked_requirements_resolver(
         resolver_release = FifoCheckpoint.create(root / "resolver-release")
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment.update(
+            {
+                LOADER_VARIABLE: str(build_interposer(root, "relay_completed_output")),
+                "MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME": '"result":{}',
+                "MCP_CONSOLE_TEST_OUTPUT_COMPLETE": str(root / "clock-advanced"),
+                "MCP_CONSOLE_TEST_CLOCK_SECONDS": "120",
+            }
+        )
         client = ServerRelayClient(
             binary,
             "live_r_requirements_then_evaluate",
@@ -122,13 +132,12 @@ def test_send_timeout_includes_blocked_requirements_resolver(
             evaluation = client.client.start_send(
                 r="42",
                 requirements={"r": ["timeout-requirement"]},
-                timeout_ms=50,
+                timeout_ms=60_000,
             )
             resolver_started.wait()
-            readable, _, _ = select.select([client.client.stdout], [], [], 0.25)
-            assert not readable, (
-                "send timeout applied while requirements were resolving"
-            )
+            client.client.request("ping")
+            assert (root / "clock-advanced").read_text() == "1"
+            assert "result" not in evaluation, evaluation
 
             resolver_release.release()
             evaluation_received.wait()

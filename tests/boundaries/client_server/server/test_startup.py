@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -240,20 +240,36 @@ def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transc
 @requires(R)
 def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
-    with gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
-        client,
-        release,
+    with (
+        gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
+            client,
+            release,
+        ),
+        closing(
+            FifoCheckpoint.create(Path(client.temporary_directory.name) / "evaluated")
+        ) as evaluated,
     ):
         client.initialize_and_list_tools()
         pending = client.start_send(
-            r='started <- get0("started", ifnotfound = 0L) + 1L; started'
+            # fmt: r
+            r=code("""
+                started <- get0("started", ifnotfound = 0L) + 1L
+                checkpoint <- fifo("evaluated", "wb", blocking = TRUE)
+                writeBin(charToRaw("1"), checkpoint)
+                close(checkpoint)
+                started
+                """),
+            timeout_ms=0,
         )
+        client.receive(pending)
+        assert pending["result"]["content"] == [
+            {"type": "text", "text": "\n[running; poll with an empty send]"}
+        ], pending
         client.request("ping")
         release.release()
-        client.receive(pending)
-        assert pending["result"]["content"] == [{"type": "text", "text": "[1] 1\n"}], (
-            pending
-        )
+        evaluated.wait("the accepted R cell executed", timeout=600)
+        client.send(timeout_ms=10_000)
+        assert last_result_text(client) == "[1] 1\n", client.transcript[-1]
         client.send(r="started")
         assert last_result_text(client) == "[1] 1\n", last_result_text(client)
         return client.finish()

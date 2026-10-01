@@ -37,9 +37,9 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        selected Python embedding library is missing: <preparation>/missing-libpython
-        [requirements were not prepared; cell was not run]
+      text: >-
+        selected Python embedding library is missing:
+        <preparation>/missing-libpython
   isError: true
 ---
 send:

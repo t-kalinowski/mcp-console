@@ -163,8 +163,7 @@ impl Client {
             .0
             .unused_default
             .load(std::sync::atomic::Ordering::Acquire)
-            && matches!(&*worker, WorkerState::Running(_))
-            && (action != super::RequirementsAction::Add || delta.restart_required);
+            && matches!(&*worker, WorkerState::Running(_));
         if self.python_only() && !replace_default {
             match &*worker {
                 WorkerState::Initial => {}

@@ -314,6 +314,7 @@ impl WorkerState {
 struct ActiveEvaluation {
     generation: WorkerGeneration,
     evaluation: Arc<Evaluation>,
+    language: crate::cell::Language,
     initial_requirements: Arc<Mutex<Option<Requirements>>>,
 }
 
@@ -464,7 +465,15 @@ impl Client {
                     .map_err(|_| "initial requirements lock poisoned".to_string())?
                     .take();
                 if let Some(requirements) = requirements {
-                    self.prepare_cell_requirements(requirements, generation)?;
+                    if let Err(error) = self
+                        .validate_language(active.language)
+                        .and_then(|()| self.validate_requirements(&requirements))
+                    {
+                        Response::tool_error(error).recover_to(self.0.output.clone());
+                        active.evaluation.complete_cell(Ok(()));
+                    } else {
+                        self.prepare_cell_requirements(requirements, generation)?;
+                    }
                 }
             }
             let _preparation = self.0.preparation.blocking_read();
@@ -948,7 +957,11 @@ impl Client {
                     .await
                 {
                     Ok(response) => output::render_response(response),
-                    Err(failure) => output::direct_failure(failure.message),
+                    Err(failure) => {
+                        let mut response = Response::default();
+                        response.push_failure(failure);
+                        response
+                    }
                 },
             );
         }
@@ -1027,43 +1040,22 @@ impl Client {
             transcript,
             call_id,
         } = request;
-        if let Some(requirements) = requirements {
-            if let Some(cell) = cell {
-                return Ok(self
-                    .send_with_requirements(
-                        cell,
-                        stdin,
-                        requirements,
-                        deadline,
-                        transcript,
-                        call_id,
-                    )
-                    .await);
-            }
-            let notice = match self.prepare(requirements).await? {
-                PrepareResult::Prepared => "prepared",
-                PrepareResult::RestartRequired => "restart required",
-                PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
-                    return Ok(response);
-                }
-            };
-            let mut response = Response::default();
-            response.push_notice(notice);
-            return Ok(response);
+        let requirements = requirements.expect("ordinary sends were admitted before readiness");
+        if let Some(cell) = cell {
+            return Ok(self
+                .send_with_requirements(cell, stdin, requirements, deadline, transcript, call_id)
+                .await);
         }
-        Ok(
-            match self
-                .send_inner(cell, stdin, None, deadline, transcript, call_id)
-                .await
-            {
-                Ok(response) => output::render_response(response),
-                Err(failure) => {
-                    let mut response = Response::default();
-                    response.push_failure(failure);
-                    response
-                }
-            },
-        )
+        let notice = match self.prepare(requirements).await? {
+            PrepareResult::Prepared => "prepared",
+            PrepareResult::RestartRequired => "restart required",
+            PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                return Ok(response);
+            }
+        };
+        let mut response = Response::default();
+        response.push_notice(notice);
+        Ok(response)
     }
 
     async fn send_controlled(
@@ -1788,6 +1780,7 @@ impl Client {
         *active = Some(ActiveEvaluation {
             generation: generation.clone(),
             evaluation: evaluation.clone(),
+            language: cell.language,
             initial_requirements: Arc::new(Mutex::new(initial_requirements)),
         });
         let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
@@ -2004,10 +1997,14 @@ impl Client {
     }
 
     fn validate_cell(&self, cell: &crate::cell::Cell) -> Result<(), String> {
-        if self.python_only() && matches!(cell.language, crate::cell::Language::R) {
+        self.validate_language(cell.language)
+    }
+
+    fn validate_language(&self, language: crate::cell::Language) -> Result<(), String> {
+        if self.python_only() && matches!(language, crate::cell::Language::R) {
             return Err("R cells are unavailable in Python sessions without R".into());
         }
-        if !self.python_available() && matches!(cell.language, crate::cell::Language::Python) {
+        if !self.python_available() && matches!(language, crate::cell::Language::Python) {
             return Err("Python cells are unavailable: the target has no Python runtime".into());
         }
         Ok(())

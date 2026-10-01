@@ -40,6 +40,62 @@ from support.suites import run_this_suite
 RUNNING = "\n[running; poll with an empty send]"
 
 
+@executions(DIRECT, SANDBOXED)
+def test_invalid_early_cell_does_not_poison_default_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        ExitStack() as resources,
+    ):
+        root = Path(temporary).resolve()
+        python, site = isolated_python(root)
+        reached = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "probe"))
+        )
+        release = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "release"))
+        )
+        (site / "sitecustomize.py").write_text(
+            # fmt: python
+            code(f"""
+                import sys
+                from pathlib import Path
+
+                if sys.argv[0] == "-c":
+                    with Path({str(reached.path)!r}).open("wb", buffering=0) as reached:
+                        assert reached.write(b"1") == 1
+                    with Path({str(release.path)!r}).open("rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                """),
+        )
+        environment = selected_python(root, python)
+        environment.pop("R_HOME", None)
+        environment["PATH"] = str(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            try:
+                reached.wait("selected Python inspection is blocked")
+                client.initialize_and_list_tools()
+                client.send(
+                    r="stop('must not execute')",
+                    requirements={"python": ["six"]},
+                    timeout_ms=0,
+                )
+                assert last_result_text(client) == RUNNING
+                release.release()
+                failure = client.send()
+                assert failure["isError"]
+                assert (
+                    last_result_text(client)
+                    == "R cells are unavailable in Python sessions without R"
+                )
+                client.send(python="answer = 42; answer")
+                assert last_result_text(client) == "42\n", client.transcript[-1]
+                return client.finish()[3:]
+            finally:
+                release.release()
+
+
 @requires(R)
 def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
