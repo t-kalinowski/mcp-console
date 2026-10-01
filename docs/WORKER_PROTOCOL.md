@@ -122,6 +122,8 @@ The server withholds an accepted cell's `evaluate` frame until bootstrap finishe
 An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete setup in the same interpreter.
 Fatal startup failure follows ordinary generation failure and replacement handling.
 Custom workers retain their existing readiness and evaluation contract and do not send this event.
+Default local and target launchers opt into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
+An internal worker invoked through a custom launcher retains on-demand initialization unless that launcher explicitly selects the bootstrap protocol.
 
 The server admits one evaluation or explicit preparation at a time.
 Each ordinary operation has exactly one matching terminal result:

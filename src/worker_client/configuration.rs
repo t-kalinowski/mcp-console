@@ -187,7 +187,10 @@ impl ClientConfiguration {
         );
         let mut configuration = Self::with_arguments(
             program,
-            vec![OsString::from("worker")],
+            vec![
+                OsString::from("worker"),
+                OsString::from("--bootstrap-runtimes"),
+            ],
             None,
             no_sandbox,
             sandbox_settings,

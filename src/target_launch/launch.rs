@@ -183,7 +183,10 @@ fn launch(
         if native {
             command.arg(&executable);
         }
-        command.arg("worker-relay").arg(&executable).arg("worker");
+        command
+            .arg("worker-relay")
+            .arg(&executable)
+            .args(["worker", "--bootstrap-runtimes"]);
         (OutputKind::Relay, None)
     };
     let result = supervise(

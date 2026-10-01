@@ -15,15 +15,15 @@ struct Coordinator {
     sql: crate::sql::Bridge,
 }
 
-pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    let result = run_session();
+pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    let result = run_session(bootstrap_runtimes);
     // Every return, including startup and readiness failures, must restore
     // Python's initial thread before extension-library process destructors.
     crate::python::prepare_process_exit()?;
     result
 }
 
-fn run_session() -> Result<(), Box<dyn Error>> {
+fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
         crate::local_runtime::WorkerSelection {
@@ -56,7 +56,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         python,
         sql,
     };
-    coordinator.run()
+    coordinator.run(bootstrap_runtimes)
 }
 
 #[cfg(target_os = "linux")]
@@ -86,7 +86,19 @@ fn reexec_with_r_library_path(
 }
 
 impl Coordinator {
-    fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    fn run(&mut self, bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+        if bootstrap_runtimes {
+            self.initialize_runtimes()?;
+        }
+        while !core::is_shutting_down() {
+            if !self.handle(Self::wait_for_message(&self.r)?)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn initialize_runtimes(&mut self) -> Result<(), Box<dyn Error>> {
         // Ready connects callbacks before hooks run. Bootstrap uses the same
         // serialized interpreter thread and never enters a user evaluation.
         let languages = crate::cell::Languages::from_environment()?;
@@ -110,11 +122,7 @@ impl Coordinator {
         }
         self.writer
             .send(&WorkerMessage::RuntimeInitialized { complete })?;
-        loop {
-            if !self.handle(Self::wait_for_message(&self.r)?)? {
-                return Ok(());
-            }
-        }
+        Ok(())
     }
 
     fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {

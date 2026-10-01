@@ -32,7 +32,7 @@ pub(crate) use interrupt::{
 };
 
 #[cfg(not(unix))]
-pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run(_bootstrap_runtimes: bool) -> Result<(), Box<dyn std::error::Error>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "embedded R workers are supported only on macOS",
