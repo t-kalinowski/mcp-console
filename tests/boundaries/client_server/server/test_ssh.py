@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from contextlib import closing
@@ -33,6 +34,7 @@ from support.suites import run_this_suite
 def test_controller_languages_override_remote_ambient_selection(
     binary: Path, execution: Execution
 ) -> list:
+    check_ssh_optional_python_absence(binary, execution)
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
@@ -114,6 +116,117 @@ def test_controller_languages_override_remote_ambient_selection(
         return [
             {"controller_r_only_selection_survives_remote_ambient_and_restart": True}
         ]
+
+
+def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> None:
+    # Exercise real absent-interpreter discovery through MCP, alongside the
+    # existing configured-language case, without changing its snapshot.
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        local, remote = root / "controller", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        environment, rscript = r_test_environment()
+        libraries = subprocess.check_output(
+            [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
+            env=environment,
+            text=True,
+        ).splitlines()
+        package = root / "package"
+        (package / "R").mkdir(parents=True)
+        (package / "DESCRIPTION").write_text(
+            "Package: consoleoptionalpython\nVersion: 0.0.0\n"
+            "Title: Optional Python Fixture\nDescription: R startup without Python.\n"
+            "License: MIT\nAuthor: Test Fixture\nMaintainer: Test Fixture <test@example.org>\n"
+        )
+        (package / "NAMESPACE").write_text("")
+        (package / "R/startup.R").write_text(
+            # fmt: r
+            code(f"""
+                .onAttach <- function(libname, pkgname) {{
+                  if (interactive()) {{
+                    .libPaths(c({", ".join(json.dumps(path) for path in libraries)}, .libPaths()))
+                    stopifnot(requireNamespace("reticulate", quietly = TRUE))
+                    assign("startup_value", 41L, envir = globalenv())
+                    readline("R before Python discovery> ")
+                  }}
+                }}
+                """)
+        )
+        library = root / "library"
+        library.mkdir()
+        subprocess.run(
+            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", package],
+            env=environment,
+            check=True,
+            capture_output=True,
+        )
+        commands, home = remote / "commands", remote / "home"
+        commands.mkdir()
+        home.mkdir()
+        (commands / "sh").symlink_to(shutil.which("sh"))
+        if sys.platform == "linux" and execution == SANDBOXED:
+            (commands / "bwrap").symlink_to(shutil.which("bwrap"))
+        workload = {
+            "R_HOME": environment["R_HOME"],
+            "PATH": str(commands),
+            "HOME": str(home),
+            "R_LIBS": str(library),
+            "R_LIBS_USER": str(library),
+            "R_LIBS_SITE": str(library),
+            "R_DEFAULT_PACKAGES": "datasets,utils,grDevices,graphics,stats,methods,consoleoptionalpython",
+            "RETICULATE_USE_MANAGED_VENV": "false",
+        }
+        prefix = remote / "launch"
+        prefix.write_text(
+            "#!/bin/sh\nexec "
+            + shlex.join(
+                [
+                    "/usr/bin/env",
+                    "-i",
+                    *[f"{key}={value}" for key, value in workload.items()],
+                    str(binary),
+                ]
+            )
+            + ' "$@"\n'
+        )
+        prefix.chmod(0o755)
+        configure(local, remote, [str(prefix)], sandbox={"environment": workload})
+        with localhost(root / "sshd") as controller:
+            controller["MCP_CONSOLE_LANGUAGES"] = "r,python"
+            with McpClient(binary, execution.serve(), controller, local) as client:
+                client.initialize_and_list_tools()
+                properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                    "properties"
+                ]
+                assert {"r", "python"} <= properties.keys(), properties
+                wait_for_evaluation_output(
+                    client,
+                    '[input requested: "R before Python discovery> "]\n[waiting for stdin]',
+                    "R startup before unresolved Python selection",
+                    r="startup_value + 1L",
+                    timeout_ms=0,
+                )
+                wait_for_evaluation_output(
+                    client,
+                    "[1] 42\n",
+                    "R cell after Python absence",
+                    stdin="continue\n",
+                )
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(!reticulate::py_available(initialize = FALSE))
+                        missing <- tryCatch(reticulate::py_config(), error = conditionMessage)
+                        stopifnot(
+                          is.character(missing),
+                          grepl("Installation of Python not found", missing, fixed = TRUE)
+                        )
+                        startup_value + 1L
+                        """),
+                )
+                assert last_result_text(client) == "[1] 42\n", last_result_text(client)
+                client.finish()
 
 
 def _preinstalled_remote_runtime(

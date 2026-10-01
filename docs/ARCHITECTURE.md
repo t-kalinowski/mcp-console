@@ -76,6 +76,7 @@ Bootstrap owns a graphics scope without marking user code active; startup output
 Managed SQL connections and first-query work remain lazy.
 An explicit or host-resolved Python selection can start without R.
 Unresolved R-side selection hints use R's compatibility adapter when installed; its absence does not prevent bare R use.
+Background selection also permits an ordinary absent-interpreter discovery result, preserving R without treating selection errors as absence.
 Later R cells, Python's R bridge, and R-owned SQL retry incomplete initialization through the same facade.
 Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.

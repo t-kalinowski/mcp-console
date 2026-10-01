@@ -148,8 +148,13 @@ pub(crate) fn ensure_initialized() -> Result<bool, String> {
         }
     }
     let adapter = adapter().ok_or("R selection adapter is unavailable")?;
-    let Some(selected) = adapter.select()? else {
-        return Ok(false);
+    let selected = match adapter.select(crate::worker::bootstrapping())? {
+        reticulate::Selection::Selected(selected) => selected,
+        // Discovery ran its ordinary callbacks and found no interpreter. This
+        // completes optional bootstrap; an actual Python cell still reports
+        // the selection error through the ordinary, required path.
+        reticulate::Selection::Unavailable => return Ok(true),
+        reticulate::Selection::Incomplete => return Ok(false),
     };
     startup::initialize_native(&selected, adapter.managed)
 }

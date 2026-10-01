@@ -119,6 +119,8 @@ An uncaught `SystemExit` terminates the worker; catching it is normal control fl
 Console owns CPython initialization with or without R.
 An explicit or host-resolved Python selection initializes before optional R setup; unresolved R-side selection uses the compatibility adapter.
 Bare R remains usable when that adapter is unavailable.
+When unresolved discovery finds no Python interpreter, background initialization finishes with R alone; an actual Python request still reports the selection error.
+Explicit selection errors and incompatible interpreters retain their ordinary failure behavior.
 Startup services are connected before executable `.pth` files and `sitecustomize` run.
 Completed site processing is not repeated on later setup or bridge attachment.
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for Python and its children.
