@@ -34,10 +34,12 @@ SQL cells can be redirected to a user-owned DBI connection retained in R or a DB
 
 The default worker starts in the background at server launch.
 MCP initialization, tool discovery, and pings proceed independently.
-Worker readiness precedes first-use interpreter initialization; R, Python, and SQL retain their existing initialization order.
+Worker transport readiness precedes background initialization of enabled R and Python runtimes on the worker's serialized interpreter thread.
+Startup hooks now run even when no code is submitted.
+SQL bridges are installed with runtime setup; managed DuckDB connections and the first query remain lazy.
 Early cells and polls include waiting for shared readiness in their observation budget.
 See [server readiness](SEND_OPERATIONS.md#server-readiness) for acceptance, cancellation, requirements changes, and startup failures.
-A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
+A startup hook that stops the worker follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
 Language errors do not reset the worker, and changes made before an error remain applied.
@@ -381,8 +383,8 @@ Python cell tracebacks omit Console's private runtime frames while retaining use
 Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
 Python 3.10 or later is required.
-R and Python initialize on demand.
-An explicit or independently resolved Python selection can run while R remains uninitialized.
+Enabled R and Python runtimes initialize eagerly after transport readiness, independently of the MCP handshake.
+An explicit or independently resolved Python selection starts through the native facade before optional R initialization.
 Unresolved R-side selection callbacks and declarations require R; reticulate otherwise supplies only interoperability and its compatibility adapter.
 Console uses the same inspected Python identity and bootstrap with and without R, before reticulate attaches for conversion, cross-language calls, and event integration.
 Explicit virtualenvs retain their executable spelling and prefixes, including subprocess selection.
@@ -399,7 +401,8 @@ Later attachment preserves the existing Python interpreter, objects, selected DB
 Linux loader preparation happens before either interpreter starts.
 R startup packages attach to the captured Python identity; incompatible later selection requests require restart.
 Different virtualenvs remain distinct selections even when their executables link to the same base Python.
-Deferred startup packages load within the initiating R or Python cell's graphics scope, before `tools:mcp-console` is attached at search position 2.
+During bootstrap, R startup packages load after Console installs its input, graphics, and selection callbacks, before `tools:mcp-console` is attached at search position 2.
+Startup plots and console output are retained for polling or the first cell.
 Their selection includes `R_DEFAULT_PACKAGES` set by the installation's system `Renviron`.
 An unchanged `RETICULATE_PYTHON` selection retains that identity after Python changes the working directory or `PATH`.
 Late attachment preserves reticulate's `ephemeral` marker for Console-managed environments.

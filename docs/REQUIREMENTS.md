@@ -103,11 +103,15 @@ When ambient reticulate supplies the bootstrap, this probe loads its namespace a
 These probes have no deadline.
 Closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
 
-Default preparation and real worker launch start eagerly without a tool call; language initialization remains on demand.
+Default preparation, real worker launch, and enabled R/Python initialization start eagerly without a tool call.
+Transport readiness precedes interpreter startup so hooks can use managed resolution and stdin.
+SQL bridges are installed during runtime setup; managed DuckDB connections and queries remain lazy.
 `initialize`, `tools/list`, and pings do not wait for them.
 An early accepted cell, including one with requirements, can return a running response within `timeout_ms` while startup continues.
 Its explicit requirements are applied before its code or bundled input is sent.
-An unused default candidate can be replaced after successful preparation; user execution restores the ordinary explicit-restart boundary for replacement declarations.
+An unused default candidate can be replaced after successful preparation, including while its startup hooks run; user code or nonempty stdin restores the ordinary explicit-restart boundary for replacement declarations.
+The first `set` or `reset` declaration does not require explicit restart merely because interpreter initialization started.
+Failed candidate preparation resumes the existing bootstrap; successful replacement retires it before the new worker's configured hooks run.
 The MCP transport remains available during this preparation: interrupt targets the active resolver, and closing MCP input cancels it during server shutdown.
 A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
 

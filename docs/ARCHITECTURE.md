@@ -138,11 +138,19 @@ Tool construction uses captured configuration, while operation validation uses d
 `ConsoleServer::new` captures the tool router and starts one background runtime task in `src/server/startup.rs`.
 Launch configuration and applicable local native-policy preflight remain synchronous; `initialize`, `tools/list`, and `ping` do not wait for interpreter, resolver, or target discovery.
 The task configures the existing client, prepares defaults, and launches the built-in worker through actual transport readiness.
-Language runtimes retain their existing first-use initialization and ordering.
+After transport readiness, the worker coordinator initializes enabled R and Python through their existing facades on the serialized interpreter thread.
+Native or materialized Python selection remains independent of R; unresolved R selection still enters the compatibility adapter.
+SQL bridge installation stays with runtime setup; managed connections and queries remain lazy.
 One client-owned readiness result serves all calls; custom workers remain lazy.
 Early cells are admitted to the ordinary evaluation slot before readiness, and their one call deadline covers startup and execution observation.
 No cell queue or scheduler is added.
 Unused default candidates can be replaced through the existing requirements transaction and launcher retirement barrier.
+Interpreter startup does not change the user-code/nonempty-input cutoff for this replacement.
+Preparation first reserves an ordered dispatcher barrier, before taking the environment lock.
+Bootstrap resolver and activation events wait behind that reservation; output, input, and retirement remain observable.
+Failed preparation releases the barrier and resumes the existing worker.
+Successful preparation joins old-worker retirement before committing and launching a new worker, whose hooks can run again.
+The accepted first cell retains its admission across this transaction and is never replayed.
 
 The MCP input owner cancels background preparation on EOF or failed handshake using the active resolver/provider stop handle.
 During preparation, a non-consuming pipe/socket observer detects closure even when queued input or a blocked initialization response prevents the protocol reader from reaching EOF.
@@ -274,7 +282,7 @@ R and reticulate attachment reinstall Console services after their hooks.
 These shared services neither access R globals directly nor evaluate R code.
 The `worker::embedded_r` adapter supplies the mixed runtime's interrupt-state callbacks and owns R initialization, interrupt checks and deferral, native error boundaries, event handling, graphics, and R console callbacks.
 Its REPL latch distinguishes submitted R source from interactive input; shared cell state identifies the enclosing language.
-R initializes on demand from an R cell, Python-side R access, an R-owned SQL operation, or unresolved R-side Python selection.
+Enabled R initializes during bootstrap; later demand from Python-side R access or an R-owned SQL operation uses the same facade.
 R capability selects the default managed SQL provider independently of initialization and bridge attachment.
 
 Command readiness is separate from waiting: when no command is ready, the coordinator uses R's event-aware wait and services its idle callbacks before waiting again.
@@ -355,8 +363,10 @@ Runtime availability is captured on the execution host at session startup and pa
 An absent Python selection in a managed R-capable worker leaves selection lazy.
 Prepared targets instead expose their inspected capabilities: genuine Python absence permits R-only operation; a broken explicit selection is an error.
 Availability, captured identity, library initialization, shared setup completion, and bridge attachment are separate state.
-When Python is already running, R startup packages are deferred until Console installs the selection hooks.
-The initiating R or Python cell is active before runtime initialization, so deferred package plots use its graphics scope.
+During bootstrap, R startup packages are deferred until Console installs input, graphics, and selection callbacks.
+Late R initialization also defers packages when Python is already running.
+Bootstrap owns a graphics scope without marking a user cell active; its output and plots use the ordinary output tape.
+An accepted first cell receives bootstrap output through its existing prelude and active routes.
 Console attaches its SQL and Python tools after the startup packages, retaining search position 2 in either initialization order.
 Attachment obtains conversion metadata from the captured executable.
 The native configuration retains the `RETICULATE_PYTHON` hint present at initialization; an unchanged hint is not resolved again against a later working directory or `PATH`.

@@ -16,11 +16,14 @@ The tool schema and descriptions come from captured configuration and do not cha
 An advertised language is not proof that its runtime is installed.
 
 One startup owner prepares the default environment and launches its real worker through transport readiness.
-R, Python, and SQL initialize on first use, preserving their existing ordering and selection semantics.
+The built-in worker then initializes enabled R and Python runtimes on its serialized interpreter thread, without waiting for submitted code.
+Transport readiness comes first so startup hooks can use resolver callbacks and input.
+Explicit and independently prepared Python selections start through the native facade; unresolved R-side selection keeps its existing rules.
+SQL bridge setup accompanies runtime initialization; managed DuckDB connections and queries remain lazy.
 Custom workers retain their existing lazy launch contract.
 Startup and all early cells share the ordinary generation, admission, evaluation, and retirement machinery.
 Default dependency preparation and a worker process are started even if the client submits no code.
-First-use interpreter initialization remains part of the first evaluation.
+The first evaluation waits behind shared interpreter initialization and is accepted only once.
 
 A structurally valid early cell occupies the existing evaluation slot immediately, including a cell with explicit requirements.
 Its observation deadline starts when the call enters the server and includes waiting for shared startup.
@@ -32,7 +35,9 @@ Requirement inspection likewise returns `[worker starting]` without a manifest u
 
 Early code-free stdin is buffered for the current generation and delivered once when its worker is registered.
 A cell's bundled stdin remains withheld until its requirements are prepared.
-First-use language startup hooks use the ordinary input notices, stdin delivery, and polling path.
+Startup hooks can produce output, plots, errors, and input requests without a submitted cell.
+They use the ordinary output tape, input notices, stdin delivery, and polling path.
+An empty poll can return `[idle]` while interpreter startup continues after transport readiness; it does not certify interpreter completion.
 Restart discards old-generation buffered input.
 A standalone requirements call that exhausts its budget before readiness returns `[worker starting]` without accepting a preparation; submit that declaration again after startup.
 An interrupt can signal startup before a process is registered and between resolver phases.
@@ -60,7 +65,10 @@ If the declaration is already admitted when discovery finishes, the startup owne
 Declarations arriving after default preparation begins use the same preparation transaction after shared startup settles.
 An unchanged declaration reuses the default candidate.
 A changed replacement can retire an unused prewarmed candidate after successful resolution, without requiring an explicit restart merely because it was prewarmed.
-Effective additions to an unused candidate also use prestart preparation and retirement, preserving its captured environment and first-use language initialization.
+Effective additions to an unused candidate also use prestart preparation and retirement, preserving its captured environment.
+Interpreter initialization alone does not make that candidate used.
+Replacement serializes bootstrap resolver callbacks with preparation and confirms old-worker retirement before launching the replacement.
+Configured startup hooks may run once in each new worker generation, including a replacement before the first cell.
 Once user code or stdin has reached the worker, the ordinary live-change and explicit-restart rules apply.
 This includes idle stdin queued for a later read.
 Resolution failure preserves the committed environment and candidate; uncertain retirement blocks replacement.

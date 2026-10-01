@@ -209,7 +209,7 @@ The optional `initialized` boolean defaults to false.
 A live tool request sets it to true so the server resolves against its accepted executable without rediscovering an interpreter; the pin remains separate from retained version constraints.
 
 An automatic import may also include `import_resolution` with `module` and `distribution` strings.
-The module must be a top-level ASCII Python identifier, and the distribution must be a bare package name present in both manifests; this metadata is valid only during an evaluation.
+The module must be a top-level ASCII Python identifier, and the distribution must be a bare package name present in both manifests; this metadata is valid during an evaluation or built-in interpreter bootstrap.
 The server associates valid metadata with the provisional environment and emits a bounded notice for differently named modules and distributions only if the matching `python_activated` event commits it for the current generation.
 
 `resolve_python_version.request.constraints` is a required array of version constraints.
@@ -230,7 +230,14 @@ Startup text may use fd 1 or fd 2, but no semantic worker frame may precede `rea
 A second `ready` is a protocol violation.
 
 For the built-in worker, readiness confirms process services and command admission; it does not imply that R or Python has initialized.
-Interpreter startup runs on demand after readiness, so a fatal startup-hook failure follows ordinary worker-generation failure and replacement handling.
+Enabled R and Python runtimes initialize in the background after readiness on the existing serialized worker thread.
+Startup hooks may emit console, image, input, resolver, and activation messages before any evaluation.
+The built-in worker ends this bootstrap with `{"kind":"runtime_initialized","complete":true}`; an interrupted retryable setup reports `complete:false`.
+Bootstrap sends no `completed` frame and consumes no Python user-cell filename ID.
+The server withholds an accepted cell's `evaluate` frame until bootstrap finishes, while delivering its stdin normally.
+An interrupted bootstrap withholds an already waiting cell; a later cell can retry incomplete Python setup in the same interpreter.
+A fatal startup-hook failure follows ordinary worker-generation failure and replacement handling.
+Custom workers retain their existing readiness and evaluation contract and do not send this bootstrap event.
 
 ### Evaluation
 
