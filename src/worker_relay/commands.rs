@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::io::{Cancellation, cancellation_pipe, set_nonblocking};
 use super::supervisor::{Control, FailureReporter};
+use crate::jsonl::JsonlBuffer;
 use crate::readiness::wait_for_io;
 use crate::relay_protocol::RelayCommand;
 use crate::worker_protocol::ServerMessage;
@@ -29,7 +30,7 @@ impl CommandReader {
         let (cancelled, cancel) = cancellation_pipe("relay stdin")?;
         let thread = thread::spawn(move || {
             let mut input = std::io::stdin();
-            let mut buffer = Vec::new();
+            let mut buffer = JsonlBuffer::default();
             loop {
                 let ready = match wait_for_io(input.as_raw_fd(), libc::POLLIN, Some(&cancelled)) {
                     Ok(ready) => ready,
@@ -46,7 +47,7 @@ impl CommandReader {
                 }
                 let mut chunk = [0_u8; READ_CHUNK_SIZE];
                 match input.read(&mut chunk) {
-                    Ok(0) if buffer.is_empty() => {
+                    Ok(0) if !buffer.has_buffered_data() => {
                         let _ = controls.send(Control::Shutdown {
                             deadline: Instant::now() + WORKER_SHUTDOWN_GRACE,
                             report_acceptance: false,
@@ -57,21 +58,17 @@ impl CommandReader {
                         failures.report("relay stdin closed midway through a frame".to_string());
                         return;
                     }
-                    Ok(length) => buffer.extend_from_slice(&chunk[..length]),
+                    Ok(length) => buffer.append(&chunk[..length]),
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => {
                         failures.report(format!("relay stdin read failed: {error}"));
                         return;
                     }
                 }
-                while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
-                    let mut frame = buffer.drain(..=newline).collect::<Vec<_>>();
-                    frame.pop();
-                    if frame.last() == Some(&b'\r') {
-                        frame.pop();
-                    }
-                    let command = match serde_json::from_slice::<RelayCommand>(&frame) {
-                        Ok(command) => command,
+                loop {
+                    let command = match buffer.next::<RelayCommand>() {
+                        Ok(Some(command)) => command,
+                        Ok(None) => break,
                         Err(error) => {
                             failures.report(format!("relay stdin frame is invalid: {error}"));
                             return;
@@ -135,7 +132,6 @@ impl CommandReader {
                         return;
                     }
                 }
-                buffer.shrink_to(READ_CHUNK_SIZE);
             }
         });
         Ok(Self { cancel, thread })

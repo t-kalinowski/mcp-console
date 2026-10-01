@@ -224,6 +224,7 @@ Keep these invariants intact:
 - `src/server/startup.rs` — shared background runtime preparation and connection-owned cancellation; MCP discovery does not wait for it.
 - `src/worker_protocol.rs`, `src/sideband.rs` — relay-worker message and framing contract.
 - `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
+- `src/jsonl.rs` — incremental byte framing shared by relay command input and worker sideband readers; I/O and retirement policy remain with those readers.
 - `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup, Python probes, and compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
 - `src/worker_relay.rs`, `src/worker_relay/{supervisor,commands,streams,io,event_writer}.rs` — relay platform facade, direct-worker supervision and reaping, command input and writers, output and retirement draining, cancellation descriptors, and ordered event publication.

@@ -11,6 +11,8 @@ mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(unix)]
+mod jsonl;
+#[cfg(unix)]
 mod local_runtime;
 #[cfg(unix)]
 mod process_descriptors;

@@ -284,6 +284,8 @@ impl WorkerOperationState {
         publish: impl FnOnce(Route) -> Result<T, String>,
     ) -> Result<T, String> {
         let state = self.lock()?;
+        // Hold the operation lock through publication so admission captures
+        // in-flight idle output as the next cell's prelude.
         let route = match state.operation.as_ref().map(|operation| &operation.kind) {
             Some(OperationKind::Cell(evaluation)) => Route::Cell(evaluation.clone()),
             Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {

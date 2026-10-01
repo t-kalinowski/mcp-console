@@ -192,7 +192,7 @@ impl ConsoleServer {
 use crate::settings::{Compute, SandboxSettings, Target};
 use serde_json::{Map, Value};
 
-pub(super) fn configure_custom(description: &mut String, properties: &mut Map<String, Value>) {
+fn configure_custom(description: &mut String, properties: &mut Map<String, Value>) {
     let (_, remaining) = description
         .split_once("\n\nSend one complete")
         .expect("send description");
@@ -230,7 +230,7 @@ pub(super) fn configure_custom(description: &mut String, properties: &mut Map<St
 }
 
 /// Prepared-target restrictions are known from configuration, independent of the probe.
-pub(super) fn configure_prepared(
+fn configure_prepared(
     description: &mut String,
     properties: &mut Map<String, Value>,
     source: &str,
@@ -270,7 +270,7 @@ pub(super) fn configure_prepared(
     }
 }
 
-pub(super) fn description(
+fn description(
     policy: &SandboxSettings,
     no_sandbox: bool,
     target: Option<&Target>,
