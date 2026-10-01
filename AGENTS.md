@@ -32,7 +32,7 @@ Reconcile the relevant contracts, tests, and current documentation when implemen
 - `docs/WORKER_PROTOCOL.md` defines the exact relay-worker and custom-worker contract.
 - `docs/RELAY_PROTOCOL.md` defines the exact private server-relay transport.
 - `docs/TOOL_DESCRIPTIONS.md` gives editorial guidance for registered MCP tool and property prose and links to the canonical handshake snapshot.
-  The actual `tools/list` result and the registered strings and Rust doc comments in `src/server.rs` are authoritative.
+  The actual `tools/list` result, registered strings, and schema doc comments in `src/server.rs` and `src/server/arguments.rs` are authoritative.
 - `tests/boundaries/README.md` describes process boundaries, selectors, normalization, and snapshot updates.
 - `design-sketches/` contains intended or exploratory future design only.
 
@@ -212,7 +212,7 @@ Keep these invariants intact:
 - `src/docker_sandbox.rs`, `src/docker_sandbox/owner.rs` — compute policy validation, typed SBX CLI adapter, prepared template identity, owned microVM creation, and confirmed retirement.
 - `src/resolver/preparation.rs`, `src/resolver/preparation/{client,host}.rs` — typed local and SSH preparation connections, JSON transports, operation-scoped resolver control, and confirmed results.
 - `src/resolver/execution.rs` — host selection for existing resolver operations, preserving local session transactions.
-- `src/server.rs`, `src/server/execution.rs`, `src/server_transport.rs` — MCP tools, descriptions derived from captured target/provider configuration, stdio transport, and response-delivery ownership.
+- `src/server.rs`, `src/server/arguments.rs`, `src/server/presentation.rs`, `src/server_transport.rs` — MCP request execution, wire arguments, tool presentation derived from captured launch configuration, stdio transport, and response-delivery ownership.
 - `src/transcript.rs`, `src/transcript/{event,markdown,output}.rs` — typed recording events, append-only tool journal, Markdown and source-only Quarto projections, cell output files, and image artifacts.
 - `python/mcp_console/` — synchronous and asynchronous MCP clients and composable framework adapters.
   The public `openai.py`, `anthropic.py`, `chatlas.py`, and `codex.py` modules group adapters by product or SDK.
@@ -226,9 +226,11 @@ Keep these invariants intact:
 - `src/readiness.rs` — shared blocking descriptor readiness and cancellation waits.
 - `src/input_watch.rs`, `src/input_watch/` — platform input-closure observation shared by startup, Python probes, and compute ownership helpers.
 - `src/relay_protocol.rs` — server-relay JSONL message and framing contract.
-- `src/worker_relay.rs`, `src/worker_relay/event_writer.rs` — worker launch, I/O forwarding, ordered event output, direct-worker signaling, termination, and reaping.
+- `src/worker_relay.rs`, `src/worker_relay/{supervisor,commands,streams,io,event_writer}.rs` — relay platform facade, direct-worker supervision and reaping, command input and writers, output and retirement draining, cancellation descriptors, and ordered event publication.
 - `src/worker_client/output.rs`, `src/worker_client/output/{tape,preview,terminal}.rs` — canonical response composition, streaming output cuts, bounded 8 KiB text previews, independent image admission, raw-file receipts, and progress projection.
-- `src/worker_client.rs`, `src/worker_client/` — session coordination and send planning, server-owned environment, evaluation, lifecycle, ordinary launcher child ownership, ordered event dispatch, output tape, and shared Unix relay transport.
+- `src/worker_client.rs`, `src/worker_client/` — live session state and readiness facade, server-owned environment, evaluation and response ownership, lifecycle, ordinary launcher child ownership, output tape, and shared Unix relay transport.
+- `src/worker_client/{configuration,send,control,execution}.rs` — configuration preparation, ordinary send orchestration and polling, inline control and follow-up cells, and evaluation admission and launch.
+- `src/worker_client/events.rs`, `src/worker_client/events/operation.rs` — ordered event dispatch and runtime-candidate callbacks, and operation admission, routing, completion, and commits.
 - `src/process_exit.rs` — ordinary direct-child exit observation without reaping, used by server launcher ownership.
 - `src/process_output.rs` — output draining bounded by an owned child exit, including a surviving inherited writer; used for local launchers, the SSH child, and the remote helper's launcher without equating their cleanup guarantees.
 - `src/sandbox.rs`, `src/sandbox/{installation,runner,unsupported}.rs` — thin sandbox frontend, verified runner selection, application policy, and unsupported-platform errors.

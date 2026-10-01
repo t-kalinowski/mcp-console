@@ -1,4 +1,194 @@
 //! Tool prose derived only from captured launch configuration.
+use std::sync::Arc;
+
+use rmcp::handler::server::router::tool::ToolRouter;
+
+use super::ConsoleServer;
+
+// Internal eval configuration; intentionally not exposed through the CLI.
+pub(super) const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct Languages {
+    r: bool,
+    python: bool,
+    sql: bool,
+}
+
+impl Languages {
+    pub(super) fn from_environment() -> Result<Self, String> {
+        let Some(value) = std::env::var_os(LANGUAGES_ENV) else {
+            return Ok(Self::all());
+        };
+        let value = value
+            .into_string()
+            .map_err(|_| Self::invalid_configuration())?;
+        let mut languages = Self::default();
+        for language in value.split(',') {
+            match language {
+                "r" => languages.r = true,
+                "python" => languages.python = true,
+                "sql" => languages.sql = true,
+                _ => return Err(Self::invalid_configuration()),
+            }
+        }
+        Ok(languages)
+    }
+
+    fn all() -> Self {
+        Self {
+            r: true,
+            python: true,
+            sql: true,
+        }
+    }
+
+    pub(super) fn enables(self, language: crate::cell::Language) -> bool {
+        match language {
+            crate::cell::Language::R => self.r,
+            crate::cell::Language::Python => self.python,
+            crate::cell::Language::Sql => self.sql,
+        }
+    }
+
+    pub(super) fn field(language: crate::cell::Language) -> &'static str {
+        match language {
+            crate::cell::Language::R => "r",
+            crate::cell::Language::Python => "python",
+            crate::cell::Language::Sql => "sql",
+        }
+    }
+
+    fn invalid_configuration() -> String {
+        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of `r`, `python`, and `sql`")
+    }
+}
+
+impl ConsoleServer {
+    pub(super) fn configured_tool_router(
+        languages: Languages,
+        builtin: bool,
+        policy: &crate::settings::SandboxSettings,
+        no_sandbox: bool,
+        target: Option<&crate::settings::Target>,
+    ) -> ToolRouter<Self> {
+        let prepared = target.and_then(|target| match &target.compute {
+            crate::settings::Compute::Docker(_) => Some("image"),
+            crate::settings::Compute::DockerSandbox(_) => Some("template"),
+            crate::settings::Compute::Host {} => None,
+        });
+        let mut router = Self::tool_router();
+        let send = router
+            .map
+            .get_mut("send")
+            .expect("send tool must be registered");
+        let description = send
+            .attr
+            .description
+            .as_mut()
+            .expect("send tool must have a description")
+            .to_mut();
+        description.push_str("\n\n");
+        description.push_str(&self::description(policy, no_sandbox, target));
+        let schema = Arc::make_mut(&mut send.attr.input_schema);
+        let properties = schema
+            .get_mut("properties")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("send schema must have object properties");
+        let control = properties
+            .get_mut("control")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("send control schema must be an object");
+        control.insert(
+            "type".to_string(),
+            serde_json::Value::String("string".to_string()),
+        );
+        if let Some(values) = control
+            .get_mut("enum")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            values.retain(|value| !value.is_null());
+        }
+        // Omission carries meaning for get/reset. Do not advertise payload defaults.
+        for property in properties
+            .get_mut("requirements")
+            .and_then(|requirements| requirements.get_mut("properties"))
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("requirements schema properties")
+            .values_mut()
+        {
+            property
+                .as_object_mut()
+                .expect("requirement property schema")
+                .remove("default");
+        }
+        // Keep the normal tool prose and nested requirements unchanged; evals
+        // only need to project which direct code fields the client can call.
+        for (field, enabled) in [
+            ("r", languages.r),
+            ("python", languages.python),
+            ("sql", languages.sql),
+        ] {
+            if !enabled {
+                properties.shift_remove(field);
+            }
+        }
+        let mut guidance = String::new();
+        if languages.sql {
+            guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");
+        }
+        if languages.r {
+            guidance.push_str(
+                "Use R for vectorized data and string operations, statistics, and plots. ",
+            );
+        }
+        if languages.python {
+            guidance.push_str(
+                "Use Python when its libraries or format-specific parsing simplify the task. ",
+            );
+        }
+        if [languages.r, languages.python, languages.sql]
+            .into_iter()
+            .filter(|enabled| *enabled)
+            .count()
+            > 1
+        {
+            guidance.push_str("Switch languages when useful, reusing persistent state.");
+        }
+        guidance.truncate(guidance.trim_end().len());
+        if languages.sql {
+            guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
+            if builtin && prepared.is_none() {
+                guidance.push_str("Built-in managed defaults include SQLite when dependency preparation is available; sessions without DuckDB preparation require preinstalled extensions. ");
+            }
+            guidance.push_str(r#"For SQLite, use an available sqlite extension and attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. When preparation is supported, prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
+            guidance.push_str("SQL results include bounded table previews that abbreviate long text cells; return focused queries and summaries for inspection.");
+        }
+        *description = description.replacen(
+            "State persists across calls. ",
+            &format!("State persists across calls.\n\n{guidance}\n\n"),
+            1,
+        );
+        if !builtin {
+            configure_custom(description, properties);
+        }
+        if let Some(source) = prepared {
+            configure_prepared(description, properties, source);
+            let requirements = properties
+                .get_mut("requirements")
+                .expect("requirements schema");
+            *requirements = serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Inspect the server's retained declaration with action=get. Preparation is unavailable for this target; the declaration is not an installed-package inventory.",
+                "properties": {"action": {"type": "string", "enum": ["get"]}},
+                "required": ["action"],
+                "additionalProperties": false,
+            });
+        }
+        router
+    }
+}
+
 use crate::settings::{Compute, SandboxSettings, Target};
 use serde_json::{Map, Value};
 
