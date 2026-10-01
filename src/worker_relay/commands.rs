@@ -77,116 +77,43 @@ impl CommandReader {
                             return;
                         }
                     };
-                    match command {
+                    let message = match command {
                         RelayCommand::Evaluate { language, source } => {
-                            if sideband
-                                .send(SidebandWrite::Message(ServerMessage::Evaluate {
-                                    language,
-                                    source,
-                                }))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::Evaluate { language, source }
                         }
-                        RelayCommand::PrepareR { library } => {
-                            if sideband
-                                .send(SidebandWrite::Message(ServerMessage::PrepareR { library }))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
-                        }
-                        RelayCommand::RResolved { library } => {
-                            if sideband
-                                .send(SidebandWrite::Message(ServerMessage::RResolved { library }))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
-                        }
+                        RelayCommand::PrepareR { library } => ServerMessage::PrepareR { library },
+                        RelayCommand::RResolved { library } => ServerMessage::RResolved { library },
                         RelayCommand::RResolutionFailed { failure, message } => {
-                            if sideband
-                                .send(SidebandWrite::Message(ServerMessage::RResolutionFailed {
-                                    failure,
-                                    message,
-                                }))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::RResolutionFailed { failure, message }
                         }
                         RelayCommand::PreparePython { packages } => {
-                            if sideband
-                                .send(SidebandWrite::Message(ServerMessage::PreparePython {
-                                    packages,
-                                }))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::PreparePython { packages }
                         }
                         RelayCommand::PythonResolved { python, native } => {
-                            if sideband
-                                .send(SidebandWrite::Message(ServerMessage::PythonResolved {
-                                    python,
-                                    native,
-                                }))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::PythonResolved { python, native }
                         }
                         RelayCommand::PythonResolutionFailed { message } => {
-                            if sideband
-                                .send(SidebandWrite::Message(
-                                    ServerMessage::PythonResolutionFailed { message },
-                                ))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::PythonResolutionFailed { message }
                         }
                         RelayCommand::PythonVersionResolved { version } => {
-                            if sideband
-                                .send(SidebandWrite::Message(
-                                    ServerMessage::PythonVersionResolved { version },
-                                ))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::PythonVersionResolved { version }
                         }
                         RelayCommand::PythonVersionResolutionFailed { message } => {
-                            if sideband
-                                .send(SidebandWrite::Message(
-                                    ServerMessage::PythonVersionResolutionFailed { message },
-                                ))
-                                .is_err()
-                            {
-                                failures.report("worker sideband writer stopped".to_string());
-                                return;
-                            }
+                            ServerMessage::PythonVersionResolutionFailed { message }
                         }
                         RelayCommand::Stdin { data } => {
                             if stdin.send(StdinWrite::Write(data.into_bytes())).is_err() {
                                 failures.report("worker stdin writer stopped".to_string());
                                 return;
                             }
+                            continue;
                         }
                         RelayCommand::Interrupt { request_id } => {
                             if controls.send(Control::Interrupt { request_id }).is_err() {
                                 failures.report("relay supervisor stopped".to_string());
                                 return;
                             }
+                            continue;
                         }
                         RelayCommand::Shutdown { grace_millis } => {
                             let deadline = Instant::now() + Duration::from_millis(grace_millis);
@@ -202,6 +129,10 @@ impl CommandReader {
                             }
                             return;
                         }
+                    };
+                    if sideband.send(SidebandWrite::Message(message)).is_err() {
+                        failures.report("worker sideband writer stopped".to_string());
+                        return;
                     }
                 }
                 buffer.shrink_to(READ_CHUNK_SIZE);
