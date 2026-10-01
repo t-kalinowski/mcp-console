@@ -390,6 +390,8 @@ impl WorkerOperationState {
         publish: impl FnOnce(Route) -> Result<T, String>,
     ) -> Result<T, String> {
         let state = self.lock()?;
+        // Hold the operation lock through publication so admission captures
+        // in-flight idle output as the next cell's prelude.
         let route = match state.operation.as_ref().map(|operation| &operation.kind) {
             Some(OperationKind::Cell(evaluation)) => Route::Cell(evaluation.clone()),
             Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
@@ -715,9 +717,10 @@ impl OperationState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker_client::EvaluationWait;
+    use crate::worker_client::evaluation::EvaluationWait;
     use crate::worker_client::output::{Content, Response, SendResponse, render_response};
     use crate::worker_protocol::ConsoleChannel::Output;
+    use std::thread;
 
     #[tokio::test]
     async fn cell_admission_captures_an_inflight_idle_route_as_prelude() {
