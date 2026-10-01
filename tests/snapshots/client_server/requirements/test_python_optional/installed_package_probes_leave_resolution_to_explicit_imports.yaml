@@ -20,6 +20,15 @@ result:
   isError: false
 ---
 send:
+  python: import importlib; importlib.reload(package).fallback
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+send:
   python: >-
     import mcp_console_test_optional_dependency;
     mcp_console_test_optional_dependency.answer

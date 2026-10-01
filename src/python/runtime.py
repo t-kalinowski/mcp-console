@@ -124,7 +124,10 @@ class _McpConsoleImportFinder:
         self._psutil_loader = psutil_loader
         self._psutil_callback = None
         self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
-        self._load_code = importlib._bootstrap._load_unlocked.__code__
+        self._load_codes = (
+            importlib._bootstrap._load_unlocked.__code__,
+            importlib._bootstrap._exec.__code__,
+        )
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
         self._pid = None
@@ -307,15 +310,19 @@ class _McpConsoleImportFinder:
 
     def _is_installed_package_initialization(self):
         # Importlib holds the selected spec throughout both Python and native
-        # initialization, including PyInit before _initializing is set. Deferred
-        # loader execution after this boundary remains eligible for resolution.
+        # initialization and reload, including PyInit before _initializing is
+        # set. Deferred execution after this boundary remains eligible.
         frame = self._sys._getframe(1)
         importing_frame = None
         while frame is not None:
-            if frame.f_code is self._load_code:
+            if any(frame.f_code is code for code in self._load_codes):
                 specification = frame.f_locals["spec"]
                 break
-            if (
+            # The current import entrypoint may wrap importlib (as reticulate
+            # does). Frames inside that entrypoint are import machinery.
+            if frame.f_code is self._importlib._bootstrap._find_and_load.__code__:
+                importing_frame = None
+            elif (
                 importing_frame is None
                 and self._id(frame.f_code) not in self._private_codes
                 and all(frame.f_globals is not scope for scope in self._import_globals)
@@ -326,7 +333,8 @@ class _McpConsoleImportFinder:
             return False
         # Cached helpers within the initializing distribution share its import
         # context. A local or other library callback owns its own imports.
-        # Native PyInit has no Python frame.
+        # Native PyInit has no Python frame. A cached C callback also contributes
+        # no Python frame, so it inherits the visible initializer's context.
         importer = (
             specification
             if importing_frame is None
@@ -341,9 +349,14 @@ class _McpConsoleImportFinder:
         }
         module = self._sys.modules.get(root)
         root_spec = specification if module is None else module.__spec__
-        locations = root_spec.submodule_search_locations
+        locations = (
+            root_spec.submodule_search_locations
+            if module is None
+            else getattr(module, "__path__", None)
+        )
         # Read metadata at the loaded root's locations, not the latest sys.path:
-        # compatible activation preserves existing package paths. Do not cache.
+        # compatible activation retains paths; extend_path can add portions.
+        # The actual package path may differ from the root spec. Do not cache.
         metadata_paths = (
             [self._os.path.dirname(path) for path in locations]
             if locations is not None

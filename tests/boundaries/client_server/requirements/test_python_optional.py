@@ -13,7 +13,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.python import build_test_extension, write_test_wheel
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, R, requires
 from support.resolvers import recording_uv_environment, uv_tool_run_requirements
 from support.suites import run_this_suite
 
@@ -112,6 +112,9 @@ def test_installed_package_probes_leave_resolution_to_explicit_imports(
             assert len(runs) == len(before) + 1, runs
             assert "mcp_console_test_optional_package" in runs[-1], runs
             assert "mcp_console_test_optional_dependency" not in runs[-1], runs
+            client.send(python="import importlib; importlib.reload(package).fallback")
+            assert last_result_text(client) == "True\n", last_result_text(client)
+            assert uv_tool_run_requirements(record) == runs
             for source in (
                 "import mcp_console_test_optional_dependency; mcp_console_test_optional_dependency.answer",
                 "package.delayed_import()",
@@ -210,6 +213,13 @@ def test_installed_extension_optional_import_observes_absence(
         extension = build_test_extension(directory, "python_optional_import")
         index = write_test_wheel(directory, package, None, native_module=extension)
         write_test_wheel(directory, dependency, "answer = 42\n")
+        framework = "mcp_console_test_native_framework"
+        write_test_wheel(
+            directory,
+            framework,
+            "import mcp_console_test_native_optional\n"
+            "fallback = mcp_console_test_native_optional.probe()\n",
+        )
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
@@ -222,6 +232,19 @@ def test_installed_extension_optional_import_observes_absence(
             )
             assert last_result_text(client) == "True\n", last_result_text(client)
             assert uv_tool_run_requirements(record) == before
+            client.send(requirements={"action": "add", "python": [framework]})
+            before = uv_tool_run_requirements(record)
+            client.send(
+                python="import mcp_console_test_native_framework; mcp_console_test_native_framework.fallback"
+            )
+            # Cached C callbacks inherit the visible initializer's context.
+            assert last_result_text(client) == "True\n", last_result_text(client)
+            assert uv_tool_run_requirements(record) == before
+            client.send(python="package.probe()")
+            assert last_result_text(client) == "False\n", last_result_text(client)
+            runs = uv_tool_run_requirements(record)
+            assert len(runs) == len(before) + 1, runs
+            assert dependency in runs[-1], runs
             client.send(
                 python="import mcp_console_test_native_optional_dependency; mcp_console_test_native_optional_dependency.answer"
             )
@@ -289,10 +312,20 @@ def test_loaded_package_optional_imports_survive_compatible_activation(
                 fallback = False
             """)
         index = write_test_wheel(
-            directory, package, "answer = 42\n", package_files={"later.py": source}
+            directory,
+            package,
+            "from pkgutil import extend_path\n"
+            "__path__ = extend_path(__path__, __name__)\nanswer = 42\n",
+            package_files={"later.py": source},
         )
         write_test_wheel(directory, dependency, "answer = 42\n")
-        write_test_wheel(directory, addition, "answer = 0\n")
+        write_test_wheel(
+            directory,
+            addition,
+            None,
+            package_name=package,
+            package_files={"new_portion.py": source},
+        )
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
@@ -324,6 +357,23 @@ def test_loaded_package_optional_imports_survive_compatible_activation(
 
                     assert Path(later.__file__).samefile(initial_package_path / "later.py")
                     later.fallback
+                    """),
+            )
+            assert last_result_text(client) == "True\n", last_result_text(client)
+            assert uv_tool_run_requirements(record) == before
+            client.send(
+                # fmt: python
+                python=code("""
+                    from pkgutil import extend_path
+
+                    original_spec_paths = tuple(package.__spec__.submodule_search_locations)
+                    package.__path__ = extend_path(package.__path__, package.__name__)
+                    assert tuple(package.__spec__.submodule_search_locations) == original_spec_paths
+                    assert len(package.__path__) > len(original_spec_paths)
+                    from mcp_console_test_retained_package import new_portion
+
+                    assert Path(new_portion.__file__).resolve().parent != initial_package_path
+                    new_portion.fallback
                     """),
             )
             assert last_result_text(client) == "True\n", last_result_text(client)
@@ -380,12 +430,19 @@ def test_deferred_lazy_module_imports_remain_eligible(
 
 @executions(DIRECT, SANDBOXED)
 def test_default_package_imports_do_not_prepare_optional_dependencies(
-    binary: Path, execution: Execution
+    binary: Path, execution: Execution, *, with_r: bool = False
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
-        environment, record = managed_environment(Path(temporary))
+        environment, record = (
+            recording_uv_environment(Path(temporary))
+            if with_r
+            else managed_environment(Path(temporary))
+        )
+        environment.pop("RETICULATE_PYTHON", None)
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
+            if with_r:
+                client.send(r='reticulate::py_run_string("pass")')
             # Background preparation must finish before recording resolver calls.
             client.send(python="pass")
             before = uv_tool_run_requirements(record)
@@ -404,6 +461,16 @@ def test_default_package_imports_do_not_prepare_optional_dependencies(
                 uv_tool_run_requirements(record),
             )
             return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_r_backed_default_package_imports_do_not_prepare_optional_dependencies(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return test_default_package_imports_do_not_prepare_optional_dependencies(
+        binary, execution, with_r=True
+    )
 
 
 if __name__ == "__main__":

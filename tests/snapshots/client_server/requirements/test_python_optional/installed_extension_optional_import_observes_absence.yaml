@@ -24,6 +24,37 @@ result:
   isError: false
 ---
 send:
+  requirements:
+    action: add
+    python:
+      - mcp_console_test_native_framework
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: >-
+    import mcp_console_test_native_framework;
+    mcp_console_test_native_framework.fallback
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+send:
+  python: package.probe()
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false
+---
+send:
   python: >-
     import mcp_console_test_native_optional_dependency;
     mcp_console_test_native_optional_dependency.answer

@@ -52,3 +52,22 @@ result:
       text: |
         True
   isError: false
+---
+send:
+  python: |
+    from pkgutil import extend_path
+
+    original_spec_paths = tuple(package.__spec__.submodule_search_locations)
+    package.__path__ = extend_path(package.__path__, package.__name__)
+    assert tuple(package.__spec__.submodule_search_locations) == original_spec_paths
+    assert len(package.__path__) > len(original_spec_paths)
+    from mcp_console_test_retained_package import new_portion
+
+    assert Path(new_portion.__file__).resolve().parent != initial_package_path
+    new_portion.fallback
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false

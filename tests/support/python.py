@@ -27,6 +27,7 @@ def write_test_wheel(
     command: str | None = None,
     native_module: Path | None = None,
     package_files: dict[str, str] | None = None,
+    package_name: str | None = None,
 ) -> Path:
     wheels = root / "wheels"
     wheels.mkdir(exist_ok=True)
@@ -45,12 +46,13 @@ def write_test_wheel(
             f"Root-Is-Purelib: {str(native_module is None).lower()}\nTag: {tag}\n"
         ),
     }
+    package = name if package_name is None else package_name
     if module_source is not None:
-        entries[f"{name}/__init__.py"] = module_source
+        entries[f"{package}/__init__.py"] = module_source
     if native_module is not None:
         entries[f"{name}.abi3.so"] = native_module.read_bytes()
     for path, source in (package_files or {}).items():
-        entries[f"{name}/{path}"] = source
+        entries[f"{package}/{path}"] = source
     if command is not None:
         entries[f"{dist_info}/entry_points.txt"] = (
             f"[console_scripts]\n{command} = {name}:main\n"
