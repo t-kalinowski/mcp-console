@@ -196,7 +196,8 @@ test_that("requirements actions preserve scalar fields and empty lists", {
     startup <- jsonlite::fromJSON(
       send(requirements = list(action = "get"))@text
     )
-    expect_false(startup$prepared)
+    # Inspection waits for the eagerly prepared default environment.
+    expect_true(startup$prepared)
     prepared <- send(
       requirements = list(
         action = "set",
