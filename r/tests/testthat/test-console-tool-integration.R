@@ -211,7 +211,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
   with_temp_working_directory({
     send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
     startup <- inspect_requirements(send)
-    # Inspection waits for the eagerly prepared default environment.
+    # Inspect the committed default environment after worker readiness.
     expect_true(startup$prepared)
     prepared <- send(
       requirements = list(

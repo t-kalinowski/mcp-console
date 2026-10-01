@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, last_tool_text
+from support.assertions import last_result_text, last_tool_text, wait_for_worker_ready
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
 from support.normalization import code
@@ -273,7 +273,7 @@ def test_bootstraps_managed_requirements_through_uv(
     ):
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
         assert "requirements" in schema["properties"], schema
-        client.send()
+        wait_for_worker_ready(client, "remote uv bootstrap")
         assert last_result_text(client) == "\n[idle]"
         assert uv_record.exists(), "background startup did not bootstrap uv"
         startup_arguments = [

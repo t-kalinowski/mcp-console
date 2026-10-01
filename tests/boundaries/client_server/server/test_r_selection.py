@@ -70,6 +70,7 @@ def test_retains_discovered_r_home_across_generations(
         environment = bare_runtime_environment(environment, root / "r-library")
         commands = root / "bin"
         commands.mkdir()
+        retain_system_bwrap(commands)
         # The selected R launcher needs sh to report its resource paths.
         (commands / "sh").symlink_to(shutil.which("sh"))
         r = commands / "R"

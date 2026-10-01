@@ -50,9 +50,7 @@ from support.suites import run_this_suite
 
 
 @contextmanager
-def gated_session(
-    binary: Path, *, probe=False, advance_clock=False, handoff=False, prewarmed=False
-):
+def gated_session(binary: Path, *, probe=False, handoff=False, prewarmed=False):
     with TemporaryDirectory() as temporary, Events() as exits:
         root = Path(temporary).resolve()
         local, remote = root / "local", root / "remote"
@@ -146,19 +144,6 @@ def gated_session(
             (remote / "armed").touch()
         with localhost(root / "sshd") as controller:
             poison_controller(root / "sshd", controller)
-            if advance_clock:
-                controller.update(
-                    {
-                        LOADER_VARIABLE: str(
-                            build_interposer(local, "relay_completed_output")
-                        ),
-                        "MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME": r'"text":"\n[running; poll with an empty send]"',
-                        "MCP_CONSOLE_TEST_OUTPUT_COMPLETE": str(
-                            remote / "clock-advanced"
-                        ),
-                        "MCP_CONSOLE_TEST_CLOCK_SECONDS": "60",
-                    }
-                )
             client = McpClient(
                 binary, DIRECT.serve(), controller, local, response_timeout=15
             )
@@ -245,9 +230,9 @@ def test_restart_cancels_remote_preparation_before_replacement(binary):
         return client.finish()[3:]
 
 
-@requires(SSH, WORKER, PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
+@requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_preparation_outlives_the_setup_deadline(binary):
-    with gated_session(binary, advance_clock=True) as (
+    with gated_session(binary) as (
         client,
         remote,
         started,
@@ -257,11 +242,14 @@ def test_preparation_outlives_the_setup_deadline(binary):
     ):
         client.send(r="42L", timeout_ms=0)
         observe(remote, started, exits, identities)
-        # MCP output advances the controller's monotonic clock by 60 seconds.
-        # Control then wakes the preparation owner after its old setup deadline.
+        # Hold the resolver past the actual 30-second connection deadline.
+        # Advancing every controller clock also distorts unrelated Tokio timers.
+        try:
+            client.process.wait(timeout=35)
+        except subprocess.TimeoutExpired:
+            pass
+        assert client.process.poll() is None, client.stderr.read()
         client.request("ping")
-        completed = (remote / "clock-advanced").read_text()
-        assert completed == "1", repr(completed)
         client.send(control="interrupt")
         retired(exits, identities)
         assert "exit status: 130" in last_result_text(client), last_result_text(client)

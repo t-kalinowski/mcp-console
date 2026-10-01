@@ -27,6 +27,21 @@ def last_result_text(client: McpClient) -> str:
     return client.transcript[-1]["result"]["content"][0]["text"]
 
 
+def wait_for_worker_ready(client: McpClient, description: str) -> None:
+    """Wait through public startup snapshots and retain the initial empty poll."""
+    deadline = time.monotonic() + client.response_timeout
+    poll_start = len(client.transcript)
+    result = client.send()
+    while tool_text(result) == "[worker starting]":
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, f"{description} did not complete"
+        result = client.send(timeout_ms=max(1, int(remaining * 1_000)))
+    assert tool_text(result) == "\n[idle]", result
+    submitted = client.transcript[poll_start]
+    submitted["result"] = client.transcript[-1]["result"]
+    client.transcript[poll_start:] = [submitted]
+
+
 def entry_result_text(entry: TranscriptEntry) -> str:
     result = entry["result"]
     assert isinstance(result, dict), result

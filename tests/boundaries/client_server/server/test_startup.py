@@ -301,7 +301,7 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
         client.request("ping")
         release.release()
         client.send()
-        assert last_result_text(client) == "[done]"
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         client.send(r='exists("cancelled_cell_ran", inherits = FALSE)')
         assert last_result_text(client) == "[1] TRUE\n", last_result_text(client)
         return client.finish()

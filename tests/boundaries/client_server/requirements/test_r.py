@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -571,7 +572,7 @@ def test_evaluates_with_default_managed_r(
 def test_prepares_initial_r_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
+    environment, rscript = r_test_environment()
     initial_r = "praise"
     candidate_r = "zeallot"
     with tempfile.TemporaryDirectory() as temporary:
@@ -596,6 +597,27 @@ def test_prepares_initial_r_requirements(
         assert last_result_text(client) == "[prepared]"
 
         invalid_r = "not a valid requirement !!!"
+        reference = subprocess.run(
+            [
+                "ir",
+                "run",
+                "--rscript",
+                str(rscript),
+                "--with",
+                invalid_r,
+                "--isolated",
+                "--vanilla",
+                "-e",
+                "42",
+            ],
+            env=environment
+            | {"IR_NO_LOCAL_SOURCES": "1", "PKG_SUBPROCESS_TIMEOUT": "60000"},
+            cwd=workspace,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+        assert reference.returncode == 1, reference
         client.send(
             requirements={"r": [invalid_r]},
         )
@@ -609,6 +631,23 @@ def test_prepares_initial_r_requirements(
         assert error.endswith("Execution halted\nir: dependency resolution failed"), (
             error
         )
+        assert error == (
+            f"R package resolution failed with exit status: 1: {reference.stderr.strip()}"
+        ), error
+        # Keep the complete diagnostic; `ir` releases change pkg_deps arguments.
+        pak_call = next(
+            line for line in error.splitlines() if line.startswith("3. pak::pkg_deps(")
+        )
+        assert error.count(pak_call) == 1, error
+        result["content"][0]["text"] = error.replace(
+            pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)"
+        )
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "replacements": {
+                "ir_pkg_deps_arguments": "<ir-version-dependent arguments>",
+            },
+        }
 
         invalid_python = "example @ https://example.invalid/example.whl"
         client.send(
