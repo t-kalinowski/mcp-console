@@ -193,7 +193,9 @@ def test_prepares_with_empty_stdin_then_restarts(
         client.send(stdin="", requirements={"r": ["praise"]})
         assert last_result_text(client) == "[prepared]"
         client.send(control="restart", requirements={"r": ["praise"]})
-        assert last_result_text(client) == "[starting new worker]\n[idle]"
+        assert last_result_text(client) == "[starting new worker]\n[idle]", (
+            client.transcript[-1]
+        )
 
         # fmt: r
         r = code(r"""
@@ -633,7 +635,7 @@ def test_prepares_initial_r_requirements(
             42L
             """)
         client.send(r=r)
-        assert last_result_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
 
         client.send(
             requirements={"r": [initial_r]},

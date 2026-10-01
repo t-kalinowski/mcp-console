@@ -135,10 +135,14 @@ One `send` can poll, provide stdin, prepare requirements, evaluate a cell, inter
 [`TOOL_DESCRIPTIONS.md`](TOOL_DESCRIPTIONS.md) gives editorial guidance, and the [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered descriptions; `src/server.rs` and the actual `tools/list` result are authoritative.
 The [capability-advertising decision](TOOL_DESCRIPTIONS.md#supported-capabilities-and-host-availability) keeps supported, configured capabilities visible even when the execution host lacks a runtime.
 Tool construction uses captured configuration, while operation validation uses discovered availability.
-`ConsoleServer::new` captures the tool router and starts one background runtime-preparation task in `src/server/startup.rs`.
+`ConsoleServer::new` captures the tool router and starts one background runtime task in `src/server/startup.rs`.
 Launch configuration and applicable local native-policy preflight remain synchronous; `initialize`, `tools/list`, and `ping` do not wait for interpreter, resolver, or target discovery.
-All `send` calls await the same retained preparation result before entering runtime operation handling; there is no second initialization path or automatic preparation retry.
-Worker startup and language initialization remain demand-driven.
+The task configures the existing client, prepares defaults, and launches the built-in worker through actual transport readiness.
+Language runtimes retain their existing first-use initialization and ordering.
+One client-owned readiness result serves all calls; custom workers remain lazy.
+Early cells are admitted to the ordinary evaluation slot before readiness, and their one call deadline covers startup and execution observation.
+No cell queue or scheduler is added.
+Unused default candidates can be replaced through the existing requirements transaction and launcher retirement barrier.
 
 The MCP input owner cancels background preparation on EOF or failed handshake using the active resolver/provider stop handle.
 During preparation, a non-consuming pipe/socket observer detects closure even when queued input or a blocked initialization response prevents the protocol reader from reaching EOF.
@@ -146,7 +150,8 @@ After owned cleanup and response settling, a blocked protocol write cannot hold 
 A cancelled tool request stops only its own wait, not the shared preparation task.
 The existing resolver and target owners retain their retirement allowances; a worker SIGTERM grace is not a deadline for microVM retirement.
 Preparation failures remain available as bounded tool errors, while failed preparation and unconfirmed retirement retain shutdown diagnostics.
-The runtime transcript is created after successful discovery, so failed initial preparation and calls cancelled while awaiting it have no runtime transcript.
+Recording metadata is supplied after successful discovery; early tool records are retained until that metadata is available.
+Failed discovery does not create a runtime transcript.
 
 This is the only public protocol boundary.
 The client does not communicate directly with a relay, worker, or resolver.

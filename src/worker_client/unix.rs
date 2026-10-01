@@ -46,6 +46,7 @@ pub(super) struct Worker {
 /// Requests deadline-bounded shutdown while `Worker` retains the I/O task joins.
 #[derive(Clone)]
 pub(super) struct WorkerShutdownHandle {
+    stdin: StdinSender,
     commands: RelayCommandSender,
     operation: WorkerOperationState,
     interrupts: InterruptRequests,
@@ -848,6 +849,7 @@ impl Worker {
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
         WorkerShutdownHandle {
+            stdin: self.stdin.clone(),
             commands: self.relay.commands(),
             operation: self.operation.clone(),
             interrupts: self.interrupts.clone(),
@@ -1161,6 +1163,10 @@ impl ShutdownAcceptance {
 }
 
 impl WorkerShutdownHandle {
+    pub(super) fn write_startup_stdin(&self, data: String) -> Result<(), String> {
+        self.stdin.send(data)
+    }
+
     pub(super) fn interrupt(&self) -> Result<(), String> {
         self.interrupts.request(&self.commands)
     }

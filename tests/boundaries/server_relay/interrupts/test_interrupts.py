@@ -254,6 +254,8 @@ def test_controlled_interrupt_orders_stdin_before_new_evaluation(
         timeout_ms=50,
     )
     output = _tool_text(result)
+    if output.endswith("[running; poll with an empty send]"):
+        output += _tool_text(client.send())
     old = output.index("old evaluation finished from stdin\n")
     new = output.index("new evaluation ran\n")
     assert old < new, output

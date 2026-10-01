@@ -225,7 +225,7 @@ impl Response {
         self.is_error
     }
 
-    pub(super) fn push_notice(&mut self, message: impl Into<String>) {
+    pub(crate) fn push_notice(&mut self, message: impl Into<String>) {
         self.with_builder(|builder| builder.notice(message));
     }
 

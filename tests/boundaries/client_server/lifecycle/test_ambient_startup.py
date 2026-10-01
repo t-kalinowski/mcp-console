@@ -56,9 +56,8 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             assert "requirements" in tools[0]["inputSchema"]["properties"], tools
             prepared = client.send(requirements={"action": "get"})
             assert not prepared.get("isError", False), prepared
-            assert record.read_text(encoding="utf-8").splitlines() == [
-                "namespace:--probe"
-            ], "initialization invoked reticulate bootstrap"
+            eager_calls = ["namespace:--probe", "namespace:", "uv_binary"]
+            assert record.read_text(encoding="utf-8").splitlines() == eager_calls
 
             result = client.send(r='stop("cell must not run")')
             assert result.get("isError") is True, result
@@ -67,7 +66,17 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             output = content[0]["text"]
             assert "fixture ambient reticulate bootstrap failed" in output, output
             assert "cell must not run" not in output, output
-            assert "uv_binary" in record.read_text(encoding="utf-8").splitlines()
+            assert record.read_text(encoding="utf-8").splitlines() == eager_calls
+
+            retry = client.send(r='stop("retry cell must not run")')
+            assert retry.get("isError") is True, retry
+            assert "fixture ambient reticulate bootstrap failed" in str(retry), retry
+            assert "retry cell must not run" not in str(retry), retry
+            assert record.read_text(encoding="utf-8").splitlines() == [
+                *eager_calls,
+                "namespace:",
+                "uv_binary",
+            ]
 
             listed_again = client.request("tools/list")
             assert listed_again["result"]["tools"] == tools, listed_again

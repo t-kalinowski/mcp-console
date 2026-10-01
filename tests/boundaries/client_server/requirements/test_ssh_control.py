@@ -50,7 +50,9 @@ from support.suites import run_this_suite
 
 
 @contextmanager
-def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=False):
+def gated_session(
+    binary: Path, *, probe=False, advance_clock=False, handoff=False, prewarmed=False
+):
     with TemporaryDirectory() as temporary, Events() as exits:
         root = Path(temporary).resolve()
         local, remote = root / "local", root / "remote"
@@ -100,6 +102,8 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
                 "MCP_CONSOLE_TEST_STARTUP_RELEASE": str(release.path),
             }
         )
+        if prewarmed:
+            (remote / "claimed").touch()
         if handoff:
             environment.update(
                 {
@@ -138,6 +142,8 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
                 )
             )
         configure(local, remote, prefix)
+        if handoff:
+            (remote / "armed").touch()
         with localhost(root / "sshd") as controller:
             poison_controller(root / "sshd", controller)
             if advance_clock:
@@ -160,8 +166,10 @@ def gated_session(binary: Path, *, probe=False, advance_clock=False, handoff=Fal
             try:
                 if not probe:
                     client.initialize_and_list_tools()
-                if handoff:
-                    (remote / "armed").touch()
+                if prewarmed:
+                    client.send(requirements={"action": "get"})
+                    assert not client.transcript[-1]["result"]["isError"]
+                    (remote / "claimed").unlink()
                 yield client, remote, started, release, exits, identities
             finally:
                 if handoff:
@@ -262,7 +270,14 @@ def test_preparation_outlives_the_setup_deadline(binary):
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_explicit_preparation_waits_and_accepts_concurrent_control(binary):
-    with gated_session(binary) as (client, remote, started, release, exits, identities):
+    with gated_session(binary, prewarmed=True) as (
+        client,
+        remote,
+        started,
+        release,
+        exits,
+        identities,
+    ):
         preparation = client.start_send(requirements={"r": ["praise"]}, timeout_ms=0)
         observe(remote, started, exits, identities)
         # The ping response precedes any preparation response even with timeout 0.
@@ -284,7 +299,8 @@ def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
         exits,
         identities,
     ):
-        preparation = client.start_send(requirements={"r": ["praise"]})
+        client.send(r="42L", requirements={"r": ["praise"]}, timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         started.wait("uv bootstrap finished before Python resolver spawn", timeout=180)
         client.request("ping")
         client.send(control="interrupt", timeout_ms=0)
@@ -292,8 +308,9 @@ def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
             last_result_text(client)
         )
         release.release()
-        client.receive(preparation)
-        assert preparation["result"]["isError"], preparation
+        preparation = client.send(timeout_ms=180_000)
+        assert preparation["isError"], preparation
+        assert last_result_text(client) == "[worker startup interrupted]"
         client.response_timeout = 180
         output = send_and_collect_runtime_python_resolution(client, r="42L")
         assert output == "[1] 42\n", output
@@ -366,7 +383,14 @@ def test_detected_transport_loss_blocks_preparation_and_replacement(binary):
 
 @requires(SSH, WORKER, PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
-    with gated_session(binary) as (client, remote, started, release, exits, identities):
+    with gated_session(binary, prewarmed=True) as (
+        client,
+        remote,
+        started,
+        release,
+        exits,
+        identities,
+    ):
         blocked = FifoCheckpoint.create(remote / "stdout-blocked")
         interposer = build_interposer(remote, "relay_stdout_backpressure")
         prefix = remote / "remote-console"

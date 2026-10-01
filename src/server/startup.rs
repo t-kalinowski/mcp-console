@@ -7,8 +7,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::watch;
-
 pub(super) struct Runtime {
     pub worker: crate::worker_client::Client,
     pub transcript: crate::transcript::Transcript,
@@ -16,7 +14,7 @@ pub(super) struct Runtime {
 
 #[derive(Clone)]
 pub(super) struct Startup {
-    result: watch::Receiver<Option<Result<Arc<Runtime>, String>>>,
+    runtime: Arc<Runtime>,
     cancellation: Arc<Mutex<Cancellation>>,
 }
 
@@ -29,67 +27,78 @@ struct Cancellation {
 impl Startup {
     pub fn new(
         input_closed: super::InputClosed,
+        runtime: Arc<Runtime>,
+        prelaunch: bool,
         initialize: impl FnOnce(
             &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
         ) -> Result<Runtime, String>
         + Send
         + 'static,
     ) -> Self {
-        let (ready, result) = watch::channel(None);
         let cancellation = Arc::new(Mutex::new(Cancellation::default()));
         let control = Arc::clone(&cancellation);
+        let worker = runtime.worker.clone();
+        let recording = runtime.transcript.clone();
+        let task_recording = recording.clone();
+        let initialize_worker = worker.clone();
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 observe_input(input_closed, || {
-                    initialize(&|resolver| {
+                    let generation = initialize_worker.admit()?;
+                    let startup = initialize_worker.reserve_worker_startup(&generation)?;
+                    let prepared = initialize(&|resolver| {
                         let mut control = control.lock().expect("startup cancellation lock");
                         if control.closed {
                             return Err("MCP connection closed during runtime preparation".into());
                         }
-                        control.resolver = Some(resolver);
-                        Ok(())
-                    })
+                        control.resolver = Some(resolver.clone());
+                        initialize_worker.register_resolver_stop_handle(&generation, resolver)
+                    })?;
+                    initialize_worker.configure(prepared.worker);
+                    task_recording.configure(prepared.transcript);
+                    initialize_worker.record_with(task_recording);
+                    if prelaunch {
+                        initialize_worker.prelaunch(&generation);
+                    }
+                    drop(startup);
+                    Ok(())
                 })
             })
             .await
             .map_err(|error| format!("runtime preparation task failed: {error}"))
-            .and_then(|result| result)
-            .map(Arc::new);
-            ready.send_replace(Some(result));
+            .and_then(|result| result);
+            if result.is_err() {
+                recording.abandon_pending();
+            }
+            worker.finish_startup(result);
         });
         Self {
-            result,
+            runtime,
             cancellation,
         }
     }
 
     pub async fn ready(&self) -> Result<Arc<Runtime>, String> {
-        let mut result = self.result.clone();
-        let ready = result
-            .wait_for(Option::is_some)
-            .await
-            .map_err(|_| "runtime preparation stopped without a result".to_string())?;
-        ready
-            .as_ref()
-            .expect("runtime preparation completed")
-            .clone()
+        self.runtime.worker.ready().await?;
+        Ok(self.runtime.clone())
+    }
+
+    pub fn runtime(&self) -> Arc<Runtime> {
+        self.runtime.clone()
     }
 
     pub async fn cancel(&self) -> Result<(), String> {
-        if self.result.borrow().is_some() {
+        if self.runtime.worker.startup_finished() {
             return Ok(());
         }
-        let control = Arc::clone(&self.cancellation);
-        tokio::task::spawn_blocking(move || {
-            let resolver = {
-                let mut control = control.lock().expect("startup cancellation lock");
-                control.closed = true;
-                control.resolver.clone()
-            };
-            resolver.map_or(Ok(()), |resolver| resolver.stop())
-        })
-        .await
-        .map_err(|error| format!("startup cancellation task failed: {error}"))?
+        self.cancellation
+            .lock()
+            .expect("startup cancellation lock")
+            .closed = true;
+        self.runtime
+            .worker
+            .cancel_startup(std::time::Instant::now() + crate::worker_client::WORKER_SHUTDOWN_GRACE)
+            .await
     }
 
     pub fn finish_failed_preparation(&self, error: String) -> Result<(), String> {

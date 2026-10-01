@@ -4,6 +4,15 @@
 send:
   r: cancelled_cell_ran <- TRUE
 ---
+send:
+  r: stop('another cell must not execute')
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[worker is already evaluating a cell; poll without a code field]"
+  isError: true
+---
 input:
   method: notifications/cancelled
   params:
@@ -13,11 +22,18 @@ input:
   method: ping
 result: {}
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
 send:
   r: exists("cancelled_cell_ran", inherits = FALSE)
 result:
   content:
     - type: text
       text: |
-        [1] FALSE
+        [1] TRUE
   isError: false

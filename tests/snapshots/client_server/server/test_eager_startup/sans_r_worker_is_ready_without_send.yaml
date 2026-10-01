@@ -1,5 +1,9 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.custom.direct.yaml
+!same-as MCP initialization for this execution mode
+---
+input:
+  method: ping
+result: {}
 ---
 send:
   requirements:
@@ -18,11 +22,7 @@ result:
           },
           "prepared": false,
           "runtime_requirements": {
-            "r": [
-              "DBI",
-              "duckdb",
-              "jsonlite"
-            ],
+            "r": [],
             "python": []
           }
         }
@@ -35,18 +35,28 @@ result:
       exclude_newer: ~
     prepared: false
     runtime_requirements:
-      r:
-        - DBI
-        - duckdb
-        - jsonlite
+      r: []
       python: []
   isError: false
 ---
 send:
-  control: interrupt
-  timeout_ms: 0
+  python: import os; worker_pid = os.getpid(); worker_pid
 result:
   content:
     - type: text
-      text: "[worker is not running]"
-  isError: true
+      text: |
+        <prewarmed worker pid>
+  isError: false
+---
+send:
+  python: os.getpid()
+result:
+  content:
+    - type: text
+      text: |
+        <same worker pid>
+  isError: false
+---
+input:
+  method: tools/list
+result: <unchanged from initialization>

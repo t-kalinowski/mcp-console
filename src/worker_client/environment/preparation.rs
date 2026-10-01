@@ -22,6 +22,7 @@ pub(in crate::worker_client) enum PrepareResult {
 pub(in crate::worker_client) enum PreparationIntent {
     Standalone,
     BeforeEvaluation,
+    StartupEvaluation,
 }
 
 impl Client {
@@ -66,7 +67,9 @@ impl Client {
             .evaluation()?
             .as_ref()
             .map(|active| active.evaluation.clone());
-        if let Some(active) = active_operation {
+        if let Some(active) =
+            active_operation.filter(|_| !matches!(intent, PreparationIntent::StartupEvaluation))
+        {
             let environment = match environment.try_lock() {
                 Ok(environment) => environment,
                 Err(std::sync::TryLockError::WouldBlock) => {
@@ -156,7 +159,12 @@ impl Client {
                 (environment, delta)
             }
         };
-        if self.python_only() {
+        let replace_default = self
+            .0
+            .unused_default
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(&*worker, WorkerState::Running(_));
+        if self.python_only() && !replace_default {
             match &*worker {
                 WorkerState::Initial => {}
                 WorkerState::Running(_) => {
@@ -192,7 +200,7 @@ impl Client {
         {
             return Ok(PrepareResult::RestartRequired);
         }
-        if matches!(*worker, WorkerState::Running(_)) {
+        if matches!(*worker, WorkerState::Running(_)) && !replace_default {
             let RequirementDelta {
                 duckdb_extensions,
                 duckdb_changed,
@@ -273,6 +281,20 @@ impl Client {
             }
         };
 
+        if replace_default {
+            // Resolve the complete candidate first: failed preparation must
+            // preserve the prewarmed worker and committed declaration.
+            match self
+                .stop_failed_worker(&mut worker, generation)
+                .map_err(|failure| failure.message)?
+            {
+                FailedWorkerStop::Stopped(_) => *worker = WorkerState::Initial,
+                FailedWorkerStop::RestartOwnsWorker => {
+                    return Err(preparation_cancelled(includes_r));
+                }
+            }
+        }
+
         let mut lifecycle = self
             .0
             .lifecycle
@@ -296,7 +318,13 @@ impl Client {
     }
 
     fn require_explicit_restart(&self, delta: &RequirementDelta) -> Result<(), String> {
-        if delta.restart_required && self.has_live_worker()? {
+        if delta.restart_required
+            && self.has_live_worker()?
+            && !self
+                .0
+                .unused_default
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
             return Err("changed requirements require an explicit restart; retry send(control=\"restart\", requirements={\"action\": \"set\", ...}) with the complete declaration (or action=\"reset\")".into());
         }
         Ok(())

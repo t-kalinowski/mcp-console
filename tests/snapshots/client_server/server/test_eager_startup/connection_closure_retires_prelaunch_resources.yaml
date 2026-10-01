@@ -4,3 +4,5 @@
 input:
   method: ping
 result: {}
+---
+prelaunch_resources_retired: true

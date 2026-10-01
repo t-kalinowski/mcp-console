@@ -44,7 +44,7 @@ def test_empty_declaration_and_round_trip(
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     startup = inspect(client)
-    assert startup["prepared"] is False
+    assert startup["prepared"] is True
     assert startup["requirements"]["python"] == ["numpy", "pandas"]
     assert "tidyverse" in startup["requirements"]["r"]
     assert "yyjsonr" in startup["requirements"]["r"]
@@ -291,7 +291,8 @@ def test_r_duckdb_replacement_failure_and_reset(
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             startup = inspect(client)
-            assert ir_run_records(record) == []
+            assert startup["prepared"] is True
+            assert ir_run_records(record), "background startup did not prepare defaults"
             client.send(
                 r="marker <- 42L; pid <- Sys.getpid()", requirements={"action": "set"}
             )

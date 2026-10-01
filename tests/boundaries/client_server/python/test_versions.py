@@ -157,6 +157,7 @@ def test_validates_registry_only_python_requirements(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
+        client.send(requirements={"action": "get"})
         uv_record.write_text("", encoding="utf-8")
 
         project = temporary / "project"
@@ -209,7 +210,10 @@ def test_validates_registry_only_python_requirements(
             control="restart",
             requirements={"python": [restarted]},
         )
-        assert last_result_text(client) == "[starting new worker]\n[idle]"
+        # Standalone preparation already retired the unused default worker.
+        assert last_result_text(client) == "[starting new worker]\n[idle]", (
+            client.transcript[-1]
+        )
 
         # fmt: r
         r = code(rf"""

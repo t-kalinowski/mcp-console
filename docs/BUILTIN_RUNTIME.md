@@ -32,7 +32,11 @@ With R available, each worker generation creates these resources when needed:
 
 SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
 
-Worker readiness precedes interpreter initialization.
+The default worker starts in the background at server launch.
+MCP initialization, tool discovery, and pings proceed independently.
+Worker readiness precedes first-use interpreter initialization; R, Python, and SQL retain their existing initialization order.
+Early cells and polls include waiting for shared readiness in their observation budget.
+See [server readiness](SEND_OPERATIONS.md#server-readiness) for acceptance, cancellation, requirements changes, and startup failures.
 A startup hook that stops the worker on first language use follows the usual worker replacement path; failed private-storage retirement blocks replacement and remains an error at server shutdown.
 
 Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.

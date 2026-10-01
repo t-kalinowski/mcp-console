@@ -98,15 +98,16 @@ Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the 
 If no R-present resolver bootstrap is available, the built-in server retains no managed environment, exposes only `requirements.action="get"`, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
 R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
 
-Before starting the MCP transport, R-present discovery locates R and detects resolver capability without installing packages or invoking `ir`.
+Background R-present discovery locates R and detects resolver capability without installing packages or invoking `ir`.
 When ambient reticulate supplies the bootstrap, this probe loads its namespace and checks that its `uv_binary` function exists; it does not call that function.
 These probes have no deadline.
 Closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
 
-In R-present sessions, `initialize`, `tools/list`, empty polls, and control-only interrupts do not prepare the defaults.
-An ordinary first cell prepares them after evaluation admission, so `timeout_ms` can return a running response while installation continues.
-Default-add requirements prepare the defaults and additions together before the cell's evaluation wait; standalone preparation does not start a worker.
-Restart and idle nonempty stdin also prepare the defaults when they start the first worker.
+Default preparation and real worker launch start eagerly without a tool call; language initialization remains on demand.
+`initialize`, `tools/list`, and pings do not wait for them.
+An early accepted cell, including one with requirements, can return a running response within `timeout_ms` while startup continues.
+Its explicit requirements are applied before its code or bundled input is sent.
+An unused default candidate can be replaced after successful preparation; user execution restores the ordinary explicit-restart boundary for replacement declarations.
 The MCP transport remains available during this preparation: interrupt targets the active resolver, and closing MCP input cancels it during server shutdown.
 A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
 

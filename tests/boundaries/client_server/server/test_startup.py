@@ -3,12 +3,11 @@
 import json
 import os
 import select
-import shlex
 import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -36,24 +35,31 @@ def discovery_environment(
         os.mkfifo(alive)
         alive_reader = os.open(alive, os.O_RDONLY | os.O_NONBLOCK)
         probe = root / "R"
+        # The blocked descendant must exist before discovery reports readiness.
+        # A shell spawning dd after the checkpoint can race cancellation.
         probe.write_text(
-            code(r"""
-                #!/bin/sh
-                exec 3>ALIVE
-                printf 1 >&3
-                printf 1 > REACHED
-                /bin/dd bs=1 count=1 < RELEASE > /dev/null 2>&1
-                RESULT
+            code(f"""
+                #!{sys.executable} -S
+                import os
+                import sys
+                from pathlib import Path
+
+                home = {str(r_home) if r_home is not None else None!r}
+                with Path({str(alive)!r}).open("wb", buffering=0) as lifetime:
+                    child = os.fork()
+                    if child == 0:
+                        assert lifetime.write(b"1") == 1
+                        with Path({str(reached.path)!r}).open("wb", buffering=0) as reached:
+                            assert reached.write(b"1") == 1
+                        with Path({str(release.path)!r}).open("rb", buffering=0) as release:
+                            assert release.read(1) == b"1"
+                        os._exit(0)
+                    assert os.waitpid(child, 0) == (child, 0)
+                    if home is None:
+                        print("fixture R discovery failed", file=sys.stderr)
+                        raise SystemExit(17)
+                    print(home)
                 """)
-            .replace(
-                "RESULT",
-                "printf '%s\\n' " + shlex.quote(str(r_home))
-                if r_home is not None
-                else "printf 'fixture R discovery failed\\n' >&2\nexit 17",
-            )
-            .replace("ALIVE", shlex.quote(str(alive)))
-            .replace("REACHED", shlex.quote(str(reached.path)))
-            .replace("RELEASE", shlex.quote(str(release.path)))
         )
         probe.chmod(0o755)
         environment = bare_runtime_environment(os.environ.copy(), root / "library")
@@ -176,6 +182,9 @@ def test_reports_discovery_failure_without_losing_mcp(binary: Path) -> Transcrip
         assert "fixture R discovery failed" in str(pending), pending
         assert pending["result"]["isError"] is True, pending
         assert client.send(r="stop('must not retry discovery')") == pending["result"]
+        inspected = client.send(requirements={"action": "get"})
+        assert inspected["isError"] is True, inspected
+        assert "fixture R discovery failed" in str(inspected), inspected
         assert client.request("tools/list")["result"] == client.transcript[2]["result"]
         transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
         assert "fixture R discovery failed" in errors, errors
@@ -191,14 +200,42 @@ def test_failed_handshake_cancels_discovery_with_input_open(binary: Path) -> Tra
         return [{"stderr": errors, "input_remained_open": not client.stdin.closed}]
 
 
+def test_bounds_discovery_failure_during_requirement_inspection(
+    binary: Path,
+) -> Transcript:
+    with discovery_environment() as (environment, reached, release, alive):
+        probe = reached.path.parent / "R"
+        probe.write_text(
+            probe.read_text().replace(
+                "fixture R discovery failed",
+                "fixture R discovery failed " + "x" * (32 * 1024),
+            )
+        )
+        with McpClient(binary, ("serve", "--no-sandbox"), environment) as client:
+            reached.wait("runtime discovery is blocked")
+            assert os.read(alive, 1) == b"1"
+            client.initialize_and_list_tools()
+            release.release()
+            failure = client.send(requirements={"action": "get"})
+            assert failure["isError"] is True, failure
+            content = failure["content"][0]["text"]
+            assert "fixture R discovery failed" in content, failure
+            assert len(content.encode()) <= 8192, len(content.encode())
+            _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+            assert "fixture R discovery failed" in stderr
+            return [{"inspection_error": "bounded to 8 KiB", "isError": True}]
+
+
 def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transcript:
     with gated_discovery(binary) as (client, release):
         client.initialize_and_list_tools()
         pending = client.start_send(r="stop('cancelled request must not execute')")
+        client.send(r="stop('another cell must not execute')", timeout_ms=0)
+        assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
         release.release()
-        result = client.send(r="stop('failed discovery must not execute')")
+        result = client.send()
         assert result["isError"], result
         assert "fixture R discovery failed" in str(result), result
         transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
@@ -209,27 +246,45 @@ def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transc
 @requires(R)
 def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
-    with gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
-        client,
-        release,
+    with (
+        gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
+            client,
+            release,
+        ),
+        closing(
+            FifoCheckpoint.create(Path(client.temporary_directory.name) / "evaluated")
+        ) as evaluated,
     ):
         client.initialize_and_list_tools()
         pending = client.start_send(
-            r='started <- get0("started", ifnotfound = 0L) + 1L; started'
+            # fmt: r
+            r=code("""
+                started <- get0("started", ifnotfound = 0L) + 1L
+                checkpoint <- fifo("evaluated", "wb", blocking = TRUE)
+                writeBin(charToRaw("1"), checkpoint)
+                close(checkpoint)
+                started
+                """),
+            timeout_ms=0,
         )
+        client.receive(pending)
+        assert pending["result"]["content"] == [
+            {"type": "text", "text": "\n[running; poll with an empty send]"}
+        ], pending
         client.request("ping")
         release.release()
-        client.receive(pending)
-        assert pending["result"]["content"] == [{"type": "text", "text": "[1] 1\n"}], (
-            pending
-        )
+        evaluated.wait("the accepted R cell executed", timeout=600)
+        client.send(timeout_ms=10_000)
+        assert last_result_text(client) == "[1] 1\n", client.transcript[-1]
         client.send(r="started")
         assert last_result_text(client) == "[1] 1\n", last_result_text(client)
         return client.finish()
 
 
 @requires(R)
-def test_cancelled_cell_is_not_replayed_after_discovery(binary: Path) -> Transcript:
+def test_cancelled_wait_preserves_admitted_cell_after_discovery(
+    binary: Path,
+) -> Transcript:
     environment, _ = r_test_environment()
     with gated_discovery(binary, r_home=Path(environment["R_HOME"])) as (
         client,
@@ -237,11 +292,15 @@ def test_cancelled_cell_is_not_replayed_after_discovery(binary: Path) -> Transcr
     ):
         client.initialize_and_list_tools()
         pending = client.start_send(r="cancelled_cell_ran <- TRUE")
+        client.send(r="stop('another cell must not execute')", timeout_ms=0)
+        assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
         release.release()
+        client.send()
+        assert last_result_text(client) == "[done]"
         client.send(r='exists("cancelled_cell_ran", inherits = FALSE)')
-        assert last_result_text(client) == "[1] FALSE\n", last_result_text(client)
+        assert last_result_text(client) == "[1] TRUE\n", last_result_text(client)
         return client.finish()
 
 

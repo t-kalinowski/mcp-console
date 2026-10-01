@@ -1,28 +1,20 @@
 ---
 restart: false
 phase: interrupt
-stdout: >
-  {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"worker
-  is shutting down"}],"isError":true}}
+cell_was_not_run: true
 stderr: ""
 ---
 restart: true
 phase: interrupt
-stdout: >
-  {"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"[worker
-  is shutting down]"}],"isError":true}}
+cell_was_not_run: true
 stderr: ""
 ---
 restart: false
 phase: inspection-interrupt
-stdout: >
-  {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"worker
-  is shutting down"}],"isError":true}}
+cell_was_not_run: true
 stderr: ""
 ---
 restart: true
 phase: inspection-interrupt
-stdout: >
-  {"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"[worker
-  is shutting down]"}],"isError":true}}
+cell_was_not_run: true
 stderr: ""

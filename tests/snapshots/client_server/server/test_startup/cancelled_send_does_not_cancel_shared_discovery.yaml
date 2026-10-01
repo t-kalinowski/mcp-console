@@ -4,6 +4,15 @@
 send:
   r: stop('cancelled request must not execute')
 ---
+send:
+  r: stop('another cell must not execute')
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[worker is already evaluating a cell; poll without a code field]"
+  isError: true
+---
 input:
   method: notifications/cancelled
   params:
@@ -13,8 +22,7 @@ input:
   method: ping
 result: {}
 ---
-send:
-  r: stop('failed discovery must not execute')
+send: {}
 result:
   content:
     - type: text

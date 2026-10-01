@@ -69,7 +69,9 @@ Docker and SBX share prepared-runtime discovery and configuration in `src/target
 Probe inside the target under workload policy, retain one immutable worker-environment result only after confirmed probe-resource retirement, and use its R/native-Python capabilities for operation validation and recording.
 Construct MCP tool presentation only from captured launch configuration; discovered runtime availability must not remove language fields.
 Run runtime discovery and initial preparation once in the background so MCP initialization, tool discovery, and pings remain responsive.
-Await the retained result before handling `send`; cancellation of one waiting call must not cancel shared preparation.
+Continue through real default-worker readiness using the existing launch and retirement lifecycle; language initialization remains on demand.
+Admit early cells to the ordinary evaluation slot and include waiting for shared readiness in the one call deadline; timeout and request cancellation leave admitted cells available to normal polling.
+Cancellation of one waiting call must not cancel shared startup.
 The MCP connection owns startup cancellation and joins the existing resolver/provider retirement protocol on closure or failed handshake.
 Prepared targets select preinstalled CPython when R is genuinely absent, support target-relative `python`, never enter dependency preparation, and retain target paths as opaque controller metadata.
 Direct compute launches provide private Python storage through the existing target launcher; extension caches and shared paths retain their provider ownership.
