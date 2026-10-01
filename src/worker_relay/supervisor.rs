@@ -1,0 +1,674 @@
+use std::os::unix::process::ExitStatusExt as _;
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use super::commands::WORKER_SHUTDOWN_GRACE;
+use super::commands::{CommandReader, SidebandWrite, SidebandWriter, StdinWrite, StdinWriter};
+use super::event_writer::{self, EventSender, EventWriter};
+use super::streams::{OutputReader, OutputStream, SidebandReader, drain_unstarted_output};
+use crate::relay_protocol::RelayEvent;
+use crate::worker_protocol::ServerMessage;
+
+const RETIREMENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+const CHILD_EXITED: libc::c_int = 1;
+const CHILD_KILLED: libc::c_int = 2;
+const CHILD_DUMPED: libc::c_int = 3;
+const CHILD_STOPPED: libc::c_int = 5;
+const CHILD_CONTINUED: libc::c_int = 6;
+
+pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
+    let (program, arguments) = command_line
+        .split_first()
+        .ok_or_else(|| "worker relay command must include an executable".to_string())?;
+
+    let (controls, control_receiver) = mpsc::channel();
+    let writer_controls = controls.clone();
+    let (events, mut event_writer) = event_writer::start(move |message| {
+        let _ = writer_controls.send(Control::Stop { message });
+    })?;
+    let failures = FailureReporter::new(controls.clone());
+    let stopping = Arc::new(AtomicBool::new(false));
+
+    let (sideband_reader, sideband_writer, child_endpoints) = match crate::sideband::bind() {
+        Ok(sideband) => sideband,
+        Err(error) => {
+            return report_startup_failure(
+                &events,
+                event_writer,
+                format!("failed to create worker sideband: {error}"),
+            );
+        }
+    };
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    child_endpoints.configure_process(&mut command);
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return report_startup_failure(
+                &events,
+                event_writer,
+                format!("failed to launch worker: {error}"),
+            );
+        }
+    };
+    drop(child_endpoints);
+
+    let mut worker = WorkerLifecycle::new(child, sideband_reader);
+    let setup = worker.start_io(sideband_writer, &events, &failures, &controls, &stopping);
+    let (status, retirement_error) = match setup {
+        Ok(()) => {
+            worker.start_exit_watcher(controls.clone());
+            let worker_sideband = worker
+                .sideband_writer
+                .as_ref()
+                .expect("worker sideband writer should be running")
+                .sender();
+            let worker_stdin = worker
+                .stdin
+                .as_ref()
+                .expect("worker stdin writer should be running")
+                .sender();
+            let result = supervise_worker(
+                &mut worker.child,
+                &control_receiver,
+                &events,
+                &stopping,
+                &worker_sideband,
+                &worker_stdin,
+            );
+            worker.retired = true;
+            result
+        }
+        Err(error) => {
+            failures.report(error.clone());
+            stopping.store(true, Ordering::SeqCst);
+            let result = force_stop_worker(&mut worker.child, error);
+            worker.retired = true;
+            result
+        }
+    };
+    if let Some(error) = retirement_error.as_ref() {
+        failures.report(error.clone());
+    }
+
+    stopping.store(true, Ordering::SeqCst);
+    event_writer.begin_retirement();
+    let mut finish_error = worker.cancel_and_join(&events);
+
+    events.send_supervisor(RelayEvent::StdoutClosed);
+    events.send_supervisor(RelayEvent::StderrClosed);
+    let reported_failure = failures.take();
+    if let Some(message) = reported_failure.as_ref() {
+        events.send_supervisor(RelayEvent::Fatal {
+            message: message.clone(),
+        });
+    }
+    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
+    if let Some(status) = status {
+        let outcome = match (status.code(), status.signal()) {
+            (Some(code), _) => RelayEvent::WorkerExited { code },
+            (None, Some(signal)) => RelayEvent::WorkerSignaled { signal },
+            (None, None) => RelayEvent::Fatal {
+                message: "worker exited without an exit code or signal".to_string(),
+            },
+        };
+        events.send_supervisor(outcome);
+    }
+    events.finish();
+    collect_error(&mut finish_error, event_writer.join());
+
+    // Do not repeat an exact retirement failure after publishing it as the
+    // authoritative Fatal event. Preserve a richer cleanup error that the
+    // first-failure reporter could not publish.
+    if retirement_error.as_ref() != reported_failure.as_ref() {
+        collect_error(&mut finish_error, retirement_error.map_or(Ok(()), Err));
+    }
+    finish_error.map_or(Ok(()), Err)
+}
+
+fn collect_error(current: &mut Option<String>, result: Result<(), String>) {
+    let Err(error) = result else {
+        return;
+    };
+    match current {
+        Some(current) => current.push_str(&format!("; additionally {error}")),
+        None => *current = Some(error),
+    }
+}
+
+fn report_startup_failure(
+    events: &EventSender,
+    mut event_writer: EventWriter,
+    error: String,
+) -> Result<(), String> {
+    event_writer.begin_retirement();
+    events.send_supervisor(RelayEvent::Fatal {
+        message: error.clone(),
+    });
+    events.finish();
+    let mut error = Some(error);
+    collect_error(&mut error, event_writer.join());
+    Err(error.expect("startup failure should be retained"))
+}
+
+fn supervise_worker(
+    child: &mut Child,
+    controls: &mpsc::Receiver<Control>,
+    events: &EventSender,
+    stopping: &AtomicBool,
+    sideband: &mpsc::Sender<SidebandWrite>,
+    stdin: &mpsc::Sender<StdinWrite>,
+) -> (Option<ExitStatus>, Option<String>) {
+    let mut exit_deadline: Option<Instant> = None;
+    loop {
+        let control = match exit_deadline {
+            Some(deadline) => {
+                match controls.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(control) => control,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        return force_stop_worker(child, String::new());
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return force_stop_worker(
+                            child,
+                            "relay control channel stopped".to_string(),
+                        );
+                    }
+                }
+            }
+            None => match controls.recv() {
+                Ok(control) => control,
+                Err(_) => {
+                    return force_stop_worker(child, "relay control channel stopped".to_string());
+                }
+            },
+        };
+        match control {
+            Control::Interrupt { request_id } => {
+                let error = interrupt_worker(child).err();
+                if !events.send_supervisor(RelayEvent::InterruptResult { request_id, error }) {
+                    return force_stop_worker(child, String::new());
+                }
+            }
+            Control::Shutdown {
+                deadline,
+                report_acceptance,
+            } => {
+                if report_acceptance && !events.send_supervisor(RelayEvent::ShutdownStarted) {
+                    return force_stop_worker(child, String::new());
+                }
+                stopping.store(true, Ordering::SeqCst);
+                let _ = stdin.send(StdinWrite::Close);
+                let _ = sideband.send(SidebandWrite::Message(ServerMessage::Shutdown));
+                exit_deadline = Some(deadline);
+            }
+            Control::Stop { message } => {
+                stopping.store(true, Ordering::SeqCst);
+                return force_stop_worker(child, message);
+            }
+            Control::SidebandClosed => {
+                stopping.store(true, Ordering::SeqCst);
+                exit_deadline.get_or_insert_with(|| Instant::now() + WORKER_SHUTDOWN_GRACE);
+            }
+            Control::WorkerExited(result) => {
+                stopping.store(true, Ordering::SeqCst);
+                return match result {
+                    Ok(()) => finish_exited_worker(child),
+                    Err(error) => force_stop_worker(child, error),
+                };
+            }
+        }
+    }
+}
+
+fn start_worker_exit_watcher(
+    process_id: u32,
+    controls: mpsc::Sender<Control>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let process_id = process_id as libc::pid_t;
+        let wait_id = process_id as libc::id_t;
+        let result = loop {
+            let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+            // SAFETY: `information` points to writable storage and
+            // `process_id` names the direct child. WNOWAIT preserves its
+            // exit status for the relay supervisor, which remains the sole
+            // reaper.
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    wait_id,
+                    information.as_mut_ptr(),
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            if result == 0 {
+                // SAFETY: successful `waitid` initialized the supplied
+                // `siginfo_t`.
+                let information = unsafe { information.assume_init() };
+                // SAFETY: waitid populated the child-status variant of siginfo_t.
+                let observed_pid = unsafe { information.si_pid() };
+                if observed_pid != process_id {
+                    break Err(format!(
+                        "waitid returned process {} while waiting for worker {process_id}",
+                        observed_pid
+                    ));
+                }
+                match information.si_code {
+                    CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => break Ok(()),
+                    CHILD_STOPPED | CHILD_CONTINUED => {
+                        // Darwin may return a pending stop or continue
+                        // notification even though the call requested only
+                        // `WEXITED`. Consume just that notification, leaving
+                        // the eventual exit status waitable for supervision.
+                        if let Err(error) =
+                            consume_worker_non_exit_notification(wait_id, process_id)
+                        {
+                            if error.kind() == std::io::ErrorKind::Interrupted {
+                                continue;
+                            }
+                            break Err(format!(
+                                "failed to consume worker status notification: {error}"
+                            ));
+                        }
+                    }
+                    code => {
+                        break Err(format!(
+                            "waitid returned unexpected worker status code {code}"
+                        ));
+                    }
+                }
+                continue;
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                break Err(format!("failed to observe worker exit: {error}"));
+            }
+        };
+        let _ = controls.send(Control::WorkerExited(result));
+    })
+}
+
+fn consume_worker_non_exit_notification(
+    wait_id: libc::id_t,
+    process_id: libc::pid_t,
+) -> std::io::Result<()> {
+    let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+    // SAFETY: `information` points to writable storage and `process_id`
+    // names the direct child. Omitting `WEXITED` and `WNOWAIT` consumes only
+    // a pending stop or continue notification, never the exit status.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            wait_id,
+            information.as_mut_ptr(),
+            libc::WSTOPPED | libc::WCONTINUED | libc::WNOHANG,
+        )
+    };
+    if result < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
+    let information = unsafe { information.assume_init() };
+    // SAFETY: waitid populated the child-status variant of siginfo_t.
+    let observed_pid = unsafe { information.si_pid() };
+    if observed_pid == 0 {
+        return Ok(());
+    }
+    if observed_pid != process_id {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "waitid returned process {} while consuming a notification for worker {process_id}",
+                observed_pid
+            ),
+        ));
+    }
+    if !matches!(information.si_code, CHILD_STOPPED | CHILD_CONTINUED) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "waitid consumed unexpected worker status code {}",
+                information.si_code
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {
+    match child.wait() {
+        Ok(status) => (Some(status), None),
+        Err(error) => (
+            None,
+            Some(format!("failed to reap the direct worker: {error}")),
+        ),
+    }
+}
+
+fn interrupt_worker(child: &mut Child) -> Result<(), String> {
+    // SAFETY: the direct child remains unreaped here, so its PID cannot be
+    // reused before `kill` returns.
+    if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) } == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to interrupt worker: {}",
+            std::io::Error::last_os_error()
+        ))
+    }
+}
+
+fn force_stop_worker(
+    child: &mut Child,
+    prior_error: String,
+) -> (Option<ExitStatus>, Option<String>) {
+    let mut errors = Vec::new();
+    if !prior_error.is_empty() {
+        errors.push(prior_error);
+    }
+    let (mut status, should_kill_direct_worker) = match child.try_wait() {
+        Ok(status @ Some(_)) => (status, false),
+        Ok(None) => (None, true),
+        Err(error) => {
+            errors.push(format!("failed to read direct worker status: {error}"));
+            (None, false)
+        }
+    };
+    if should_kill_direct_worker
+        && let Err(error) = child.kill()
+        && error.raw_os_error() != Some(libc::ESRCH)
+    {
+        errors.push(format!("failed to stop the direct worker: {error}"));
+    }
+    if status.is_none() {
+        match child.wait() {
+            Ok(exit_status) => status = Some(exit_status),
+            Err(error) => {
+                errors.push(format!("failed to reap the direct worker: {error}"));
+            }
+        }
+    }
+    let error = (!errors.is_empty()).then(|| errors.join("; "));
+    (status, error)
+}
+
+enum ReaderState<Raw, Task> {
+    Unstarted(Raw),
+    Running(Task),
+    Retired,
+}
+
+impl<Raw, Task> ReaderState<Raw, Task> {
+    fn start(
+        &mut self,
+        start: impl FnOnce(Raw) -> Result<Task, (Raw, String)>,
+    ) -> Result<(), String> {
+        let Self::Unstarted(raw) = self.take() else {
+            panic!("worker reader should start only once");
+        };
+        match start(raw) {
+            Ok(task) => {
+                *self = Self::Running(task);
+                Ok(())
+            }
+            Err((raw, error)) => {
+                *self = Self::Unstarted(raw);
+                Err(error)
+            }
+        }
+    }
+
+    fn take(&mut self) -> Self {
+        std::mem::replace(self, Self::Retired)
+    }
+}
+
+struct WorkerLifecycle {
+    child: Child,
+    retired: bool,
+    drain_deadline: Arc<OnceLock<Instant>>,
+    raw_stdin: Option<ChildStdin>,
+    stdin: Option<StdinWriter>,
+    sideband_writer: Option<SidebandWriter>,
+    stdout: ReaderState<ChildStdout, OutputReader>,
+    stderr: ReaderState<ChildStderr, OutputReader>,
+    sideband_reader: ReaderState<crate::sideband::Reader, SidebandReader>,
+    command_reader: Option<CommandReader>,
+    exit_watcher: Option<thread::JoinHandle<()>>,
+}
+
+impl WorkerLifecycle {
+    fn new(mut child: Child, sideband_reader: crate::sideband::Reader) -> Self {
+        let raw_stdin = child
+            .stdin
+            .take()
+            .expect("piped worker stdin should be available");
+        let raw_stdout = child
+            .stdout
+            .take()
+            .expect("piped worker stdout should be available");
+        let raw_stderr = child
+            .stderr
+            .take()
+            .expect("piped worker stderr should be available");
+        Self {
+            child,
+            retired: false,
+            drain_deadline: Arc::new(OnceLock::new()),
+            raw_stdin: Some(raw_stdin),
+            stdin: None,
+            sideband_writer: None,
+            stdout: ReaderState::Unstarted(raw_stdout),
+            stderr: ReaderState::Unstarted(raw_stderr),
+            sideband_reader: ReaderState::Unstarted(sideband_reader),
+            command_reader: None,
+            exit_watcher: None,
+        }
+    }
+
+    fn start_io(
+        &mut self,
+        sideband_writer: crate::sideband::Writer,
+        events: &EventSender,
+        failures: &FailureReporter,
+        controls: &mpsc::Sender<Control>,
+        stopping: &Arc<AtomicBool>,
+    ) -> Result<(), String> {
+        let stdin = self
+            .raw_stdin
+            .take()
+            .expect("raw worker stdin should be available");
+        self.stdin = Some(StdinWriter::start(
+            stdin,
+            failures.clone(),
+            stopping.clone(),
+        )?);
+        self.sideband_writer = Some(SidebandWriter::start(
+            sideband_writer,
+            failures.clone(),
+            stopping.clone(),
+        )?);
+
+        self.stdout.start(|stdout| {
+            OutputReader::start(
+                stdout,
+                OutputStream::Stdout,
+                events.clone(),
+                failures.clone(),
+                self.drain_deadline.clone(),
+            )
+        })?;
+        self.stderr.start(|stderr| {
+            OutputReader::start(
+                stderr,
+                OutputStream::Stderr,
+                events.clone(),
+                failures.clone(),
+                self.drain_deadline.clone(),
+            )
+        })?;
+
+        self.command_reader = Some(CommandReader::start(
+            self.sideband_writer
+                .as_ref()
+                .expect("worker sideband writer should be running")
+                .sender(),
+            self.stdin
+                .as_ref()
+                .expect("worker stdin writer should be running")
+                .sender(),
+            controls.clone(),
+            failures.clone(),
+        )?);
+
+        self.sideband_reader.start(|sideband_reader| {
+            SidebandReader::start(
+                sideband_reader,
+                events.clone(),
+                failures.clone(),
+                controls.clone(),
+                self.drain_deadline.clone(),
+            )
+        })
+    }
+
+    fn start_exit_watcher(&mut self, controls: mpsc::Sender<Control>) {
+        self.exit_watcher = Some(start_worker_exit_watcher(self.child.id(), controls));
+    }
+
+    fn cancel_and_join(&mut self, events: &EventSender) -> Option<String> {
+        let mut error = None;
+        let deadline = Instant::now() + RETIREMENT_DRAIN_TIMEOUT;
+        self.drain_deadline
+            .set(deadline)
+            .expect("worker transports should retire only once");
+        // Wake every reader before joining any of them: a continuously
+        // readable stream must not extend the other readers' allowance.
+        if let ReaderState::Running(reader) = &self.sideband_reader {
+            reader.cancel.cancel();
+        }
+        if let ReaderState::Running(reader) = &self.stdout {
+            reader.cancel.cancel();
+        }
+        if let ReaderState::Running(reader) = &self.stderr {
+            reader.cancel.cancel();
+        }
+        drop(self.raw_stdin.take());
+        if let Some(command_reader) = self.command_reader.take() {
+            collect_error(&mut error, command_reader.cancel_and_join());
+        }
+        if let Some(stdin) = self.stdin.take() {
+            collect_error(&mut error, stdin.cancel_and_join());
+        }
+        if let Some(sideband_writer) = self.sideband_writer.take() {
+            collect_error(&mut error, sideband_writer.cancel_and_join());
+        }
+        if let ReaderState::Running(sideband_reader) = self.sideband_reader.take() {
+            collect_error(&mut error, sideband_reader.cancel_and_join());
+        }
+        match self.stdout.take() {
+            ReaderState::Running(stdout) => collect_error(&mut error, stdout.cancel_and_join()),
+            ReaderState::Unstarted(stdout) => collect_error(
+                &mut error,
+                drain_unstarted_output(stdout, OutputStream::Stdout, events, deadline),
+            ),
+            ReaderState::Retired => {}
+        }
+        match self.stderr.take() {
+            ReaderState::Running(stderr) => collect_error(&mut error, stderr.cancel_and_join()),
+            ReaderState::Unstarted(stderr) => collect_error(
+                &mut error,
+                drain_unstarted_output(stderr, OutputStream::Stderr, events, deadline),
+            ),
+            ReaderState::Retired => {}
+        }
+        if self
+            .exit_watcher
+            .take()
+            .is_some_and(|watcher| watcher.join().is_err())
+        {
+            collect_error(
+                &mut error,
+                Err("worker exit watcher task failed".to_string()),
+            );
+        }
+        error
+    }
+}
+
+impl Drop for WorkerLifecycle {
+    fn drop(&mut self) {
+        if !self.retired {
+            let _ = force_stop_worker(
+                &mut self.child,
+                "relay failed while starting worker I/O".to_string(),
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct FailureReporter {
+    controls: mpsc::Sender<Control>,
+    message: Arc<Mutex<Option<String>>>,
+}
+
+impl FailureReporter {
+    fn new(controls: mpsc::Sender<Control>) -> Self {
+        Self {
+            controls,
+            message: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub(super) fn report(&self, message: String) {
+        let first = {
+            let mut reported = self
+                .message
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if reported.is_some() {
+                false
+            } else {
+                *reported = Some(message.clone());
+                true
+            }
+        };
+        if !first {
+            return;
+        }
+        let _ = self.controls.send(Control::Stop { message });
+    }
+
+    fn take(&self) -> Option<String> {
+        self.message
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+}
+
+pub(super) enum Control {
+    Interrupt {
+        request_id: u64,
+    },
+    Shutdown {
+        deadline: Instant,
+        report_acceptance: bool,
+    },
+    SidebandClosed,
+    Stop {
+        message: String,
+    },
+    WorkerExited(Result<(), String>),
+}

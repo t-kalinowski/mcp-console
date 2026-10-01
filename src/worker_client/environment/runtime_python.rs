@@ -53,7 +53,7 @@ impl Client {
                     .to_string(),
             );
         }
-        if (initialized || self.python_only()) && import_resolution.is_none() {
+        if (initialized || self.0.python_only) && import_resolution.is_none() {
             if self.requirement_change_state(&generation)?
                 == RequirementChangeState::RestartRequired
             {

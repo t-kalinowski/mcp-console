@@ -3,6 +3,7 @@
 import json
 import os
 import select
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,8 @@ def discovery_environment(
                 """)
         )
         probe.chmod(0o755)
+        # The selected R launcher uses sh to report its resource directories.
+        (root / "sh").symlink_to(shutil.which("sh"))
         environment = bare_runtime_environment(os.environ.copy(), root / "library")
         environment["R_PROFILE_USER"] = os.devnull
         environment.pop("R_HOME", None)

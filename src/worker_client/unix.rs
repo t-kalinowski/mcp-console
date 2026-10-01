@@ -15,6 +15,7 @@ use super::output::SendFailure;
 use super::{
     PreparationOutcome, PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome,
 };
+use crate::process_exit::ChildExitWaiter;
 use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent};
 
 /// Lets the relay finish direct-worker shutdown, stream draining, and protocol
@@ -68,7 +69,7 @@ struct RelayProcess {
     child: Child,
     retirement_grace: Duration,
     no_sandbox: bool,
-    exit: super::child_exit::ChildExitWaiter,
+    exit: ChildExitWaiter,
     exited: bool,
     reaped: bool,
     ready_committed: bool,
@@ -382,15 +383,14 @@ impl RelayProcess {
         retirement_grace: Duration,
         notify_output_exit: std::io::PipeWriter,
     ) -> Result<Self, String> {
-        let exit =
-            match super::child_exit::ChildExitWaiter::start_notifying(child.id(), move || {
-                drop(notify_output_exit);
-            }) {
-                Ok(exit) => exit,
-                Err(error) => {
-                    return Err(retire_after_exit_observer_failure(child, error));
-                }
-            };
+        let exit = match ChildExitWaiter::start_notifying(child.id(), move || {
+            drop(notify_output_exit);
+        }) {
+            Ok(exit) => exit,
+            Err(error) => {
+                return Err(retire_after_exit_observer_failure(child, error));
+            }
+        };
         Ok(Self {
             temporary: None,
             temporary_retirement: Ok(()),
@@ -667,7 +667,7 @@ fn observe_and_reap_child(
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
-    match super::child_exit::ChildExitWaiter::start(child.id()) {
+    match ChildExitWaiter::start(child.id()) {
         Ok(mut exit) => match exit.wait(timeout) {
             Ok(true) => {
                 return match child.wait() {
