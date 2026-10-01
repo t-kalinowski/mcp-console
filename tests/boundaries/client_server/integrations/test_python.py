@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -20,7 +21,7 @@ from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
-from support.requirements import WORKER, requires
+from support.requirements import WORKER, command, requires
 from support.resolvers import (
     bare_runtime_environment,
     fake_ir_environment,
@@ -40,6 +41,7 @@ def options(binary: Path, execution: Execution) -> dict:
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_clients_inspect_and_replace_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -47,12 +49,42 @@ def test_clients_inspect_and_replace_requirements(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         environment, _ = recording_uv_environment(root)
-        # These clients inspect manifests without evaluating a cell. Supply
-        # deterministic host resolver results; package installation is covered
-        # by the runtime requirements suites.
-        library = root / "prepared-r-library"
-        library.mkdir()
+        # No cell is evaluated, but eager startup still prepares DuckDB extensions.
+        # Supply those real packages alongside deterministic resolver results.
+        library = Path(
+            subprocess.run(
+                [
+                    "ir",
+                    "run",
+                    "--with",
+                    "DBI",
+                    "--with",
+                    "duckdb",
+                    "--with",
+                    "jsonlite",
+                    "--isolated",
+                    "--vanilla",
+                    "-e",
+                    "cat(.libPaths()[[1L]])",
+                ],
+                cwd=directory,
+                env=r_test_environment()[0],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout
+        )
+        assert library.is_absolute() and library.is_dir(), library
         environment.update(fake_ir_environment(root, [library] * 4))
+        # Preparation must not borrow packages from the caller's R libraries.
+        empty_library = root / "empty-r-library"
+        empty_library.mkdir()
+        environment.update(
+            {
+                name: str(empty_library)
+                for name in ("R_LIBS", "R_LIBS_USER", "R_LIBS_SITE")
+            }
+        )
         environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         settings = {
@@ -62,7 +94,7 @@ def test_clients_inspect_and_replace_requirements(
         }
         with MCPConsole(**settings) as console:
             startup = json.loads(console.send(requirements={"action": "get"}))
-            assert startup["prepared"] is True
+            assert startup["prepared"] is True, startup
             console.send(
                 requirements={
                     "action": "set",
@@ -80,7 +112,7 @@ def test_clients_inspect_and_replace_requirements(
         async def asynchronous() -> None:
             async with AsyncMCPConsole(**settings) as console:
                 startup = json.loads(await console.send(requirements={"action": "get"}))
-                assert startup["prepared"] is True
+                assert startup["prepared"] is True, startup
                 await console.send(requirements={"action": "set"})
                 selected = json.loads(
                     await console.send(requirements={"action": "get"})
