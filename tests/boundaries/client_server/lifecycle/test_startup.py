@@ -419,39 +419,16 @@ def test_restart_replaces_first_use_cell_and_stdin(
 ) -> Transcript:
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
-        contended = FifoCheckpoint.create(root / "contended")
         completion_started = FifoCheckpoint.create(root / "completion-started")
-        cancel_release = FifoCheckpoint.create(root / "cancel-release")
-        replacement_unlocked = FifoCheckpoint.create(root / "replacement-unlocked")
-        unlock_return = FifoCheckpoint.create(root / "unlock-return")
-        unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
-        for checkpoint in (
-            contended,
-            completion_started,
-            cancel_release,
-            replacement_unlocked,
-            unlock_return,
-            unlocked,
-            release,
-            parked,
-        ):
+        for checkpoint in (completion_started, release, parked):
             resources.callback(checkpoint.close)
         armed = root / "armed"
         environment = {
-            LOADER_VARIABLE: str(
-                build_interposer(root, "evaluation_return_interposer")
-            ),
+            LOADER_VARIABLE: str(build_interposer(root, "startup_return_interposer")),
             "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
             "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(completion_started.path),
-            "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
-            "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
-            "MCP_CONSOLE_TEST_COMPLETION_REPLACEMENT_UNLOCKED": str(
-                replacement_unlocked.path
-            ),
-            "MCP_CONSOLE_TEST_COMPLETION_UNLOCK_RETURN": str(unlock_return.path),
-            "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
             "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(release.path),
             "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(parked.path),
         }
@@ -461,8 +438,6 @@ def test_restart_replaces_first_use_cell_and_stdin(
             )
         )
         resources.callback(release.release)
-        resources.callback(unlock_return.release)
-        resources.callback(cancel_release.release)
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
@@ -484,15 +459,10 @@ def test_restart_replaces_first_use_cell_and_stdin(
             stdin="replacement input",
             timeout_ms=600_000,
         )
-        completion_started.wait("resolver completion reached the server")
-        contended.wait("restart waits for the cancelling evaluation's worker lock")
-        assert not select.select([client.stdout], [], [], 0)[0], (
-            "restart replied before the old evaluation released the worker lock"
-        )
-        cancel_release.release()
-        replacement_unlocked.wait("restart released the acquired worker lock")
-        unlock_return.release()
-        unlocked.wait("old evaluation released the worker lock")
+        # Hold the cancelled initializer after it closes its input watcher,
+        # before its blocking task returns. The replacement must remain usable
+        # while the old startup outcome is still pending.
+        completion_started.wait("cancelled startup closed its completion socket")
         client.receive(replacement)
         assert last_tool_text(client) == code("""
             [active evaluation stopped by session restart request]
@@ -511,7 +481,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
         )
         fixture.wait_for_resolver_exit()
         release.release()
-        parked.wait("old evaluation task returned to the pool")
+        parked.wait("cancelled startup task returned to the pool")
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         return client.finish()

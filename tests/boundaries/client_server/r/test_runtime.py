@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -102,7 +102,11 @@ def test_uses_selected_r_resource_directories(
         assert reference == expected, reference
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
-            client.send(
+            wait_for_evaluation_output(
+                client,
+                "Python changed R paths before R initialization\n",
+                "Python initialization before R resource validation",
+                completion_timeout_seconds=600,
                 # fmt: python
                 python=code("""
                     import ctypes
@@ -127,9 +131,18 @@ def test_uses_selected_r_resource_directories(
             assert last_tool_text(client) == (
                 "Python changed R paths before R initialization\n"
             ), last_tool_text(client)
-            client.send(r=r)
+            wait_for_evaluation_output(
+                client,
+                expected,
+                "R resource-directory validation",
+                completion_timeout_seconds=600,
+                r=r,
+            )
             assert last_tool_text(client) == expected, last_tool_text(client)
-            client.send(
+            wait_for_evaluation_output(
+                client,
+                "[done]",
+                "restored native R environment",
                 # fmt: python
                 python=code("""
                     native = ctypes.CDLL(None)
@@ -182,7 +195,11 @@ def test_uses_selected_r_launcher_default_architecture(
         assert reference == "/identity-test", reference
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
-            client.send(
+            wait_for_evaluation_output(
+                client,
+                "Selected R launcher supplies its default architecture\n",
+                "R launcher architecture validation",
+                completion_timeout_seconds=600,
                 # fmt: r
                 r=code(r"""
                     executable <- commandArgs()[1L]

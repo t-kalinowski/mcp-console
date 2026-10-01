@@ -193,10 +193,11 @@ test_that("console_tool works when registered with an ellmer chat", {
 test_that("requirements actions preserve scalar fields and empty lists", {
   with_temp_working_directory({
     send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
+    expect_identical(send(timeout_ms = 600000)@text, "\n[idle]")
     startup <- jsonlite::fromJSON(
       send(requirements = list(action = "get"))@text
     )
-    # Inspection waits for the eagerly prepared default environment.
+    # Inspect the committed default environment after worker readiness.
     expect_true(startup$prepared)
     prepared <- send(
       requirements = list(

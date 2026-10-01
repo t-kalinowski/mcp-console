@@ -1,6 +1,6 @@
 """Shared public acceptance for R-free execution providers."""
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.normalization import code
 
@@ -47,5 +47,10 @@ def exercise_no_r_catalog(client: McpClient) -> None:
     assert "42" in last_result_text(client)
     client.send(python="input('target> ')")
     assert "[waiting for stdin]" in last_result_text(client)
-    client.send(stdin="exact input\n")
-    assert last_result_text(client) == "'exact input'\n"
+    wait_for_evaluation_output(
+        client,
+        "'exact input'\n",
+        "R-free target input receipt",
+        stdin="exact input\n",
+    )
+    assert last_result_text(client) == "'exact input'\n", last_result_text(client)
