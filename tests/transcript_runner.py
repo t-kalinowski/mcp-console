@@ -2114,6 +2114,77 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
+    def test_default_concurrency_runs_twice_the_cpu_count(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def concurrent_case(binary: Path) -> list[dict[str, str]]:
+                    root = binary.parents[2]
+                    with (root / "started").open("wb", buffering=0) as started:
+                        assert started.write(b"1") == 1
+                    with (root / "release").open("rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                    return [{"runner": "concurrent"}]
+
+
+                test_selected = concurrent_case
+                test_unselected = concurrent_case
+                test_third = concurrent_case
+                test_fourth = concurrent_case
+                """),
+            encoding="utf-8",
+        )
+        for name in ("selected", "unselected", "third", "fourth"):
+            (self.snapshots / f"{name}.yaml").write_text(
+                "---\nrunner: concurrent\n...\n", encoding="utf-8"
+            )
+        launcher = self.root / "two_cpu_host.py"
+        launcher.write_text(
+            # fmt: python
+            code("""
+                import runpy
+                import sys
+                from unittest.mock import patch
+
+                runner = sys.argv.pop(1)
+                with patch("os.cpu_count", return_value=2):
+                    runpy.run_path(runner, run_name="__main__")
+                """),
+            encoding="utf-8",
+        )
+        os.mkfifo(self.root / "started")
+        os.mkfifo(self.root / "release")
+        started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
+        release = os.open(self.root / "release", os.O_RDWR)
+        process = subprocess.Popen(
+            [sys.executable, launcher, self.boundaries / "_run.py", "--full"],
+            cwd=self.root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            acknowledgements = b""
+            while len(acknowledgements) < 4:
+                ready, _, _ = select.select([started], [], [], 10)
+                self.assertTrue(
+                    ready,
+                    f"only {len(acknowledgements)} of four cases started on a two-CPU host",
+                )
+                acknowledgements += os.read(started, 4 - len(acknowledgements))
+            self.assertEqual(os.write(release, b"1111"), 4)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        finally:
+            os.close(started)
+            os.close(release)
+            if process.poll() is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):

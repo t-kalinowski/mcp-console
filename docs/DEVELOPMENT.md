@@ -61,6 +61,7 @@ Focused updates preserve unselected snapshots.
 
 Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the checkout build for transcripts; sandboxed cases still need its companion bundle.
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
+The default concurrency is twice the logical CPU count, with a minimum of four cases.
 
 ## Find the public test
 
