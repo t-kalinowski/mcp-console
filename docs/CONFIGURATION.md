@@ -39,9 +39,8 @@ This overrides inherited `RETICULATE_PYTHON`, is retained across restarts, and i
 Paths, including bare filenames, are relative to the launch directory locally or `target.workspace` on an execution target.
 The controller does not resolve target paths.
 
-For local `python` paths, a leading `~` component expands to the controller's absolute `HOME`: `python: ~/.venv/bin/python` or a quoted override such as `-c 'python=~/.venv/bin/python'`.
-Missing, empty, or relative `HOME` is an error when expansion is requested.
-`~user` and environment-variable references are not expanded.
+For local selection, a leading `~` expands using the controller's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
+Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
 
 Explicit selection uses preinstalled Python packages and bypasses managed Python preparation.
 Without R or an explicit selection, local/SSH sessions use uv on the execution host.
