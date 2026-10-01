@@ -46,6 +46,7 @@ Calls admitted after readiness retain the existing response-delivery cancellatio
 A cancelled request may have crossed admission before its caller observed cancellation; an empty poll discovers the retained state safely.
 Neither cancellation nor timeout cancels shared startup.
 Closing the MCP connection cancels discovery, preparation, and worker launch, then joins the existing ownership and retirement protocol.
+After MCP input closes, delivery and the exact diagnostic of an outstanding response are unspecified.
 
 A failed runtime discovery is retained: subsequent `send` calls report the same failure rather than retrying setup, and tool discovery remains available.
 The failure uses the ordinary bounded tool-error response, including for requirement inspection.

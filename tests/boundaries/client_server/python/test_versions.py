@@ -210,8 +210,9 @@ def test_validates_registry_only_python_requirements(
             control="restart",
             requirements={"python": [restarted]},
         )
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        # Standalone preparation already retired the unused default worker.
+        assert last_result_text(client) == "[starting new worker]\n[idle]", (
+            client.transcript[-1]
         )
 
         # fmt: r

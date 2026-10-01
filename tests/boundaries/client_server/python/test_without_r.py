@@ -1804,6 +1804,9 @@ def test_shutdown_cancels_sans_r_python_preparation(
                         requirements={"python": ["py-yaml12"]},
                         # fmt: python
                         python=code("""
+                            from pathlib import Path
+
+                            Path("cancelled-preparation-cell-ran").touch()
                             raise AssertionError("cancelled preparation ran code")
                             """),
                         **({"control": "restart"} if restart else {}),
@@ -1821,11 +1824,15 @@ def test_shutdown_cancels_sans_r_python_preparation(
                     assert readable and os.read(alive, 1) == b"", (
                         "resolver survived shutdown"
                     )
+                    assert not (workspace / "cancelled-preparation-cell-ran").exists()
+                    # Closing MCP input forfeits response delivery. Drain EOF;
+                    # the cancellation/retirement race has no fixed diagnostic.
+                    client.stdout.read()
                     records.append(
                         {
                             "restart": restart,
                             "phase": mode,
-                            "stdout": client.stdout.read(),
+                            "cell_was_not_run": True,
                             "stderr": client.stderr.read(),
                         }
                     )
