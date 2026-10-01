@@ -29,6 +29,68 @@ def managed_environment(directory: Path) -> tuple[dict[str, str], Path]:
 
 
 @executions(DIRECT, SANDBOXED)
+def test_optional_imports_do_not_inspect_unrelated_distribution_files(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        package = "mcp_console_test_metadata_package"
+        index = write_test_wheel(
+            directory,
+            package,
+            "try:\n    import mcp_console_test_metadata_optional_dependency\n"
+            "except ImportError:\n    fallback = True\n",
+            package_files={f"payload_{index}.txt": "data\n" for index in range(200)},
+        )
+        environment, record = managed_environment(directory)
+        environment["UV_INDEX"] = index.as_uri()
+        environment["UV_INDEX_STRATEGY"] = "first-index"
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "set", "python": [package]})
+            before = uv_tool_run_requirements(record)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+
+                    original_lstat = os.lstat
+                    original_stat = os.stat
+                    payload_inspections = []
+
+
+                    def record_lstat(path, *args, **kwargs):
+                        if os.path.basename(os.fspath(path)).startswith("payload_"):
+                            payload_inspections.append(path)
+                        return original_lstat(path, *args, **kwargs)
+
+
+                    def record_stat(path, *args, **kwargs):
+                        if os.path.basename(os.fspath(path)).startswith("payload_"):
+                            payload_inspections.append(path)
+                        return original_stat(path, *args, **kwargs)
+
+
+                    os.lstat = record_lstat
+                    os.stat = record_stat
+                    try:
+                        import mcp_console_test_metadata_package as package
+                    finally:
+                        os.lstat = original_lstat
+                        os.stat = original_stat
+                    assert package.fallback
+                    assert payload_inspections == [], len(payload_inspections)
+                    print("Optional initialization leaves unrelated data files untouched")
+                    """),
+            )
+            assert last_result_text(client) == (
+                "Optional initialization leaves unrelated data files untouched\n"
+            ), last_result_text(client)
+            assert uv_tool_run_requirements(record) == before
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_rply_optional_import_does_not_install_rpython(
     binary: Path, execution: Execution
 ) -> Transcript:

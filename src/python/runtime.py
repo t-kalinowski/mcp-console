@@ -110,6 +110,7 @@ class _McpConsoleImportFinder:
         self._distributions = distributions
         self._ambiguous_roots = ambiguous_roots
         self._metadata = metadata
+        self._csv_reader = importlib.import_module("csv").reader
         self._private_codes = private_codes
         self._id = id
         self._import_globals = (
@@ -309,9 +310,8 @@ class _McpConsoleImportFinder:
         )
 
     def _is_installed_package_initialization(self):
-        # Importlib holds the selected spec throughout both Python and native
-        # initialization and reload, including PyInit before _initializing is
-        # set. Deferred execution after this boundary remains eligible.
+        # Importlib holds the spec during loading, PyInit, and reload.
+        # Deferred execution after this boundary remains eligible.
         frame = self._sys._getframe(1)
         importing_frame = None
         while frame is not None:
@@ -331,10 +331,8 @@ class _McpConsoleImportFinder:
             frame = frame.f_back
         else:
             return False
-        # Cached helpers within the initializing distribution share its import
-        # context. A local or other library callback owns its own imports.
-        # Native PyInit has no Python frame. A cached C callback also contributes
-        # no Python frame, so it inherits the visible initializer's context.
+        # Cached helpers share initialization context; local callbacks own theirs.
+        # Native callbacks expose no frame and inherit the visible initializer.
         importer = (
             specification
             if importing_frame is None
@@ -343,10 +341,7 @@ class _McpConsoleImportFinder:
         if importer is None or importer.origin is None or specification.origin is None:
             return False
         root = specification.name.partition(".")[0]
-        origins = {
-            self._os.path.realpath(specification.origin),
-            self._os.path.realpath(importer.origin),
-        }
+        origins = (specification.origin, importer.origin)
         module = self._sys.modules.get(root)
         root_spec = specification if module is None else module.__spec__
         locations = (
@@ -354,9 +349,8 @@ class _McpConsoleImportFinder:
             if module is None
             else getattr(module, "__path__", None)
         )
-        # Read metadata at the loaded root's locations, not the latest sys.path:
-        # compatible activation retains paths; extend_path can add portions.
-        # The actual package path may differ from the root spec. Do not cache.
+        # Use actual loaded paths retained by activation or extend_path.
+        # Package paths may differ from the root spec. Do not cache metadata.
         metadata_paths = (
             [self._os.path.dirname(path) for path in locations]
             if locations is not None
@@ -365,11 +359,17 @@ class _McpConsoleImportFinder:
         for distribution in self._metadata.distributions(path=metadata_paths):
             # Both selected files must belong to the same distribution. Names,
             # file-less metadata and indirect editable records cannot own them.
-            installed = {
-                self._os.path.realpath(str(distribution.locate_file(file)))
-                for file in distribution.files or ()
-            }
-            if origins <= installed:
+            # Managed installations use wheel RECORDs. Distribution.files also
+            # stats every payload; read the record without traversing those files.
+            record = distribution.read_text("RECORD")
+            if record is None:
+                continue
+            # Match loaded origins without resolving unrelated payload paths.
+            location = str(distribution.locate_file(""))
+            selected = {self._os.path.relpath(origin, location) for origin in origins}
+            rows = self._csv_reader(record.splitlines(keepends=True), strict=True)
+            installed = {self._os.path.normpath(row[0]) for row in rows}
+            if selected <= installed:
                 return True
         return False
 
