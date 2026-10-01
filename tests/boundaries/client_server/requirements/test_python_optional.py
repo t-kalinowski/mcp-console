@@ -91,6 +91,76 @@ def test_optional_imports_do_not_inspect_unrelated_distribution_files(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_symlinked_package_origins_keep_optional_imports_on_the_ordinary_path(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        package = "mcp_console_test_symlinked_package"
+        dependency = "mcp_console_test_symlinked_optional_dependency"
+        # fmt: python
+        source = code("""
+            from pathlib import Path
+            from . import helper
+
+            __path__ = [str(Path(__file__).resolve().parent)]
+            fallback = helper.optional_import()
+            """)
+        # fmt: python
+        helper = code("""
+            def optional_import():
+                try:
+                    import mcp_console_test_symlinked_optional_dependency
+                except ImportError:
+                    return True
+                return False
+            """)
+        index = write_test_wheel(
+            directory, package, source, package_files={"helper.py": helper}
+        )
+        write_test_wheel(directory, dependency, "answer = 42\n")
+        environment, record = managed_environment(directory)
+        environment["UV_INDEX"] = index.as_uri()
+        environment["UV_INDEX_STRATEGY"] = "first-index"
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "set", "python": [package]})
+            before = uv_tool_run_requirements(record)
+            client.send(
+                # fmt: python
+                python=code("""
+                    import importlib.util
+                    import sys
+                    import tempfile
+                    from pathlib import Path
+
+                    site = Path(
+                        importlib.util.find_spec("mcp_console_test_symlinked_package").origin
+                    ).parent.parent
+                    with tempfile.TemporaryDirectory() as temporary:
+                        linked_site = Path(temporary) / "site-packages"
+                        linked_site.symlink_to(site, target_is_directory=True)
+                        sys.path.insert(0, str(linked_site))
+                        try:
+                            import mcp_console_test_symlinked_package as package
+
+                            assert linked_site in Path(package.__spec__.origin).parents
+                            assert linked_site in Path(package.helper.__spec__.origin).parents
+                            assert package.__path__ == [str((site / package.__name__).resolve())]
+                            assert package.fallback
+                        finally:
+                            sys.path.remove(str(linked_site))
+                    print("Symlinked package and helper keep their optional-import fallback")
+                    """),
+            )
+            assert last_result_text(client) == (
+                "Symlinked package and helper keep their optional-import fallback\n"
+            ), last_result_text(client)
+            assert uv_tool_run_requirements(record) == before
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_rply_optional_import_does_not_install_rpython(
     binary: Path, execution: Execution
 ) -> Transcript:

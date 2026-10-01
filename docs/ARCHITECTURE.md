@@ -594,6 +594,7 @@ The private finder runs only after Python's existing import finders have failed,
 It also yields without a callback when the importing Python module or native extension and the active eager importlib initializer belong to the same installed distribution's wheel `RECORD`.
 Ordinary loading and reload share that ownership check; frames inside the current import entrypoint, including an R adapter's wrapper, are import machinery.
 Metadata is read at the loaded import root's actual package paths, including paths retained across compatible activation and portions added by `pkgutil.extend_path`, without a cache or filesystem inspection of unrelated payload files.
+Selected module origins and their matching `RECORD` entries are canonicalized so symlinked installation paths retain the same file identity.
 This preserves ordinary optional-dependency handling; later calls and local modules, including cached Python callbacks invoked by installed initializers, remain eligible for automatic resolution.
 An installation without a recorded file matching the selected origin does not establish ownership and remains eligible for automatic resolution.
 Malformed installed file metadata is unsupported; parsing errors from corrupted records propagate instead of silently skipping the distribution.

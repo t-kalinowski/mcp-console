@@ -341,7 +341,10 @@ class _McpConsoleImportFinder:
         if importer is None or importer.origin is None or specification.origin is None:
             return False
         root = specification.name.partition(".")[0]
-        origins = (specification.origin, importer.origin)
+        origins = {
+            self._os.path.realpath(specification.origin),
+            self._os.path.realpath(importer.origin),
+        }
         module = self._sys.modules.get(root)
         root_spec = specification if module is None else module.__spec__
         locations = (
@@ -364,12 +367,17 @@ class _McpConsoleImportFinder:
             record = distribution.read_text("RECORD")
             if record is None:
                 continue
-            # Match loaded origins without resolving unrelated payload paths.
-            location = str(distribution.locate_file(""))
+            # Canonicalize selected files across symlinked installation paths.
+            location = self._os.path.realpath(str(distribution.locate_file("")))
             selected = {self._os.path.relpath(origin, location) for origin in origins}
             rows = self._csv_reader(record.splitlines(keepends=True), strict=True)
-            installed = {self._os.path.normpath(row[0]) for row in rows}
-            if selected <= installed:
+            # Resolve only matching RECORD entries, not unrelated payload paths.
+            installed = {
+                self._os.path.realpath(str(distribution.locate_file(row[0])))
+                for row in rows
+                if self._os.path.normpath(row[0]) in selected
+            }
+            if origins <= installed:
                 return True
         return False
 
