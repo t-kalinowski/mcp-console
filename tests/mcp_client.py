@@ -430,6 +430,31 @@ class ScriptedClient:
 
 
 class EvaluationCollectorTests(unittest.TestCase):
+    def test_observes_running_and_stdin_without_waiting_for_completion(self) -> None:
+        running = "\n[running; poll with an empty send]"
+        for state in ("arrived\n" + running, "prompt\n[waiting for stdin]"):
+            with self.subTest(state=state):
+                client = ScriptedClient(
+                    [
+                        {"content": [{"type": "text", "text": running}]},
+                        {"content": [{"type": "text", "text": state}]},
+                    ]
+                )
+                self.assertEqual(
+                    wait_for_evaluation_output(
+                        client,
+                        state,
+                        "state arrival",
+                        completion_timeout_seconds=1,
+                        python="once",
+                        timeout_ms=0,
+                    ),
+                    state,
+                )
+                # A running cell cannot complete to wake a long receive. Leave
+                # budget for its snapshot to reach the client before the deadline.
+                self.assertLess(client.calls[1]["timeout_ms"], 500)
+
     def test_exact_deltas_terminal_states_and_single_submission(self) -> None:
         running = "\n[running; poll with an empty send]"
         rows = (

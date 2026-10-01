@@ -11,6 +11,15 @@ result:
       text: "[prepared]"
   isError: false
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
 send:
   r: |
     first <- readline("first> ")

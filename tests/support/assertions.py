@@ -235,9 +235,12 @@ def wait_for_evaluation_output(
             assert expected.startswith(collected), repr(collected)
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"{description} did not complete"
-        result = _send_before(
-            client, deadline, description, timeout_ms=max(1, int(remaining * 1_000))
-        )
+        poll_ms = max(1, int(remaining * 1_000))
+        if isinstance(expected, str) and expected.endswith((running, waiting)):
+            # Observe a nonterminal state without making completion the event
+            # that wakes the receive at the logical deadline.
+            poll_ms = min(poll_ms, 100)
+        result = _send_before(client, deadline, description, timeout_ms=poll_ms)
 
     assert expected_error is None or result.get("isError", False) is expected_error, (
         result
