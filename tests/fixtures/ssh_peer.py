@@ -70,13 +70,23 @@ frame(
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
-if mode != "prior-bootstrap-protocol":
+if mode == "bootstrap-interrupted":
+    root = log.parent
+    with (root / "interrupt-bootstrap").open("rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    frame(2, {"kind": "runtime_initialized", "complete": False})
+    frame(2, {"kind": "console_output", "data": "bootstrap interrupted\n"})
+elif mode != "prior-bootstrap-protocol":
     frame(2, {"kind": "runtime_initialized", "complete": True})
 for line in sys.stdin.buffer:
     command = json.loads(line)
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
     if command["kind"] == "evaluate":
+        if mode == "bootstrap-interrupted":
+            if command["source"] == "never_run = True":
+                (log.parent / "cell-ran").touch()
+            frame(2, {"kind": "console_output", "data": "42\n"})
         if mode == "lost":
             sys.exit(255)
         if mode == "resolver":
@@ -102,6 +112,8 @@ for line in sys.stdin.buffer:
             ), response
             frame(2, {"kind": "console_output", "data": response["message"] + "\n"})
         frame(2, {"kind": "completed"})
+    elif command["kind"] == "interrupt" and mode == "bootstrap-interrupted":
+        frame(2, {"kind": "interrupt_result", "request_id": command["request_id"]})
     elif command["kind"] == "shutdown":
         frame(2, {"kind": "shutdown_started"})
         frame(2, {"kind": "worker_exited", "code": 0})

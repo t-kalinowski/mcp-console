@@ -445,6 +445,9 @@ impl Client {
                 lifecycle.interrupt_startup(),
             )
         };
+        // Receipt dispatch can mark the accepted cell before an interrupt reply.
+        // Never hold its slot lock while waiting for that dispatcher.
+        drop(active);
         if let Some(resolver) = processes.resolver
             && resolver.interrupt()?
         {

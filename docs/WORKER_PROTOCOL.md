@@ -119,7 +119,7 @@ Enabled R and Python then initialize on the existing serialized worker thread; h
 Bootstrap ends with `{"kind":"runtime_initialized","complete":true}`; interrupted retryable setup reports `complete:false`.
 It sends no `completed` frame and consumes no Python user-cell filename ID.
 The server withholds an accepted cell's `evaluate` frame until bootstrap finishes, while delivering its stdin normally.
-An interrupted bootstrap withholds an already waiting cell; a later cell can retry incomplete setup in the same interpreter.
+An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete setup in the same interpreter.
 Fatal startup failure follows ordinary generation failure and replacement handling.
 Custom workers retain their existing readiness and evaluation contract and do not send this event.
 

@@ -413,6 +413,19 @@ impl Client {
 }
 
 impl WorkerCallbacks {
+    fn interrupt_bootstrap_cell(&self) -> Result<(), String> {
+        // Admission and this receipt share the evaluation-slot lock. The marker
+        // survives delayed blocking-task scheduling and applies only to the
+        // generation that emitted the incomplete bootstrap result.
+        let active = self.client.evaluation()?;
+        if let Some(active) = active.as_ref()
+            && active.generation.is(&self.generation)
+        {
+            active.evaluation.interrupt_bootstrap()?;
+        }
+        Ok(())
+    }
+
     fn resolve_r(
         &self,
         packages: Vec<String>,

@@ -653,7 +653,12 @@ fn handle_semantic_event(
             callbacks.fail_python_activation()?;
             Ok(())
         }
-        RelayEvent::RuntimeInitialized { complete } => operation.finish_bootstrap(complete),
+        RelayEvent::RuntimeInitialized { complete } => {
+            if !complete {
+                callbacks.interrupt_bootstrap_cell()?;
+            }
+            operation.finish_bootstrap()
+        }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }

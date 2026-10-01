@@ -26,7 +26,7 @@ struct OperationState {
 enum Bootstrap {
     Disabled,
     Running,
-    Finished { complete: bool },
+    Finished,
 }
 
 struct OperationStateCell {
@@ -103,9 +103,8 @@ impl WorkerOperationState {
         }))
     }
 
-    pub(in crate::worker_client) fn wait_for_bootstrap(&self) -> Result<bool, String> {
+    pub(in crate::worker_client) fn wait_for_bootstrap(&self) -> Result<(), String> {
         let mut state = self.lock()?;
-        let waiting = matches!(state.bootstrap, Bootstrap::Running);
         while matches!(state.bootstrap, Bootstrap::Running) {
             state.ensure_running()?;
             state = self
@@ -114,16 +113,15 @@ impl WorkerOperationState {
                 .wait(state)
                 .map_err(|_| "worker operation state lock poisoned".to_string())?;
         }
-        state.ensure_running()?;
-        Ok(!waiting || !matches!(state.bootstrap, Bootstrap::Finished { complete: false }))
+        state.ensure_running()
     }
 
-    pub(super) fn finish_bootstrap(&self, complete: bool) -> Result<(), String> {
+    pub(super) fn finish_bootstrap(&self) -> Result<(), String> {
         let mut state = self.lock()?;
         if !matches!(state.bootstrap, Bootstrap::Running) {
             return Err("worker sent an unexpected runtime initialization result".into());
         }
-        state.bootstrap = Bootstrap::Finished { complete };
+        state.bootstrap = Bootstrap::Finished;
         drop(state);
         self.0.runtime_r_reply.notify_all();
         Ok(())

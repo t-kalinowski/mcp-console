@@ -39,6 +39,8 @@ struct EvaluationState {
     /// Restart or controlled handoff permanently retires this evaluation.
     /// Releasing its response reservation must not revive late task failures.
     retired: bool,
+    /// This accepted cell preceded an interrupted bootstrap receipt.
+    bootstrap_interrupted: bool,
     restart_handoff: Option<Response>,
     #[cfg(unix)]
     stdin: Option<super::platform::StdinSender>,
@@ -125,6 +127,7 @@ impl Evaluation {
                 input_report_at: None,
                 waiting: false,
                 retired: false,
+                bootstrap_interrupted: false,
                 restart_handoff: None,
                 #[cfg(unix)]
                 stdin: None,
@@ -170,6 +173,23 @@ impl Evaluation {
             state.phase,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
         ))
+    }
+
+    pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        state.bootstrap_interrupted = true;
+        Ok(())
+    }
+
+    pub(super) fn bootstrap_interrupted(&self) -> Result<bool, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        Ok(state.bootstrap_interrupted)
     }
 
     /// Reserves an open response until restart finishes retiring the worker.

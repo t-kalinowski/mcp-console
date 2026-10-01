@@ -792,9 +792,10 @@ impl Worker {
             self.operation.fail(error.clone());
             return Err(error);
         }
-        if !self.operation.wait_for_bootstrap()? {
-            // An interrupted hook aborts the cell already waiting behind it.
-            // A later cell can retry the facade's incomplete runtime setup.
+        self.operation.wait_for_bootstrap()?;
+        if evaluation.bootstrap_interrupted()? {
+            // The receipt marks logical admission, even when this evaluator did
+            // not start waiting until bootstrap had already been interrupted.
             return self.operation.abort_bootstrap_cell();
         }
         if let Err(error) = self

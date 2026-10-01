@@ -24,6 +24,7 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
@@ -40,6 +41,7 @@ from support.processes import (
     host_process_id,
 )
 from support.r import r_test_environment
+from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -532,6 +534,7 @@ def test_r_bootstrap_resolves_python_version_and_import(
 def test_cancelled_response_preserves_bootstrap_and_first_cell(
     binary: Path, execution: Execution
 ) -> list:
+    check_interrupted_bootstrap_before_evaluator_readiness(binary, execution)
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
         root = Path(temporary)
         profile = resources.enter_context(closing(AllocationProfile(root)))
@@ -578,6 +581,88 @@ def test_cancelled_response_preserves_bootstrap_and_first_cell(
         client.send(python="counter")
         assert last_result_text(client) == "1\n"
         return client.finish()[3:]
+
+
+def check_interrupted_bootstrap_before_evaluator_readiness(
+    binary: Path, execution: Execution
+) -> None:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary).resolve()
+        local, remote = root / "controller", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        checkpoints = {
+            name: resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in (
+                "completion-started",
+                "release",
+                "parked",
+                "interrupt-bootstrap",
+            )
+        }
+        armed = root / "armed"
+        armed.touch()
+        environment = peer_environment(root, "bootstrap-interrupted")
+        environment.update(
+            {
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "startup_return_interposer")
+                ),
+                "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
+                "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(
+                    checkpoints["completion-started"].path
+                ),
+                "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(checkpoints["release"].path),
+                "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(checkpoints["parked"].path),
+            }
+        )
+        configure(local, remote, [str(binary)])
+        with McpClient(binary, execution.serve(), environment, local) as client:
+            try:
+                client.initialize_and_list_tools()
+                checkpoints["completion-started"].wait(
+                    "transport ready; readiness outcome held"
+                )
+                # This cell owns the ordinary slot, but its evaluator cannot yet
+                # reach the worker's bootstrap wait.
+                client.send(python="never_run = True", timeout_ms=0)
+                assert last_result_text(client) == RUNNING
+                client.send(control="interrupt", timeout_ms=0)
+                checkpoints["interrupt-bootstrap"].release()
+                wait_for_evaluation_output(
+                    client,
+                    "bootstrap interrupted\n" + RUNNING,
+                    "ordered output acknowledges incomplete bootstrap before readiness",
+                )
+                checkpoints["release"].release()
+                checkpoints["parked"].wait("startup outcome returned to blocking pool")
+                wait_for_evaluation_output(
+                    client,
+                    lambda output: not output.endswith(RUNNING),
+                    "interrupted accepted cell completes without evaluation",
+                )
+                assert not (root / "cell-ran").exists()
+                commands = (root / "calls").read_text().splitlines()
+                assert commands.count("launched") == 1, commands
+                assert not any(
+                    '"kind": "evaluate"' in command for command in commands
+                ), commands
+                client.send(python="42")
+                assert last_result_text(client) == "42\n"
+                commands = (root / "calls").read_text().splitlines()
+                evaluations = [
+                    json.loads(command)
+                    for command in commands
+                    if command.startswith("{")
+                    and json.loads(command)["kind"] == "evaluate"
+                ]
+                assert [command["source"] for command in evaluations] == ["42"], (
+                    commands
+                )
+                client.finish()
+            finally:
+                checkpoints["interrupt-bootstrap"].release()
+                checkpoints["release"].release()
 
 
 @contextmanager
