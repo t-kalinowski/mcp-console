@@ -13,6 +13,10 @@ use super::{
 pub(super) struct WorkerOperationState(Arc<OperationStateCell>);
 
 pub(super) enum WorkerEvent {
+    SuspendBootstrap {
+        admitted: mpsc::SyncSender<Result<(), String>>,
+    },
+    ResumeBootstrap,
     Relay(RelayEvent),
     TransportFailure(String),
     RetireOperation {
@@ -33,6 +37,8 @@ pub(super) struct WorkerEventDispatcher {
 }
 
 struct OperationState {
+    bootstrap: Bootstrap,
+    bootstrap_suspended: bool,
     operation: Option<Operation>,
     failure: Option<String>,
     relay_exit_caused_failure: bool,
@@ -40,6 +46,13 @@ struct OperationState {
     runtime_r_callback: Option<RuntimeRCallbackPhase>,
     environment_preparation_reserved: bool,
     retiring: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Bootstrap {
+    Disabled,
+    Running,
+    Finished { complete: bool },
 }
 
 struct OperationStateCell {
@@ -55,6 +68,7 @@ enum RuntimeRCallbackPhase {
 
 pub(super) struct EnvironmentPreparationReservation {
     operation: WorkerOperationState,
+    bootstrap_events: Option<mpsc::Sender<WorkerEvent>>,
 }
 
 struct Operation {
@@ -77,6 +91,7 @@ enum OperationKind {
 
 enum Route {
     Cell(Arc<Evaluation>),
+    Bootstrap,
     Preparation,
     Idle,
 }
@@ -112,9 +127,15 @@ pub(super) enum OperationResult {
 }
 
 impl WorkerOperationState {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(builtin: bool) -> Self {
         Self(Arc::new(OperationStateCell {
             state: Mutex::new(OperationState {
+                bootstrap: if builtin {
+                    Bootstrap::Running
+                } else {
+                    Bootstrap::Disabled
+                },
+                bootstrap_suspended: false,
                 operation: None,
                 failure: None,
                 relay_exit_caused_failure: false,
@@ -127,14 +148,85 @@ impl WorkerOperationState {
         }))
     }
 
+    pub(super) fn wait_for_bootstrap(&self) -> Result<bool, String> {
+        let mut state = self.lock()?;
+        let waiting = matches!(state.bootstrap, Bootstrap::Running);
+        while matches!(state.bootstrap, Bootstrap::Running) {
+            state.ensure_running()?;
+            state = self
+                .0
+                .runtime_r_reply
+                .wait(state)
+                .map_err(|_| "worker operation state lock poisoned".to_string())?;
+        }
+        state.ensure_running()?;
+        Ok(!waiting || !matches!(state.bootstrap, Bootstrap::Finished { complete: false }))
+    }
+
+    fn finish_bootstrap(&self, complete: bool) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if !matches!(state.bootstrap, Bootstrap::Running) {
+            return Err("worker sent an unexpected runtime initialization result".into());
+        }
+        state.bootstrap = Bootstrap::Finished { complete };
+        drop(state);
+        self.0.runtime_r_reply.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn abort_bootstrap_cell(&self) -> Result<(), String> {
+        let operation = self
+            .lock()?
+            .operation
+            .take()
+            .ok_or("interrupted bootstrap has no waiting cell")?;
+        let OperationKind::Cell(evaluation) = operation.kind else {
+            return Err("interrupted bootstrap did not own a waiting cell".into());
+        };
+        evaluation.complete_cell_after_grace();
+        Ok(())
+    }
+
     pub(super) fn reserve_environment_preparation(
         &self,
+        replacing: bool,
+        events: mpsc::Sender<WorkerEvent>,
     ) -> Result<EnvironmentPreparationReservation, super::EnvironmentPreparationAdmissionFailure>
     {
         use super::EnvironmentPreparationAdmissionFailure::{Busy, Infrastructure};
 
+        if replacing {
+            // An ordered dispatcher barrier lets in-flight callbacks finish
+            // before the preparation owner takes the environment lock.
+            let (admitted, receiver) = mpsc::sync_channel(1);
+            events
+                .send(WorkerEvent::SuspendBootstrap { admitted })
+                .map_err(|_| Infrastructure("worker event dispatcher stopped".into()))?;
+            receiver
+                .recv()
+                .map_err(|_| Infrastructure("worker bootstrap reservation stopped".into()))?
+                .map_err(Infrastructure)?;
+            return Ok(EnvironmentPreparationReservation {
+                operation: self.clone(),
+                bootstrap_events: Some(events),
+            });
+        }
         let mut state = self.lock().map_err(Infrastructure)?;
         state.ensure_available().map_err(Infrastructure)?;
+        while matches!(state.bootstrap, Bootstrap::Running) {
+            if state.idle_input.is_some() {
+                return Err(Busy(
+                    "runtime startup requested input; supply stdin before preparing requirements"
+                        .into(),
+                ));
+            }
+            state = self
+                .0
+                .runtime_r_reply
+                .wait(state)
+                .map_err(|_| Infrastructure("worker operation state lock poisoned".into()))?;
+            state.ensure_available().map_err(Infrastructure)?;
+        }
         if state.runtime_r_callback.is_some() {
             return Err(Busy(
                 "requirements were not prepared because an idle runtime R callback owns environment changes"
@@ -149,7 +241,20 @@ impl WorkerOperationState {
         state.environment_preparation_reserved = true;
         Ok(EnvironmentPreparationReservation {
             operation: self.clone(),
+            bootstrap_events: None,
         })
+    }
+
+    fn suspend_bootstrap(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        state.ensure_available()?;
+        if matches!(state.bootstrap, Bootstrap::Disabled) || state.environment_preparation_reserved
+        {
+            return Err("worker cannot reserve unused bootstrap replacement".into());
+        }
+        state.environment_preparation_reserved = true;
+        state.bootstrap_suspended = true;
+        Ok(())
     }
 
     pub(super) fn begin_cell(
@@ -285,6 +390,7 @@ impl WorkerOperationState {
                 return;
             };
             state.retiring = true;
+            state.bootstrap_suspended = false;
             state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
             state
@@ -325,6 +431,7 @@ impl WorkerOperationState {
             Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
                 Route::Preparation
             }
+            None if matches!(state.bootstrap, Bootstrap::Running) => Route::Bootstrap,
             None => Route::Idle,
         };
         publish(route)
@@ -424,6 +531,7 @@ impl WorkerOperationState {
                 }
                 state.idle_input = Some(rendered.clone());
                 output.push_notice_line(format!("input requested: {rendered}"));
+                self.0.runtime_r_reply.notify_all();
                 Ok(())
             }
         }
@@ -590,6 +698,10 @@ impl Drop for EnvironmentPreparationReservation {
     fn drop(&mut self) {
         if let Ok(mut state) = self.operation.0.state.lock() {
             state.environment_preparation_reserved = false;
+            state.bootstrap_suspended = false;
+        }
+        if let Some(events) = &self.bootstrap_events {
+            let _ = events.send(WorkerEvent::ResumeBootstrap);
         }
     }
 }
@@ -618,14 +730,19 @@ impl OperationKind {
 
 impl OperationState {
     fn ensure_available(&self) -> Result<(), String> {
+        self.ensure_running()?;
+        if self.operation.is_some() {
+            return Err("worker already has an active operation".to_string());
+        }
+        Ok(())
+    }
+
+    fn ensure_running(&self) -> Result<(), String> {
         if let Some(error) = self.failure.as_ref() {
             return Err(error.clone());
         }
         if self.retiring {
             return Err("worker is retiring".to_string());
-        }
-        if self.operation.is_some() {
-            return Err("worker already has an active operation".to_string());
         }
         Ok(())
     }
@@ -695,9 +812,24 @@ fn dispatch_worker_events(
     let mut process_outcome = None;
     let mut relay_closed = false;
 
-    while let Ok(event) = events.recv() {
+    let mut deferred = std::collections::VecDeque::new();
+    loop {
+        let event = if !operation.lock()?.bootstrap_suspended && !deferred.is_empty() {
+            WorkerEvent::Relay(deferred.pop_front().expect("deferred bootstrap event"))
+        } else {
+            let Ok(event) = events.recv() else { break };
+            event
+        };
         match event {
+            WorkerEvent::SuspendBootstrap { admitted } => {
+                let _ = admitted.send(operation.suspend_bootstrap());
+            }
+            WorkerEvent::ResumeBootstrap => {}
             WorkerEvent::Relay(event) => {
+                if operation.lock()?.bootstrap_suspended && bootstrap_callback(&event) {
+                    deferred.push_back(event);
+                    continue;
+                }
                 if process_outcome.is_some() {
                     fail_dispatch(
                         &operation,
@@ -866,6 +998,7 @@ fn dispatch_worker_events(
                 }
             }
             WorkerEvent::RetireOperation { error, reached } => {
+                deferred.clear();
                 if let Some(startup) = startup.take() {
                     let _ = startup.send(Err(error.clone()));
                 }
@@ -919,10 +1052,25 @@ fn dispatch_worker_events(
     retirement_failure.map_or(Ok(process_outcome), Err)
 }
 
+fn bootstrap_callback(event: &RelayEvent) -> bool {
+    matches!(
+        event,
+        RelayEvent::ResolveR { .. }
+            | RelayEvent::RActivated { .. }
+            | RelayEvent::RActivationFailed { .. }
+            | RelayEvent::ResolvePython { .. }
+            | RelayEvent::ResolvePythonVersion { .. }
+            | RelayEvent::PythonActivated { .. }
+            | RelayEvent::PythonActivationFailed { .. }
+            | RelayEvent::RuntimeInitialized { .. }
+    )
+}
+
 fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
+            | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::InputRequested { .. }
             | RelayEvent::InputReceived
             | RelayEvent::InputCancelled
@@ -985,21 +1133,21 @@ fn handle_semantic_event(
     match event {
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 output.push_console_text(Output, data);
                 Ok(())
             }
         }),
         RelayEvent::ConsoleDiagnostic { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Diagnostic, data),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 output.push_console_text(Diagnostic, data);
                 Ok(())
             }
         }),
         RelayEvent::Image { data, mime_type } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.image(data, mime_type),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 crate::transcript::validate_image_data(&data)?;
                 output.push_image(data, mime_type, None);
                 Ok(())
@@ -1076,7 +1224,7 @@ fn handle_semantic_event(
         RelayEvent::ResolvePython { request } => {
             if request.import_resolution.is_some() {
                 operation.with_route(|route| match route {
-                    Route::Cell(_) => Ok(()),
+                    Route::Cell(_) | Route::Bootstrap => Ok(()),
                     Route::Preparation | Route::Idle => Err(
                         "worker requested automatic Python import resolution outside an evaluation"
                             .to_string(),
@@ -1142,6 +1290,13 @@ fn handle_semantic_event(
                         "resolved PyPI distribution '{}' for Python import '{}'",
                         resolution.distribution, resolution.module
                     )),
+                    Route::Bootstrap => {
+                        output.push_notice_line(format!(
+                            "resolved PyPI distribution '{}' for Python import '{}'",
+                            resolution.distribution, resolution.module
+                        ));
+                        Ok(())
+                    }
                     Route::Preparation | Route::Idle => Err(
                         "worker activated an automatic Python import resolution outside an evaluation"
                             .to_string(),
@@ -1166,6 +1321,7 @@ fn handle_semantic_event(
             callbacks.fail_python_activation()?;
             Ok(())
         }
+        RelayEvent::RuntimeInitialized { complete } => operation.finish_bootstrap(complete),
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }
@@ -1200,7 +1356,7 @@ mod tests {
     #[tokio::test]
     async fn cell_admission_captures_an_inflight_idle_route_as_prelude() {
         let output = OutputTape::new();
-        let operation = WorkerOperationState::new();
+        let operation = WorkerOperationState::new(false);
         let evaluation = Arc::new(Evaluation::new(
             crate::transcript::Transcript::new(true),
             None,
@@ -1245,7 +1401,9 @@ mod tests {
         operation
             .with_route(|route| match route {
                 Route::Cell(evaluation) => evaluation.output(Output, "cell output".to_string()),
-                Route::Preparation | Route::Idle => panic!("cell route was not installed"),
+                Route::Bootstrap | Route::Preparation | Route::Idle => {
+                    panic!("cell route was not installed")
+                }
             })
             .unwrap();
         evaluation.complete_cell(Ok(()));

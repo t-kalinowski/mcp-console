@@ -96,6 +96,33 @@ impl Client {
             }
             return Err(active.reject_preparation_message().to_string());
         }
+        // Preparation owns admission and no evaluation is active. A delivered
+        // completion can precede release of the evaluator's worker lock.
+        let mut worker = self
+            .0
+            .worker
+            .lock()
+            .map_err(|_| "worker lock poisoned".to_string())?;
+        let replace_default = self
+            .0
+            .unused_default
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(&*worker, WorkerState::Running(_));
+        let environment_preparation = if let WorkerState::Running(running) = &*worker {
+            match running.reserve_environment_preparation(replace_default) {
+                Ok(reservation) => Ok(Some(reservation)),
+                Err(EnvironmentPreparationAdmissionFailure::Busy(error)) => {
+                    return self.finish_environment_resolution_failure(
+                        generation,
+                        intent,
+                        EnvironmentResolutionFailure::Host(error),
+                    );
+                }
+                Err(EnvironmentPreparationAdmissionFailure::Infrastructure(error)) => Err(error),
+            }
+        } else {
+            Ok(None)
+        };
         let mut pending_requirements = Some(requirements);
         let available_environment = match environment.try_lock() {
             Ok(environment) => {
@@ -117,28 +144,6 @@ impl Client {
                 return Err("worker environment lock poisoned".to_string());
             }
         };
-        // Preparation owns admission and no evaluation is active. A delivered
-        // completion can precede release of the evaluator's worker lock.
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| "worker lock poisoned".to_string())?;
-        let environment_preparation = if let WorkerState::Running(running) = &*worker {
-            match running.reserve_environment_preparation() {
-                Ok(reservation) => Ok(Some(reservation)),
-                Err(EnvironmentPreparationAdmissionFailure::Busy(error)) => {
-                    return self.finish_environment_resolution_failure(
-                        generation,
-                        intent,
-                        EnvironmentResolutionFailure::Host(error),
-                    );
-                }
-                Err(EnvironmentPreparationAdmissionFailure::Infrastructure(error)) => Err(error),
-            }
-        } else {
-            Ok(None)
-        };
         let (mut environment, delta) = match available_environment {
             Some(snapshot) => snapshot,
             None => {
@@ -159,11 +164,6 @@ impl Client {
                 (environment, delta)
             }
         };
-        let replace_default = self
-            .0
-            .unused_default
-            .load(std::sync::atomic::Ordering::Acquire)
-            && matches!(&*worker, WorkerState::Running(_));
         if self.python_only() && !replace_default {
             match &*worker {
                 WorkerState::Initial => {}

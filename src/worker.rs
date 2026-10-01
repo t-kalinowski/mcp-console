@@ -18,7 +18,7 @@ mod r_integration;
 pub(crate) use coordinator::run;
 #[cfg(unix)]
 pub(crate) use core::{
-    emit_output, mark_shutting_down, publish_plot, publish_python_activation,
+    bootstrapping, emit_output, mark_shutting_down, publish_plot, publish_python_activation,
     publish_python_activation_failure, publish_r_activation, publish_r_activation_failure,
     record_worker_failure, resolve_python, resolve_python_version, resolve_r,
 };

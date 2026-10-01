@@ -257,7 +257,7 @@ impl WorkerRuntime {
             .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
         let child = Arc::new(Mutex::new(child));
 
-        let operation = WorkerOperationState::new();
+        let operation = WorkerOperationState::new(local_runtime.is_some());
         let interrupts = InterruptRequests::new();
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let (ready_commit_sender, ready_commit_receiver) = mpsc::channel();
@@ -719,11 +719,13 @@ fn collected_errors(errors: Vec<String>) -> Result<(), String> {
 impl Worker {
     pub(super) fn reserve_environment_preparation(
         &self,
+        replacing: bool,
     ) -> Result<
         super::events::EnvironmentPreparationReservation,
         super::EnvironmentPreparationAdmissionFailure,
     > {
-        self.operation.reserve_environment_preparation()
+        self.operation
+            .reserve_environment_preparation(replacing, self.relay.commands.events.clone())
     }
 
     pub(super) fn prepare_r(
@@ -784,6 +786,11 @@ impl Worker {
         if let Err(error) = evaluation.attach_writer(self.stdin.clone()) {
             self.operation.fail(error.clone());
             return Err(error);
+        }
+        if !self.operation.wait_for_bootstrap()? {
+            // An interrupted hook aborts the cell already waiting behind it.
+            // A later cell can retry the facade's incomplete runtime setup.
+            return self.operation.abort_bootstrap_cell();
         }
         if let Err(error) = self
             .relay

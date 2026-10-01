@@ -84,6 +84,29 @@ fn reexec_with_r_library_path(
 
 impl Coordinator {
     fn run(&mut self) -> Result<(), Box<dyn Error>> {
+        // Ready connects callbacks before hooks run. Bootstrap uses the same
+        // serialized interpreter thread and never enters a user evaluation.
+        let languages = crate::cell::Languages::from_environment()?;
+        core::set_bootstrapping(true);
+        let complete = if languages.enables(Language::Python) {
+            crate::python::ensure_initialized().map_err(io::Error::other)?
+        } else {
+            true
+        };
+        if complete && languages.enables(Language::R) && super::r_available() {
+            super::ensure_r().map_err(io::Error::other)?;
+        }
+        self.r.finish_graphics().map_err(io::Error::other)?;
+        core::set_bootstrapping(false);
+        finish_console_stdin_operation()?;
+        if core::is_shutting_down() {
+            return Ok(());
+        }
+        if let Some(message) = take_worker_failure() {
+            return Err(io::Error::other(message).into());
+        }
+        self.writer
+            .send(&WorkerMessage::RuntimeInitialized { complete })?;
         loop {
             if !self.handle(Self::wait_for_message(&self.r)?)? {
                 return Ok(());
