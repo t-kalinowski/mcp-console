@@ -19,13 +19,101 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.r import r_test_environment
 from support.requirements import SANDBOX, WORKER, requires
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(SSH, WORKER)
+def test_controller_languages_override_remote_ambient_selection(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        local, remote = root / "controller", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        remote_environment, _ = r_test_environment()
+        modules = remote / "modules"
+        modules.mkdir()
+        hook = remote / "python-hook"
+        (modules / "sitecustomize.py").write_text(
+            # fmt: python
+            code(f"""
+                import sys
+                from pathlib import Path
+
+                if "_mcp_console_services" in sys.modules:
+                    Path({str(hook)!r}).touch()
+                """),
+        )
+        prefix = remote / "launch"
+        prefix.write_text(
+            "#!/bin/sh\nexec "
+            + shlex.join(
+                [
+                    "/usr/bin/env",
+                    "-i",
+                    "PATH=/usr/bin:/bin",
+                    "MCP_CONSOLE_LANGUAGES=invalid-remote-selection",
+                    "HOME=" + str(remote),
+                    "R_HOME=" + remote_environment["R_HOME"],
+                    str(binary),
+                ]
+            )
+            + ' "$@"\n'
+        )
+        prefix.chmod(0o755)
+        configure(
+            local,
+            remote,
+            [str(prefix)],
+            python=sys.executable,
+            sandbox={
+                "environment": {
+                    "R_HOME": remote_environment["R_HOME"],
+                    "RETICULATE_PYTHONPATH": str(modules),
+                    "R_LIBS": "/unavailable",
+                    "R_LIBS_USER": "/unavailable",
+                    "R_LIBS_SITE": "/unavailable",
+                }
+            },
+        )
+        with localhost(root / "sshd") as environment:
+            environment["MCP_CONSOLE_LANGUAGES"] = "r"
+            with McpClient(binary, execution.serve(), environment, local) as client:
+                client.initialize_and_list_tools()
+                properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                    "properties"
+                ]
+                assert (
+                    "r" in properties
+                    and "python" not in properties
+                    and "sql" not in properties
+                )
+                for arguments in ({}, {"control": "restart"}):
+                    client.send(
+                        r='stopifnot(Sys.getenv("MCP_CONSOLE_LANGUAGES") == "r"); 42L',
+                        **arguments,
+                    )
+                    expected = (
+                        "[worker stopped: in-memory state lost]\n[starting new worker]\n[1] 42\n[done]"
+                        if arguments
+                        else "[1] 42\n"
+                    )
+                    assert last_result_text(client) == expected, last_result_text(
+                        client
+                    )
+                    assert not hook.exists(), "disabled Python startup hook ran"
+                client.finish()
+        return [
+            {"controller_r_only_selection_survives_remote_ambient_and_restart": True}
+        ]
 
 
 def _preinstalled_remote_runtime(
@@ -315,7 +403,7 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
                 "auth": "unconfirmed",
                 "stdout": "unexpected stdout",
                 "incompatible": "incompatible SSH bootstrap",
-                "prior-bootstrap-protocol": "expected protocol 8",
+                "prior-bootstrap-protocol": "expected protocol 9",
                 "lost": "unconfirmed",
                 "resolver": "dynamic environment resolution is unavailable",
             }[mode]

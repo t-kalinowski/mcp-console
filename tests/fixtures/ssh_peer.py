@@ -61,7 +61,7 @@ frame(
     {
         "version": 999
         if mode == "incompatible"
-        else 7
+        else 8
         if mode == "prior-bootstrap-protocol"
         else bootstrap["version"],
         "build": bootstrap["build"],

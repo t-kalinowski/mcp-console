@@ -24,21 +24,23 @@ The [worker protocol](WORKER_PROTOCOL.md) owns the inherited fd and worker-messa
 ## Target launch envelope
 
 SSH, Docker, and SBX wrap unchanged relay JSONL using [`src/target_launch.rs`](../src/target_launch.rs).
-The current launch version is **8**, with matching Console package version required independently.
-Version 8 requires the built-in interpreter-bootstrap completion event after transport readiness, preventing older target workers from leaving an admitted cell waiting indefinitely.
+The current launch version is **9**, with matching Console package version required independently.
+Version 9 also carries enabled languages captured on the controller; execution-host ambient values and workload policy cannot replace that selection.
+Version 8 introduced the built-in interpreter-bootstrap completion event after transport readiness, preventing older target workers from leaving an admitted cell waiting indefinitely.
 Increment launch compatibility for incompatible envelope or relay changes, even between development builds sharing a package version.
 SSH preparation has its own protocol and connection.
 
 Controller input begins with a four-byte unsigned big-endian length and at most 1 MiB of UTF-8 JSON bootstrap:
 
-| Field                                    | Meaning                                                                                                        |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `version`, `build`                       | Launch version and Console package version.                                                                    |
-| `workspace`                              | Existing absolute execution-host directory.                                                                    |
-| `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection.                                                      |
-| `provider`                               | `native` by default, or `compute` for SBX.                                                                     |
-| `environment`                            | Optional discovered capabilities and retained R/Python selections; required for prepared-target worker launch. |
-| `python`                                 | Optional Python selection for Docker/SBX probes only; rejected by SSH.                                         |
+| Field                                    | Meaning                                                                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `version`, `build`                       | Launch version and Console package version.                                                                      |
+| `languages`                              | Controller-selected `r`, `python`, and `sql` booleans; omitted by private launch-only callers means all enabled. |
+| `workspace`                              | Existing absolute execution-host directory.                                                                      |
+| `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection.                                                        |
+| `provider`                               | `native` by default, or `compute` for SBX.                                                                       |
+| `environment`                            | Optional discovered capabilities and retained R/Python selections; required for prepared-target worker launch.   |
+| `python`                                 | Optional Python selection for Docker/SBX probes only; rejected by SSH.                                           |
 
 Consume exactly the bootstrap, forwarding every subsequent byte to relay stdin, including bytes received in the same read.
 Validate compatibility before worker startup; relay `ready` does not substitute for this check.

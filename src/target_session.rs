@@ -24,6 +24,7 @@ pub(crate) struct ComputeProfile {
 pub(crate) struct ComputeState {
     profile: &'static ComputeProfile,
     roots: Vec<PathBuf>,
+    languages: crate::cell::Languages,
     blocked: Arc<Mutex<Option<String>>>,
     // One immutable handoff retained beside the captured image/template.
     runtime: Option<Arc<crate::resolver::preparation::WorkerEnvironment>>,
@@ -45,6 +46,7 @@ impl Session {
     pub fn setup_compute(
         target: Target,
         roots: Vec<PathBuf>,
+        languages: crate::cell::Languages,
         policy: &SandboxSettings,
         no_sandbox: bool,
         python: Option<&std::path::Path>,
@@ -60,6 +62,7 @@ impl Session {
         let state = ComputeState {
             profile,
             roots,
+            languages,
             blocked: Arc::default(),
             runtime: None,
         };
@@ -149,6 +152,8 @@ impl Session {
     }
 
     pub fn python_available(&self) -> bool {
+        // Prepared probes attest to runtime absence. R-backed SSH discovery
+        // retains unresolved Python selection hints, not a negative capability.
         self.compute()
             .and_then(|state| state.runtime.as_ref())
             .and_then(|runtime| runtime.native.as_ref())
@@ -292,6 +297,7 @@ impl ComputeState {
             name: name.clone(),
             probe,
             bootstrap: Bootstrap {
+                languages: self.languages,
                 version: target_launch::VERSION,
                 build: env!("CARGO_PKG_VERSION").into(),
                 workspace: target.workspace.clone(),

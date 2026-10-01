@@ -126,7 +126,7 @@ elif args[0] == "exec":
             "version": (
                 3
                 if mode == "probe-version"
-                else 7
+                else 8
                 if mode == "prior-bootstrap-protocol"
                 else bootstrap["version"]
             ),

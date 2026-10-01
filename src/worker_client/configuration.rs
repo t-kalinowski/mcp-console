@@ -253,9 +253,10 @@ impl ClientConfiguration {
         python: Option<PathBuf>,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
+        let languages = crate::cell::Languages::from_environment()?;
         if matches!(target.compute, crate::settings::Compute::Host {}) {
             return Self::ssh(
-                crate::ssh::Session::new(target, roots),
+                crate::ssh::Session::new(target, roots, languages),
                 no_sandbox,
                 policy,
                 python,
@@ -265,6 +266,7 @@ impl ClientConfiguration {
         let session = crate::target_session::Session::setup_compute(
             target,
             roots,
+            languages,
             &policy,
             no_sandbox,
             python.as_deref(),

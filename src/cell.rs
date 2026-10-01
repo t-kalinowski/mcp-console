@@ -16,7 +16,8 @@ pub(crate) struct Cell {
 // Internal eval configuration; intentionally not exposed through the CLI.
 pub(crate) const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Languages {
     pub(crate) r: bool,
     pub(crate) python: bool,
@@ -43,12 +44,21 @@ impl Languages {
         Ok(languages)
     }
 
-    fn all() -> Self {
+    pub(crate) fn all() -> Self {
         Self {
             r: true,
             python: true,
             sql: true,
         }
+    }
+
+    pub(crate) fn configure(self, command: &mut std::process::Command) {
+        let fields = [Language::R, Language::Python, Language::Sql]
+            .into_iter()
+            .filter(|language| self.enables(*language))
+            .map(Self::field)
+            .collect::<Vec<_>>();
+        command.env(LANGUAGES_ENV, fields.join(","));
     }
 
     pub(crate) fn enables(self, language: crate::cell::Language) -> bool {
