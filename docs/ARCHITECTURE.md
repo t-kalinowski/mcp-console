@@ -361,7 +361,7 @@ The same setup accepts a managed import policy or a disabled reason independentl
 Python initialization, common setup completion, and bridge attachment have separate completion state.
 Runtime availability is captured on the execution host at session startup and passed through internal launch configuration to each worker.
 `local_runtime::Selection` retains an optional R home and an independently optional inspected Python selection, including managed local and SSH environments and prepared Docker/SBX targets with both runtimes.
-An absent Python selection in an R-capable worker is resolved by the R compatibility adapter during bootstrap.
+An absent Python selection in an R-capable worker uses the R compatibility adapter during bootstrap when that adapter is installed.
 Prepared targets instead expose their inspected capabilities: genuine Python absence permits R-only operation; a broken explicit selection is an error.
 Availability, captured identity, library initialization, shared setup completion, and bridge attachment are separate state.
 During bootstrap, R startup packages are deferred until Console installs input, graphics, and selection callbacks.

@@ -46,7 +46,9 @@ result:
 ---
 send:
   r: |
-    stopifnot(isTRUE(reticulate::py_eval("id(retained_object) == retained_object_id")))
+    stopifnot(isTRUE(reticulate::py_eval(
+      "id(retained_object) == retained_object_id"
+    )))
     startup_marker + 1L
 result:
   content:
