@@ -376,7 +376,11 @@ Python cells execute in one persistent `__main__.__dict__`.
 Imports, assignments, functions, and objects remain available across cells and through R's `py$name` bridge.
 The final expression of a cell is displayed through Python's normal display hook; source is not echoed.
 
-An uncaught exception prints its traceback and completes as a language outcome.
+An uncaught `SystemExit`, including `sys.exit()`, terminates the worker using [Python's exit status and message handling](https://docs.python.org/3/library/sys.html#sys.exit).
+This also applies when called library code raises the exit.
+For example, `sys.exit(33)` reports `[worker exited with status 33]` as a tool error and starts a replacement worker with fresh R and Python state.
+Explicitly caught `SystemExit` remains normal Python control flow; an uncaught exit in a background thread ends only that thread.
+Other uncaught exceptions print their traceback and complete as a language outcome.
 Python cell tracebacks omit Console's private runtime frames while retaining user, standard-library, and third-party frames, including frames from user-created `exec()` code.
 Source syntax errors print the Python diagnostic and any available source location without a runtime traceback.
 The Python session remains usable, including state established before the exception.
