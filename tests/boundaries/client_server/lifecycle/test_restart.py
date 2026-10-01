@@ -224,13 +224,15 @@ def test_restart_discards_unread_stdin(
         execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
+    client.send(r="echo echo")
+    assert last_tool_text(client) == "zod: echo\n"
     client.send(stdin="stale\n")
     assert last_tool_text(client) == "\n[idle]"
 
     client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    )
+    ), last_tool_text(client)
 
     client.send(r="input without request", stdin="fresh\n")
     assert last_tool_text(client) == "zod stdin: fresh\n"

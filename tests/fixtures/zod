@@ -330,7 +330,10 @@ def configure_startup(
             os.close(sideband_writer)
         mode = "block"
     if mode == "block":
-        publish_marker(root / "zod-replacement-waiting-ready")
+        checkpoint = os.environ.get("ZOD_STARTUP_STARTED")
+        publish_marker(
+            Path(checkpoint) if checkpoint else root / "zod-replacement-waiting-ready"
+        )
         release = Path(os.environ["ZOD_STARTUP_RELEASE"])
         while not release.exists():
             time.sleep(0.01)

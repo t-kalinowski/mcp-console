@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -69,6 +70,8 @@ def test_retains_discovered_r_home_across_generations(
         environment = bare_runtime_environment(environment, root / "r-library")
         commands = root / "bin"
         commands.mkdir()
+        retain_system_bwrap(commands)
+        (commands / "sh").symlink_to(shutil.which("sh"))
         r = commands / "R"
         r.write_text(
             code(f"""
