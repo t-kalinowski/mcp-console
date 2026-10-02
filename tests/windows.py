@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from threading import Thread
 from textwrap import dedent
 import unittest
@@ -183,6 +184,107 @@ class WindowsPackaging(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def test_consumes_idle_interrupt_before_next_cell(self):
+        # Exercise the same public contract as the Unix Python-only case,
+        # including both runtime initialization orders and a shared send.
+        for order in ("python", "python-r", "r-python"):
+            with self.subTest(order=order):
+                session = Session()
+                try:
+                    session.initialize()
+                    if order == "r-python":
+                        self.assertIn("42", json.dumps(session.send(r="42L")))
+                    self.assertFalse(
+                        session.send(python="import time; retained = 0")["isError"]
+                    )
+                    if order == "python-r":
+                        self.assertIn("42", json.dumps(session.send(r="42L")))
+                    for expected in range(1, 41):
+                        control = {"control": "interrupt"}
+                        if expected % 2:
+                            result = session.send(**control)
+                            if order != "python":
+                                self.assertEqual(
+                                    result["content"],
+                                    [{"type": "text", "text": "\n\n[idle]"}],
+                                )
+                            control = {}
+                        result = session.send(
+                            **control,
+                            python="time.sleep(0.01); retained += 1; print(retained)",
+                        )
+                        output = "".join(item["text"] for item in result["content"])
+                        self.assertFalse(result["isError"], result)
+                        idle = (
+                            "\n[output produced while idle]\n"
+                            if control and order != "python"
+                            else ""
+                        )
+                        self.assertEqual(
+                            output,
+                            idle + f"{expected}\n" + ("[done]" if control else ""),
+                        )
+                    if order != "python":
+                        result = session.send(control="interrupt", r="42L")
+                        self.assertIn("[1] 42", json.dumps(result))
+                        self.assertFalse(result["isError"], result)
+                finally:
+                    session.close()
+
+    def test_interrupt_and_following_cell_keep_input_and_state_separate(self):
+        session = self.session()
+        session.send(python="history = []")
+        for initialize_r in (False, True):
+            if initialize_r:
+                session.send(r="42L")
+            result = session.send(
+                python="history.append('old'); input('Old input: '); history.append('wrong')"
+            )
+            self.assertIn("waiting for stdin", json.dumps(result))
+            result = session.send(
+                control="interrupt",
+                python="history.append('new'); value = input('New input: '); history.append(value)",
+            )
+            output = json.dumps(result)
+            self.assertIn("KeyboardInterrupt", output)
+            self.assertIn("New input: ", output)
+            self.assertIn("waiting for stdin", output)
+            result = session.send(stdin="delivered to new cell\n")
+            self.assertNotIn("waiting for stdin", json.dumps(result))
+            expected = ["old", "new", "delivered to new cell"] * (1 + initialize_r)
+            result = session.send(python="print(history)")
+            self.assertEqual(
+                result["content"], [{"type": "text", "text": repr(expected) + "\n"}]
+            )
+
+    def test_rejects_startup_environment_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="console startup ") as directory:
+            (Path(directory) / "sitecustomize.py").write_text(
+                "import sys; sys.prefix = 'changed-by-startup-hook'\n"
+            )
+            session = Session(
+                dict(
+                    os.environ,
+                    RETICULATE_PYTHON=sys.executable,
+                    RETICULATE_PYTHONPATH=directory,
+                )
+            )
+            try:
+                session.initialize()
+                result = session.send(
+                    python="raise AssertionError('invalid environment ran code')"
+                )
+                output = json.dumps(result)
+                self.assertTrue(result["isError"], result)
+                self.assertIn(
+                    "RuntimeError: embedded Python prefix differs from the selected environment",
+                    output,
+                )
+                self.assertNotIn("FileNotFoundError", output)
+                self.assertNotIn("invalid environment ran code", output)
+            finally:
+                session.close()
+
     def test_empty_python_selection_uses_available_runtimes(self):
         r_home = (
             os.environ.get("R_HOME")
@@ -288,22 +390,25 @@ class WindowsConsole(unittest.TestCase):
             json.dumps(session.send(control="interrupt", timeout_ms=2000)),
         )
         self.assertIn("42", json.dumps(session.send(r="42L")))
-        for iteration in range(12):
-            with self.subTest(iteration=iteration):
-                result = session.send(r="repeat { Sys.sleep(0) }", timeout_ms=50)
-                self.assertIn("running;", json.dumps(result))
+        # A failed iteration leaves an active cell: stop at the first failure.
+        for _ in range(12):
+            result = session.send(r="repeat { Sys.sleep(0) }", timeout_ms=50)
+            self.assertIn("running;", json.dumps(result))
+            result = session.send(control="interrupt", timeout_ms=2000)
+            self.assertNotIn("running;", json.dumps(result))
+            for arguments in (
+                {"r": "readline('R input: ')"},
+                {"python": "input('Python input: ')"},
+            ):
+                result = session.send(**arguments, timeout_ms=50)
+                deadline = time.monotonic() + 10
+                while "running;" in json.dumps(result) and time.monotonic() < deadline:
+                    result = session.send(timeout_ms=1000)
+                self.assertIn("waiting for stdin", json.dumps(result))
                 result = session.send(control="interrupt", timeout_ms=2000)
                 self.assertNotIn("running;", json.dumps(result))
-                for arguments in (
-                    {"r": "readline('R input: ')"},
-                    {"python": "input('Python input: ')"},
-                ):
-                    result = session.send(**arguments, timeout_ms=50)
-                    self.assertIn("waiting for stdin", json.dumps(result))
-                    result = session.send(control="interrupt", timeout_ms=2000)
-                    self.assertNotIn("running;", json.dumps(result))
-                    self.assertNotIn("waiting for stdin", json.dumps(result))
-                self.assertIn("42", json.dumps(session.send(python="saved")))
+                self.assertNotIn("waiting for stdin", json.dumps(result))
+            self.assertIn("42", json.dumps(session.send(python="saved")))
 
     def test_python_without_r(self):
         environment = dict(

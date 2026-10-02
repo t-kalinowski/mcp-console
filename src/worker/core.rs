@@ -57,25 +57,33 @@ pub(super) fn next_command() -> Result<CommandReadiness, String> {
         return Ok(CommandReadiness::Ready(message));
     }
     #[cfg(unix)]
-    let (buffered, descriptor) = {
-        let reader = worker_reader()?;
-        (reader.has_buffered_data(), reader.as_raw_fd())
-    };
-    #[cfg(windows)]
-    let buffered = worker_reader()?.has_buffered_data();
-    if buffered {
-        receive_server_message().map(CommandReadiness::Ready)
-    } else {
-        #[cfg(unix)]
-        return Ok(CommandReadiness::Waiting(descriptor));
-        #[cfg(windows)]
-        Ok(CommandReadiness::Waiting)
+    {
+        let (buffered, descriptor) = {
+            let reader = worker_reader()?;
+            (reader.has_buffered_data(), reader.as_raw_fd())
+        };
+        if buffered {
+            receive_server_message().map(CommandReadiness::Ready)
+        } else {
+            Ok(CommandReadiness::Waiting(descriptor))
+        }
     }
+    // Even buffered bytes can be an incomplete frame. The Windows idle read
+    // must retain its interrupt wakeup until the whole command is available.
+    #[cfg(windows)]
+    Ok(CommandReadiness::Waiting)
 }
 
 pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
     worker_reader()?
         .receive()
+        .map_err(|error| format!("worker sideband read failed: {error}"))
+}
+
+#[cfg(windows)]
+pub(super) fn receive_idle_command() -> Result<Option<ServerMessage>, String> {
+    worker_reader()?
+        .receive_or_wake(super::interrupt::windows_wakeup())
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
