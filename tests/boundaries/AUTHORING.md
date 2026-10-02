@@ -38,6 +38,8 @@ Keep cleanup in context managers or `finally` blocks.
 Use `wait_for_path()` for known marker paths and worker-file discovery only for worker-owned directories whose names are initially unknown.
 `FifoCheckpoint.release()` buffers an early token; `release_fixture_checkpoint()` instead waits for a real reader with a bounded rendezvous.
 Pass the client when its exit should end that wait.
+Marker waits subscribe to native filesystem/process events on macOS and Linux; Windows uses cancellable bounded path polling.
+Pass an owned `Events` instance to `wait_for_path()` when the fixture needs explicit cancellation; `Events.cancel()` wakes the wait without a marker or client.
 
 ```python
 client.send(python=program, timeout_ms=0)

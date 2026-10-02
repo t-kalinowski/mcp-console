@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import runpy
 import select
 import shutil
 import signal
@@ -17,16 +18,20 @@ import tempfile
 import time
 import unittest
 from collections.abc import Callable, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from contextlib import closing, contextmanager
+from concurrent.futures import CancelledError, ThreadPoolExecutor
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Event
+from typing import Any
+from unittest.mock import patch
 
 from support.assertions import wait_for_evaluation_output
 from support.checkpoints import (
     FifoCheckpoint,
     release_fixture_checkpoint,
     release_partial_sideband,
+    wait_for_checkpoint,
     wait_for_path,
     wait_for_worker_file,
 )
@@ -545,6 +550,75 @@ class EvaluationCollectorTests(unittest.TestCase):
 
 
 class MarkerTests(unittest.TestCase):
+    def test_cancellation_wakes_an_idle_marker_wait_without_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, Events() as events:
+            arrived = Event()
+            probes = []
+
+            def discover() -> None:
+                probes.append(None)
+                arrived.set()
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                pending = executor.submit(
+                    wait_for_checkpoint,
+                    discover,
+                    "cancelled generation",
+                    root=Path(directory),
+                    events=events,
+                    timeout=2,
+                )
+                try:
+                    self.assertTrue(arrived.wait(1))
+                    events.cancel()
+                    events.cancel()
+                    with self.assertRaisesRegex(CancelledError, "cancelled generation"):
+                        pending.result(timeout=1)
+                    if sys.platform in {"darwin", "linux"}:
+                        self.assertEqual(len(probes), 1)
+                finally:
+                    events.cancel()
+
+    def test_late_nested_marker_and_portable_cancellation(self) -> None:
+        for platform in (sys.platform, "win32"):
+            with (
+                self.subTest(platform=platform),
+                patch("support.events.sys.platform", platform),
+                tempfile.TemporaryDirectory() as directory,
+                Events() as events,
+            ):
+                root = Path(directory)
+                marker = root / "new" / "worker" / "ready"
+                arrived = Event()
+
+                def discover() -> Path | None:
+                    found = marker if marker.exists() else None
+                    arrived.set()
+                    return found
+
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    pending = executor.submit(
+                        wait_for_checkpoint,
+                        discover,
+                        "late generation",
+                        root=root,
+                        recursive=True,
+                        events=events,
+                        timeout=2,
+                    )
+                    try:
+                        self.assertTrue(arrived.wait(1))
+                        marker.parent.mkdir(parents=True)
+                        marker.touch()
+                        self.assertEqual(pending.result(timeout=1), marker)
+                        events.cancel()
+                        with self.assertRaises(CancelledError):
+                            wait_for_path(
+                                marker, "cancel before arrival", events=events
+                            )
+                    finally:
+                        events.cancel()
+
     def test_exact_generation_path_and_missing_marker_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -559,7 +633,115 @@ class MarkerTests(unittest.TestCase):
 
 
 @unittest.skipUnless(POSIX.available, POSIX.reason)
+class ColdProviderBudgetTests(unittest.TestCase):
+    def test_docker_callback_case_keeps_its_cold_transport_budget(self) -> None:
+        case = runpy.run_path(
+            str(ROOT / "tests/boundaries/client_server/server/test_docker_setup.py")
+        )["test_callbacks_cannot_prepare_controller_packages"]
+        output = (
+            "dynamic environment resolution is unavailable for Docker targets; "
+            "install packages in the image and start a new server session\n"
+            "dynamic environment resolution is unavailable\n"
+            "dynamic environment resolution is unavailable\n"
+        )
+
+        class ColdClient(ScriptedClient):
+            def __enter__(self) -> ColdClient:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                pass
+
+            def initialize_and_list_tools(self) -> None:
+                pass
+
+            def finish(self) -> list[dict[str, object] | None]:
+                return [None] * 3 + self.transcript
+
+        client = ColdClient([{"content": [{"type": "text", "text": output}]}])
+
+        def collect(
+            *arguments: Any,
+            completion_timeout_seconds: float = 3,
+            **send_arguments: Any,
+        ) -> str:
+            self.assertEqual(completion_timeout_seconds, client.response_timeout)
+            return wait_for_evaluation_output(
+                *arguments,
+                completion_timeout_seconds=completion_timeout_seconds,
+                **send_arguments,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "peer").mkdir()
+            with patch.dict(
+                case.__globals__,
+                image=lambda: "fixture-image",
+                workspace=lambda: nullcontext(root),
+                cli_peer=lambda path: {},
+                configure=lambda *args, **kwargs: None,
+                McpClient=lambda *args: client,
+                wait_for_evaluation_output=collect,
+            ):
+                result = case(Path("unused-binary"))
+        self.assertEqual(client.calls, [{"r": "42"}])
+        self.assertEqual(client.response_timeout, 600)
+        self.assertEqual(result[0]["result"]["content"][0]["text"], output)
+
+
+@unittest.skipUnless(POSIX.available, POSIX.reason)
 class CheckpointTests(unittest.TestCase):
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
+    def test_owner_exit_wakes_pending_marker_wait_with_evidence(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            Events() as events,
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys; print('ready', flush=True); sys.stdin.read()",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+            ) as owner,
+        ):
+            self.assertEqual(owner.stdout.readline(), "ready\n")
+            client = SimpleNamespace(
+                process=owner,
+                transcript=[{"result": "last response"}],
+                stderr=SimpleNamespace(buffer=b"bounded diagnostic"),
+            )
+            arrived = Event()
+
+            def discover() -> None:
+                arrived.set()
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                pending = executor.submit(
+                    wait_for_checkpoint,
+                    discover,
+                    "owner exit",
+                    root=Path(directory),
+                    events=events,
+                    client=client,
+                    timeout=2,
+                )
+                try:
+                    self.assertTrue(arrived.wait(1))
+                    owner.stdin.close()
+                    with self.assertRaisesRegex(
+                        AssertionError, "owner exit.*last response.*bounded diagnostic"
+                    ):
+                        pending.result(timeout=1)
+                finally:
+                    events.cancel()
+                    if owner.poll() is None:
+                        owner.kill()
+                    owner.wait(timeout=2)
+
     def test_early_release_and_repeated_close_preserve_descriptor_ownership(
         self,
     ) -> None:

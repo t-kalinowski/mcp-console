@@ -24,9 +24,8 @@ from typing import Self
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import last_result_text
-from support.checkpoints import release_fixture_checkpoint
+from support.checkpoints import release_fixture_checkpoint, wait_for_checkpoint
 from support.client import McpClient, TextReader
-from support.events import Events
 from support.execution import SANDBOXED, Execution
 from support.processes import (
     capture_process_identity,
@@ -533,30 +532,14 @@ def expose_idle_sideband_output(
 
 
 def wait_for_marker(root: Path, name: str, client: McpClient) -> Path:
-    deadline = time.monotonic() + FIXTURE_CHECKPOINT_TIMEOUT_SECONDS
-    with Events() as events:
-        events.watch_process(client.process.pid)
-        events.watch_file(root)
-        while True:
-            for directory in root.glob("sandbox-*"):
-                if directory.is_dir():
-                    events.watch_file(directory)
-                    # Subscribe to each parent before discovering its child:
-                    # data can appear between discovery and watch registration.
-                    data = directory / "data"
-                    if data.is_dir():
-                        events.watch_file(data)
-            marker = find_marker(root, name)
-            if marker is not None:
-                return marker
-            assert client.process.poll() is None, (
-                f"mcp-console stopped before Zod reported its {name!r} checkpoint"
-            )
-            remaining = deadline - time.monotonic()
-            assert remaining > 0 and events.wait(remaining), (
-                f"Zod did not report its {name!r} checkpoint within "
-                f"{FIXTURE_CHECKPOINT_TIMEOUT_SECONDS} seconds"
-            )
+    return wait_for_checkpoint(
+        lambda: find_marker(root, name),
+        f"Zod checkpoint {name!r}",
+        root=root,
+        recursive=True,
+        client=client,
+        timeout=FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+    )
 
 
 def find_marker(root: Path, name: str) -> Path | None:

@@ -346,6 +346,7 @@ dynamic environment resolution is unavailable
 dynamic environment resolution is unavailable
 """,
                 "disabled container callbacks",
+                completion_timeout_seconds=client.response_timeout,
                 r="42",
             )
             result = client.finish()[3:]

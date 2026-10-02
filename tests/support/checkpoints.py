@@ -4,9 +4,12 @@ import select
 import time
 from pathlib import Path
 from collections.abc import Callable
+from concurrent.futures import CancelledError
+from contextlib import nullcontext
 from typing import Self
 
 from support.client import McpClient
+from support.events import Events
 
 
 class FifoCheckpoint:
@@ -52,21 +55,47 @@ def wait_for_checkpoint(
     discover: Callable[[], Path | None],
     description: str,
     *,
+    root: Path,
     client: McpClient | None = None,
     timeout: float = 10,
+    recursive: bool = False,
+    events: Events | None = None,
 ) -> Path:
     deadline = time.monotonic() + timeout
-    while True:
-        # Owner exit takes precedence over stale markers left by that owner.
+    with Events() if events is None else nullcontext(events) as events:
         assert client is None or client.process.poll() is None, checkpoint_evidence(
             description, client
         )
-        if path := discover():
-            return path
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError(checkpoint_evidence(description, client))
-        time.sleep(min(0.01, remaining))
+        if (
+            client is not None
+            and events.native
+            and client.process.pid not in events.processes
+        ):
+            try:
+                events.watch_process(client.process.pid)
+            except ProcessLookupError as error:
+                raise AssertionError(
+                    checkpoint_evidence(description, client)
+                ) from error
+        while True:
+            if events.cancelled:
+                raise CancelledError(checkpoint_evidence(description, client))
+            # Owner exit takes precedence over stale markers left by that owner.
+            assert client is None or client.process.poll() is None, checkpoint_evidence(
+                description, client
+            )
+            events.watch_tree(root, recursive=recursive)
+            if path := discover():
+                return path
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(checkpoint_evidence(description, client))
+            try:
+                events.wait(remaining)
+            except CancelledError as error:
+                raise CancelledError(
+                    checkpoint_evidence(description, client)
+                ) from error
 
 
 def wait_for_path(
@@ -75,12 +104,15 @@ def wait_for_path(
     *,
     client: McpClient | None = None,
     timeout: float = 10,
+    events: Events | None = None,
 ) -> None:
     wait_for_checkpoint(
         lambda: path if path.exists() else None,
         f"{description}: {path}",
+        root=path.parent,
         client=client,
         timeout=timeout,
+        events=events,
     )
 
 
@@ -93,7 +125,11 @@ def wait_for_worker_file(root: Path, name: str, client: McpClient) -> Path:
         return None
 
     return wait_for_checkpoint(
-        discover, f"worker checkpoint {name}: {root}", client=client
+        discover,
+        f"worker checkpoint {name}: {root}",
+        root=root,
+        recursive=True,
+        client=client,
     )
 
 
