@@ -152,7 +152,7 @@ def test_cancels_native_inspection_and_retries(
             )
             with McpClient(binary, serve) as client:
                 client.initialize_and_list_tools()
-                client.send(
+                client.expect(
                     # fmt: r
                     r=code(f"""
                         retained_value <- 41L
@@ -166,9 +166,12 @@ def test_cancels_native_inspection_and_retries(
                     # fmt: python
                     python=code("""
                         unexecuted_value = 1
-                        """)
+                        """),
+                    timeout_ms=600_000,
                 )
-                ready.wait("native Python inspection")
+                # Inspection follows cold Python setup; contention must not
+                # turn its checkpoint into a ten-second startup deadline.
+                ready.wait("native Python inspection", timeout=600)
                 pid = host_process_id(
                     int((site / "inspection-pid").read_text()), client.process.pid
                 )

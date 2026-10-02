@@ -4,6 +4,7 @@ import base64
 import select
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -99,7 +100,12 @@ def test_send_timeout_includes_blocked_requirements_resolver(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        closing(
+            FifoCheckpoint.create(Path(temporary) / "clock-advanced")
+        ) as clock_advanced,
+    ):
         root = Path(temporary)
         library = root / "timeout-candidate"
         library.mkdir()
@@ -136,7 +142,7 @@ def test_send_timeout_includes_blocked_requirements_resolver(
             )
             resolver_started.wait()
             client.client.request("ping")
-            assert (root / "clock-advanced").read_text() == "1"
+            clock_advanced.wait("send observation deadline has passed")
             assert "result" not in evaluation, evaluation
 
             resolver_release.release()
