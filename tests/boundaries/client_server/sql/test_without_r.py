@@ -522,8 +522,8 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             client.send(python="assert id(identity) == identity_id; print(input())")
             assert "retained input" not in last_tool_text(client)
             assert "[waiting for stdin]" in last_tool_text(client)
-            client.send(stdin="fresh input\n")
-            assert "fresh input" in last_tool_text(client)
+            # Enqueuing stdin can return before Python consumes it.
+            client.expect("fresh input\n", stdin="fresh input\n")
             client.send(python="console_sql_connection(None)")
             client.send(sql="SELECT value FROM retained")
             assert "42" in last_tool_text(client)

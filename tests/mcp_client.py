@@ -467,6 +467,16 @@ class EvaluationCollectorTests(unittest.TestCase):
             ([running, "[done]"], "[done]", False),
             (["one" + running, "two"], "onetwo", False),
             (
+                [
+                    "\n[waiting for stdin]",
+                    "fresh " + running,
+                    "input\n" + running,
+                    "[done]",
+                ],
+                "fresh input\n",
+                False,
+            ),
+            (
                 ["prompt\n" + running, "\n[waiting for stdin]"],
                 "prompt\n[waiting for stdin]",
                 False,
