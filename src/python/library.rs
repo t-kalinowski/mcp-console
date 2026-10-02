@@ -275,7 +275,6 @@ pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String>
         // Interactive argv names no script; orig_argv retains the interpreter
         // executable. Initialize both before site hooks, and only once.
         (api.set_argv_ex)(0, std::ptr::null_mut(), 0);
-        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut slot = PYTHON_LIBRARY
         .lock()

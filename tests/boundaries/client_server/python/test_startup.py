@@ -138,6 +138,42 @@ def test_embeds_framework_python(binary: Path, execution: Execution) -> list:
             return client.finish()
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_preserves_broken_pipe_errors_after_r_startup(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        with McpClient(
+            binary, execution.serve(), selected_python(root, python), root
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+
+                    reader, writer = os.pipe()
+                    os.close(reader)
+                    try:
+                        os.write(writer, b"closed reader")
+                    except BrokenPipeError:
+                        print("caught Python broken pipe")
+                    finally:
+                        os.close(writer)
+                    """)
+            )
+            assert last_result_text(client) == "caught Python broken pipe\n", (
+                last_result_text(client)
+            )
+            client.send(r="1L + 1L")
+            assert last_result_text(client) == "[1] 2\n", last_result_text(client)
+            client.finish()
+            return [{"broken_pipe_errors_survive_r_startup": True}]
+
+
 @executions(DIRECT, SANDBOXED)
 def test_processes_initial_site_directories_once(
     binary: Path, execution: Execution

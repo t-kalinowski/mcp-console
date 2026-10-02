@@ -40,6 +40,8 @@ static METHODS_REGISTERED: AtomicBool = AtomicBool::new(false);
 static MODULE_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
+    // R startup replaces this handler even when Python initialized first.
+    unsafe { (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN) };
     if installed {
         let services = SERVICES
             .get()
