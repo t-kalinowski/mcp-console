@@ -273,7 +273,13 @@ def test_bootstraps_managed_requirements_through_uv(
     ):
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
         assert "requirements" in schema["properties"], schema
-        wait_for_worker_ready(client, "remote uv bootstrap")
+        # This path bootstraps ir and default R packages into a fresh cache.
+        # Its cold build budget is separate from later SSH/tool exchanges.
+        client.response_timeout = 600
+        try:
+            wait_for_worker_ready(client, "remote uv bootstrap")
+        finally:
+            client.response_timeout = 180
         assert last_result_text(client) == "\n[idle]"
         assert uv_record.exists(), "background startup did not bootstrap uv"
         startup_arguments = [

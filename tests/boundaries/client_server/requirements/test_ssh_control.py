@@ -152,8 +152,17 @@ def gated_session(binary: Path, *, probe=False, handoff=False, prewarmed=False):
                 if not probe:
                     client.initialize_and_list_tools()
                 if prewarmed:
-                    client.send(requirements={"action": "get"})
-                    assert not client.transcript[-1]["result"]["isError"]
+                    # Finish preparation before rearming its fixture gate.
+                    # The later control exchanges retain their short budget.
+                    client.response_timeout = 180
+                    try:
+                        client.expect(
+                            "[prepared]",
+                            requirements={"action": "reset"},
+                            timeout_ms=180_000,
+                        )
+                    finally:
+                        client.response_timeout = 15
                     (remote / "claimed").unlink()
                 yield client, remote, started, release, exits, identities
             finally:

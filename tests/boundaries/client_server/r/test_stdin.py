@@ -99,6 +99,9 @@ def test_routes_combined_and_followup_stdin(
 Ada|Lovelace
 """,
         "combined same-call stdin",
+        # The first R cell includes cold interpreter startup; subsequent input
+        # observations use the ordinary arrival budget after this completes.
+        completion_timeout_seconds=client.response_timeout,
         r=r,
         stdin="Ada\nLovelace\n",
     )

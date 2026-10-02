@@ -74,7 +74,9 @@ zod: echo
                 "isError": False,
             }, timed_out
 
-            release_fixture_checkpoint(pending.parent / "zod-release-cell-output")
+            release_fixture_checkpoint(
+                pending.parent / "zod-release-cell-output", client=client
+            )
             processed = wait_for_marker(
                 temporary_path,
                 "zod-cell-output-processed",
