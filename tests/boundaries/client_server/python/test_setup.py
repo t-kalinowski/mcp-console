@@ -31,6 +31,7 @@ from support.resolvers import (
 )
 from support.r import install_r_startup, r_test_environment
 from support.suites import run_this_suite
+from boundaries.client_server.python.test_environment import bootstrap_diagnostic
 
 
 @contextmanager
@@ -1270,19 +1271,10 @@ def test_reports_matplotlib_setup_error_once(
         runtime_identity_id = id(runtime_identity)
         """)
     with startup_client(binary, execution, source) as client:
-        client.send(
-            # fmt: python
-            python=code("""
-                raise AssertionError("failed setup ran the cell")
-                """)
-        )
-        result = client.transcript[-1]["result"]
-        output = last_result_text(client)
-        assert result["isError"] is False, result
+        output = bootstrap_diagnostic(client, "ValueError: matplotlib setup failed\n")
         assert output.startswith("Traceback (most recent call last):\n"), output
         assert output.count("ValueError: matplotlib setup failed\n") == 1, output
         assert output.endswith("ValueError: matplotlib setup failed\n"), output
-        assert "failed setup ran the cell" not in output, output
         client.send(python="assert id(runtime_identity) == runtime_identity_id; 42")
         assert last_result_text(client) == "42\n", client.transcript[-1]
         return client.finish()
