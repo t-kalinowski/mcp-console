@@ -13,20 +13,22 @@ pub(crate) fn run() -> Result<(), String> {
     preparation::run_local()
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_duckdb;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_duckdb_python;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_python;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod managed_r;
 #[cfg(any(unix, windows))]
 pub(crate) mod process;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod python_configuration;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod python_version;
+#[cfg(any(unix, windows))]
+mod r_program;
 pub(crate) mod result_file;
 #[cfg(not(any(unix, windows)))]
 mod unsupported;
@@ -53,20 +55,20 @@ pub(crate) fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
     })
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
 #[cfg(all(test, unix))]
 use managed_python::resolve_python_manifest;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_python::{
     resolve_python_manifest_for_remote, resolve_python_version, resolve_python_version_for_remote,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use managed_r::{
     ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
 };

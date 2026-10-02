@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from queue import Queue
 import socket
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,7 @@ from textwrap import dedent
 import unittest
 
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
+from windows_resolver import WindowsResolver  # noqa: F401 -- include resolver acceptance
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,7 +97,24 @@ class Session:
         self.process.stdin.flush()
 
     def send(self, **arguments):
-        return self.request("tools/call", {"name": "send", "arguments": arguments})
+        observe_completion = "timeout_ms" not in arguments
+        arguments.setdefault("timeout_ms", 10000)
+        result = self.request("tools/call", {"name": "send", "arguments": arguments})
+        # Cold resolver caches can outlive one observation. Preserve tests that
+        # explicitly choose a timeout to inspect an intermediate lifecycle state.
+        if observe_completion:
+            for _ in range(18):
+                if not any(
+                    item.get("text", "")
+                    .strip()
+                    .endswith("[running; poll with an empty send]")
+                    for item in result.get("content", [])
+                ):
+                    break
+                result = self.request(
+                    "tools/call", {"name": "send", "arguments": {"timeout_ms": 10000}}
+                )
+        return result
 
     def close(self):
         self.process.stdin.close()
@@ -398,20 +417,76 @@ class WindowsConsole(unittest.TestCase):
             json.dumps(session.send(control="restart", python=source)),
         )
 
-    def test_windows_requirements_are_explicitly_unavailable(self):
-        session = self.session()
+    def test_selected_python_rejects_managed_requirements(self):
+        environment = dict(
+            os.environ,
+            PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
+            RETICULATE_PYTHON=sys.executable,
+        )
+        environment.pop("R_HOME", None)
+        session = Session(environment)
+        self.addCleanup(session.close)
+        session.initialize()
         schema = session.request("tools/list", {})
         self.assertNotIn("sql", schema["tools"][0]["inputSchema"]["properties"])
         self.assertEqual(
             schema["tools"][0]["inputSchema"]["properties"]["requirements"][
                 "properties"
             ]["action"]["enum"],
-            ["get"],
+            ["get", "add", "set", "reset"],
         )
         result = session.send(requirements={"action": "add", "python": ["six"]})
         self.assertTrue(result.get("isError"), result)
         self.assertIn("unavailable", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(python="42")))
+
+    def test_managed_python_requirements_without_r(self):
+        uv = shutil.which("uv")
+        self.assertIsNotNone(uv, "Windows resolver acceptance requires uv")
+        directory = tempfile.TemporaryDirectory(prefix="console managed 日本語 ")
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        shutil.copyfile(uv, root / "uv.exe")
+        environment = dict(
+            os.environ,
+            PATH=os.pathsep.join(
+                [
+                    str(root),
+                    str(Path(sys.executable).parent),
+                    str(Path(os.environ["SystemRoot"]) / "System32"),
+                ]
+            ),
+            RETICULATE_PYTHON="managed",
+            UV_PYTHON_PREFERENCE="only-system",
+            UV_PYTHON_DOWNLOADS="never",
+        )
+        environment.pop("R_HOME", None)
+        session = Session(environment)
+        self.addCleanup(session.close)
+        session.initialize()
+
+        def completed(**arguments):
+            result = session.send(**arguments)
+            self.assertFalse(result.get("isError"), result)
+            return result
+
+        result = completed(
+            requirements={"action": "set", "python": ["six"]},
+            python="import six; saved = 42; print(six.__version__)",
+        )
+        self.assertIn("1.", json.dumps(result))
+        result = completed(python="import sniffio; print(sniffio.__version__)")
+        self.assertIn("1.", json.dumps(result))
+        inspection = session.send(requirements={"action": "get"})
+        self.assertEqual(
+            inspection["structuredContent"]["requirements"]["python"],
+            ["six", "sniffio"],
+        )
+        self.assertIn("42", json.dumps(completed(python="print(saved)")))
+        result = completed(
+            control="restart", python="import six, sniffio; print('saved' in globals())"
+        )
+        self.assertIn("False", json.dumps(result))
 
     def test_python_initializes_before_r(self):
         session = Session()

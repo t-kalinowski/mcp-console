@@ -34,7 +34,7 @@ pub(crate) fn resolve_python_duckdb_extensions(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",
             python.display()

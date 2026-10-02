@@ -9,21 +9,18 @@ use crate::worker_protocol::PythonRequirementManifest;
 
 #[derive(Clone)]
 pub(crate) enum Bootstrap {
-    #[cfg_attr(windows, allow(dead_code))]
     Local(Preparation),
     Ssh(Preparation),
 }
 
 #[derive(Clone)]
 pub(crate) enum RConfiguration {
-    #[cfg_attr(windows, allow(dead_code))]
     Local(Preparation),
     Ssh(Preparation),
 }
 
 #[derive(Clone)]
 pub(crate) enum PythonConfiguration {
-    #[cfg_attr(windows, allow(dead_code))]
     Local {
         preparation: Preparation,
         has_uv: bool,
