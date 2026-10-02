@@ -9,7 +9,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, wait_for_evaluation_output
+from support.assertions import (
+    last_result_text,
+    wait_for_evaluation_output,
+    wait_for_idle_output,
+)
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -263,8 +267,11 @@ def check_bootstrap_completion_requires_input_termination(
                         == '[input requested: "startup> "]\n[waiting for stdin]'
                     )
                 else:
-                    client.expect(
+                    wait_for_idle_output(
+                        client,
                         '[input requested: "startup> "]\n[waiting for stdin]',
+                        "startup input before first cell",
+                        completion_timeout_seconds=client.response_timeout,
                     )
                 finish.release()
                 wait_for_evaluation_output(

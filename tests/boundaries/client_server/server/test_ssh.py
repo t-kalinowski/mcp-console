@@ -141,8 +141,6 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
         commands.mkdir()
         home.mkdir()
         (commands / "sh").symlink_to(shutil.which("sh"))
-        if sys.platform == "linux" and execution == SANDBOXED:
-            (commands / "bwrap").symlink_to(shutil.which("bwrap"))
         workload = {
             "R_HOME": environment["R_HOME"],
             "PATH": str(commands),

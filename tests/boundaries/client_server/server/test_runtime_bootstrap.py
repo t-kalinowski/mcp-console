@@ -124,13 +124,17 @@ def python_bootstrap(
 
 
 def bootstrap_output(
-    client: McpClient, expected: str, *, terminal: str = "\n[idle]"
+    client: McpClient,
+    expected: str,
+    *,
+    terminal: str = "\n[idle]",
+    **send_arguments: int,
 ) -> None:
     start = len(client.transcript)
     collected = ""
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + client.response_timeout
     while True:
-        result = client.send(timeout_ms=0)
+        result = client.send(**send_arguments)
         assert not result["isError"], result
         output = last_result_text(client)
         assert output.endswith(terminal), repr(output)
@@ -297,9 +301,7 @@ def test_incomplete_bootstrap_preserves_waiting_cell(
 def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
     client.initialize_and_list_tools()
     client.request("ping")
-    wait_for_evaluation_output(
-        client, "Python startup\n\n[idle]", "startup output before first cell"
-    )
+    bootstrap_output(client, "Python startup\n")
     client.send(
         python="import builtins; counter = 1; builtins.bootstrap_input", timeout_ms=0
     )
@@ -312,8 +314,7 @@ def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
     wait_for_evaluation_output(
         client, '[input requested: "startup> "]\n[waiting for stdin]', "startup input"
     )
-    client.send(stdin="retained\n")
-    assert last_result_text(client) == "'retained'\n", last_result_text(client)
+    client.expect("'retained'\n", stdin="retained\n")
     client.send(python="counter, builtins.bootstrap_runs")
     assert last_result_text(client) == "(1, 1)\n", last_result_text(client)
     client.send(python="raise RuntimeError('first user filenames')")
@@ -327,7 +328,7 @@ def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
 def test_short_startup_transcript(binary: Path, execution: Execution) -> list:
     with python_bootstrap(binary, execution, sans_r=True) as (client, release):
         client.initialize_and_list_tools()
-        wait_for_evaluation_output(client, "Python startup\n\n[idle]", "startup output")
+        bootstrap_output(client, "Python startup\n")
         client.send(
             python="import builtins; builtins.bootstrap_input",
             stdin="hello\n",
@@ -563,12 +564,13 @@ def test_r_bootstrap_resolves_python_version_and_import(
                 release.release()
                 resolving.wait("bootstrap automatic import reaches host resolver")
                 client.request("ping")
-                bootstrap_output(client, "Python version resolved\n")
+                bootstrap_output(client, "Python version resolved\n", timeout_ms=0)
                 resolved.release()
                 complete.wait("bootstrap import finished", timeout=600)
                 bootstrap_output(
                     client,
                     "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\nPython import resolved\n",
+                    timeout_ms=0,
                 )
                 manifest = client.send(requirements={"action": "get"})[
                     "structuredContent"
@@ -613,7 +615,7 @@ def test_cancelled_response_preserves_bootstrap_and_first_cell(
             )
         )
         client.initialize_and_list_tools()
-        wait_for_evaluation_output(client, "Python startup\n\n[idle]", "startup output")
+        bootstrap_output(client, "Python startup\n")
         profile.pause_results(True)
         try:
             pending = client.start_send(python="counter = 1; counter", timeout_ms=0)
@@ -685,7 +687,9 @@ def check_interrupted_bootstrap_before_evaluator_readiness(
                 assert last_result_text(client) == RUNNING
                 client.send(control="interrupt", timeout_ms=0)
                 checkpoints["interrupt-bootstrap"].release()
-                bootstrap_output(client, "bootstrap interrupted\n", terminal=RUNNING)
+                bootstrap_output(
+                    client, "bootstrap interrupted\n", terminal=RUNNING, timeout_ms=0
+                )
                 checkpoints["release"].release()
                 checkpoints["parked"].wait("startup outcome returned to blocking pool")
                 wait_for_evaluation_output(

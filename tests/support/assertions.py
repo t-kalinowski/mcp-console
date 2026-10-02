@@ -149,10 +149,12 @@ def wait_for_idle_output(
     client: McpClient,
     expected: str,
     description: str,
+    *,
+    completion_timeout_seconds: float = 3,
     **send_arguments: Any,
 ) -> None:
     """Poll the public idle snapshot until a worker event reaches the server."""
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + completion_timeout_seconds
     poll_start = len(client.transcript)
     while True:
         result = _send_before(client, deadline, description, **send_arguments)
