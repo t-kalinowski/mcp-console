@@ -40,8 +40,8 @@ result:
           ]
         }
         uv output:
-        × No solution found when resolving tool dependencies:
-          ╰─▶ you require py-yaml12<0, which does not allow any versions
+        error: No solution found when resolving tool dependencies
+          cause: you require py-yaml12<0, which does not allow any versions
   isError: true
 ---
 send:

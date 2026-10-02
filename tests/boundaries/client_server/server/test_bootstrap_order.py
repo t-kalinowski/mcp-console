@@ -13,6 +13,7 @@ from support.assertions import last_result_text, wait_for_evaluation_output
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.requirements import WORKER, NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, FIXTURES
@@ -49,6 +50,12 @@ def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
         published = resources.enter_context(
             closing(FifoCheckpoint.create(root / "published"))
         )
+        received = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "received"))
+        )
+        receipt_release = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "receipt-release"))
+        )
         resuming = resources.enter_context(
             closing(FifoCheckpoint.create(root / "resuming"))
         )
@@ -83,17 +90,39 @@ def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
             RETICULATE_PYTHON="managed",
             CONSOLE_BOOTSTRAP_ORDER_BINARY=str(binary),
             CONSOLE_BOOTSTRAP_ORDER_ROOT=str(root),
-            # With excess output, the frame crossing 16 MiB has left the
-            # bounded SSH transport before the producer's published checkpoint.
             CONSOLE_BOOTSTRAP_ORDER_NOISE="32768" if exceed_limit else "8192",
         )
         environment.update(profile.environment)
+        environment.update(
+            MCP_CONSOLE_TEST_RELAY_READ_MATCH="ordered receipt",
+            MCP_CONSOLE_TEST_RELAY_READ_BLOCKED=str(received.path),
+            MCP_CONSOLE_TEST_RELAY_READ_RELEASE=str(receipt_release.path),
+        )
+        environment["MCP_CONSOLE_TEST_CONTROLLER_LIBRARIES"] = (
+            environment.pop(LOADER_VARIABLE)
+            + ":"
+            + str(build_interposer(root, "relay_stdout_read_interposer"))
+        )
+        launcher = code("""
+            import os
+            import sys
+
+            os.environ["MCP_CONSOLE_TEST_RELAY_READ_PID"] = str(os.getpid())
+            loader = "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+            os.environ[loader] = os.environ.pop("MCP_CONSOLE_TEST_CONTROLLER_LIBRARIES")
+            os.execv(sys.argv[1], sys.argv[1:])
+            """)
         peer = FIXTURES / "bootstrap_order_peer.py"
         (root / "ssh").write_text(
             "#!/bin/sh\nexec " + shlex.join([sys.executable, str(peer)]) + ' "$@"\n'
         )
         configure(local, remote, [str(binary)])
-        with McpClient(binary, ("serve", "--no-sandbox"), environment, local) as client:
+        with McpClient(
+            Path(sys.executable),
+            ("-c", launcher, str(binary), "serve", "--no-sandbox"),
+            environment,
+            local,
+        ) as client:
             try:
                 client.initialize_and_list_tools()
                 ready.wait("built-in target transport ready", timeout=120)
@@ -108,6 +137,11 @@ def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
                 published.wait(
                     "startup semantic frames published while replacement is held"
                 )
+                # The controller reader has enqueued the preceding output
+                # before replacement can enqueue ResumeBootstrap. A producer
+                # write alone leaves that ordering dependent on transport speed.
+                received.wait("controller received the startup output")
+                receipt_release.release()
                 client.send(timeout_ms=0)
                 assert last_result_text(client) == "[session is preparing requirements]"
                 resolved.release()
@@ -200,6 +234,7 @@ def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
                 ]
             finally:
                 events.release()
+                receipt_release.release()
                 resolved.release()
                 resuming.release()
 
