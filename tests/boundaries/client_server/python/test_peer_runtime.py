@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack
+from functools import cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -133,16 +134,15 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
         redirected_stderr = io.StringIO()
         sys.stdout, sys.stderr = redirected_stdout, redirected_stderr
         """)
-    client.send(python=source)
-    assert last_result_text(client) == "Python live; R absent\n", client.transcript[-1]
+    client.expect("Python live; R absent\n", python=source)
     if trigger == "r-cell":
-        client.send(
-            r="peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))"
+        client.expect(
+            r="peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))",
         )
-        assert last_result_text(client) == "[done]", client.transcript[-1]
     else:
-        client.send(python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41")
-        assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.expect(
+            python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41",
+        )
     # fmt: python
     source = code("""
         assert r_initialized()
@@ -172,14 +172,10 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
 
         print("Python state and services retained")
         """)
-    client.send(python=source)
-    assert last_result_text(client) == "Python state and services retained\n", (
-        client.transcript[-1]
-    )
+    client.expect("Python state and services retained\n", python=source)
     client.send(sql="select value from peer")
     assert "42" in last_result_text(client), client.transcript[-1]
-    client.send(r="stopifnot(identical(reticulate::py$nested_peer(), 42L))")
-    assert last_result_text(client) == "[done]", client.transcript[-1]
+    client.expect(r="stopifnot(identical(reticulate::py$nested_peer(), 42L))")
 
 
 @requires(R)
@@ -310,12 +306,12 @@ def test_late_attachment_preserves_environment_metadata(
             )
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
-                client.send(
-                    python="peer_object = object(); peer_identity = id(peer_object)"
+                client.expect(
+                    python="peer_object = object(); peer_identity = id(peer_object)",
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
                 # fmt: r
-                client.send(
+                client.expect(
+                    "environment metadata retained\n",
                     r=code("""
                     config <- reticulate::py_config()
                     sys <- reticulate::import("sys")
@@ -334,17 +330,11 @@ def test_late_attachment_preserves_environment_metadata(
                       identical(config$virtualenv_activate, "")
                     )
                     cat("environment metadata retained\\n")
-                    """)
+                    """),
                 )
-                assert last_result_text(client) == "environment metadata retained\n", (
-                    kind,
-                    client.transcript[-1],
-                )
-                client.send(
-                    python="assert id(peer_object) == peer_identity; print('same interpreter')"
-                )
-                assert last_result_text(client) == "same interpreter\n", (
-                    client.transcript[-1]
+                client.expect(
+                    "same interpreter\n",
+                    python="assert id(peer_object) == peer_identity; print('same interpreter')",
                 )
                 records.extend([{"environment": kind}, *client.finish()[3:]])
     return records
@@ -369,11 +359,9 @@ def test_interrupt_wakes_input_before_and_after_attachment(
                 client.initialize_and_list_tools()
                 for attached in (False, True):
                     if attached:
-                        client.send(python="assert int(r['42L']) == 42")
-                        assert last_result_text(client) == "[done]", client.transcript[
-                            -1
-                        ]
-                    client.send(
+                        client.expect(python="assert int(r['42L']) == 42")
+                    client.expect(
+                        '[input requested: "interrupt gate> "]\n[waiting for stdin]',
                         python=code("""
                         import signal
                         import threading
@@ -392,21 +380,17 @@ def test_interrupt_wakes_input_before_and_after_attachment(
                         else:
                             raise AssertionError("input was not interrupted")
                         sender.join()
-                        """)
+                        """),
                     )
-                    assert (
-                        last_result_text(client)
-                        == '[input requested: "interrupt gate> "]\n[waiting for stdin]'
-                    ), client.transcript[-1]
                     # The public input request proves the main thread is blocked.
                     # SIGINT goes to another thread, so only the self-pipe wakes it.
                     release.release()
                     wait_for_evaluation_output(
                         client, "input cancelled once\n", "background-thread interrupt"
                     )
-                    client.send(python="print('no duplicate interrupt')")
-                    assert last_result_text(client) == "no duplicate interrupt\n", (
-                        client.transcript[-1]
+                    client.expect(
+                        "no duplicate interrupt\n",
+                        python="print('no duplicate interrupt')",
                     )
                 return client.finish()[3:]
         finally:
@@ -457,10 +441,10 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             assert last_result_text(client) == (
                 "Python cells are unavailable: the target has no Python runtime"
             ), result
-            client.send(
-                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer"
+            client.expect(
+                "[1] 42\n",
+                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer",
             )
-            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
             result = client.send(
                 control="restart",
                 python="raise AssertionError('unavailable cell ran')",
@@ -469,10 +453,10 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             assert last_result_text(client) == (
                 "Python cells are unavailable: the target has no Python runtime"
             ), result
-            client.send(
-                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer"
+            client.expect(
+                "[1] 42\n",
+                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer",
             )
-            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
             client.finish()
         policy["python"] = "/missing-explicit-python"
         config.write_text(json.dumps(policy))
@@ -510,13 +494,11 @@ def test_idle_preparation_keeps_r_uninitialized(
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
-            client.send(
-                python="import sys; from pathlib import Path; sentinel = object(); original = sentinel; _ = Path('running-python').write_text(sys.executable)"
+            client.expect(
+                python="import sys; from pathlib import Path; sentinel = object(); original = sentinel; _ = Path('running-python').write_text(sys.executable)",
             )
-            assert last_result_text(client) == "[done]", client.transcript[-1]
             arguments.write_text("")
-            client.send(requirements={"python": ["packaging"]})
-            assert last_result_text(client) == "[prepared]", client.transcript[-1]
+            client.expect("[prepared]", requirements={"python": ["packaging"]})
             calls = [json.loads(line) for line in arguments.read_text().splitlines()]
             resolution = next(call for call in calls if call[:2] == ["tool", "run"])
             assert (
@@ -546,14 +528,10 @@ def test_idle_preparation_keeps_r_uninitialized(
                 assert sentinel is original
                 print("idle preparation uses the Python owner")
                 """)
-            client.send(python=source)
-            assert (
-                last_result_text(client) == "idle preparation uses the Python owner\n"
-            ), client.transcript[-1]
-            client.send(
-                r='stopifnot("packaging" %in% reticulate::py_require()$packages, isTRUE(reticulate::py_config()$ephemeral))'
+            client.expect("idle preparation uses the Python owner\n", python=source)
+            client.expect(
+                r='stopifnot("packaging" %in% reticulate::py_require()$packages, isTRUE(reticulate::py_config()$ephemeral))',
             )
-            assert last_result_text(client) == "[done]", client.transcript[-1]
             return client.finish()[3:]
 
 
@@ -590,8 +568,7 @@ def test_shared_module_configuration(binary: Path, execution: Execution) -> Tran
                 (Path(environment["PATH"]) / "uv").symlink_to(uv)
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
-                client.send(requirements={"python": ["matplotlib"]})
-                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+                client.expect("[prepared]", requirements={"python": ["matplotlib"]})
                 # Defaults apply at the first import, not at a later cell or
                 # bridge attachment. Each module keeps subsequent user choices.
                 # fmt: python
@@ -608,22 +585,15 @@ def test_shared_module_configuration(binary: Path, execution: Execution) -> Tran
                     plt.show = custom_show
                     print("shared module defaults installed")
                     """)
-                client.send(python=source)
-                assert (
-                    last_result_text(client) == "shared module defaults installed\n"
-                ), client.transcript[-1]
+                client.expect("shared module defaults installed\n", python=source)
                 if with_r:
-                    client.send(
-                        r="reticulate::py_eval(\"id(custom_show) == id(__import__('matplotlib.pyplot', fromlist=['show']).show)\")"
+                    client.expect(
+                        "[1] TRUE\n",
+                        r="reticulate::py_eval(\"id(custom_show) == id(__import__('matplotlib.pyplot', fromlist=['show']).show)\")",
                     )
-                    assert last_result_text(client) == "[1] TRUE\n", client.transcript[
-                        -1
-                    ]
-                client.send(
-                    python='assert np.get_printoptions()["linewidth"] == 73; assert pd.get_option("display.width") == 79; assert plt.show is custom_show; print("user module options retained")'
-                )
-                assert last_result_text(client) == "user module options retained\n", (
-                    client.transcript[-1]
+                client.expect(
+                    "user module options retained\n",
+                    python='assert np.get_printoptions()["linewidth"] == 73; assert pd.get_option("display.width") == 79; assert plt.show is custom_show; print("user module options retained")',
                 )
                 current = client.finish()[3:]
                 if records is None:
@@ -632,7 +602,7 @@ def test_shared_module_configuration(binary: Path, execution: Execution) -> Tran
     return records
 
 
-def exercise_python(client: McpClient, *, first_evaluation: int = 1) -> tuple[str, ...]:
+def exercise_python(client: McpClient) -> tuple[str, ...]:
     # Every configuration exercises the same evaluator and NumPy availability
     # without referring to the R/Python bridge.
     # fmt: python
@@ -682,8 +652,7 @@ def exercise_python(client: McpClient, *, first_evaluation: int = 1) -> tuple[st
         output.append(last_result_text(client))
         if len(output) == 1:
             assert output[0] == "shared stdout\nshared stderr\n41\n", output[0]
-    assert output[0] == "shared stdout\nshared stderr\n41\n", output[0]
-    assert f"<mcp-console:python:e{first_evaluation + 1}>" in output[1], output[1]
+    assert "<mcp-console:python:e2>" in output[1], output[1]
     assert output[1].endswith("ValueError: peer runtime sentinel\n"), output[1]
     assert output[2:] == ["(42, True, True)\n", "42\n", "43\n"], output[2:]
     return tuple(output)
@@ -721,10 +690,9 @@ def test_python_contract_with_and_without_r(
                 client.initialize_and_list_tools()
                 if mode == "r-first":
                     # R execution itself must not force CPython initialization.
-                    client.send(
-                        r="stopifnot(!reticulate::py_available(initialize = FALSE))"
+                    client.expect(
+                        r="stopifnot(!reticulate::py_available(initialize = FALSE))",
                     )
-                    assert last_result_text(client) == "[done]"
                 actual = exercise_python(client)
                 if reference is None:
                     reference = actual
@@ -739,10 +707,10 @@ def test_python_contract_with_and_without_r(
                         stopifnot(identical(reticulate::py_eval("peer_value"), 43L))
                         peer_from_r <- 44L
                         """)
-                    client.send(r=r)
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
-                    client.send(python="(int(r.peer_from_r), peer_value)")
-                    assert last_result_text(client) == "(44, 43)\n"
+                    client.expect(r=r)
+                    client.expect(
+                        "(44, 43)\n", python="(int(r.peer_from_r), peer_value)"
+                    )
                 transcript = client.finish()[3:]
                 if mode == "without-r":
                     records = transcript
@@ -845,17 +813,27 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
             with McpClient(binary, execution.serve(), environment, workspace) as client:
                 client.initialize_and_list_tools()
                 if mode == "r-first":
-                    client.send(r='reticulate::py_run_string("peer_from_r = object()")')
-                    assert last_result_text(client) == "[done]"
-                exercise_python(client)
+                    client.expect(
+                        r='reticulate::py_run_string("peer_from_r = object()")',
+                    )
                 # fmt: python
                 source = code("""
+                    import os
+                    import sys
                     import json
                     import subprocess
                     import builtins
                     import peer_module
 
                     assert peer_module.value == 41
+                    assert os.path.samefile(
+                        peer_module.__file__,
+                        os.path.join(os.environ["RETICULATE_PYTHONPATH"], "peer_module.py"),
+                    )
+                    assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
+                    assert os.path.realpath(sys.prefix) == os.path.realpath(
+                        os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
+                    )
                     assert os.environ["PYTHONPATH"] == os.environ["RETICULATE_PYTHONPATH"]
                     assert builtins.peer_bootstrap_count == 1
                     assert builtins.peer_bootstrap == (sys.prefix, sys.prefix, sys.executable), (
@@ -891,16 +869,14 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                     records = client.finish()[3:]
                 else:
                     assert actual == reference
-                    client.send(
-                        python="peer_object = object(); peer_id = id(peer_object); os.chdir('after-startup')"
+                    client.expect(
+                        python="peer_object = object(); peer_id = id(peer_object); os.chdir('after-startup')",
                     )
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
-                    client.send(r=CLI_CHECK)
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
+                    client.expect(r=CLI_CHECK)
                     if mode == "python-first-relative":
                         # A genuinely changed selection still fails before
                         # attachment, and restoring the original hint retries.
-                        client.send(
+                        client.expect(
                             r=code("""
                             original <- Sys.getenv("RETICULATE_PYTHON")
                             for (selection in c("/incompatible-python", "managed", Sys.getenv("MCP_CONSOLE_TEST_OTHER_PYTHON"))) {
@@ -909,12 +885,9 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                               stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
                             }
                             Sys.setenv(RETICULATE_PYTHON = original)
-                            """)
+                            """),
                         )
-                        assert last_result_text(client) == "[done]", client.transcript[
-                            -1
-                        ]
-                    client.send(
+                    client.expect(
                         r=code("""
                         requested <- Sys.getenv("MCP_CONSOLE_TEST_OTHER_PYTHON")
                         failure <- tryCatch(
@@ -927,16 +900,14 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                           file.path(dirname(Sys.getenv("MCP_CONSOLE_TEST_PYTHON")), "python3"),
                           required = TRUE
                         ))
-                        """)
+                        """),
                     )
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
-                    client.send(r='check_cli("peer-cli", "mcp_console_test_cli")')
-                    assert (
-                        last_result_text(client)
-                        == "installed CLI uses the selected Python environment\n"
-                    ), client.transcript[-1]
+                    client.expect(
+                        "installed CLI uses the selected Python environment\n",
+                        r='check_cli("peer-cli", "mcp_console_test_cli")',
+                    )
                     # fmt: r
-                    client.send(
+                    client.expect(
                         r=code("""
                         actual <- reticulate::py_config()$virtualenv_activate
                         expected <- file.path(
@@ -947,13 +918,11 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                           normalizePath(actual, mustWork = TRUE),
                           normalizePath(expected, mustWork = TRUE)
                         ))
-                        """)
+                        """),
                     )
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
-                    client.send(
-                        python="assert id(peer_object) == peer_id; assert builtins.peer_bootstrap_count == 1"
+                    client.expect(
+                        python="assert id(peer_object) == peer_id; assert builtins.peer_bootstrap_count == 1",
                     )
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
                     client.finish()
         assert records is not None
         return records
@@ -986,22 +955,21 @@ def test_r_does_not_initialize_python(binary: Path, execution: Execution) -> Tra
                 stopifnot(!reticulate::py_available(initialize = FALSE))
                 r_value$answer
                 """).replace("PROBE_PATH", json.dumps(str(probe)))
-            client.send(r=source)
-            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            client.expect("[1] 42\n", r=source)
             client.transcript[-1]["send"]["r"] = source.replace(
                 str(probe), "<Python initialization probe>"
             )
-            client.send(
-                python="peer_object = object(); peer_identity = id(peer_object); int(r.r_answer)"
+            client.expect(
+                "42\n",
+                python="peer_object = object(); peer_identity = id(peer_object); int(r.r_answer)",
             )
-            assert last_result_text(client) == "42\n", client.transcript[-1]
-            client.send(r="stopifnot(python_initialized() == 1L); r_value$answer")
-            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
-            client.send(
-                python="assert id(peer_object) == peer_identity; print('runtime objects retained')"
+            client.expect(
+                "[1] 42\n",
+                r="stopifnot(python_initialized() == 1L); r_value$answer",
             )
-            assert last_result_text(client) == "runtime objects retained\n", (
-                client.transcript[-1]
+            client.expect(
+                "runtime objects retained\n",
+                python="assert id(peer_object) == peer_identity; print('runtime objects retained')",
             )
             return client.finish()[3:]
 
@@ -1061,13 +1029,11 @@ def test_remote_managed_identity_survives_restart(
                 binary, execution.serve(), controller, local
             ) as client:
                 client.initialize_and_list_tools()
-                client.send(
+                client.expect(
+                    "\n[running; poll with an empty send]",
                     python="import sys; peer_object = object(); peer_id = id(peer_object)",
                     timeout_ms=0,
                 )
-                assert last_result_text(client) == (
-                    "\n[running; poll with an empty send]"
-                ), client.transcript[-1]
                 # Release only after the collector observes an empty running
                 # poll, so completion must survive that earlier empty cut.
                 collected = send_and_collect_runtime_python_resolution(
@@ -1079,20 +1045,15 @@ def test_remote_managed_identity_survives_restart(
                 assert not client.transcript[-1]["result"].get("isError"), (
                     client.transcript[-1]
                 )
-                client.send(
-                    python="import yaml12; assert id(peer_object) == peer_id; print('live identity retained')"
+                client.expect(
+                    "live identity retained\n",
+                    python="import yaml12; assert id(peer_object) == peer_id; print('live identity retained')",
                 )
-                assert last_result_text(client) == "live identity retained\n", (
-                    client.transcript[-1]
-                )
-                client.send(
+                client.expect(
+                    "[worker stopped: in-memory state lost]\n[starting new worker]\naccepted environment retained\n[done]",
                     control="restart",
                     python="import yaml12; print('accepted environment retained')",
                 )
-                assert (
-                    last_result_text(client)
-                    == "[worker stopped: in-memory state lost]\n[starting new worker]\naccepted environment retained\n[done]"
-                ), client.transcript[-1]
                 records = client.finish()[3:]
             assert not trap.exists(), (
                 "controller inspected or resolved a remote runtime"
@@ -1126,10 +1087,9 @@ def test_shared_managed_bootstrap_and_replacement(
                 ]["requirements"]["python"]
                 assert "numpy" in defaults, defaults
                 if mode == "r-first":
-                    client.send(
-                        r="stopifnot(!reticulate::py_available(initialize = FALSE))"
+                    client.expect(
+                        r="stopifnot(!reticulate::py_available(initialize = FALSE))",
                     )
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
                 client.send(requirements={"python": ["py-yaml12"]})
                 assert not client.transcript[-1]["result"].get("isError"), (
                     client.transcript[-1]
@@ -1163,40 +1123,32 @@ def test_shared_managed_bootstrap_and_replacement(
                     assert os.environ["VIRTUAL_ENV"] == sys.prefix
                     print("managed identity and child environment agree")
                     """)
-                client.send(python=source)
-                assert (
-                    last_result_text(client)
-                    == "managed identity and child environment agree\n"
-                ), client.transcript[-1]
-                if with_r:
-                    client.send(
-                        r="stopifnot(isTRUE(reticulate::py_config()$ephemeral))"
-                    )
-                    assert last_result_text(client) == "[done]", client.transcript[-1]
-                client.send(
-                    python="import more_itertools; assert id(peer_object) == peer_id; assert sys.base_prefix == peer_library; print('live import retained objects')"
+                client.expect(
+                    "managed identity and child environment agree\n",
+                    python=source,
                 )
-                assert last_result_text(client) == "live import retained objects\n", (
-                    client.transcript[-1]
+                if with_r:
+                    client.expect(
+                        r="stopifnot(isTRUE(reticulate::py_config()$ephemeral))",
+                    )
+                client.expect(
+                    "live import retained objects\n",
+                    python="import more_itertools; assert id(peer_object) == peer_id; assert sys.base_prefix == peer_library; print('live import retained objects')",
                 )
                 client.send(python="raise ValueError('after accepted activation')")
                 assert last_result_text(client).endswith(
                     "ValueError: after accepted activation\n"
                 ), client.transcript[-1]
                 client.send(control="restart")
-                client.send(
-                    python="import yaml12, more_itertools; print('accepted additions survived restart')"
+                client.expect(
+                    "accepted additions survived restart\n",
+                    python="import yaml12, more_itertools; print('accepted additions survived restart')",
                 )
-                assert (
-                    last_result_text(client) == "accepted additions survived restart\n"
-                ), client.transcript[-1]
                 client.send(python="import os; os._exit(47)")
-                client.send(
-                    python="import yaml12, more_itertools; print('accepted additions survived crash')"
+                client.expect(
+                    "accepted additions survived crash\n",
+                    python="import yaml12, more_itertools; print('accepted additions survived crash')",
                 )
-                assert (
-                    last_result_text(client) == "accepted additions survived crash\n"
-                ), client.transcript[-1]
                 current = client.finish()[3:]
                 if not with_r:
                     records = current
@@ -1223,44 +1175,38 @@ def test_r_commands_follow_managed_python_activation(
         environment.pop("RETICULATE_PYTHON", None)
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
-            client.send(requirements={"python": ["mcp-console-test-cli"]})
-            assert last_result_text(client) == "[prepared]", client.transcript[-1]
-            client.send(
-                python="import numpy as np; peer_object = object(); peer_id = id(peer_object)"
+            client.expect(
+                "[prepared]", requirements={"python": ["mcp-console-test-cli"]}
             )
-            assert last_result_text(client) == "[done]", client.transcript[-1]
-            client.send(r=CLI_CHECK)
-            assert last_result_text(client) == "[done]", client.transcript[-1]
-            client.send(
-                r='check_cli("peer-cli", "mcp_console_test_cli"); stopifnot(Sys.which("peer-cli-added") == "")'
+            client.expect(
+                python="import numpy as np; peer_object = object(); peer_id = id(peer_object)",
             )
-            assert (
-                last_result_text(client)
-                == "installed CLI uses the selected Python environment\n"
-            ), client.transcript[-1]
-            client.send(requirements={"python": ["mcp-console-test-cli-added"]})
-            assert last_result_text(client) == "[prepared]", client.transcript[-1]
-            client.send(
-                python="assert id(peer_object) == peer_id; assert np.arange(3).tolist() == [0, 1, 2]"
+            client.expect(r=CLI_CHECK)
+            client.expect(
+                "installed CLI uses the selected Python environment\n",
+                r='check_cli("peer-cli", "mcp_console_test_cli"); stopifnot(Sys.which("peer-cli-added") == "")',
             )
-            assert last_result_text(client) == "[done]", client.transcript[-1]
+            client.expect(
+                "[prepared]",
+                requirements={"python": ["mcp-console-test-cli-added"]},
+            )
+            client.expect(
+                python="assert id(peer_object) == peer_id; assert np.arange(3).tolist() == [0, 1, 2]",
+            )
             for command, module in (
                 ("peer-cli", "mcp_console_test_cli"),
                 ("peer-cli-added", "mcp_console_test_cli_added"),
             ):
-                client.send(r=f'check_cli("{command}", "{module}")')
-                assert (
-                    last_result_text(client)
-                    == "installed CLI uses the selected Python environment\n"
-                ), client.transcript[-1]
+                client.expect(
+                    "installed CLI uses the selected Python environment\n",
+                    r=f'check_cli("{command}", "{module}")',
+                )
             client.send(control="restart")
-            client.send(r=CLI_CHECK)
-            assert last_result_text(client) == "[done]", client.transcript[-1]
-            client.send(r='check_cli("peer-cli-added", "mcp_console_test_cli_added")')
-            assert (
-                last_result_text(client)
-                == "installed CLI uses the selected Python environment\n"
-            ), client.transcript[-1]
+            client.expect(r=CLI_CHECK)
+            client.expect(
+                "installed CLI uses the selected Python environment\n",
+                r='check_cli("peer-cli-added", "mcp_console_test_cli_added")',
+            )
             return client.finish()[3:]
 
 
@@ -1327,6 +1273,49 @@ def test_system_default_packages_survive_late_r_startup(
     return records
 
 
+@cache
+def early_python_reference_plots(
+    rscript: Path, environment: tuple[tuple[str, str], ...]
+) -> list[bytes]:
+    return reference_plots(
+        rscript,
+        dict(environment),
+        "graphics::plot(1:3); graphics::plot(3:1)\n",
+        width=800 / 96,
+        height=600 / 96,
+        dpi=96,
+        pages=2,
+    )
+
+
+@cache
+def installed_early_python_library() -> tuple[tempfile.TemporaryDirectory, Path]:
+    # Reuse only immutable package files across this case's execution modes.
+    # The real load/attach hooks still run in each fresh Console worker.
+    temporary = tempfile.TemporaryDirectory(prefix="mcp-console-early-python-")
+    library = Path(temporary.name)
+    environment, rscript = r_test_environment()
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/early_python"
+    try:
+        subprocess.run(
+            [
+                rscript.with_name("R"),
+                "CMD",
+                "INSTALL",
+                "--no-test-load",
+                f"--library={library}",
+                fixture,
+            ],
+            check=True,
+            capture_output=True,
+            env=environment,
+        )
+    except BaseException:
+        temporary.cleanup()
+        raise
+    return temporary, library
+
+
 def attach_python_initialized_during_r_startup(
     binary: Path,
     execution: Execution,
@@ -1339,28 +1328,12 @@ def attach_python_initialized_during_r_startup(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as checkpoints:
         root = Path(directory)
-        library = root / "library"
-        library.mkdir()
+        _, library = installed_early_python_library()
         environment, rscript = r_test_environment()
         expected_plots = (
-            reference_plots(
-                rscript,
-                environment,
-                "graphics::plot(1:3); graphics::plot(3:1)\n",
-                width=800 / 96,
-                height=600 / 96,
-                dpi=96,
-                pages=2,
-            )
+            early_python_reference_plots(rscript, tuple(sorted(environment.items())))
             if startup_plots
             else []
-        )
-        fixture = Path(__file__).resolve().parents[3] / "fixtures/early_python"
-        subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", fixture],
-            check=True,
-            capture_output=True,
-            env=environment,
         )
         environment.update(
             R_LIBS=os.pathsep.join(
@@ -1401,7 +1374,11 @@ def attach_python_initialized_during_r_startup(
                 check=True,
                 capture_output=True,
             )
-            environment["MCP_CONSOLE_TEST_EARLY_PYTHON"] = str(early_python)
+            environment.update(
+                MCP_CONSOLE_TEST_EARLY_PYTHON=str(early_python),
+                MCP_CONSOLE_TEST_PYTHON=str(early_python),
+                MCP_CONSOLE_TEST_PYTHON_PREFIX=str(virtualenv),
+            )
             version = "==" + ".".join(map(str, sys.version_info[:3]))
         serve = (
             execution.serve("--writable-root", str(root))
@@ -1411,8 +1388,7 @@ def attach_python_initialized_during_r_startup(
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
             if managed:
-                client.send(requirements={"python_version": [version]})
-                assert last_result_text(client) == "[prepared]", client.transcript[-1]
+                client.expect("[prepared]", requirements={"python_version": [version]})
             if python_first:
                 collected = send_and_collect_runtime_python_resolution(
                     client,
@@ -1443,7 +1419,7 @@ def attach_python_initialized_during_r_startup(
             else:
                 assert last_result_text(client) == "[done]", client.transcript[-1]
             # fmt: r
-            client.send(
+            client.expect(
                 r=code("""
                 stopifnot(
                   "mcpconsoleearlypython" %in% getOption("defaultPackages"),
@@ -1453,39 +1429,33 @@ def attach_python_initialized_during_r_startup(
                   identical(find("sql_connection")[[1L]], "tools:mcp-console"),
                   identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
                 )
-                """)
+                """),
             )
-            assert last_result_text(client) == "[done]", client.transcript[-1]
             if python_first:
-                client.send(
-                    python="assert id(before_r) == before_r_identity; assert early_executable == sys.executable; print('startup package attached to running Python')"
+                client.expect(
+                    "startup package attached to running Python\n",
+                    python="assert id(before_r) == before_r_identity; assert early_executable == sys.executable; print('startup package attached to running Python')",
                 )
-                assert (
-                    last_result_text(client)
-                    == "startup package attached to running Python\n"
-                ), client.transcript[-1]
-                client.send(
+                client.expect(
                     r=code("""
                     incompatible <- tryCatch(
                         reticulate::use_python("/incompatible-python", required = TRUE),
                         error = conditionMessage
                     )
                     stopifnot(identical(incompatible, "Python is already initialized with another selection; restart required"))
-                    """)
+                    """),
                 )
-                assert last_result_text(client) == "[done]", client.transcript[-1]
-            if not managed:
-                exercise_python(
-                    client,
-                    first_evaluation=(3 if python_first else 1)
-                    + int(trigger == "python-access"),
-                )
-            client.send(
+            client.expect(
+                "attached to the existing interpreter\n",
                 # fmt: python
                 python=code("""
                     import json
                     import subprocess
 
+                    assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
+                    assert os.path.realpath(sys.prefix) == os.path.realpath(
+                        os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
+                    )
                     assert id(early_object) == early_identity
                     assert sys.executable == early_executable
                     assert (
@@ -1500,21 +1470,17 @@ def attach_python_initialized_during_r_startup(
                     )
                     assert child == early_child, (child, early_child)
                     print("attached to the existing interpreter")
-                    """)
+                    """),
             )
-            assert (
-                last_result_text(client) == "attached to the existing interpreter\n"
-            ), client.transcript[-1]
-            client.send(r='reticulate::py_eval("id(early_object) == early_identity")')
-            assert last_result_text(client) == "[1] TRUE\n", client.transcript[-1]
+            client.expect(
+                "[1] TRUE\n",
+                r='reticulate::py_eval("id(early_object) == early_identity")',
+            )
             if managed:
-                client.send(
-                    python="import yaml12; assert id(early_object) == early_identity; print('adopted interpreter resolved import')"
+                client.expect(
+                    "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\nadopted interpreter resolved import\n",
+                    python="import yaml12; assert id(early_object) == early_identity; print('adopted interpreter resolved import')",
                 )
-                assert last_result_text(client) == (
-                    "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
-                    "adopted interpreter resolved import\n"
-                ), client.transcript[-1]
                 accepted = client.send(requirements={"action": "get"})[
                     "structuredContent"
                 ]["requirements"]

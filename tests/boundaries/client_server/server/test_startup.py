@@ -300,7 +300,13 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
         release.release()
-        client.send()
+        # Releasing discovery still leaves cold R startup and the admitted
+        # cell to finish. Keep the raw cancellation/poll exchange intact.
+        client.response_timeout = 600
+        try:
+            client.send(timeout_ms=600_000)
+        finally:
+            client.response_timeout = 5
         assert last_result_text(client) == "[done]", client.transcript[-1]
         client.send(r='exists("cancelled_cell_ran", inherits = FALSE)')
         assert last_result_text(client) == "[1] TRUE\n", last_result_text(client)

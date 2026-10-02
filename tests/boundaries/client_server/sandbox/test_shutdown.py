@@ -70,7 +70,7 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             )
             wait_for_descendant(descendant_group, client.process)
             control.connect(client)
-            release_partial_sideband(marker)
+            release_partial_sideband(marker, client=client)
             control.wait_for(0, "partial_sideband_written")
 
             restarted = client.start_send(control="restart")
@@ -346,7 +346,7 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
             )
             wait_for_descendant(descendant_group, client.process)
             control.connect(client)
-            release_partial_sideband(marker)
+            release_partial_sideband(marker, client=client)
             control.wait_for(0, "partial_sideband_written")
 
             shutdown_started = time.monotonic()
