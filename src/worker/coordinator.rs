@@ -90,10 +90,22 @@ fn reexec_with_r_library_path(
 impl Coordinator {
     #[cfg(windows)]
     fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
-        r.idle()?;
-        match core::next_command()? {
-            CommandReadiness::Ready(message) => Ok(message),
-            CommandReadiness::Waiting => core::receive_server_message(),
+        loop {
+            r.idle()?;
+            let message = match core::next_command()? {
+                CommandReadiness::Ready(message) => Some(message),
+                CommandReadiness::Waiting => core::receive_idle_command()?,
+            };
+            // The relay signals interrupts before forwarding the next command,
+            // but their watcher may still be publishing native/Python state.
+            interrupt::finish_windows_publication().map_err(|error| error.to_string())?;
+            r.idle()?;
+            if let Some(message) = take_worker_failure() {
+                return Err(message);
+            }
+            if let Some(message) = message {
+                return Ok(message);
+            }
         }
     }
 

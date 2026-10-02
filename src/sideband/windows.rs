@@ -53,10 +53,6 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 }
 
 impl Reader {
-    pub(crate) fn has_buffered_data(&self) -> bool {
-        !self.input.buffer().is_empty()
-    }
-
     fn new(pipe: Pipe) -> Self {
         Self {
             input: BufReader::new(pipe),
@@ -81,6 +77,22 @@ impl Reader {
         }
         let frame = std::mem::take(&mut self.frame);
         serde_json::from_slice(&frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+
+    pub(crate) fn receive_or_wake<T: DeserializeOwned>(
+        &mut self,
+        wakeup: Event,
+    ) -> io::Result<Option<T>> {
+        // Reuse the overlapped read's cancellation wait. A wakeup preserves
+        // the partial frame, and receive resumes it after idle processing.
+        let pipe = self.input.get_mut();
+        pipe.set_cancel(wakeup);
+        let result = self.receive();
+        self.input.get_mut().clear_cancel();
+        match result {
+            Err(error) if error.kind() == io::ErrorKind::ConnectionAborted => Ok(None),
+            result => result.map(Some),
+        }
     }
 
     pub(crate) fn drain_available<T: DeserializeOwned>(

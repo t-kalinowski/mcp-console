@@ -109,10 +109,14 @@ PYTHON_FRAMEWORK = Requirement(
     FRAMEWORK_PYTHON.is_file(),
     "requires a macOS framework Python installation",
 )
+OLD_PYTHON_EXECUTABLE = Path(
+    os.environ.get("MCP_CONSOLE_TEST_OLD_PYTHON", SYSTEM_PYTHON)
+)
 OLD_PYTHON = Requirement(
     "Python before 3.10",
-    sys.platform == "darwin" and SYSTEM_PYTHON.is_file(),
-    "requires the macOS system Python fixture",
+    (sys.platform == "darwin" or "MCP_CONSOLE_TEST_OLD_PYTHON" in os.environ)
+    and OLD_PYTHON_EXECUTABLE.is_file(),
+    "requires macOS system Python or MCP_CONSOLE_TEST_OLD_PYTHON selecting Python 3.9",
 )
 
 SYSTEM_FONT_DIRECTORY = Path("/System/Library/Fonts")

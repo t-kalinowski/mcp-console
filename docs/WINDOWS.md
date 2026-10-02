@@ -50,6 +50,7 @@ The Windows relay uses private named pipes with overlapped I/O, inherited events
 The public MCP messages, server-relay JSONL, and worker sideband message shapes remain shared across platforms.
 R and Python interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
 The worker updates interpreter pending state and invokes the C runtime's current SIGINT handler without requiring a console window.
+Its idle command wait also wakes for interrupts and consumes them before dispatching a following cell, including an interrupt and cell supplied in the same `send`.
 The Windows worker does not service R's background event loop while waiting between cells; idle callbacks such as `later` are unsupported.
 
 Resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code.
@@ -70,7 +71,7 @@ The built-in worker uses the C runtime's inherited stdin descriptor because R su
 
 ## Validation
 
-Native acceptance covers Python-first and R-first startup, each runtime without the other, a Unicode virtualenv path, both bridge directions, input, interrupts including Python sleep, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
+Native acceptance covers Python-first and R-first startup, each runtime without the other, a Unicode virtualenv path, both bridge directions, input, active and idle interrupts including Python sleep and same-call following cells, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
 `tests/windows.py` includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
 It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir/uv arguments, real environment materialization, failures, interrupts, and descendant retirement.
 Run native commands exclusively in a checkout; the Unix checkout workflow and transcript/sandbox suites are not Windows validation targets.

@@ -374,12 +374,35 @@ pub(crate) fn finish_python_commit() -> bool {
 
 #[cfg(windows)]
 static WINDOWS_WAKEUP: OnceLock<crate::windows::Event> = OnceLock::new();
+#[cfg(windows)]
+static WINDOWS_REQUESTS: OnceLock<crate::windows::Event> = OnceLock::new();
 // Windows publication runs on an ordinary watcher thread. Serialize the flag
 // and event with consumption, including transfer to R during attachment.
 #[cfg(windows)]
 static WINDOWS_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(windows)]
+static WINDOWS_REQUEST_PUBLISHED: std::sync::Condvar = std::sync::Condvar::new();
+#[cfg(windows)]
 static PYTHON_INTERRUPT: OnceLock<unsafe extern "C" fn()> = OnceLock::new();
+
+#[cfg(windows)]
+pub(super) fn windows_wakeup() -> crate::windows::Event {
+    WINDOWS_WAKEUP.get().expect("interrupt initialized").clone()
+}
+
+#[cfg(windows)]
+pub(super) fn finish_windows_publication() -> io::Result<()> {
+    let mut publication = WINDOWS_REQUEST_LOCK
+        .lock()
+        .expect("interrupt publication lock");
+    let requests = WINDOWS_REQUESTS.get().expect("interrupt initialized");
+    while requests.wait(Some(std::time::Duration::ZERO))? {
+        publication = WINDOWS_REQUEST_PUBLISHED
+            .wait(publication)
+            .expect("interrupt publication lock");
+    }
+    Ok(())
+}
 
 #[cfg(windows)]
 pub(super) fn deliver_windows_r_interrupt() {
@@ -437,6 +460,9 @@ pub(super) fn initialize_native() -> io::Result<()> {
         return Err(io::Error::other("invalid worker interrupt handle"));
     }
     let requests = unsafe { crate::windows::Event::from_inherited(handle as _)? };
+    WINDOWS_REQUESTS
+        .set(requests.clone())
+        .map_err(|_| io::Error::other("interrupt requests already initialized"))?;
     let pending = crate::windows::Event::new()?;
     super::input::initialize_windows_stdin(pending.clone())
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -448,7 +474,6 @@ pub(super) fn initialize_native() -> io::Result<()> {
         .name("worker-interrupt".into())
         .spawn(move || {
             while requests.wait(None).is_ok() {
-                requests.reset();
                 {
                     let _publication = WINDOWS_REQUEST_LOCK
                         .lock()
@@ -465,6 +490,14 @@ pub(super) fn initialize_native() -> io::Result<()> {
                 unsafe {
                     libc::raise(libc::SIGINT);
                 }
+                // Keep the request visible until all signal APIs have returned.
+                // Idle command dispatch waits here before acknowledging it, so
+                // a delayed watcher cannot interrupt the following cell.
+                let _publication = WINDOWS_REQUEST_LOCK
+                    .lock()
+                    .expect("interrupt publication lock");
+                requests.reset();
+                WINDOWS_REQUEST_PUBLISHED.notify_all();
             }
         })?;
     unsafe {
