@@ -16,7 +16,7 @@ pub(super) struct Adapter {
 }
 
 pub(super) enum Selection {
-    Selected(NativePython),
+    Selected(Box<NativePython>),
     Unavailable,
     Incomplete,
 }
@@ -157,7 +157,7 @@ impl Adapter {
         }
         serde_json::from_str::<Option<NativePython>>(&selected)
             .map(|selected| match selected {
-                Some(selected) => Selection::Selected(selected),
+                Some(selected) => Selection::Selected(Box::new(selected)),
                 None => Selection::Unavailable,
             })
             .map_err(|error| format!("invalid selected Python configuration: {error}"))
