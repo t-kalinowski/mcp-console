@@ -67,7 +67,11 @@ Early cells reserve the ordinary evaluation slot while startup finishes.
 There is no cell queue.
 A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
 Connection closure cancels startup through the existing preparation/provider owners and waits for their cleanup contract.
+The preparation close barrier joins its owner thread after protocol closure and child reaping, so the server cannot exit with resolver cleanup still in flight.
+If the owner failed, closing retains its protocol error instead of replacing it with a generic stopped-owner error.
+A failed close handshake kills the preparation child before joining I/O and reaping, without starting a second exit allowance.
 It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
+Retirement cancels an in-flight Python bootstrap inspection without reporting that cancellation as a Python setup error.
 
 Initialization alone does not consume the unused-worker replacement exception.
 Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
