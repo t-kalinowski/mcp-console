@@ -57,6 +57,7 @@ class InstallationTests(unittest.TestCase):
                     edition = "2024"
                     [build-dependencies]
                     cc = "1"
+                    embed-resource = "3"
                     serde_json = "1"
                     sha2 = "0.11"
                     """)
