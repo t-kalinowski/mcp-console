@@ -140,6 +140,21 @@ impl WorkerOperationState {
         Ok(())
     }
 
+    pub(in crate::worker_client) fn interrupt_bootstrap_cell(
+        &self,
+        evaluation: Option<&Evaluation>,
+    ) -> Result<(), String> {
+        // Serialize interrupt admission with release of the waiting cell.
+        // kill(SIGINT) acknowledges dispatch, not worker-side observation.
+        let state = self.lock()?;
+        if matches!(state.bootstrap, Bootstrap::Running)
+            && let Some(evaluation) = evaluation
+        {
+            evaluation.interrupt_bootstrap()?;
+        }
+        Ok(())
+    }
+
     pub(in crate::worker_client) fn abort_bootstrap_cell(&self) -> Result<(), String> {
         let operation = self
             .lock()?

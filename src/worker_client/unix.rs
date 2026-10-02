@@ -1205,7 +1205,8 @@ impl WorkerShutdownHandle {
         self.stdin.send(data)
     }
 
-    pub(super) fn interrupt(&self) -> Result<(), String> {
+    pub(super) fn interrupt(&self, evaluation: Option<&super::Evaluation>) -> Result<(), String> {
+        self.operation.interrupt_bootstrap_cell(evaluation)?;
         self.interrupts.request(&self.commands)
     }
 

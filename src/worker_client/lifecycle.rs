@@ -422,7 +422,7 @@ impl Client {
         }
 
         let active = self.evaluation()?;
-        let (processes, worker_allowed, startup) = {
+        let (processes, worker_allowed, startup, evaluation) = {
             let mut lifecycle = self
                 .0
                 .lifecycle
@@ -443,6 +443,10 @@ impl Client {
                 lifecycle.processes.clone(),
                 worker_allowed,
                 lifecycle.interrupt_startup(),
+                active
+                    .as_ref()
+                    .filter(|active| active.generation.is(&lifecycle.generation))
+                    .map(|active| active.evaluation.clone()),
             )
         };
         // Receipt dispatch can mark the accepted cell before an interrupt reply.
@@ -460,24 +464,28 @@ impl Client {
             return processes
                 .worker
                 .ok_or_else(|| "worker is not running".to_string())?
-                .interrupt();
+                .interrupt(evaluation.as_deref());
         }
         Err("session control is in progress".to_string())
     }
 
     pub(super) fn interrupt_blocking(&self) -> Result<(), String> {
-        let (processes, startup) = {
+        let (processes, startup, evaluation) = {
+            let active = self.evaluation()?;
             let mut lifecycle = self
                 .0
                 .lifecycle
                 .lock()
                 .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-            (lifecycle.processes.clone(), lifecycle.interrupt_startup())
+            (
+                lifecycle.processes.clone(),
+                lifecycle.interrupt_startup(),
+                active
+                    .as_ref()
+                    .filter(|active| active.generation.is(&lifecycle.generation))
+                    .map(|active| active.evaluation.clone()),
+            )
         };
-        Self::interrupt_processes(processes, startup)
-    }
-
-    fn interrupt_processes(processes: ProcessStopHandles, startup: bool) -> Result<(), String> {
         if let Some(resolver) = processes.resolver
             && resolver.interrupt()?
         {
@@ -489,7 +497,7 @@ impl Client {
         processes
             .worker
             .ok_or_else(|| "worker is not running".to_string())?
-            .interrupt()
+            .interrupt(evaluation.as_deref())
     }
 
     /// Defers the replacement-ready marker when this admission owns a follow-up operation.

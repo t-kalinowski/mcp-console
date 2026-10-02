@@ -140,6 +140,47 @@ def bootstrap_output(
     client.transcript[start:] = [client.transcript[-1]]
 
 
+@executions(DIRECT)
+@requires(NATIVE_FIXTURES)
+def test_interrupt_before_bootstrap_publication_discards_waiting_cell(
+    binary: Path, execution: Execution
+) -> list:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary).resolve()
+        completing, complete, observed = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in ("completing", "complete", "observed")
+        ]
+        library = build_interposer(root, "bootstrap_completion_checkpoint")
+        environment = selected_python(root, Path(sys.executable))
+        environment.update(
+            {
+                LOADER_VARIABLE: str(library),
+                "MCP_CONSOLE_LANGUAGES": "python",
+                "MCP_CONSOLE_TEST_BOOTSTRAP_COMPLETING": str(completing.path),
+                "MCP_CONSOLE_TEST_BOOTSTRAP_COMPLETE": str(complete.path),
+                "MCP_CONSOLE_TEST_BOOTSTRAP_SIGNAL": str(observed.path),
+            }
+        )
+        # The sandbox launcher deliberately removes injected loader libraries.
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            try:
+                completing.wait("worker is publishing bootstrap completion")
+                client.initialize_and_list_tools()
+                client.expect(RUNNING, python="discarded_cell = True", timeout_ms=0)
+                client.expect(RUNNING, control="interrupt", timeout_ms=0)
+                observed.wait("worker handled SIGINT before publishing completion")
+                complete.release()
+                client.expect()
+                client.expect(
+                    "42\n",
+                    python="assert 'discarded_cell' not in globals(); 42",
+                )
+                return client.finish()[3:]
+            finally:
+                complete.release()
+
+
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_restart_retires_bootstrap_before_new_cell(
