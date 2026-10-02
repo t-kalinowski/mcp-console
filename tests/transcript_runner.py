@@ -2205,6 +2205,16 @@ runner: orphan
         self.assertIn("more than 15%", result.stderr)
         self.assertIn("not started: 16", result.stderr)
 
+    def test_reports_diagnostics_for_more_than_fifteen_failures(self) -> None:
+        names = self.write_failure_collection_suite(set(range(20)))
+        # Initialization fails first; the other 19 cases are already admitted
+        # together when the failure limit is crossed.
+        result = self.run_runner("--full", "--jobs", "20")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("20 of 20 transcript cases failed", result.stderr)
+        for name in names:
+            self.assertIn(f"AssertionError: failure in {name}", result.stderr)
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):

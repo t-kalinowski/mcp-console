@@ -29,6 +29,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, SimpleQueue
+from traceback import TracebackException
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
@@ -722,4 +723,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseExceptionGroup as error:
+        TracebackException.from_exception(
+            error, max_group_width=len(error.exceptions)
+        ).print()
+        raise SystemExit(1) from None
