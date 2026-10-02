@@ -12,7 +12,6 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 from checkout_workflow import cache_directory, checkout_owner, exclusive
 
 TARGETS = (
@@ -114,7 +113,11 @@ def main() -> None:
 def runner_checkout(args: argparse.Namespace, pin: dict) -> Path:
     return (
         args.checkout
-        or cache_directory() / "mcp-console/sandbox" / pin["repository"] / pin["commit"] / "source"
+        or cache_directory()
+        / "mcp-console/sandbox"
+        / pin["repository"]
+        / pin["commit"]
+        / "source"
     ).resolve()
 
 

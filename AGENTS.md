@@ -40,7 +40,7 @@ CI is the comprehensive merge gate.
 
 Windows x64 supports experimental local `serve --no-sandbox` with preinstalled R and Python.
 SQL, managed dependency resolution, sandboxing, and Windows SSH/Docker/SBX controllers are deferred.
-Follow [Windows validation](docs/WINDOWS.md#validation); the Unix checkout wrappers do not run on Windows.
+Follow [Windows validation](docs/WINDOWS.md#validation); shared workflow commands select native Windows checks.
 Run native build and validation commands exclusively in the checkout; Windows packaging holds a blocking native checkout lock outside `target`.
 
 Use temporary workspaces and `MCP_CONSOLE_HOME` for tests, preserving `HOME` and the caller's tool environment.
@@ -60,7 +60,7 @@ Group related command arguments and diagnostic fields.
 ## Local work and publishing
 
 For resumed work, verify `.dev-workflow/task.md`, when present, against Git status; it is a checkpoint, not authority.
-On macOS/Linux, use `scripts/with-checkout` for direct Cargo/Maturin commands.
+Use `scripts/with-checkout` for direct Cargo/Maturin commands (`scripts/with-checkout.cmd` on Windows).
 Do not bypass checkout ownership locks or reuse a busy worktree.
 See [development](docs/DEVELOPMENT.md) for the validation ladder and [release](RELEASE.md) for companion staging and packaging.
 
