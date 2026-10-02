@@ -2,33 +2,17 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-// A loaded handle is retained for the process lifetime. SQL calls copy its
+mod services;
+
+// A loaded handle is retained for the process lifetime. Runtime calls copy its
 // immutable function table under this lock, then release the guard before
 // invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
-#[cfg(windows)]
-type PySetInterrupt = unsafe extern "C" fn();
-#[cfg(windows)]
-static INTERRUPT_API: std::sync::OnceLock<(PyIsInitialized, PySetInterrupt)> =
-    std::sync::OnceLock::new();
-
-#[cfg(windows)]
-pub(crate) fn interrupt_windows() {
-    if let Some((initialized, interrupt)) = INTERRUPT_API.get() {
-        unsafe {
-            if initialized() != 0 {
-                interrupt();
-            }
-        }
-    }
-}
-
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
-type PySetPythonHome = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
-type PySysSetArgv = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t);
+type PySysSetArgvEx = unsafe extern "C" fn(libc::c_int, *mut *mut libc::wchar_t, libc::c_int);
 #[cfg(unix)]
 type PyOsSetSignal = unsafe extern "C" fn(libc::c_int, libc::sighandler_t) -> libc::sighandler_t;
 type PyEvalSaveThread = unsafe extern "C" fn() -> *mut libc::c_void;
@@ -42,6 +26,8 @@ type PyModuleGetDict = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
 type PyDictNew = unsafe extern "C" fn() -> *mut PyObject;
 type PyDictGetItemString =
     unsafe extern "C" fn(*mut PyObject, *const libc::c_char) -> *mut PyObject;
+type PyDictSetItemString =
+    unsafe extern "C" fn(*mut PyObject, *const libc::c_char, *mut PyObject) -> libc::c_int;
 type PyRunStringFlags = unsafe extern "C" fn(
     *const libc::c_char,
     libc::c_int,
@@ -60,8 +46,12 @@ type PyErrNormalizeException =
 type PyErrDisplay = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject);
 type PyErrClear = unsafe extern "C" fn();
 type PyErrPrint = unsafe extern "C" fn();
+type PyErrExceptionMatches = unsafe extern "C" fn(*mut PyObject) -> libc::c_int;
+type PyExceptionSetTraceback = unsafe extern "C" fn(*mut PyObject, *mut PyObject) -> libc::c_int;
 
 const PY_FILE_INPUT: libc::c_int = 257;
+// The seventh field of sys.flags on the supported CPython versions.
+const NO_SITE_FLAG_INDEX: isize = 6;
 const SQL_PROVIDER_R: libc::c_long = 0;
 const SQL_PROVIDER_MANAGED: libc::c_long = 1;
 const SQL_PROVIDER_HANDLED: libc::c_long = 2;
@@ -72,16 +62,40 @@ struct LoadedLibrary {
     api: PythonApi,
     interpreter: Interpreter,
     configuration: Option<Configuration>,
-    sql_runtime_installed: bool,
+    setup: SetupCompletion,
+}
+
+#[derive(Default)]
+struct SetupCompletion {
+    services: bool,
+    evaluator: bool,
+    site: bool,
+    sql: bool,
+    configured: bool,
+    environment: bool,
+}
+
+impl SetupCompletion {
+    fn mark_configured(&mut self) -> Result<(), String> {
+        if !self.services || !self.evaluator || !self.site || !self.sql || !self.environment {
+            return Err("Python runtime configuration preceded installation".to_string());
+        }
+        self.configured = true;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
 struct PythonApi {
     is_initialized: PyIsInitialized,
     set_program_name: PySetProgramName,
-    set_python_home: PySetPythonHome,
     initialize_ex: PyInitializeEx,
-    set_argv: PySysSetArgv,
+    no_site_flag: usize,
+    sys_get_object: unsafe extern "C" fn(*const libc::c_char) -> *mut PyObject,
+    struct_sequence_get_item: unsafe extern "C" fn(*mut PyObject, isize) -> *mut PyObject,
+    struct_sequence_set_item: unsafe extern "C" fn(*mut PyObject, isize, *mut PyObject),
+    long_from_long: unsafe extern "C" fn(libc::c_long) -> *mut PyObject,
+    set_argv_ex: PySysSetArgvEx,
     #[cfg(unix)]
     set_signal: PyOsSetSignal,
     save_thread: PyEvalSaveThread,
@@ -92,6 +106,7 @@ struct PythonApi {
     module_get_dict: PyModuleGetDict,
     dict_new: PyDictNew,
     dict_get_item_string: PyDictGetItemString,
+    dict_set_item_string: PyDictSetItemString,
     run_string_flags: PyRunStringFlags,
     call_no_args: PyObjectCallNoArgs,
     call_function_obj_args: PyObjectCallFunctionObjArgs,
@@ -103,21 +118,25 @@ struct PythonApi {
     err_display: PyErrDisplay,
     err_clear: PyErrClear,
     err_print: PyErrPrint,
+    err_exception_matches: PyErrExceptionMatches,
+    system_exit: usize,
+    exception_set_traceback: PyExceptionSetTraceback,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Interpreter {
     Uninitialized,
+    Initializing,
     External,
     // PyEval_SaveThread's main-thread state, retained until process exit.
     RustOwned { saved_thread: Option<usize> },
 }
 
 struct Configuration {
-    program_name: String,
-    python_home: String,
+    selected: super::NativePython,
+    // Preserve the selection hint before startup hooks can change cwd or PATH.
+    reticulate_python: Option<std::ffi::OsString>,
     program_name_wide: Vec<libc::wchar_t>,
-    python_home_wide: Vec<libc::wchar_t>,
 }
 
 pub(super) fn prepare_process_exit() -> Result<(), String> {
@@ -153,34 +172,527 @@ pub(super) fn load(path: &Path) -> Result<bool, String> {
     with_library(path, LoadedLibrary::attach)
 }
 
-pub(super) fn initialize(
-    path: &Path,
-    program_name: &str,
-    python_home: &str,
-) -> Result<bool, String> {
-    with_library(path, |library| {
-        library.initialize(program_name, python_home)
-    })
+pub(super) fn initialized_selection() -> Result<Option<super::NativePython>, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    Ok(slot.as_ref().and_then(|library| {
+        matches!(
+            library.interpreter,
+            Interpreter::RustOwned { .. } | Interpreter::External
+        )
+        .then(|| {
+            library
+                .configuration
+                .as_ref()
+                .map(|config| config.selected.clone())
+        })
+        .flatten()
+    }))
+}
+
+pub(super) fn environment_selection_unchanged() -> Result<bool, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    let configuration = slot
+        .as_ref()
+        .and_then(|library| library.configuration.as_ref())
+        .ok_or("Python interpreter selection is unavailable")?;
+    Ok(std::env::var_os("RETICULATE_PYTHON") == configuration.reticulate_python)
+}
+
+pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String> {
+    let path = Path::new(&selected.embedding.libpython);
+    let path = path.canonicalize().map_err(|error| {
+        format!(
+            "failed to resolve Python shared library `{}`: {error}",
+            path.display()
+        )
+    })?;
+    ensure_loaded(&path)?;
+    let (api, program_name_wide) = {
+        let mut slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        let library = slot.as_mut().unwrap();
+        library.ensure_path(&path)?;
+        if library.interpreter == Interpreter::Initializing {
+            return Err("Python interpreter initialization is already in progress".to_string());
+        }
+        // SAFETY: The resolved function has no preconditions.
+        if unsafe { (library.api.is_initialized)() } != 0 {
+            if library.interpreter == Interpreter::Uninitialized {
+                library.interpreter = Interpreter::External;
+            }
+            library.ensure_configuration(selected)?;
+            return Ok(matches!(library.interpreter, Interpreter::RustOwned { .. }));
+        }
+        match library.interpreter {
+            Interpreter::Uninitialized => {}
+            Interpreter::External => {
+                return Err("externally owned Python interpreter was finalized".to_string());
+            }
+            Interpreter::RustOwned { .. } => {
+                return Err("Rust-owned Python interpreter was finalized".to_string());
+            }
+            Interpreter::Initializing => unreachable!(),
+        }
+        let configuration = Configuration::new(selected)?;
+        let program_name_wide = configuration.program_name_wide.as_ptr();
+        super::startup::configure_process_environment(selected)?;
+        library.configuration = Some(configuration);
+        library.interpreter = Interpreter::Initializing;
+        (library.api, program_name_wide)
+    };
+
+    // The selected configuration remains owned by the process-lifetime library
+    // state. Release its lock before CPython runs site hooks or callbacks.
+    unsafe {
+        (api.set_program_name)(program_name_wide);
+        // Defer executable .pth files and sitecustomize until Console's input
+        // and interrupt services are connected by shared runtime setup.
+        *(api.no_site_flag as *mut libc::c_int) = 1;
+        (api.initialize_ex)(0);
+    }
+    // SAFETY: The resolved function has no preconditions.
+    if unsafe { (api.is_initialized)() } == 0 {
+        return Err("CPython initialization did not complete".to_string());
+    }
+    let mut argv = [program_name_wide.cast_mut()];
+    unsafe {
+        // Workspace lookup is installed by common setup, never the bin directory.
+        (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
+        let sys = (api.import_add_module)(c"sys".as_ptr());
+        if sys.is_null() {
+            return Err("cannot access Python interpreter arguments".into());
+        }
+        let original = (api.sys_get_object)(c"argv".as_ptr());
+        if (api.dict_set_item_string)((api.module_get_dict)(sys), c"orig_argv".as_ptr(), original)
+            != 0
+        {
+            return Err("cannot retain Python interpreter arguments".into());
+        }
+        // Interactive argv names no script; orig_argv retains the interpreter
+        // executable. Initialize both before site hooks, and only once.
+        (api.set_argv_ex)(0, std::ptr::null_mut(), 0);
+        #[cfg(unix)]
+        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
+    }
+    let mut slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?;
+    slot.as_mut().unwrap().interpreter = Interpreter::RustOwned { saved_thread: None };
+    Ok(true)
+}
+
+pub(super) fn initialize_site() -> Result<bool, String> {
+    let api = {
+        let mut slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
+        // An externally initialized interpreter has already run its site hooks.
+        if library.interpreter == Interpreter::External {
+            library.setup.site = true;
+        }
+        if library.setup.site {
+            return Ok(true);
+        }
+        library.api
+    };
+    // Hooks can call Console services. Release the library lock before Python.
+    let initialized = api.with_gil(|api| unsafe {
+        // Restore normal flags before multiprocessing forwards no_site as -S
+        // to children that need the selected environment's installed packages.
+        let flags = (api.sys_get_object)(c"flags".as_ptr());
+        let enabled = (api.long_from_long)(0);
+        if enabled.is_null() {
+            return Err("cannot restore Python site flags".into());
+        }
+        let previous = (api.struct_sequence_get_item)(flags, NO_SITE_FLAG_INDEX);
+        (api.struct_sequence_set_item)(flags, NO_SITE_FLAG_INDEX, enabled);
+        // SetItem steals the new reference without releasing the previous one.
+        (api.dec_ref)(previous);
+        *(api.no_site_flag as *mut libc::c_int) = 0;
+        let function = api.function(c"_mcp_console_services", c"initialize_site")?;
+        api.finish_setup((api.call_no_args)(function))
+    })?;
+    if initialized {
+        PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.site = true;
+    }
+    Ok(initialized)
+}
+
+pub(super) fn configure_environment() -> Result<bool, String> {
+    let selected = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.setup.environment {
+            return Ok(true);
+        }
+        library
+            .configuration
+            .as_ref()
+            .ok_or("Python has no inspected selection")?
+            .selected
+            .clone()
+    };
+    if !configure_inspected_environment(&selected)? {
+        return Ok(false);
+    }
+    PYTHON_LIBRARY
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .setup
+        .environment = true;
+    Ok(true)
+}
+
+pub(super) fn accept_configuration(selected: &super::NativePython) -> Result<(), String> {
+    let mut slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    let configuration = slot
+        .as_mut()
+        .and_then(|library| library.configuration.as_mut())
+        .ok_or("Python has no inspected selection")?;
+    // Keep the original program-name allocation alive for CPython. Only its
+    // current environment identity changes after successful live activation.
+    configuration.selected = selected.clone();
+    Ok(())
+}
+
+pub(super) fn selected_configuration() -> Result<super::NativePython, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    slot.as_ref()
+        .and_then(|library| library.configuration.as_ref())
+        .map(|configuration| configuration.selected.clone())
+        .ok_or_else(|| "Python has no inspected selection".into())
+}
+
+pub(super) fn add_bridge_path(path: &str) -> Result<(), String> {
+    let path = serde_json::to_string(path).map_err(|error| error.to_string())?;
+    let source = CString::new(format!(
+        "import sys\nif {path} not in sys.path: sys.path.append({path})"
+    ))
+    .map_err(|error| error.to_string())?;
+    api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_bridge", &source) })
 }
 
 pub(super) fn install_runtime(source: &str) -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+    let api = {
+        let slot = PYTHON_LIBRARY.lock().unwrap();
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.setup.evaluator {
+            return Ok(());
+        }
+        library.api
+    };
+    let source = CString::new(source)
+        .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
+    api.with_gil(|api| unsafe { api.run_runtime(&source) })?;
+    PYTHON_LIBRARY
         .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
+        .unwrap()
         .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.install_runtime(source)
+        .unwrap()
+        .setup
+        .evaluator = true;
+    Ok(())
 }
 
-pub(super) fn install_sql_runtime(source: &str) -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
+    let api = {
+        let slot = PYTHON_LIBRARY.lock().unwrap();
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        if library.setup.sql {
+            return Ok(true);
+        }
+        library.api
+    };
+    let source = CString::new(source)
+        .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
+    let installed = api.with_gil(|api| unsafe {
+        let result = api.run_module_result(c"_mcp_console_sql", &source)?;
+        api.finish_setup(result)
+    })?;
+    if installed {
+        PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+    }
+    Ok(installed)
+}
+
+fn api() -> Result<PythonApi, String> {
+    PYTHON_LIBRARY
         .lock()
-        .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
-        .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.install_sql_runtime(source)
+        .map_err(|_| "Python shared library state is unavailable")?
+        .as_ref()
+        .map(|library| library.api)
+        .ok_or_else(|| "Python shared library is not loaded".to_string())
+}
+
+pub(super) fn services_installed() -> Result<bool, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    Ok(slot
+        .as_ref()
+        .ok_or("Python shared library is not loaded")?
+        .setup
+        .services)
+}
+
+pub(super) fn install_services() -> Result<(), String> {
+    let (api, installed) = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        (library.api, library.setup.services)
+    };
+    api.with_gil(|api| services::install(api, installed))?;
+    if !installed {
+        PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?
+            .as_mut()
+            .unwrap()
+            .setup
+            .services = true;
+    }
+    Ok(())
+}
+
+pub(super) fn configure_import_resolution(
+    resolution: super::ImportResolution<'_>,
+) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_import_resolution")?;
+        let builtins = (api.import_add_module)(c"builtins".as_ptr());
+        if builtins.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let namespace = (api.module_get_dict)(builtins);
+        if namespace.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let none = (api.dict_get_item_string)(namespace, c"None".as_ptr());
+        if none.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let (callback, disabled_reason) = match resolution {
+            super::ImportResolution::Managed => (
+                api.function(c"_mcp_console_services", c"resolve_import")?,
+                None,
+            ),
+            super::ImportResolution::Disabled(reason) => (none, Some(reason)),
+        };
+        let reason = disabled_reason.map(|reason| {
+            (api.unicode_from_string_and_size)(reason.as_ptr().cast(), reason.len() as isize)
+        });
+        if reason.is_some_and(|reason| reason.is_null()) {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let result = (api.call_function_obj_args)(
+            function,
+            callback,
+            reason.unwrap_or(none),
+            std::ptr::null_mut::<PyObject>(),
+        );
+        if let Some(reason) = reason {
+            (api.dec_ref)(reason);
+        }
+        api.finish_setup(result)
+    })
+}
+
+pub(super) fn runtime_configured() -> Result<bool, String> {
+    let slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    Ok(slot
+        .as_ref()
+        .is_some_and(|library| library.setup.configured))
+}
+
+pub(super) fn mark_runtime_configured() -> Result<(), String> {
+    let mut slot = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable")?;
+    let library = slot.as_mut().ok_or("Python shared library is not loaded")?;
+    library.setup.mark_configured()
+}
+
+fn configure_inspected_environment(configuration: &super::NativePython) -> Result<bool, String> {
+    let executable = serde_json::to_string(configuration)
+        .map_err(|error| format!("cannot encode native Python environment: {error}"))?;
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_environment")?;
+        let executable = (api.unicode_from_string_and_size)(
+            executable.as_ptr().cast(),
+            executable.len() as isize,
+        );
+        if executable.is_null() {
+            return Err("cannot encode selected Python executable".into());
+        }
+        let result =
+            (api.call_function_obj_args)(function, executable, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(executable);
+        api.finish_setup(result)
+    })
+}
+
+pub(super) fn configure_native_child_environment(
+    configuration: &super::NativePython,
+) -> Result<bool, String> {
+    let encoded = serde_json::to_string(configuration)
+        .map_err(|error| format!("cannot encode native Python environment: {error}"))?;
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_native_child_environment")?;
+        let argument =
+            (api.unicode_from_string_and_size)(encoded.as_ptr().cast(), encoded.len() as isize);
+        if argument.is_null() {
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        api.finish_setup(result)
+    })
+}
+
+pub(super) fn display_setup_exception() -> Result<(), String> {
+    let api = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable")?;
+        let library = slot.as_ref().ok_or("Python shared library is not loaded")?;
+        // Retained setup exceptions arise after the private runtime is installed.
+        if !library.setup.evaluator {
+            return Ok(());
+        }
+        library.api
+    };
+    api.with_gil(|api| api.call_unit(c"_mcp_console", c"display_activation_exception"))
+}
+
+pub(super) fn display_activation_exception() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console", c"display_activation_exception"))
+}
+
+pub(super) fn activate_environment(script: &str, executable: &str) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"activate_environment")?;
+        let script =
+            (api.unicode_from_string_and_size)(script.as_ptr().cast(), script.len() as isize);
+        let executable = (api.unicode_from_string_and_size)(
+            executable.as_ptr().cast(),
+            executable.len() as isize,
+        );
+        if script.is_null() || executable.is_null() {
+            for object in [script, executable] {
+                if !object.is_null() {
+                    (api.dec_ref)(object);
+                }
+            }
+            return api.finish_setup(std::ptr::null_mut());
+        }
+        let result = (api.call_function_obj_args)(
+            function,
+            script,
+            executable,
+            std::ptr::null_mut::<PyObject>(),
+        );
+        (api.dec_ref)(script);
+        (api.dec_ref)(executable);
+        api.finish_setup(result)
+    })
+}
+
+pub(super) fn install_environment() -> Result<(), String> {
+    let source = CString::new(include_str!("environment.py")).unwrap();
+    api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_environment", &source) })
+}
+
+pub(super) fn environment_call(name: &CStr, request: &str) -> Result<Option<String>, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_environment", name)?;
+        let argument =
+            (api.unicode_from_string_and_size)(request.as_ptr().cast(), request.len() as isize);
+        if argument.is_null() {
+            api.display_pending_exception();
+            return Err("failed to create Python environment request".to_string());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        if result.is_null() {
+            if services::take_interrupt() {
+                return Ok(None);
+            }
+            api.display_pending_exception();
+            return Err(python_function_error(c"_mcp_console_environment", name));
+        }
+        let response = services::response_text(result).map(Some);
+        if response.is_err() {
+            api.display_pending_exception();
+        }
+        (api.dec_ref)(result);
+        response
+    })
+}
+
+pub(super) fn configure_module_defaults() -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"configure_module_defaults")?;
+        api.finish_setup((api.call_no_args)(function))
+    })
+}
+
+pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"eval_cell")?;
+        let source =
+            (api.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
+        let filename =
+            (api.unicode_from_string_and_size)(filename.as_ptr().cast(), filename.len() as isize);
+        if source.is_null() || filename.is_null() {
+            for object in [source, filename] {
+                if !object.is_null() {
+                    (api.dec_ref)(object);
+                }
+            }
+            api.display_pending_exception();
+            return Err("failed to create Python cell arguments".to_string());
+        }
+        let result = (api.call_function_obj_args)(
+            function,
+            source,
+            filename,
+            std::ptr::null_mut::<PyObject>(),
+        );
+        (api.dec_ref)(source);
+        (api.dec_ref)(filename);
+        if result.is_null() {
+            // Only an uncaught cell exit reaches CPython's REPL exit handler.
+            // Adapter and service calls retain their handled-exception boundary.
+            if (api.err_exception_matches)(api.system_exit as *mut PyObject) != 0 {
+                (api.err_print)();
+            } else {
+                api.display_pending_exception();
+            }
+        } else {
+            (api.dec_ref)(result);
+        }
+        Ok(())
+    })
 }
 
 pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
@@ -197,6 +709,17 @@ pub(super) fn use_r_sql() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
 }
 
+pub(super) fn configure_native_sql() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"enable_native"))
+}
+
+pub(super) fn take_sql_restore_request() -> Result<bool, String> {
+    let Some(api) = installed_sql_api()? else {
+        return Ok(false);
+    };
+    api.with_gil(PythonApi::call_take_sql_restore_request)
+}
+
 fn installed_sql_api() -> Result<Option<PythonApi>, String> {
     let library_slot = PYTHON_LIBRARY
         .lock()
@@ -204,17 +727,48 @@ fn installed_sql_api() -> Result<Option<PythonApi>, String> {
     let Some(library) = library_slot.as_ref() else {
         return Ok(None);
     };
-    Ok(library.sql_runtime_installed.then_some(library.api))
+    Ok(library.setup.sql.then_some(library.api))
 }
 
 pub(super) fn finish_initialization() -> Result<(), String> {
-    let mut library_slot = PYTHON_LIBRARY
+    let save_thread = {
+        let slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        let library = slot
+            .as_ref()
+            .ok_or_else(|| "Python shared library is not loaded".to_string())?;
+        match library.interpreter {
+            Interpreter::Uninitialized => {
+                return Err("Python interpreter is not initialized".to_string());
+            }
+            Interpreter::Initializing => {
+                return Err("Python interpreter initialization is incomplete".to_string());
+            }
+            Interpreter::External
+            | Interpreter::RustOwned {
+                saved_thread: Some(_),
+            } => return Ok(()),
+            Interpreter::RustOwned { saved_thread: None } => {}
+        }
+        if unsafe { (library.api.is_initialized)() } == 0 {
+            return Err("Rust-owned Python interpreter was finalized".to_string());
+        }
+        library.api.save_thread
+    };
+    // Reticulate has returned from its C adapter. Release the library lock
+    // before detaching the initial main-thread state.
+    let thread_state = unsafe { save_thread() };
+    if thread_state.is_null() {
+        return Err("CPython did not return its initial thread state".to_string());
+    }
+    let mut slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    let library = library_slot
-        .as_mut()
-        .ok_or_else(|| "Python shared library is not loaded".to_string())?;
-    library.finish_initialization()
+    slot.as_mut().unwrap().interpreter = Interpreter::RustOwned {
+        saved_thread: Some(thread_state as usize),
+    };
+    Ok(())
 }
 
 fn with_library<T>(
@@ -227,17 +781,34 @@ fn with_library<T>(
             path.display()
         )
     })?;
+    ensure_loaded(&path)?;
     let mut library_slot = PYTHON_LIBRARY
         .lock()
         .map_err(|_| "Python shared library state is unavailable".to_string())?;
-    if library_slot.is_none() {
-        *library_slot = Some(LoadedLibrary::open(path.clone())?);
-    }
     let library = library_slot
         .as_mut()
         .expect("Python shared library should have been loaded");
     library.ensure_path(&path)?;
     operation(library)
+}
+
+fn ensure_loaded(path: &Path) -> Result<(), String> {
+    let missing = PYTHON_LIBRARY
+        .lock()
+        .map_err(|_| "Python shared library state is unavailable".to_string())?
+        .is_none();
+    if missing {
+        // Loading a shared object may run its constructors. Keep those outside
+        // the library-state lock just as we do for interpreter execution.
+        let loaded = LoadedLibrary::open(path.to_path_buf())?;
+        let mut slot = PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python shared library state is unavailable".to_string())?;
+        if slot.is_none() {
+            *slot = Some(loaded);
+        }
+    }
+    Ok(())
 }
 
 impl LoadedLibrary {
@@ -277,7 +848,7 @@ impl LoadedLibrary {
             api,
             interpreter,
             configuration: None,
-            sql_runtime_installed: false,
+            setup: SetupCompletion::default(),
         })
     }
 
@@ -303,126 +874,69 @@ impl LoadedLibrary {
         Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }))
     }
 
-    fn initialize(&mut self, program_name: &str, python_home: &str) -> Result<bool, String> {
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } != 0 {
-            if self.interpreter == Interpreter::Uninitialized {
-                self.interpreter = Interpreter::External;
-            }
-            self.ensure_configuration(program_name, python_home)?;
-            return Ok(matches!(self.interpreter, Interpreter::RustOwned { .. }));
-        }
-
-        match self.interpreter {
-            Interpreter::Uninitialized => {}
-            Interpreter::External => {
-                return Err("externally owned Python interpreter was finalized".to_string());
-            }
-            Interpreter::RustOwned { .. } => {
-                return Err("Rust-owned Python interpreter was finalized".to_string());
-            }
-        }
-
-        let configuration = Configuration::new(program_name, python_home)?;
-        // SAFETY: The pointers are NUL-terminated process-lifetime buffers.
-        // CPython is not initialized, and these legacy configuration calls
-        // must precede Py_InitializeEx for the supported Python versions.
-        unsafe {
-            (self.api.set_program_name)(configuration.program_name_wide.as_ptr());
-            (self.api.set_python_home)(configuration.python_home_wide.as_ptr());
-            (self.api.initialize_ex)(0);
-        }
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } == 0 {
-            return Err("CPython initialization did not complete".to_string());
-        }
-
-        let mut argv = [configuration.program_name_wide.as_ptr().cast_mut()];
-        // SAFETY: CPython is initialized and argv points to the retained,
-        // NUL-terminated program-name buffer.
-        unsafe {
-            (self.api.set_argv)(1, argv.as_mut_ptr());
-            // Py_InitializeEx(0) does not install Python's signal handlers,
-            // including its normal SIGPIPE disposition. Preserve the prior
-            // reticulate-hosted behavior for the worker process lifetime.
-            #[cfg(unix)]
-            (self.api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
-        }
-
-        self.configuration = Some(configuration);
-        self.interpreter = Interpreter::RustOwned { saved_thread: None };
-        #[cfg(windows)]
-        {
-            let interrupt =
-                unsafe { load_symbol(&self._library, &self.path, b"PyErr_SetInterrupt\0")? };
-            let _ = INTERRUPT_API.set((self.api.is_initialized, interrupt));
-        }
-        Ok(true)
-    }
-
-    fn ensure_configuration(&self, program_name: &str, python_home: &str) -> Result<(), String> {
+    fn ensure_configuration(&mut self, selected: &super::NativePython) -> Result<(), String> {
         let Some(configuration) = self.configuration.as_ref() else {
+            // Retain the observed identity when attaching to an interpreter
+            // initialized before Console installed its startup adapter. Its
+            // environment and thread-state ownership are already established.
+            self.configuration = Some(Configuration::new(selected)?);
             return Ok(());
         };
-        if configuration.program_name == program_name && configuration.python_home == python_home {
+        if &configuration.selected == selected {
             return Ok(());
         }
         Err("Python interpreter is already initialized with different configuration".to_string())
     }
-
-    fn install_runtime(&self, source: &str) -> Result<(), String> {
-        let source = CString::new(source)
-            .map_err(|_| "embedded Python runtime source contains NUL".to_string())?;
-        self.api.with_gil(|api| {
-            // SAFETY: The GIL is held and the source is a valid NUL-terminated
-            // buffer for the duration of the call.
-            unsafe { api.run_runtime(&source) }
-        })
-    }
-
-    fn install_sql_runtime(&mut self, source: &str) -> Result<(), String> {
-        let source = CString::new(source)
-            .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
-        self.api.with_gil(|api| {
-            // SAFETY: The GIL is held and both strings are valid for the call.
-            unsafe { api.run_module(c"_mcp_console_sql", &source) }
-        })?;
-        self.sql_runtime_installed = true;
-        Ok(())
-    }
-
-    fn finish_initialization(&mut self) -> Result<(), String> {
-        match self.interpreter {
-            Interpreter::Uninitialized => {
-                return Err("Python interpreter is not initialized".to_string());
-            }
-            Interpreter::External
-            | Interpreter::RustOwned {
-                saved_thread: Some(_),
-            } => {
-                return Ok(());
-            }
-            Interpreter::RustOwned { saved_thread: None } => {}
-        }
-        // SAFETY: The resolved function has no preconditions.
-        if unsafe { (self.api.is_initialized)() } == 0 {
-            return Err("Rust-owned Python interpreter was finalized".to_string());
-        }
-        // SAFETY: Rust initialized CPython on this thread, and reticulate's
-        // wrapped C initializer leaves this initial thread state attached on
-        // both its return and unwind paths.
-        let thread_state = unsafe { (self.api.save_thread)() };
-        if thread_state.is_null() {
-            return Err("CPython did not return its initial thread state".to_string());
-        }
-        self.interpreter = Interpreter::RustOwned {
-            saved_thread: Some(thread_state as usize),
-        };
-        Ok(())
-    }
 }
 
 impl PythonApi {
+    unsafe fn finish_setup(&self, result: *mut PyObject) -> Result<bool, String> {
+        // Keep the original exception and traceback for the R adapter to
+        // rethrow through reticulate's existing condition/interrupt boundary.
+        // Do not display it here or turn a failed setup into activation success.
+        unsafe {
+            if !result.is_null() {
+                (self.dec_ref)(result);
+                return Ok(true);
+            }
+            let mut exception_type = std::ptr::null_mut();
+            let mut exception_value = std::ptr::null_mut();
+            let mut traceback = std::ptr::null_mut();
+            (self.err_fetch)(&mut exception_type, &mut exception_value, &mut traceback);
+            (self.err_normalize_exception)(
+                &mut exception_type,
+                &mut exception_value,
+                &mut traceback,
+            );
+            let builtins = (self.import_add_module)(c"builtins".as_ptr());
+            let namespace = if builtins.is_null() {
+                std::ptr::null_mut()
+            } else {
+                (self.module_get_dict)(builtins)
+            };
+            let retained = !exception_value.is_null()
+                && !namespace.is_null()
+                && (traceback.is_null()
+                    || (self.exception_set_traceback)(exception_value, traceback) == 0)
+                && (self.dict_set_item_string)(
+                    namespace,
+                    c"_mcp_console_setup_error".as_ptr(),
+                    exception_value,
+                ) == 0;
+            for object in [exception_type, exception_value, traceback] {
+                if !object.is_null() {
+                    (self.dec_ref)(object);
+                }
+            }
+            if retained {
+                Ok(false)
+            } else {
+                (self.err_clear)();
+                Err("failed to retain Python setup exception".to_string())
+            }
+        }
+    }
+
     fn with_gil<T>(
         &self,
         operation: impl FnOnce(&PythonApi) -> Result<T, String>,
@@ -483,6 +997,23 @@ impl PythonApi {
     }
 
     unsafe fn run_module(&self, name: &CStr, source: &CStr) -> Result<(), String> {
+        let result = unsafe { self.run_module_result(name, source)? };
+        if result.is_null() {
+            unsafe { (self.err_print)() };
+            return Err(format!(
+                "failed to install Python module `{}`",
+                name.to_string_lossy()
+            ));
+        }
+        unsafe { (self.dec_ref)(result) };
+        Ok(())
+    }
+
+    unsafe fn run_module_result(
+        &self,
+        name: &CStr,
+        source: &CStr,
+    ) -> Result<*mut PyObject, String> {
         let module = unsafe { (self.import_add_module)(name.as_ptr()) };
         if module.is_null() {
             unsafe { (self.err_print)() };
@@ -499,7 +1030,7 @@ impl PythonApi {
                 name.to_string_lossy()
             ));
         }
-        let result = unsafe {
+        Ok(unsafe {
             (self.run_string_flags)(
                 source.as_ptr(),
                 PY_FILE_INPUT,
@@ -507,16 +1038,7 @@ impl PythonApi {
                 namespace,
                 std::ptr::null_mut(),
             )
-        };
-        if result.is_null() {
-            unsafe { (self.err_print)() };
-            return Err(format!(
-                "failed to install Python module `{}`",
-                name.to_string_lossy()
-            ));
-        }
-        unsafe { (self.dec_ref)(result) };
-        Ok(())
+        })
     }
 
     fn call_unit(&self, module: &CStr, name: &CStr) -> Result<(), String> {
@@ -570,10 +1092,28 @@ impl PythonApi {
         }
     }
 
+    fn call_take_sql_restore_request(&self) -> Result<bool, String> {
+        // SAFETY: The GIL is held for the private Python call and reference release.
+        unsafe {
+            let function = self.function(c"_mcp_console_sql", c"take_managed_restore_request")?;
+            let result = (self.call_no_args)(function);
+            if result.is_null() {
+                self.display_pending_exception();
+                return Err("Python SQL restore request failed".to_string());
+            }
+            let requested = (self.long_as_long)(result);
+            (self.dec_ref)(result);
+            match requested {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err("Python SQL restore request returned an invalid value".to_string()),
+            }
+        }
+    }
+
     fn display_pending_exception(&self) {
-        // PyErr_Print exits the process for SystemExit. Fetch and display the
-        // pending exception directly so every Python language exception remains
-        // ordinary worker output.
+        // Adapter and service failures are handled here, including SystemExit.
+        // Fetch and display them without invoking CPython's process exit handler.
         unsafe {
             let mut exception_type = std::ptr::null_mut();
             let mut exception_value = std::ptr::null_mut();
@@ -632,9 +1172,19 @@ impl PythonApi {
             // SAFETY: Symbol types match the documented CPython C API.
             is_initialized: unsafe { load_symbol(library, path, b"Py_IsInitialized\0")? },
             set_program_name: unsafe { load_symbol(library, path, b"Py_SetProgramName\0")? },
-            set_python_home: unsafe { load_symbol(library, path, b"Py_SetPythonHome\0")? },
             initialize_ex: unsafe { load_symbol(library, path, b"Py_InitializeEx\0")? },
-            set_argv: unsafe { load_symbol(library, path, b"PySys_SetArgv\0")? },
+            no_site_flag: unsafe {
+                load_symbol::<*mut libc::c_int>(library, path, b"Py_NoSiteFlag\0")? as usize
+            },
+            sys_get_object: unsafe { load_symbol(library, path, b"PySys_GetObject\0")? },
+            struct_sequence_get_item: unsafe {
+                load_symbol(library, path, b"PyStructSequence_GetItem\0")?
+            },
+            struct_sequence_set_item: unsafe {
+                load_symbol(library, path, b"PyStructSequence_SetItem\0")?
+            },
+            long_from_long: unsafe { load_symbol(library, path, b"PyLong_FromLong\0")? },
+            set_argv_ex: unsafe { load_symbol(library, path, b"PySys_SetArgvEx\0")? },
             #[cfg(unix)]
             set_signal: unsafe { load_symbol(library, path, b"PyOS_setsig\0")? },
             save_thread: unsafe { load_symbol(library, path, b"PyEval_SaveThread\0")? },
@@ -645,6 +1195,7 @@ impl PythonApi {
             module_get_dict: unsafe { load_symbol(library, path, b"PyModule_GetDict\0")? },
             dict_new: unsafe { load_symbol(library, path, b"PyDict_New\0")? },
             dict_get_item_string: unsafe { load_symbol(library, path, b"PyDict_GetItemString\0")? },
+            dict_set_item_string: unsafe { load_symbol(library, path, b"PyDict_SetItemString\0")? },
             run_string_flags: unsafe { load_symbol(library, path, b"PyRun_StringFlags\0")? },
             call_no_args: unsafe { load_symbol(library, path, b"PyObject_CallNoArgs\0")? },
             call_function_obj_args: unsafe {
@@ -662,6 +1213,15 @@ impl PythonApi {
             err_display: unsafe { load_symbol(library, path, b"PyErr_Display\0")? },
             err_clear: unsafe { load_symbol(library, path, b"PyErr_Clear\0")? },
             err_print: unsafe { load_symbol(library, path, b"PyErr_Print\0")? },
+            err_exception_matches: unsafe {
+                load_symbol(library, path, b"PyErr_ExceptionMatches\0")?
+            },
+            system_exit: unsafe {
+                *load_symbol::<*const *mut PyObject>(library, path, b"PyExc_SystemExit\0")?
+            } as usize,
+            exception_set_traceback: unsafe {
+                load_symbol(library, path, b"PyException_SetTraceback\0")?
+            },
         })
     }
 }
@@ -694,12 +1254,11 @@ unsafe fn load_symbol<T: Copy>(
 }
 
 impl Configuration {
-    fn new(program_name: &str, python_home: &str) -> Result<Self, String> {
+    fn new(selected: &super::NativePython) -> Result<Self, String> {
         Ok(Self {
-            program_name: program_name.to_string(),
-            python_home: python_home.to_string(),
-            program_name_wide: wide_string(program_name, "program name")?,
-            python_home_wide: wide_string(python_home, "home")?,
+            selected: selected.clone(),
+            reticulate_python: std::env::var_os("RETICULATE_PYTHON"),
+            program_name_wide: wide_string(&selected.embedding.python, "program name")?,
         })
     }
 }

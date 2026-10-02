@@ -170,7 +170,7 @@ class WindowsRelay(unittest.TestCase):
                 ("", None),
             ):
                 with self.subTest(r_user=r_user, profile=profile):
-                    environment = dict(os.environ, HOME=home)
+                    environment = dict(os.environ, HOME=home, TMPDIR=home)
                     for key, value in (("R_USER", r_user), ("USERPROFILE", profile)):
                         if value is None:
                             environment.pop(key, None)

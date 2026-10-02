@@ -26,6 +26,40 @@ def configure(workspace: Path, value: object) -> None:
     config.write_text(json.dumps(value))
 
 
+def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
+    yaml = code("""
+        !configuration
+        !key target: !target
+          transport: !transport {kind: !kind local}
+          compute: !compute {kind: !kind host}
+          command: !command null
+        sandbox: !policy
+          environment: !environment {LABEL: !text tagged}
+          filesystem: !filesystem {entries: !entries []}
+        """)
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary).resolve()
+        config = workspace / CONFIG
+        config.parent.mkdir(parents=True)
+        config.write_text(yaml)
+        with McpClient(
+            binary,
+            (
+                "serve",
+                "--no-sandbox",
+                "--worker",
+                "unused-worker",
+                "-c",
+                "sandbox.environment.ADDED=override",
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+    return [{"yaml": yaml, "initialized": True}]
+
+
 @requires(SANDBOX, NATIVE_FIXTURES)
 def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
     records = []
@@ -208,6 +242,172 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     return [{"overrides": list(overrides), "initialized": True}]
 
 
+def test_discovers_home_configuration_with_project_precedence(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        workspace = root / "project"
+        home.mkdir()
+        workspace.mkdir()
+        environment = {**os.environ, "HOME": str(home)}
+        environment.pop("MCP_CONSOLE_HOME", None)
+        configure(home, {"unknown": "home"})
+
+        def launch_error() -> str:
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox"],
+                cwd=workspace,
+                env=environment,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            return result.stderr
+
+        assert str(home / CONFIG) in launch_error()
+
+        fixture_workspace = root / "default-client"
+        fixture_workspace.mkdir()
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=fixture_workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+        opt_out_workspace = root / "opt-out-client"
+        opt_out_workspace.mkdir()
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=opt_out_workspace,
+            record_in_project=False,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+        assert not (opt_out_workspace / ".agents").exists()
+
+        configure(workspace, {})
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+        configure(workspace, {"unknown": "project"})
+        error = launch_error()
+        assert CONFIG in error and str(home / CONFIG) not in error, error
+
+        (workspace / CONFIG).unlink()
+        assert str(home / CONFIG) in launch_error()
+        configure(home, {})
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment=environment,
+            current_directory=workspace,
+            record_in_project=False,
+            use_home_configuration=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+    return [{"home_fallback": True, "project_precedence": True}]
+
+
+def test_discovers_explicit_console_home(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        console_home = root / "console"
+        workspace = root / "workspace"
+        console_home.mkdir()
+        workspace.mkdir()
+        configure(home, {"unknown": "ambient home"})
+        selected_config = console_home / "config.yaml"
+        selected_config.write_text('{"unknown": "selected console home"}')
+        environment = os.environ | {
+            "HOME": str(home),
+            "MCP_CONSOLE_HOME": str(console_home),
+        }
+        for arguments in (("serve", "--no-sandbox"), ("sandbox", "--", "unused")):
+            result = subprocess.run(
+                [binary, *arguments],
+                cwd=workspace,
+                env=environment,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert str(selected_config) in result.stderr, result.stderr
+            assert str(home / CONFIG) not in result.stderr, result.stderr
+
+        configure(workspace, {})
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment,
+            workspace,
+            record_in_project=False,
+            use_home_configuration=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+        (workspace / CONFIG).unlink()
+        selected_config.unlink()
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox"),
+            environment,
+            workspace,
+            record_in_project=False,
+            use_home_configuration=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+
+        for invalid in ("", "relative/path"):
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox"],
+                cwd=workspace,
+                env=environment | {"MCP_CONSOLE_HOME": invalid},
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert "MCP_CONSOLE_HOME must be an absolute path" in result.stderr, (
+                result.stderr
+            )
+    return [
+        {
+            "console_home_override": True,
+            "project_precedence": True,
+            "invalid_console_home_rejected": True,
+        }
+    ]
+
+
 def test_rejects_malformed_overrides(binary: Path) -> Transcript:
     cases = (
         "sandbox",
@@ -238,6 +438,34 @@ def test_rejects_malformed_overrides(binary: Path) -> Transcript:
             assert result.returncode == 1 and result.stdout == "", result
             assert "configuration override" in result.stderr, result.stderr
             records.append({"override": override, "stderr": result.stderr})
+    return records
+
+
+def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, {"python": "~/.venv/bin/python"})
+        for home in (None, "", "relative/home"):
+            environment = dict(os.environ)
+            environment.pop("HOME", None)
+            if home is not None:
+                environment["HOME"] = home
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox"],
+                cwd=workspace,
+                env=environment,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert (
+                "configured Python home expansion requires an absolute HOME"
+                in result.stderr
+            )
+            records.append({"HOME": home, "stderr": result.stderr})
     return records
 
 

@@ -3,7 +3,7 @@ use std::process::Stdio;
 use serde::Serialize;
 
 use super::process::{
-    ResolverProcess, ResolverStopHandle, read_output, resolver_command, stop_resolver, write_input,
+    ResolverProcess, ResolverStopHandle, read_output, resolver_command, write_input,
 };
 
 const MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE: &str = include_str!("programs/duckdb_extensions.R");
@@ -23,17 +23,15 @@ pub(crate) fn resolve_duckdb_extensions(
 
     let rscript = managed_r.rscript();
     let mut command = resolver_command(rscript);
-    let source =
-        super::process::r_expression(&mut command, MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE);
     command
-        .args(["--vanilla", "-e", source])
+        .args(["--vanilla", "-e", MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     managed_r.configure_worker(&mut command)?;
     // DuckDB performs its normal extension installation outside the sandbox.
     // Names are JSON input, never R or SQL source.
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let mut child = command.spawn().map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",
             rscript.display()
@@ -43,11 +41,13 @@ pub(crate) fn resolve_duckdb_extensions(
     let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
     let stdin = child.stdin.take().expect("resolver stdin is piped");
     let resolver = ResolverProcess::new();
+    resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
-        let _ = stop_resolver(&mut child, rscript, "DuckDB extension");
+        resolver
+            .abort(&mut child, rscript, "DuckDB extension")
+            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
         return Err(error);
     }
-    resolver.watch_exit(child.id());
     let output = resolver.wait(
         &mut child,
         write_input(stdin, input),

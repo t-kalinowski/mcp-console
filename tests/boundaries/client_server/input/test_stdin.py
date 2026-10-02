@@ -56,18 +56,31 @@ def test_idle_stdin_startup_blocks_preparation(
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        environment["ZOD_STARTUP_STARTED"] = str(
+            temporary_path / "initial-waiting-ready"
+        )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                "--worker",
+                str(zod),
+                *(
+                    ("--writable-root", str(temporary_path))
+                    if execution == SANDBOXED
+                    else ()
+                ),
+            ),
             environment,
         )
         passed = False
         try:
             client.initialize_and_list_tools()
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
             idle_stdin = client.start_send(stdin="queued\n")
             wait_for_marker(
                 temporary_path,
-                "zod-replacement-waiting-ready",
+                "initial-waiting-ready",
                 client,
             )
 
@@ -221,7 +234,11 @@ def test_preserves_unexposed_input_output(
 
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == (
-            'before\n[input requested: "late> "]\nduring request\nzod stdin: answer\n'
+            """before
+[input requested: "late> "]
+during request
+zod stdin: answer
+"""
         )
         return client.finish()
 

@@ -3,29 +3,33 @@
 import os
 import sys
 import tempfile
+import time
 from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
-    assert_large_output,
+    LARGE_OUTPUT_SIZE,
     large_output,
     last_tool_text,
     remove_length_marker,
 )
 from support.previews import (
+    OMISSION,
     TEXT_BUDGET,
     assert_preview,
     cell_text,
     compact_previews,
     normalize_pipe_counts,
     normalize_preview_paths,
+    session_directory,
 )
 from support.client import McpClient, stop_client
+from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
-from support.checkpoints import FifoCheckpoint
+from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
@@ -117,21 +121,43 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    client = McpClient(
-        binary,
-        execution.serve("--worker", str(zod)),
-    )
-    client.initialize_and_list_tools()
-    client.send(r="emit stdout")
-    output = last_tool_text(client)
-    raw = cell_text(client, 1)
-    assert_large_output(raw, "zod stdout 👩🏽‍💻\n")
-    assert_preview(output, raw)
-    normalize_preview_paths(client)
-    compact_previews(client, "x", "y", "z", "s", "p", "ab")
-    return client.finish()
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        McpClient(
+            binary,
+            execution.serve("--worker", str(zod)),
+            {**os.environ, "TMPDIR": temporary},
+        ) as client,
+    ):
+        client.initialize_and_list_tools()
+        request = client.start_send(r="emit stdout")
+        release = wait_for_marker(
+            Path(temporary), "zod-release-stdout-completion", client
+        )
+        expected = large_output("zod stdout 👩🏽‍💻\n")
+        recorded = session_directory(client) / "outputs/call-000001.log"
+        # stdout and completion use independent transports. A completed write
+        # does not prove the server has captured the pipe's remaining bytes.
+        deadline = time.monotonic() + 10
+        with Events() as events:
+            events.watch_file(recorded)
+            events.watch_process(client.process.pid)
+            while recorded.stat().st_size < len(expected.encode()):
+                assert client.process.poll() is None, "server exited before capture"
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and events.wait(remaining), (
+                    "server did not capture the complete stdout payload"
+                )
+        assert recorded.read_bytes() == expected.encode()
+        release_fixture_checkpoint(release)
+        client.receive(request)
+        assert_preview(last_tool_text(client), expected)
+        normalize_preview_paths(client)
+        compact_previews(client, "x", "y", "z", "s", "p", "ab")
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -394,9 +420,18 @@ def test_drains_background_stderr_while_idle(
         assert "no retained cell log" in output
         assert "outputs/call-" not in output
         assert cell_text(client, 1) == ""
-        assert_preview(
-            output.removesuffix("\n[idle]"), large_output("zod background stderr\n")
+        preview = output.removesuffix("\n[idle]")
+        (marker,) = list(OMISSION.finditer(preview))
+        observed = (
+            len(preview[: marker.start()].encode())
+            + int(marker[1])
+            + len(preview[marker.end() :].encode())
         )
+        expected = large_output("zod background stderr\n")
+        assert len(expected) <= observed <= len(expected) + LARGE_OUTPUT_SIZE, observed
+        assert f"({observed} raw bytes observed)" in preview
+        assert_preview(preview, expected + ("y" * (observed - len(expected))))
+        normalize_pipe_counts(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 

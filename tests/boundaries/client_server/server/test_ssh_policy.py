@@ -207,6 +207,8 @@ def test_nul_runtime_selectors_fail_on_remote_host_without_panicking(
                     sandbox={"environment": {name: "invalid\0selection"}},
                 )
                 with McpClient(binary, ("serve",), environment, root) as client:
+                    client.startup_error()
+                    client.stdin.close()
                     assert client.process.wait(timeout=12) != 0
                     assert not client.stdout.read()
                     errors = client.stderr.read()

@@ -1,513 +1,256 @@
 # Requirements and environments
 
-**Status:** Implemented current behavior
+Managed dependency resolution and the `resolve` subcommand are not yet supported on [Windows](WINDOWS.md).
+Windows local sessions use preinstalled R/Python packages and reject preparation requests with an unavailable error.
 
-This document describes how MCP Console prepares and retains R packages, Python packages, and DuckDB extensions.
-The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation timing, control and stdin ordering, failure effects, and wait timeouts.
-This guide describes preparation before a cell, standalone preparation, and requirements included in restart.
-[Host resolution and trust](#host-resolution-and-trust) explains why requirement input is restricted and which work runs with server permissions.
-
-Prepared requirements configure the built-in worker; they do not attach an R package, import a Python package, or load a DuckDB extension.
-Runtime use is covered by the [built-in runtime guide](BUILTIN_RUNTIME.md).
-Exact live-worker messages and custom-worker receipts belong to the [worker protocol](WORKER_PROTOCOL.md).
-
-[SSH targets](SSH.md) use the same capability discovery and managed preparation on the execution host.
-The controller never discovers local R/Python or executes resolvers for remote sessions.
-A separate trusted remote preparation owner captures resolver settings before MCP readiness without preparing defaults or starting a worker.
-When a bootstrap is available, `requirements`, first-use defaults, automatic R/Python requests, and restart preparation use the remote R installation, caches, filesystem, and temporary files.
-Bare fallback remains available when no bootstrap is found; a selected bootstrap failure does not fall back.
-An explicit remote Python interpreter disables managed Python additions while retaining managed R and DuckDB.
-The local server keeps requirement merging, transaction and activation decisions, generation ownership, and recording.
-Remote results require confirmed resolver cleanup before commit; uncertain completion blocks further preparation and replacement.
-
-[Docker targets](DOCKER.md) and [Docker Sandbox targets](DOCKER_SANDBOX.md) deliberately use a preinstalled image environment.
-Capability probes never select `uv` or `ir`; `requirements`, automatic resolution, and worker preparation callbacks are disabled.
-Reticulate cannot silently create a managed environment.
-Rebuild the image and start a new server session to add packages.
-
-On Linux, preparing a managed environment can compile R packages, including the resolver's own `pak` tooling.
-On Debian and Ubuntu, install `build-essential`, `pkg-config`, and `libcurl4-openssl-dev` for that bootstrap.
-Additional R packages can require their own system libraries and development headers.
+The server retains dependency declarations and resolved environments across worker generations.
+Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
+[Send ordering](SEND_OPERATIONS.md) defines when preparation, control, input, and code run.
+[Host resolution and trust](#host-resolution-and-trust) is essential: installation runs outside the worker sandbox.
 
 ## Retained environments
 
-MCP Console retains one environment configuration in server memory:
+The retained environment combines an R library/declaration, a normalized Python manifest and inspected interpreter identity, and DuckDB extension names.
+It lives in server memory, not across server processes.
+A plain restart reuses accepted requirements, including successful automatic additions, without resolving again.
 
-- a resolved R library and its complete R requirement set;
-- a selected Python environment and normalized Python manifest; and
-- a set of prepared DuckDB extension names.
+| Target/environment                    | Preparation                                                                                                  |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Local/SSH with R and resolver support | Managed R, Python when not explicitly selected, and R-backed DuckDB extensions.                              |
+| Local/SSH without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.       |
+| Bare R-capable runtime                | Preinstalled packages/adapters; inspection only.                                                             |
+| Docker/SBX                            | Preinstalled image/template; inspection only. No implicit resolver or installation.                          |
+| Custom worker                         | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python. |
 
-The sets are additive.
-Repeating an accepted requirement is idempotent, and a restart reuses everything retained so far, including R packages and Python distributions resolved automatically during earlier cells.
-The current API has no operation to remove a requirement, replace a manifest, select a named environment, or persist the retained configuration across server processes.
+The default optional declarations are:
 
-The built-in server prepares these defaults when an operation first needs an environment:
+| Environment | Defaults                                                                    |
+| ----------- | --------------------------------------------------------------------------- |
+| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr` |
+| Python      | `numpy`, `pandas`; also `duckdb` without R                                  |
+| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                          |
 
-| Environment | Defaults                                                             |
-| ----------- | -------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, and `nanoarrow` |
-| Python      | NumPy and pandas when Python is server-managed                       |
-| DuckDB      | ICU and JSON extensions                                              |
+Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
+Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
+Without R, an empty Python declaration omits DuckDB, but a user-selected DB-API connection can still provide SQL.
 
-These defaults apply when startup finds a resolver bootstrap from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
-Server-managed Python additionally needs `uv`; when only `ir` is on `PATH`, the resolved reticulate installation supplies it.
-If no resolver bootstrap is available, the built-in server retains no managed environment, exposes no `requirements` field, and starts a bare runtime from the packages already available to R, reticulate, and DuckDB.
-R, Python, and SQL cells remain available, with ordinary R missing-package errors and explicit unavailable-adapter diagnostics where appropriate.
+Default preparation and built-in worker launch run in the background; languages initialize on demand.
+Discovery and first-use preparation are different stages.
+See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early requirements and replacement of an unused prewarmed worker.
 
-Before starting the MCP transport, the server locates R and detects resolver capability without installing packages or invoking `ir`.
-When ambient reticulate supplies the bootstrap, this probe loads its namespace and checks that its `uv_binary` function exists; it does not call that function.
-These probes have no deadline.
-On Unix, closing a pipe or socket used for MCP standard input cancels an active probe and retires its resolver process group without consuming buffered MCP input.
-Windows shares a bounded stdin reader with the MCP transport, cancels probes on observed EOF, and confirms resolver Job Object retirement; see [Windows lifecycle differences](WINDOWS.md).
+## Inspecting and replacing requirements
 
-`initialize`, `tools/list`, empty polls, and control-only interrupts do not prepare the defaults.
-An ordinary first cell prepares them after evaluation admission, so `timeout_ms` can return a running response while installation continues.
-Explicit requirements prepare the defaults and additions together before the cell's evaluation wait; standalone preparation does not start a worker.
-Restart and idle nonempty stdin also prepare the defaults when they start the first worker.
-The MCP transport remains available during this preparation: interrupt targets the active resolver, and closing MCP input cancels it during server shutdown.
-A failed or cancelled preparation leaves the initial environment pending for a later attempt; resolver cache effects may remain.
+| Action          | Meaning                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------- |
+| `get`           | Read the last committed declaration; no resolution, output consumption, or worker launch.     |
+| `add` (default) | Accumulate requirements; exact repeats are no-ops.                                            |
+| `set`           | Replace the whole declaration; omitted lists/constraints are empty. No defaults are injected. |
+| `reset`         | Restore startup defaults, removing explicit and automatic additions from the declaration.     |
 
-Host resolution for changed requirements submitted through `send` also has no deadline.
-The call remains pending until the resolver exits; while MCP input is open, `send(control = "interrupt")` sends `SIGINT` to the active Unix resolver or terminates the active Windows resolver Job, and closing MCP input cancels it during server shutdown.
+```python
+send(requirements={"action": "get"})
+send(requirements={"python": ["requests[socks]>=2,<3"]})
+send(control="restart", requirements={"action": "set", "python": ["requests>=2"]})
+send(control="restart", requirements={"action": "set"})  # No optional requirements.
+send(control="restart", requirements={"action": "reset"})
+```
 
-Packages supplied by these environments are available but are not attached or imported automatically.
-The default DuckDB extensions are installed in DuckDB's native cache but are loaded only when DuckDB needs them inside the worker.
+`get` rejects code, stdin (even empty), control, and payload fields.
+`reset` rejects payload fields too.
+A bare `{}` is invalid.
+Changed `set`/`reset` on a worker that has accepted user execution requires explicit restart; unchanged replacement is a no-op, though an explicitly requested restart still occurs.
+The [startup exception](SEND_OPERATIONS.md#server-readiness) applies only to an unused prewarmed candidate.
+Removing declarations does not uninstall or prohibit later runtime use, and automatic resolution may acquire packages again.
 
-A custom worker skips all three default preparations.
-Its more limited requirements contract is described under [Custom workers](#custom-workers).
+Inspection returns `requirements`, `prepared`, and `runtime_requirements` in structured content.
+It is a declaration, not an installed-package inventory.
+While resolution is pending, it shows only the last commit.
+Large manifests are complete in structured content even when omitted from the bounded text preview.
+Copy and edit the `requirements` object, then add `action: "set"` to round-trip it.
+
+`python_version` is a list of constraints; `exclude_newer` is a publication cutoff string or null.
+Add accumulates version constraints and can fill an unset cutoff, but cannot replace an existing cutoff.
+Set clears omitted constraints; reset restores startup constraints.
+Effective constraint changes on a live worker need restart.
+These actions do not rewrite captured resolver configuration.
 
 ## Requirements for a cell
 
-Use the optional `requirements` field on a code-bearing `send` when a cell needs an exact requirement or a package or extension prepared before evaluation:
-
-```json
-{
-  "python": "import requests\nprint(requests.__version__)",
-  "requirements": {
-    "python": ["requests[socks]>=2,<3"]
-  }
-}
-```
-
-The field contains R, Python, and DuckDB arrays and requires at least one entry across them.
-It may accompany any cell language because the built-in languages share one worker environment: an R requirement can accompany a Python cell, for example.
-Without a cell, requirements perform standalone preparation or participate in a restart transaction.
-Requirements are cell preconditions, with the control-specific ordering and partial effects described in the [operation table](SEND_OPERATIONS.md#operations).
-No other operation can change the environment between successful preparation and admission of the accompanying cell.
-
-Without inline control, the preparation behavior depends on worker state:
-
-- Before the worker starts, the server resolves all changed candidates, commits the complete retained environment only after they all succeed, starts the worker, and evaluates the cell.
-- With an idle running worker, the server applies the live R, Python, and DuckDB behavior described below, preserving supported live state, then immediately launches the cell in that worker generation.
-- With an eligible stopped worker, the server resolves and retains additions without live preparation, starts the normal replacement, and evaluates the cell there.
-- After a recoverable live R failure has made further environment changes require restart, new additions fail with `requirements require session restart; cell was not run`.
-  The live worker is not destroyed automatically, so its state can be saved before an explicit restart.
-
-The built-in worker can resolve missing plain R package names and managed Python imports while a cell runs, as described below.
-Neither R nor Python source is scanned in advance.
-SQL and `install.packages()` do not trigger automatic package resolution, and MCP Console does not replay a cell after a missing-package error.
-Prepared packages and extensions still must be attached, imported, or loaded by code when their runtime requires it.
-
-## Automatic R package resolution
-
-The built-in R worker resolves a missing plain package name when evaluated code reaches `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`.
-It wraps `base::library` because `library()` calls `find.package()` and can report a missing package before it reaches namespace loading.
-For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart, makes the package available, and lets R's implementation continue.
-Preserving the original body keeps packages that inspect `loadNamespace()` compatible.
-`require()` delegates to `library()`, `requireNamespace()` delegates to `loadNamespace()`, and the namespace operators use `loadNamespace()` when needed.
-
-These adapters do not replace `find.package()` or `install.packages()`.
-They skip resolution when the package is already attached, loaded, or findable, and preserve base behavior for `library()` help and listing calls.
-An explicit non-NULL `lib.loc` and a partial namespace load also bypass automatic resolution because adding a managed library would not satisfy those requests.
-
-Worker-originated requests accept at most 64 plain package names.
-Each name must start with an ASCII letter, end with an ASCII letter or digit, and contain only ASCII letters, digits, and dots.
-The server validates these names again before invoking `ir`, so paths, URLs, source prefixes, version selectors, whitespace, and arbitrary `ir` references from evaluated code are rejected.
-Use explicit `requirements.r` for an `ir` reference such as `github::owner/repository` or for staging packages before evaluation.
-
-For a changed request, the server merges the names with the complete retained R requirement set and resolves that complete set through the existing host-side `ir` resolver.
-It also prepares the complete retained DuckDB extension set for the candidate library.
-The candidate remains uncommitted while the worker normalizes it and applies it through the same `.libPaths()` transition used by explicit live R preparation.
-Only after the worker reports `RActivated` does the server match the exact candidate, retain it, and add it to the DuckDB R-library history.
-The original base operation then continues, so `library()` or `require()` attaches the package and `::` or `:::` loads only its namespace as usual.
-Successful automatic resolution emits no preparation marker.
-
-An idle automatic request owns environment changes until the worker reports activation or failure.
-Explicit preparation that arrives before that report fails without resolving a second candidate or stopping the worker.
-If explicit preparation reserved the transition first, an otherwise idle automatic request receives an ordinary unavailable response instead.
-A cell without changed requirements can still queue while an idle automatic request is pending; the worker processes it after the synchronous callback finishes.
-
-This transition does not restart the worker.
-Its R process, PID, globals, loaded namespaces, Python state, DuckDB catalog, and stdin state remain in place.
-The server commits after `.libPaths()` accepts the candidate but before the original package operation resumes, so the environment remains retained if a later `.onLoad`, namespace operation, or expression in the cell fails.
-
-The worker does not inspect R source before evaluation.
-Each missing package is resolved only when execution reaches one of these operations, so unreachable or quoted code does not invoke `ir`.
-Several new package loads in one cell can therefore cause several incremental `ir` calls in execution order.
-
-An automatic request is part of the active R evaluation.
-If `timeout_ms` expires, `send` can return `[running; poll with an empty send]` while its resolver continues; the resolver is not cancelled by that wait timeout.
-Interrupt targets the active resolver, while restart or shutdown cancels it.
-A restart that also adds requirements serializes behind the active environment resolution before it prepares those additions and replaces the worker.
-An interrupted or lifecycle-cancelled request is reported to its operation, and a candidate from a replaced generation cannot commit into its replacement.
-
-If `ir` cannot resolve a package requested at runtime, `library()` and namespace loads surface their normal R errors, while `require()` may return `FALSE` according to `logical.return`; the worker remains available.
-If applying the candidate library fails, the worker reports `RActivationFailed`, the server discards the candidate, and further requirement changes in that generation require restart; the worker remains available so its in-memory state can be saved.
-Transport, sideband, protocol, and bridge-infrastructure failures retain the existing worker-failure behavior.
-
-## Automatic Python import resolution
-
-The built-in server-managed Python environment resolves a missing import when Python's ordinary import machinery cannot find it.
-The private runtime appends a last-chance finder to `sys.meta_path`, after the existing built-in, frozen, path, and other finders.
-Already-installed, local, standard-library, and already-loaded modules therefore resolve without a host request.
-Availability queries such as `importlib.util.find_spec()` report the current environment without adding a requirement.
-If a missing optional import is reached while the default NumPy or pandas package is initializing, the finder leaves it to ordinary Python behavior instead of starting host resolution.
-Importing either available default therefore does not add optional modules encountered during its initialization to the retained manifest.
-A later direct import can resolve such a dependency after initialization finishes; an explicit `requirements.python` entry can prepare it earlier.
-
-The finder infers one PyPI distribution from the top-level import name.
-A curated table covers established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.
-Otherwise a conservative ASCII identifier maps to the same bare distribution name.
-The inferred name is validated through the same named-registry requirement path used for explicit managed-Python requests before `uv` starts.
-
-Automatic inference does not produce versions, extras, markers, paths, URLs, direct references, or other requirement syntax.
-It also declines a same-name fallback for broad shared namespaces, a missing submodule whose top-level package is already present, and a standard-library module unavailable in the selected Python build.
-These cases report an actionable import error instead of installing an ambiguous or misleading distribution.
-A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
-Both forms report the full missing-submodule name.
-
-When inference succeeds, the Python finder calls a private R closure supplied by the reticulate bridge.
-That closure snapshots reticulate's current requirement state, adds the inferred distribution through `reticulate::py_require(..., action = "add")`, and materializes the complete manifest through the existing managed-Python callback.
-The server returns a provisional environment in a `PythonResolved` reply to the existing `ResolvePython` request.
-After reticulate activates a compatible environment, the worker reports `PythonActivated` with the complete normalized logical manifest.
-The worker emits that report before the original Python import resumes.
-The server matches and commits the candidate when it processes the report; sideband order places it before any later evaluation outcome.
-
-The finder then invalidates Python's import caches and retries the current meta-path finders for the requested module.
-If the module is present, the original import continues in place.
-The cell is not replayed, and successful resolution emits no preparation marker.
-When the import and inferred distribution names differ, the server emits a bounded notice such as `[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']` after it commits the matching activation.
-Same-name inference and explicit preparation emit no resolution notice.
-The worker process, Python interpreter, Python objects, R globals, DuckDB catalog, stdin state, and PID remain in place.
-New subprocesses use the activated environment and can import its retained packages.
-
-A successfully activated environment remains committed if the inferred distribution does not provide the requested module or if later code in the cell fails.
-A later cell and a replacement after restart reuse it.
-An ordinary failure before activation restores the previous reticulate manifest, discards the provisional candidate, and leaves the worker usable.
-Resolver diagnostics name the import and inferred distribution and show the `requirements.python` recovery shape.
-
-Resolution occurs only when execution reaches a missing import.
-Unreachable branches and uncalled functions do not invoke `uv`, and several new imports in one cell resolve incrementally in execution order.
-An automatic request belongs to the active Python evaluation, so `timeout_ms` can return `[running; poll with an empty send]` while its resolver and cell continue.
-An empty `send` polls that evaluation, and interrupt targets its active host resolver.
-Restart, shutdown, and generation checks cancel or discard unactivated candidates from an old worker; an earlier `PythonActivated` commit remains retained.
-
-The finder prevents a second automatic resolution while its R callback is active.
-A recursive missing import follows ordinary import failure rather than starting another resolver.
-The callback is also limited to the main worker process and the Python thread that configured the runtime.
-A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts and does not call R, reticulate, the sideband, or `uv`.
-
-A nonempty user-selected `RETICULATE_PYTHON` disables this path as well as explicit `requirements.python` additions.
-The finder still reports a specific missing-import diagnostic, directing the user to install the distribution into that selected environment or restart MCP Console with managed Python enabled.
-
-Use explicit `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or marker is needed, the namespace is ambiguous, an error asks for an exact requirement, or the package should be prepared before the cell starts.
-Explicit requirements make a distribution available but do not import it.
-
-## Staging requirements ahead of time
-
-Use a requirements-only `send` to add exact requirements without replacing the worker:
-
-```json
-{
-  "requirements": {
-    "r": ["data.table"],
-    "python": ["polars>=1"],
-    "duckdb": ["fts"]
-  }
-}
-```
-
-Each array accepts at most 64 entries, and the request needs at least one entry overall.
-The [standalone preparation row](SEND_OPERATIONS.md#operations) specifies its result, input restrictions, and timeout behavior.
-
-Before a worker starts, the server resolves every changed candidate on the host, commits the retained configuration only after the complete request succeeds, and does not start the worker.
-Exact repeats return `[prepared]` without resolving them again.
-
-After a worker starts, requests that add to the retained environment are available only while it is idle:
-
-- R additions can update a worker that implements live R preparation.
-- Compatible Python additions can update an idle server-managed built-in worker.
-- DuckDB extensions are installed on the host without replacing the worker.
-
-Live R and Python preparation is noninteractive.
-Use `send` to satisfy and collect any managed input requested by an idle R callback before preparing R or Python requirements.
-If such a request is outstanding or arises during live preparation, the preparation fails and the server stops the worker, losing its in-memory state.
-
-A request with new additions during an active cell is rejected.
-If a request with new additions overlaps worker startup, it returns `[requirements not prepared: worker is starting]` without resolving or retaining the additions.
-If the worker is stopped, new additions return `[restart required]`; use restart to prepare them and start a replacement.
-
-An explicit restart can cancel an in-flight live R or Python preparation.
-The preparation call then fails with `R preparation cancelled by restart` or `Python preparation cancelled by restart`, and the restart continues.
-The cancelled call does not retain pending candidates; a Python environment already committed by an earlier step remains retained.
-
-### Live R preparation
-
-The server resolves a new library containing the complete retained R requirement set.
-The worker prepends that library to `.libPaths()`, removes the previous managed library entry, and preserves its other library paths and in-memory state.
-The server retains the candidate only after the worker confirms the normalized library path.
-
-An ordinary live R preparation failure leaves the worker available for evaluation, because the caller may need to save in-memory state.
-Its live library path may have changed before the failure, so the server does not accept more requirement changes in that generation.
-The failed call reports that further changes require restart, and later additions return `[restart required]`.
-A successful explicit restart clears this state.
-
-An R transport, protocol, or bridge-infrastructure failure is different: the server stops a worker whose state is no longer known to be usable.
-
-### Live Python preparation
-
-Explicit Python preparation and automatic imports use the same reticulate additive requirement helper.
-The helper snapshots the current manifest before calling `reticulate::py_require(..., action = "add")`.
-Before Python initializes, the worker materializes the complete manifest.
-After initialization, reticulate checks that the candidate uses the live `libpython` and activates a compatible environment without replacing the interpreter or its objects.
-
-The server retains a Python environment when the worker reports that reticulate accepted its complete normalized manifest.
-A runtime import reports that activation before the original import continues.
-A successful activation commits independently of later steps in the same mixed request.
-If Python succeeds and a following live R update fails, the Python addition remains retained and is available after restart.
-The same rule retains an automatically inferred distribution when the requested module or later cell code still fails.
-
-An ordinary Python preparation failure restores the prior reticulate manifest, discards unaccepted candidates, and leaves the worker usable.
-By itself, this failure does not make restart mandatory.
-A Python transport, protocol, or bridge-infrastructure failure stops the worker instead.
-
-Before Python first initializes, an evaluated `reticulate::py_require()` can change only the live worker's lazy manifest.
-That change becomes retained after successful Python initialization reports its activation, or after an explicit preparation materializes it.
-Worker loss before either point loses the uncommitted declaration.
-
-### Live DuckDB preparation
-
-DuckDB extension installation occurs entirely on the host.
-There is no DuckDB-specific live-worker request or receipt.
-The server installs the complete retained extension set for each relevant resolved R library, so the current worker and later generations can use the extension with their DuckDB version.
-It then retains the extension names without changing the worker's R, Python, SQL, or catalog state.
-
-Preparation does not load extension code.
-A later `LOAD` or DuckDB automatic load occurs inside the worker, which is sandboxed by default.
-With `serve --no-sandbox`, extension code uses the selected host account's or container's filesystem, process, and network access.
-DuckDB chooses its compiled default extension repository and version-and-platform native cache; MCP Console does not accept a repository, URL, path, or version selector.
-
-When a DuckDB request also needs a new R library, the worker still uses live R preparation for that library.
-Its success and failure semantics therefore follow the R rules above.
-
-## Restarting with requirements
-
-`send(control = "restart")` can add requirements while replacing the worker, with or without a cell:
-
-```json
-{
-  "control": "restart",
-  "requirements": {
-    "r": ["praise"],
-    "python": ["py-yaml12"],
-    "duckdb": ["spatial"]
-  }
-}
-```
-
-A restart can continue with a cell in the same call:
-
-```json
-{
-  "control": "restart",
-  "requirements": {
-    "python": ["polars>=1"]
-  },
-  "python": "import polars as pl\npl.__version__"
-}
-```
-
-Omit `requirements` to restart with the retained configuration unchanged.
-The [restart row and preparation notes](SEND_OPERATIONS.md#operations) describe resolution, commit, replacement, and what can remain after failure.
-The [implemented architecture](ARCHITECTURE.md) owns the replacement lifecycle; [Explicit restart](BUILTIN_RUNTIME.md#explicit-restart) describes its user-visible response ownership and notices.
+Requirements may accompany any supported cell language, or stand alone to stage dependencies.
+They are preconditions: failed preparation withholds that cell.
+One environment transition covers preparation through admission, so another call cannot change the environment between them.
+Standalone preparation rejects nonempty stdin and returns `[prepared]` on success; bundled preparation adds no marker.
+See [operations](SEND_OPERATIONS.md#operations) for partial effects after interrupt and for wait timing.
 
 ## Accepted requirement input
 
-### R
+Add accepts at most 64 entries per language per call.
+Set accepts a complete accumulated manifest without that per-list limit.
 
-Explicit R requirements are `ir` package references.
-MCP Console owns only the framing checks: each request may contain at most 64 nonempty strings, and a string may not contain NUL, carriage return, or newline.
-`ir` owns the accepted package reference syntax and dependency resolution.
+| Field            | Accepted input                                                                                                                                                  |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r`              | Nonempty, single-line `ir` references, with no NUL/CR/LF; explicit remote references are allowed, local sources are rejected by `ir`.                           |
+| `python`         | Named PEP 508 registry requirements, including extras, versions, and markers. No paths, editable requirements, file URLs, archives, or `name @ URL` references. |
+| `duckdb`         | Names up to 64 ASCII characters: lowercase letter first, then lowercase letters, digits, or underscores. No repository/version/URL/SQL selectors.               |
+| `python_version` | Version numbers and supported PEP 440 `==`, `!=`, `<`, `<=`, `>`, `>=` constraints, not executable names or paths.                                              |
 
-Automatic runtime R requests use the narrower plain-name syntax described under [Automatic R package resolution](#automatic-r-package-resolution).
-That validator is separate from explicit `requirements.r`, so restricting runtime discovery does not remove supported remote `ir` references from explicit preparation or restart.
+Automatic R discovery is narrower: plain names beginning with a letter, ending with a letter/digit, and containing only ASCII letters, digits, or dots.
+Automatic Python inference supplies one bare distribution name, not versions, extras, or markers.
+The server validates worker requests again before resolution.
 
-The built-in server uses `$R_HOME/bin/Rscript` when `R_HOME` is set.
-Otherwise it runs `R RHOME` using `R` from `PATH` and uses the reported home's `bin/Rscript`.
-It passes that exact `Rscript` to `ir` and uses it for DuckDB resolution.
-When Python is server-managed, the server-selected `uv` executable creates and updates the environment directly.
-The current managed R library is supplied through `R_LIBS` when one is available.
-Python version inventory and selection run directly through the same `uv` executable.
-The server prepends the resolved managed library to inherited `R_LIBS`, preserving its nonempty path entries after the managed library.
+## Automatic R package resolution
 
-The server prefers `ir` from `PATH`.
-If `ir` is absent and `uv` is present, it runs `uv tool run --from r-lib-ir ir`.
-It does not fall back when a selected PATH entry fails to start, resolve, or report a supported version.
-The selected `ir` must be version 0.4.0 or later.
-The server passes each requirement as a separate `ir run --with` argument; requirement text is never inserted into R source.
-Every invocation sets `IR_NO_LOCAL_SOURCES=1`, so `ir` rejects direct or transitive installation from the local filesystem.
-The `uv` path may download `r-lib-ir`; remote package installation and build code still run with server permissions.
+Managed R resolves missing packages reached through `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, and `:::`.
+Source is not scanned; unreachable code does nothing and the cell is never replayed.
+Explicit `lib.loc`, partial namespace loading, already available packages, and library help/listing calls retain ordinary behavior.
+`install.packages()` is not intercepted.
 
-When `ir` is the only command on `PATH` and managed Python is selected, the server first resolves the default R library, then runs a fixed `reticulate:::uv_binary()` program through that library's exact `Rscript`.
-The resulting `uv` executable becomes the session's managed-Python resolver.
-When neither command is on `PATH`, the server checks the selected ambient R installation for this capability before accepting MCP input and invokes it during first-use preparation.
-A usable ambient reticulate can bootstrap `uv`, which then supplies `ir`.
-If reticulate or that capability is absent, the server enters bare mode.
-An installed reticulate namespace that fails to load is a startup error.
-A selected bootstrap that later fails reports an operation error; it does not change the advertised requirements capability to bare mode.
+The adapter preserves base call frames and the original `loadNamespace()` body and retry path.
+This matters for native conditions, tracebacks, and packages that inspect base functions.
+Failed automatic resolution preserves the original operation's behavior, including `FALSE` from missing-package `require()` / `requireNamespace()`; explicit preparation instead reports resolver diagnostics.
 
-### Python
+The host resolves the complete candidate and retained extensions.
+The worker applies the candidate `.libPaths()` and reports `RActivated`; only a matching current-generation receipt commits it.
+The original load then resumes, attaching only when that operation normally attaches.
+A later namespace/cell failure does not undo acceptance.
+An activation failure leaves recoverable state available but requires restart before further requirement changes.
 
-Explicit managed-Python additions accept named PEP 508 registry requirements.
-Package extras, version specifiers, and environment markers are supported, for example:
+An idle automatic callback owns the environment transition until its receipt.
+Concurrent explicit preparation cannot resolve and commit a stale snapshot; whichever operation already owns the transition takes precedence.
 
-```text
-requests[socks]>=2,<3; python_version >= '3.10'
-```
+## Automatic Python import resolution
 
-Paths, `file:` URLs, editable requirements, direct references such as `name @ URL`, and local archives or projects are rejected before a resolver starts.
-A request may contain at most 64 entries.
+A last-chance finder runs after Python's existing import finders.
+Available standard-library, installed, local, and loaded modules resolve normally; availability queries such as `find_spec()` do not install packages.
 
-Automatic imports use the narrower input described under [Automatic Python import resolution](#automatic-python-import-resolution): one inferred bare distribution name.
-They cannot add a version, extra, or marker.
-The same registry-only validator checks that name before host resolution.
+Inference maps known differences (`yaml` → `pyyaml`, `PIL` → `pillow`, `sklearn` → `scikit-learn`) and otherwise uses a conservative top-level same-name fallback.
+It declines ambiguous shared namespaces, missing submodules of an available package, and absent standard-library modules.
+Use explicit `requirements.python` for the right distribution, versions/extras/markers, or preparation before use.
 
-Reticulate can also request a Python version during managed operation.
-The server accepts version numbers and `==`, `!=`, `<`, `<=`, `>`, and `>=` PEP 440 specifiers.
-Interpreter names, executable paths, and installation directories are not accepted as version constraints.
+Missing optional imports during an installed distribution's eager importlib initialization retain ordinary Python behavior.
+Ownership is established from matching installed files in wheel `RECORD`, not package names.
+Later library calls and direct imports remain eligible, as do local callbacks and deferred module bodies.
+The implementation in `src/python/` owns the precise import-stack and metadata checks; do not replace them with a package-name heuristic.
 
-### DuckDB
+The finder proposes an additive manifest.
+The host resolves and inspects it; the worker activates it and publishes acceptance before retrying the import.
+The cell is not replayed.
+A differently named mapping gets a bounded notice only after commit.
+Even if the distribution lacks the module or later code fails, a successfully accepted environment remains retained.
 
-DuckDB requirements are extension names.
-A request may contain at most 64 names.
-Each name must be at most 64 ASCII characters, start with a lowercase ASCII letter, and otherwise contain only lowercase ASCII letters, digits, and underscores.
+Resolution is restricted to the configuring worker thread and process, with a reentrancy guard.
+Prepare dependencies before starting other threads or fork children; missing imports there cannot invoke the resolver.
+Explicit Python, bare, and prepared targets disable managed resolution.
+Already available imports still work.
 
-The resolver treats a validated name as data and issues DuckDB's own `INSTALL` for a quoted identifier.
-Paths, URLs, repository selectors, version expressions, and SQL fragments are not accepted.
+## Live preparation
+
+Changed additions require an idle worker, except automatic resolution within its own evaluation.
+A busy or starting worker does not silently queue standalone preparation; stopped workers with new requirements need restart.
+Live R/Python preparation is noninteractive: an outstanding or newly raised managed input request during it is a failure that stops the worker.
+Finish interactive work before preparing dependencies.
+
+### Live R preparation
+
+The worker replaces its managed library entry, preserving other paths and live objects.
+A sandbox's temporary writable library remains first.
+The server commits only the confirmed normalized path.
+Ordinary activation failure can leave live library state different from retained state: preserve the worker for recovery, but require restart for further changes.
+Transport/protocol/infrastructure failure instead stops a worker whose state cannot be trusted.
+
+### Live Python preparation
+
+Console uses the same native requirement owner with or without R; reticulate metadata is an optional compatibility projection.
+Before initialization, preparation can materialize a selection without starting either interpreter.
+After initialization, a candidate must match the loaded `libpython` identity and running version and must not change or remove a loaded distribution's version.
+Add is not a promise that arbitrary upgrades are safe: a newly added package can change unloaded/transitive dependencies.
+Use restart for changes needing fresh imports; changing an already declared distribution requires replacement.
+
+Compatible activation preserves the interpreter, objects, catalog, and selected connection.
+It replaces environment-owned paths while preserving user paths and updates child-process selection.
+Publication and local commit defer interrupts.
+A successfully restored interrupted activation can retry; arbitrary site-hook effects cannot be rolled back, so other unsafe activation failures require restart.
+Pre-mutation failures leave the accepted environment usable.
+
+A lazy `reticulate::py_require()` declaration is not yet server-retained.
+It is retained after successful initialization or explicit materialization.
+Successful activation is its own commit boundary: it survives later import/cell failure or a following live R failure in the same request.
+
+### DuckDB extension preparation
+
+The trusted host uses DuckDB's installation API and normal repository/signature checks.
+Loading happens later in the worker.
+No SQL catalog, user connection, or runtime object is replaced by an extension-only addition.
+
+R-backed preparation covers each retained R library that may have supplied the current DuckDB.
+Python-backed preparation uses the accepted or candidate Python's DuckDB and the captured shared cache.
+A changed Python candidate prepares the whole retained extension set even when names are unchanged.
+Combined Python and extension additions prepare everything before activation.
+Missing DuckDB in a replacement manifest makes extension preparation fail; include `duckdb` explicitly.
+
+Removing a declaration does not remove its cache entry.
+Prepared Docker/SBX connections can load preinstalled extensions but disable automatic installation.
+
+## Restarting with requirements
+
+Before startup or restart, resolve and inspect all candidates, then commit the complete retained environment before retiring the old worker.
+Failure before commit preserves the old worker and declaration; same-call input/code is withheld.
+Once retirement begins, later failure cannot undo the commit or restore live state.
+Plain restart uses accepted selections without another resolution.
 
 ## Python environment selection
 
-The built-in server reads inherited `RETICULATE_PYTHON` when it starts:
+An explicit Console `python` path takes precedence over inherited `RETICULATE_PYTHON`.
+For the legacy variable, unset/empty/`managed` means managed; other values select an existing environment.
+An explicit selection disables managed Python from every request path.
+With R, R and its DuckDB preparation can remain available; without R, host extension preparation is disabled too.
+See [configuration](CONFIGURATION.md#python-environment-selection).
 
-- unset, empty, or exactly `managed` selects the server-managed environment;
-- any other nonempty value selects that existing Python environment.
-
-A user-selected environment is preserved for the worker.
-The server skips managed-Python preparation and rejects Python additions from every `send` call shape, automatic imports, or other worker-originated managed-resolution requests.
-R requirements and DuckDB extensions remain available.
-The selected interpreter must still satisfy the [built-in runtime](BUILTIN_RUNTIME.md) requirement for Python 3.10 or later and must initialize under the worker's offline policy.
-Imports already available in the selected environment work normally.
-A missing import explains that automatic resolution and `requirements.python` are disabled and directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
-
-This selection is independent of custom-worker policy.
-A custom worker always rejects managed Python requirements, regardless of `RETICULATE_PYTHON`.
-
-## Bare runtime
-
-Bare mode is selected only when no resolver bootstrap is available from `ir` on `PATH`, `uv` on `PATH`, an explicit `uv` selection, or ambient reticulate.
-The server skips default R, Python, and DuckDB preparation.
-The `send` schema retains R, Python, and SQL cells but omits `requirements`; a manually supplied requirements payload is also rejected.
-Automatic R wrappers and the Python import resolver callback are disabled.
-Installed packages and ambient language adapters continue to work.
-Missing R packages keep their ordinary `library()` behavior, while missing Python imports explain that dynamic resolution is unavailable.
-Install `ir` or `uv` and restart MCP Console to enable dynamic resolution.
+Without R, local/SSH preparation uses startup PATH uv and ignores `RETICULATE_UV`; there is no PATH-Python fallback.
+R-present preparation prefers PATH `ir`, then uv (`uv tool run --from r-lib-ir ir`), with reticulate bootstrap when needed.
+Selected broken tools fail rather than silently selecting alternatives.
+`ir` must be at least 0.4.0 and receives the exact selected Rscript.
+No available R-present bootstrap means a bare runtime; a bootstrap that fails is an error, not bare mode.
 
 ## Custom workers
 
-Custom workers start without the built-in R library, managed Python environment, or default DuckDB extensions.
-They can use explicit R requirements and DuckDB extensions, and may opt into the worker-protocol runtime R resolution callbacks.
-Managed Python requirements remain unavailable for standalone preparation, cell preconditions, and restart.
-
-Every custom-worker R candidate, whether explicitly or at runtime, includes DBI, DuckDB, and jsonlite so the host can prepare later DuckDB extensions with the same library.
-The server supplies the retained library through `R_LIBS` at worker launch.
-A running custom worker must implement live R preparation for explicit additions.
-If it opts into runtime resolution, it must confirm or reject each provisional library as specified by the [worker protocol](WORKER_PROTOCOL.md).
-
-Prepared extensions remain in DuckDB's native default cache.
-A custom worker must use that cache when it loads them.
-It must also apply its first managed R library before loading DuckDB; a DuckDB namespace loaded earlier from inherited libraries is outside this contract.
+Custom workers have no built-in defaults and no managed Python.
+Explicit R candidates include DBI, DuckDB, and jsonlite infrastructure and are supplied as `R_LIBS`.
+Live R additions require the [worker preparation contract](WORKER_PROTOCOL.md); optional runtime R callbacks must confirm or reject every candidate.
+Apply the managed library before loading DuckDB and use its normal extension cache.
 
 ## Host resolution and trust
 
-For local execution, the resolver permissions and startup environment described below belong to the server.
-For [SSH execution](SSH.md#trusted-preparation), they belong to the trusted preparation owner on the execution host.
+Local `mcp-console resolve` and SSH's trusted preparation owner run with execution- host account permissions, **outside the worker sandbox**.
+Installation, builds, Python startup hooks, and cache warming can execute package code there.
+Use only trusted requirements, resolvers, configuration, and package sources.
 
-On macOS and Linux, the default worker sandbox denies direct network access and regular writes outside its private temporary directory and any [explicit writable roots](SANDBOX_CONFIGURATION.md#additional-writable-paths).
-Dependency resolution is a deliberate exception to that boundary: the server launches R, Python, and DuckDB resolvers on the host, outside the sandbox.
-With `serve --no-sandbox`, the worker and loaded package or extension code use the selected host account's or container's filesystem, process, and network access.
-The requirement validation and trusted-resolver rules apply in both modes.
+R references become separate `ir` arguments with `IR_NO_LOCAL_SOURCES=1`; Python requirements become validated uv arguments, and DuckDB names are data.
+Submitted cells and `send` stdin are not resolver programs.
+These restrictions reduce input syntax; they do not make remote package code safe.
 
-Host resolvers may access the network and their normal caches.
-R and Python package installation can execute package installation or build code with the server's filesystem and process permissions.
-Managed Python environment startup and Matplotlib font-cache warming can also import or execute selected package code.
-Use only trusted requirements and trusted resolver configuration.
-`IR_NO_LOCAL_SOURCES` and the Python and DuckDB validation rules reduce the accepted input surface; they do not make arbitrary remote packages safe.
+**Worker-modifiable resolver inputs are an unresolved escape path.** Capturing paths/environment values does not freeze the files they name.
+A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can cause later preparation to execute its code with host permissions.
+Console does not yet isolate those inputs or sandbox resolvers.
+Native worker enforcement is not protection against this route.
 
-Resolver inputs do not contain submitted cells or `send` stdin:
+### Host resolver uv configuration
 
-- Explicit R requirements and validated automatic package names become individual process arguments to `ir`, which receives a constant R program.
-- Validated Python requirements, including bare distributions inferred from imports, become separate `uv tool run --with` arguments; the selected version and optional exclusion date use `--python` and `--exclude-newer`, and resolver standard input is closed.
-- The resolved interpreter path is returned through a server-created output file, not standard output or evaluated R source.
-- Validated Python version constraints remain in server memory; Rust filters the JSON inventory returned by direct `uv python list`, whose standard input is closed.
-- DuckDB extension names are validated JSON data and are not submitted SQL.
+The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
+R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
+Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
 
-Evaluated R code can trigger managed R resolution through the built-in `library()` and `loadNamespace()` bridge.
-Only validated plain names cross that worker-to-server boundary, and every automatic `ir` invocation still sets `IR_NO_LOCAL_SOURCES=1`.
-A plain name restricts resolver syntax, but the selected package's installation or build code still runs with server permissions; use only packages you trust.
-Evaluated Python imports and reticulate APIs can trigger managed Python resolution, but the same named-registry and version-constraint validation applies before a host resolver starts.
-Host resolution and managed-environment startup may run accepted distributions' installation, build, or initialization code with server permissions; use only packages you trust.
-
-### Server-owned `uv` configuration
-
-An explicit `RETICULATE_UV` startup value is retained.
-Otherwise the server selects `uv` from `PATH`, from the managed R library's reticulate installation, or from ambient reticulate.
-Direct Python version inventory and managed-environment creation receive that stable selection.
-When `RETICULATE_UV=managed`, the server resolves reticulate's managed executable and uses that same executable, cache directory, and Python installation directory for direct version inventory.
-The reticulate bootstrap invocation receives `RETICULATE_UV=managed`, so reticulate validates or installs its managed `uv` rather than recursively selecting an absent `PATH` command.
-When the server starts, it captures inherited `UV_*` variables except `UV_OFFLINE`.
-Before each managed-Python or bootstrap resolver starts, it removes the current `UV_*` environment, restores that startup snapshot, and removes `UV_OFFLINE`.
-Changes made later by evaluated R or Python code therefore cannot configure host resolution.
-
-Direct version discovery uses `uv`'s managed and system inventories under the server's startup `PATH`.
-It does not add reticulate's separately registered virtualenv directories to `PATH`, so a system interpreter must be discoverable by `uv` there.
-Enabled `UV_MANAGED_PYTHON` and `UV_NO_MANAGED_PYTHON` settings are normalized to their equivalent `UV_PYTHON_PREFERENCE` values before direct calls, and recognized disabled aliases are removed.
-This avoids conflicting command-line and environment selectors while preserving the requested source policy.
-Conflicting or invalid source settings remain unchanged so `uv` reports them normally.
-Managed-environment creation passes each validated requirement as its own argument, inherits the current managed R library through `R_LIBS` when available, and removes its server-created interpreter-path output file after the resolver call.
-It removes `UV_NO_CACHE` after restoring the trusted startup snapshot because `uv tool run` deletes a no-cache tool environment when that command exits; Python version inventory and the other resolver calls retain the setting.
-Ordinary Matplotlib cache-warm failures remain best effort, but an interrupt during cache warming fails the preparation before its candidate environment can be committed.
-
-The built-in worker forces `UV_OFFLINE=1` before user code runs, including with `serve --no-sandbox`.
-This setting configures `uv`; only the default sandbox supplies a process-level network restriction.
+Managed environment creation removes `UV_NO_CACHE` because uv would otherwise delete the selected environment on exit.
+Worker code starts with `UV_OFFLINE=1`, including under `--no-sandbox`; that variable configures uv, not process-level network enforcement.
+Linux package builds may need system development libraries; see [build prerequisites](../RELEASE.md#private-sandbox-executable).
 
 ## Failure atomicity and cache effects
 
-Before worker startup and during restart, the server commits the retained R, Python, and DuckDB candidates only after all requested resolution succeeds.
-A failure does not change the retained manifest or replace the current worker.
-The same pre-start transaction is used for requirements declared by a cell, and any failure prevents that cell from being dispatched.
-For inline restart, the same failure also prevents stdin enqueue and worker replacement.
+Transactions protect accepted server state, not resolver caches or arbitrary installation effects.
+Downloads/builds/extension files can remain after failure.
+Prestart/restart candidates commit together; live activations have independent receipts and can partially succeed.
+Successfully activated Python remains after a later R failure; accepted R remains after namespace failure.
+Preparation failure withholds an accompanying cell, but does not undo a preceding interrupt or input enqueue.
+Generation checks discard unaccepted old candidates, never commit them for a replacement.
 
-That transaction covers server-owned state, not external resolver caches.
-`ir`, `uv`, reticulate, and DuckDB may download, build, or install files before a later step fails.
-For example, an earlier extension in a failed multi-extension request can remain in DuckDB's native cache without entering the retained extension set.
-A future request may reuse such cache entries.
-
-Live preparation has worker-confirmed commit boundaries.
-A Python activation is retained as soon as the worker reports it.
-It is not rolled back if an automatic import still cannot find its module, later Python code fails, or a later R step in the same request fails.
-An automatic Python candidate that fails before activation is discarded and the earlier reticulate manifest is restored.
-An automatic R candidate is retained only after the worker reports that `.libPaths()` accepted its exact library, and it is not rolled back if later namespace loading or cell code fails.
-Explicit R and DuckDB changes commit only after their complete live operation succeeds.
-For a `send` with explicit requirements, any preparation failure returns through that send and prevents its cell from running, while retaining or discarding candidates according to these existing live-preparation boundaries.
-After inline interrupt, this preparation boundary does not roll back the already acknowledged signal or same-call stdin enqueue.
-The earlier sections describe how ordinary Python failure, recoverable R failure, and infrastructure failure affect the current worker.
+[Recording](RECORDING.md) distinguishes accepted manifests, source declarations, and replacement boundaries in the journal and generated report.

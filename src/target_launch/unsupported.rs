@@ -58,3 +58,15 @@ pub(crate) mod owner {
         Err("target execution is unavailable on this platform".into())
     }
 }
+
+pub(crate) mod runtime {
+    pub(crate) fn runtime_probe(_: Option<&std::path::Path>) -> Result<(), String> {
+        Err("target execution is unavailable on this platform".into())
+    }
+    pub(crate) fn validate_result(_: &crate::ssh::preparation::WorkerEnvironment) -> Result<(), String> {
+        Err("target execution is unavailable on this platform".into())
+    }
+    pub(crate) fn configure_worker(_: &super::super::Bootstrap, _: &mut std::process::Command) -> Result<(), String> {
+        Err("target execution is unavailable on this platform".into())
+    }
+}

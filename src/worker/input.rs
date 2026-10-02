@@ -1,9 +1,64 @@
 use std::collections::VecDeque;
 use std::ffi::{c_int, c_uchar};
 use std::io;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::OnceLock;
 
 use super::core;
+
+#[cfg(unix)]
+static INTERRUPT_WAKEUP: OnceLock<io::PipeReader> = OnceLock::new();
+
+#[cfg(unix)]
+pub(super) fn initialize_interrupt_wakeup() -> io::Result<c_int> {
+    let (reader, writer) = io::pipe()?;
+    for descriptor in [reader.as_raw_fd(), writer.as_raw_fd()] {
+        if unsafe { libc::fcntl(descriptor, libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    INTERRUPT_WAKEUP
+        .set(reader)
+        .map_err(|_| io::Error::other("interrupt wakeup already initialized"))?;
+    // The signal handler retains this descriptor for the worker lifetime.
+    Ok(writer.into_raw_fd())
+}
+
+#[cfg(unix)]
+pub(super) fn interrupt_wakeup_fd() -> RawFd {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .as_raw_fd()
+}
+
+#[cfg(unix)]
+pub(super) fn drain_interrupt_wakeup() -> io::Result<()> {
+    let mut bytes = [0u8; 64];
+    loop {
+        let count = unsafe {
+            libc::read(
+                interrupt_wakeup_fd(),
+                bytes.as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        };
+        if count > 0 {
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if count < 0 && error.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if count < 0 && error.kind() == io::ErrorKind::WouldBlock {
+            return Ok(());
+        }
+        return Err(io::Error::other("worker interrupt wakeup closed"));
+    }
+}
 
 static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
     pushback: VecDeque::new(),
@@ -28,7 +83,12 @@ impl ConsoleStdin {
             };
             debug_assert!(chunk.offset <= chunk.bytes.len());
             let remaining = &chunk.bytes[chunk.offset..];
-            let length = remaining.len().min(capacity - copied);
+            let line_length = remaining
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(remaining.len(), |index| index + 1);
+            let length = line_length.min(capacity - copied);
+            let complete = remaining[length - 1] == b'\n';
             unsafe {
                 std::ptr::copy_nonoverlapping(remaining.as_ptr(), destination.add(copied), length);
             }
@@ -36,6 +96,9 @@ impl ConsoleStdin {
             chunk.offset += length;
             if chunk.offset == chunk.bytes.len() {
                 self.pushback.pop_front();
+            }
+            if complete {
+                break;
             }
         }
         if self.pushback.is_empty() {
@@ -95,55 +158,70 @@ pub(super) fn read_console_stdin(
     let mut stdin = CONSOLE_STDIN
         .lock()
         .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-    // SAFETY: r_read_console validated buf and reserved one byte for NUL.
+    // SAFETY: callers provide buflen writable bytes, reserving one for NUL.
     let mut length = unsafe { stdin.copy_pushback(buf, capacity) };
     drop(stdin);
 
-    while length < capacity {
+    while length < capacity && (length == 0 || unsafe { *buf.add(length - 1) } != b'\n') {
         if interrupted() {
             return cancel_console_stdin_read(buf, length);
         }
         let byte = unsafe { buf.add(length) };
         #[cfg(unix)]
         let count = {
-            let mut descriptor = libc::pollfd {
+        let wakeup = INTERRUPT_WAKEUP
+            .get()
+            .expect("interrupt wakeup initialized");
+        let mut descriptors = [
+            libc::pollfd {
                 fd: libc::STDIN_FILENO,
                 events: libc::POLLIN,
                 revents: 0,
-            };
-            let ready = unsafe { libc::poll(&mut descriptor, 1, 10) };
-            if ready == 0 {
+            },
+            libc::pollfd {
+                fd: wakeup.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, -1) };
+        if ready == 0 {
+            continue;
+        }
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-            if ready < 0 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::Interrupted {
-                    continue;
-                }
-                return Err(format!("R worker stdin poll failed: {error}"));
-            }
-            if descriptor.revents & libc::POLLNVAL != 0 {
-                return Err("R worker stdin descriptor is invalid".to_string());
-            }
-            if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
-                return Err(format!(
-                    "R worker stdin poll returned unexpected events {}",
-                    descriptor.revents
-                ));
-            }
-            if interrupted() {
-                return cancel_console_stdin_read(buf, length);
-            }
-
-            unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) }
+            return Err(format!("R worker stdin poll failed: {error}"));
+        }
+        if descriptors[1].revents != 0 {
+            let mut bytes = [0u8; 64];
+            unsafe { libc::read(wakeup.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len()) };
+        }
+        let descriptor = &descriptors[0];
+        if descriptor.revents == 0 {
+            continue;
+        }
+        if descriptor.revents & libc::POLLNVAL != 0 {
+            return Err("R worker stdin descriptor is invalid".to_string());
+        }
+        if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+            return Err(format!(
+                "R worker stdin poll returned unexpected events {}",
+                descriptor.revents
+            ));
+        }
+        if interrupted() {
+            return cancel_console_stdin_read(buf, length);
+        }
+        unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) }
         };
         #[cfg(windows)]
         let count = {
-            wait_windows_stdin().map_err(|error| format!("R worker stdin wait failed: {error}"))?;
-            if interrupted() {
-                return cancel_console_stdin_read(buf, length);
-            }
-            (unsafe { libc::read(0, byte.cast(), 1) }) as isize
+            wait_windows_stdin().map_err(|error| format!("worker stdin wait failed: {error}"))?;
+            if interrupted() { return cancel_console_stdin_read(buf, length); }
+            unsafe { libc::read(0, byte.cast(), 1) as isize }
         };
         if count == 1 {
             length += 1;
@@ -167,7 +245,7 @@ pub(super) fn read_console_stdin(
         *buf.add(length) = 0;
     }
     record_console_stdin_chunk(buf, length)?;
-    Ok(i32::from(length > 0))
+    Ok(length as c_int)
 }
 
 fn record_console_stdin_chunk(buf: *const c_uchar, length: usize) -> Result<(), String> {
@@ -194,6 +272,51 @@ pub(super) fn finish_console_stdin_operation() -> Result<(), String> {
         .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
     stdin.finish_operation();
     Ok(())
+}
+
+pub(crate) enum PythonInput {
+    Line(Vec<u8>),
+    Interrupted,
+    Eof,
+}
+
+pub(crate) fn read_python_input(prompt: &str) -> Result<PythonInput, String> {
+    (|| -> Result<PythonInput, String> {
+        core::send_input_requested(prompt)?;
+        let mut line = Vec::new();
+        loop {
+            let mut buffer = [0u8; 4096];
+            let length = read_console_stdin(
+                buffer.as_mut_ptr(),
+                buffer.len() as c_int,
+                super::interrupt::pending,
+            )?;
+            if length < 0 {
+                core::send_input_cancelled()?;
+                return Ok(PythonInput::Interrupted);
+            }
+            if length == 0 {
+                core::send_input_received()?;
+                return Ok(PythonInput::Eof);
+            }
+            line.extend_from_slice(&buffer[..length as usize]);
+            if line.last() == Some(&b'\n') {
+                line.pop();
+                core::send_input_received()?;
+                return Ok(PythonInput::Line(line));
+            }
+        }
+    })()
+    .inspect_err(|error| core::record_worker_failure(error.clone()))
+}
+
+#[cfg(unix)]
+pub(crate) fn python_interrupt_wakeup() -> Result<io::PipeReader, String> {
+    INTERRUPT_WAKEUP
+        .get()
+        .expect("interrupt wakeup initialized")
+        .try_clone()
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(windows)]

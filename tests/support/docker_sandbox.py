@@ -50,10 +50,9 @@ def available() -> bool:
         return False
     try:
         with runtime_lock():
-            return (
-                sbx("version").stdout.startswith("sbx version: v0.42.1 ")
-                and sbx("ls", "--json", timeout=5).returncode == 0
-            )
+            # The adapter enforces the minimum version. Let installed upgrades
+            # exercise its CLI contract instead of skipping them at discovery.
+            return sbx("ls", "--json", timeout=5).returncode == 0
     except subprocess.TimeoutExpired:
         return False
 
@@ -61,7 +60,7 @@ def available() -> bool:
 DOCKER_SANDBOX = Requirement(
     "Docker Sandbox fixture",
     available(),
-    "requires standalone sbx v0.42.1, usable local virtualization/login/policy, and MCP_CONSOLE_TEST_SBX_TEMPLATE built from examples/docker-sandbox/Dockerfile",
+    "requires standalone sbx v0.42.1 or newer, usable local virtualization/login/policy, and MCP_CONSOLE_TEST_SBX_TEMPLATE built from examples/docker-sandbox/Dockerfile",
 )
 
 

@@ -89,6 +89,8 @@ def test_native_selection_is_enforced_or_rejected(binary: Path) -> Transcript:
                 )
                 client.finish()
             else:
+                client.startup_error()
+                client.stdin.close()
                 assert client.stdout.read(timeout=30) == ""
                 error = client.stderr.read(timeout=30)
                 assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
@@ -150,6 +152,10 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                 arguments,
                 {
                     **os.environ,
+                    # Keep the caller's CLI context when poisoning HOME for
+                    # workload projection; do not reconstruct its endpoint.
+                    "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG")
+                    or str(Path.home() / ".docker"),
                     "HOME": "/controller-home",
                     "TMPDIR": "/controller-temp",
                 },
@@ -185,7 +191,10 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                 )
                 wait_for_evaluation_output(
                     client,
-                    "No module named 'mcpConsoleDefinitelyMissingPackage'.\n\nMCP Console dynamic environment resolution is unavailable for Docker targets. Install the distribution in the image and start a new server session.\n",
+                    """No module named 'mcpConsoleDefinitelyMissingPackage'.
+
+MCP Console dynamic environment resolution is unavailable for Docker targets. Install the distribution in the image and start a new server session.
+""",
                     "missing preinstalled Python package",
                     # fmt: python
                     python=code("""
@@ -263,6 +272,11 @@ def test_runtime_discovery_uses_workload_environment(binary: Path) -> Transcript
                     {"arguments": list(arguments), "inherit_environment": inherit}
                 )
                 records.extend(transcript)
+    from boundaries.client_server.python.test_peer_runtime import (
+        exercise_prepared_r_only,
+    )
+
+    exercise_prepared_r_only(binary, "docker")
     return records
 
 
@@ -284,17 +298,9 @@ def test_explicit_proxy_uses_native_setup(binary: Path) -> Transcript:
         }
         config.write_text(json.dumps(policy))
         with McpClient(binary, ("serve",), current_directory=root) as client:
-            entry = client.start_request(
-                "initialize",
-                protocolVersion="2025-11-25",
-                capabilities={},
-                clientInfo={"name": "docker-proxy-test", "version": "1"},
-            )
-            line = client.stdout.readline(timeout=30)
-            if line:
-                response = json.loads(line)
-                assert response["id"] == entry["id"] and "result" in response, response
-                client.notify("notifications/initialized")
+            client.initialize_and_list_tools()
+            result = client.send(requirements={"action": "get"})
+            if not result.get("isError", False):
                 client.send(
                     python='import os; assert os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"); print("native proxy configured")'
                 )
@@ -303,6 +309,8 @@ def test_explicit_proxy_uses_native_setup(binary: Path) -> Transcript:
                 )
                 client.finish()
             else:
+                client.stdin.close()
+                assert client.stdout.read(timeout=15) == ""
                 error = client.stderr.read(timeout=15)
                 assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
                 assert client.process.wait(timeout=5) != 0

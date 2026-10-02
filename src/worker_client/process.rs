@@ -29,6 +29,7 @@ use super::output::SendFailure;
 use super::{
     PreparationOutcome, PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome,
 };
+use crate::process_exit::ChildExitWaiter;
 use crate::relay_protocol::{JsonlReader, JsonlWriter, RelayCommand, RelayEvent};
 
 /// Lets the relay finish direct-worker shutdown, stream draining, and protocol
@@ -60,6 +61,7 @@ pub(super) struct Worker {
 /// Requests deadline-bounded shutdown while `Worker` retains the I/O task joins.
 #[derive(Clone)]
 pub(super) struct WorkerShutdownHandle {
+    stdin: StdinSender,
     commands: RelayCommandSender,
     operation: WorkerOperationState,
     interrupts: InterruptRequests,
@@ -76,10 +78,12 @@ struct RelayConnection {
 }
 
 struct RelayProcess {
+    temporary: Option<crate::local_runtime::TemporaryDirectory>,
+    temporary_retirement: Result<(), String>,
     child: Child,
     retirement_grace: Duration,
     no_sandbox: bool,
-    exit: super::child_exit::ChildExitWaiter,
+    exit: ChildExitWaiter,
     exited: bool,
     reaped: bool,
     ready_committed: bool,
@@ -153,6 +157,7 @@ impl WorkerRuntime {
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
             target,
+            local_runtime,
             executable,
             arguments,
             relay,
@@ -170,7 +175,7 @@ impl WorkerRuntime {
                 no_sandbox,
                 managed_r,
                 python.and_then(super::PythonEnvironment::managed),
-                false,
+                local_runtime,
             )?;
             (command, Some((session.protocol(), bytes)), Some(generation))
         } else {
@@ -196,9 +201,22 @@ impl WorkerRuntime {
             };
             (command, None, None)
         };
+        let temporary = if no_sandbox && target.is_none() && local_runtime.is_some() {
+            Some(crate::local_runtime::TemporaryDirectory::create()?)
+        } else {
+            None
+        };
+        if let Some(temporary) = &temporary {
+            command.env("TMPDIR", temporary.path());
+        }
         if target.is_none() {
+            // Never accept an ambient internal selection for custom workers.
+            command.env_remove(crate::local_runtime::ENVIRONMENT);
             if let Some(python) = python {
                 python.configure_worker(&mut command);
+            }
+            if let Some(runtime) = local_runtime {
+                runtime.configure(&mut command)?;
             }
             if let Some(managed_r) = managed_r {
                 managed_r.configure_worker(&mut command)?;
@@ -240,7 +258,7 @@ impl WorkerRuntime {
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
         drop(command);
-        let child = RelayProcess::new(
+        let mut child = RelayProcess::new(
             child,
             no_sandbox,
             target.is_some_and(crate::target_session::Session::is_ssh),
@@ -251,8 +269,7 @@ impl WorkerRuntime {
             notify_output_exit,
         )
         .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
-        #[cfg(unix)]
-        let mut child = child;
+        child.temporary = temporary;
         #[cfg(unix)]
         let relay_stdin = child
             .take_stdin()
@@ -395,16 +412,17 @@ impl RelayProcess {
         retirement_grace: Duration,
         notify_output_exit: PipeWriter,
     ) -> Result<Self, String> {
-        let exit =
-            match super::child_exit::ChildExitWaiter::start_notifying(child.id(), move || {
-                drop(notify_output_exit);
-            }) {
-                Ok(exit) => exit,
-                Err(error) => {
-                    return Err(retire_after_exit_observer_failure(child, error));
-                }
-            };
+        let exit = match ChildExitWaiter::start_notifying(child.id(), move || {
+            drop(notify_output_exit);
+        }) {
+            Ok(exit) => exit,
+            Err(error) => {
+                return Err(retire_after_exit_observer_failure(child, error));
+            }
+        };
         Ok(Self {
+            temporary: None,
+            temporary_retirement: Ok(()),
             child,
             retirement_grace,
             no_sandbox,
@@ -576,6 +594,10 @@ impl RelayProcess {
     fn finish_reaped_status(&mut self, status: ExitStatus) -> Result<(), String> {
         self.exited = true;
         self.reaped = true;
+        if let Some(mut temporary) = self.temporary.take() {
+            self.temporary_retirement = temporary.retire();
+            self.temporary_retirement.clone()?;
+        }
         if self.ssh {
             return if status.success() {
                 Ok(())
@@ -675,7 +697,7 @@ fn observe_and_reap_child(
     let deadline = Instant::now()
         .checked_add(timeout)
         .unwrap_or_else(Instant::now);
-    match super::child_exit::ChildExitWaiter::start(child.id()) {
+    match ChildExitWaiter::start(child.id()) {
         Ok(mut exit) => match exit.wait(timeout) {
             Ok(true) => {
                 return match child.wait() {
@@ -759,11 +781,14 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         continue_environment_preparation: bool,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
         commit: PythonPreparationCommit,
     ) -> Result<PreparationOutcome, String> {
-        let result = self
-            .operation
-            .begin_python_preparation(commit, continue_environment_preparation)?;
+        let result = self.operation.begin_python_preparation(
+            commit,
+            continue_environment_preparation,
+            duckdb_extensions,
+        )?;
         self.relay
             .commands
             .send(RelayCommand::PreparePython { packages })?;
@@ -854,6 +879,7 @@ impl Worker {
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
         WorkerShutdownHandle {
+            stdin: self.stdin.clone(),
             commands: self.relay.commands(),
             operation: self.operation.clone(),
             interrupts: self.interrupts.clone(),
@@ -1167,6 +1193,10 @@ impl ShutdownAcceptance {
 }
 
 impl WorkerShutdownHandle {
+    pub(super) fn write_startup_stdin(&self, data: String) -> Result<(), String> {
+        self.stdin.send(data)
+    }
+
     pub(super) fn interrupt(&self) -> Result<(), String> {
         self.interrupts.request(&self.commands)
     }
@@ -1347,7 +1377,7 @@ impl RelayConnection {
                 .lock()
                 .map_err(|_| "worker child lock poisoned".to_string())?;
             let cleanup = if child.is_reaped() {
-                Ok(())
+                child.temporary_retirement.clone()
             } else {
                 child.retire_launcher()
             };

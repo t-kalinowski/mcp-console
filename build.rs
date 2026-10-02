@@ -11,6 +11,7 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=src/r_graphics.c");
     println!("cargo:rerun-if-changed=src/r_repl.c");
+    println!("cargo:rerun-if-changed=src/worker/interrupt.c");
 
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
@@ -21,7 +22,11 @@ fn main() {
     if std::env::var_os("CARGO_CFG_UNIX").is_some()
         || std::env::var_os("CARGO_CFG_WINDOWS").is_some()
     {
-        cc::Build::new()
+        let mut native = cc::Build::new();
+        if std::env::var_os("CARGO_CFG_UNIX").is_some() {
+            native.file("src/worker/interrupt.c");
+        }
+        native
             .file("src/r_graphics.c")
             .file("src/r_repl.c")
             .compile("mcp_console_r_repl");

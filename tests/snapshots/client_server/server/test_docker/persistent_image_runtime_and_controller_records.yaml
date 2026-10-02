@@ -49,6 +49,16 @@ result:
   isError: false
 ---
 send:
+  r: >-
+    stopifnot(!DBI::dbGetQuery(sql_connection(), "SELECT
+    current_setting('autoinstall_known_extensions')")[[1]])
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   python: 'print(input("container prompt: "))'
 result:
   content:

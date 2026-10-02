@@ -298,8 +298,8 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 RelayCommand::PreparePython { packages } => {
                     let _ = send_sideband.send(ServerMessage::PreparePython { packages });
                 }
-                RelayCommand::PythonResolved { python } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolved { python });
+                RelayCommand::PythonResolved { python, native } => {
+                    let _ = send_sideband.send(ServerMessage::PythonResolved { python, native });
                 }
                 RelayCommand::PythonResolutionFailed { message } => {
                     let _ = send_sideband.send(ServerMessage::PythonResolutionFailed { message });

@@ -5,6 +5,7 @@ fields:
   - control
   - python
   - r
+  - requirements
   - sql
   - stdin
   - timeout_ms

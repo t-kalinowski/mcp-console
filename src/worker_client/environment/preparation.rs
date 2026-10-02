@@ -22,6 +22,7 @@ pub(in crate::worker_client) enum PrepareResult {
 pub(in crate::worker_client) enum PreparationIntent {
     Standalone,
     BeforeEvaluation,
+    StartupEvaluation,
 }
 
 impl Client {
@@ -55,6 +56,8 @@ impl Client {
         _preparation: &tokio::sync::RwLockWriteGuard<'_, ()>,
         intent: PreparationIntent,
     ) -> Result<PrepareResult, String> {
+        let action = requirements.action;
+        let call_id = requirements.call_id;
         let environment = self
             .0
             .environment
@@ -64,7 +67,9 @@ impl Client {
             .evaluation()?
             .as_ref()
             .map(|active| active.evaluation.clone());
-        if let Some(active) = active_operation {
+        if let Some(active) =
+            active_operation.filter(|_| !matches!(intent, PreparationIntent::StartupEvaluation))
+        {
             let environment = match environment.try_lock() {
                 Ok(environment) => environment,
                 Err(std::sync::TryLockError::WouldBlock) => {
@@ -78,6 +83,10 @@ impl Client {
             let delta = RequirementDelta::calculate(&environment, requirements)?;
             if delta.is_empty() {
                 return Ok(PrepareResult::Prepared);
+            }
+            self.require_explicit_restart(&delta)?;
+            if self.0.python_only {
+                self.validate_live_native_delta(&environment, &delta)?;
             }
             if matches!(intent, PreparationIntent::Standalone)
                 && self.requirement_change_state(generation)?
@@ -100,6 +109,7 @@ impl Client {
                 if delta.is_empty() {
                     return Ok(PrepareResult::Prepared);
                 }
+                self.require_explicit_restart(&delta)?;
                 Some((environment, delta))
             }
             Err(std::sync::TryLockError::WouldBlock) => None,
@@ -145,9 +155,26 @@ impl Client {
                 if delta.is_empty() {
                     return Ok(PrepareResult::Prepared);
                 }
+                self.require_explicit_restart(&delta)?;
                 (environment, delta)
             }
         };
+        let replace_default = self
+            .0
+            .unused_default
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(&*worker, WorkerState::Running(_));
+        if self.0.python_only && !replace_default {
+            match &*worker {
+                WorkerState::Initial => {}
+                WorkerState::Running(_) => {
+                    self.validate_live_native_delta(&environment, &delta)?;
+                }
+                WorkerState::Stopped => {
+                    return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
+                }
+            }
+        }
         let includes_r = delta.r_changed;
         let _environment_preparation = match environment_preparation {
             Ok(reservation) => reservation,
@@ -162,20 +189,24 @@ impl Client {
                 );
             }
         };
-        if self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired {
+        if !delta.restart_required
+            && self.requirement_change_state(generation)? == RequirementChangeState::RestartRequired
+        {
             return Ok(PrepareResult::RestartRequired);
         }
-        if matches!(*worker, WorkerState::Stopped)
+        if !delta.restart_required
+            && matches!(*worker, WorkerState::Stopped)
             && matches!(intent, PreparationIntent::Standalone)
         {
             return Ok(PrepareResult::RestartRequired);
         }
-        if matches!(*worker, WorkerState::Running(_)) {
+        if matches!(*worker, WorkerState::Running(_)) && !replace_default {
             let RequirementDelta {
                 duckdb_extensions,
                 duckdb_changed,
                 python_additions,
                 python_candidate,
+                restart_required: _,
                 r_requirements,
                 r_changed,
             } = delta;
@@ -190,7 +221,19 @@ impl Client {
             } else {
                 None
             };
-            if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
+            if self.0.python_only && duckdb_changed && python_candidate.is_none() {
+                let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
+                if let Err(failure) = self.resolve_python_duckdb_extensions_for_environment(
+                    generation,
+                    &environment,
+                    &extensions,
+                ) {
+                    return self.finish_environment_resolution_failure(generation, intent, failure);
+                }
+            } else if !self.0.python_only
+                && !duckdb_extensions.is_empty()
+                && (duckdb_changed || managed_r.is_some())
+            {
                 let mut targets = Vec::new();
                 if duckdb_changed {
                     targets.extend(environment.duckdb_r_targets.iter().cloned());
@@ -238,6 +281,20 @@ impl Client {
             }
         };
 
+        if replace_default {
+            // Resolve the complete candidate first: failed preparation must
+            // preserve the prewarmed worker and committed declaration.
+            match self
+                .stop_failed_worker(&mut worker, generation)
+                .map_err(|failure| failure.message)?
+            {
+                FailedWorkerStop::Stopped(_) => *worker = WorkerState::Initial,
+                FailedWorkerStop::RestartOwnsWorker => {
+                    return Err(preparation_cancelled(includes_r));
+                }
+            }
+        }
+
         let mut lifecycle = self
             .0
             .lifecycle
@@ -247,6 +304,9 @@ impl Client {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.processes.resolver = None;
                 *environment = resolved;
+                self.record_accepted_python(&environment);
+                self.publish_requirements(&environment);
+                self.record_requirements(action, call_id, &environment);
                 Ok(PrepareResult::Prepared)
             }
             LifecycleState::Ready => {
@@ -255,6 +315,32 @@ impl Client {
             LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
             LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
         }
+    }
+
+    fn require_explicit_restart(&self, delta: &RequirementDelta) -> Result<(), String> {
+        if delta.restart_required
+            && self.has_live_worker()?
+            && !self
+                .0
+                .unused_default
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return Err("changed requirements require an explicit restart; retry send(control=\"restart\", requirements={\"action\": \"set\", ...}) with the complete declaration (or action=\"reset\")".into());
+        }
+        Ok(())
+    }
+
+    fn validate_live_native_delta(
+        &self,
+        environment: &Environment,
+        delta: &RequirementDelta,
+    ) -> Result<(), String> {
+        if delta.has_live_python_additions() {
+            delta.validate_live_python_additions(environment)?;
+        } else if !delta.is_live_duckdb_only() {
+            return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
+        }
+        Ok(())
     }
 
     fn finish_environment_resolution_failure(
@@ -290,6 +376,7 @@ impl Client {
         match lifecycle.state {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 environment.duckdb_extensions = duckdb_extensions;
+                self.publish_requirements(environment);
                 Ok(())
             }
             LifecycleState::Ready => {
@@ -328,16 +415,28 @@ impl Client {
             let commit = Box::new(move |result| {
                 let managed = match result {
                     Ok(managed) => managed,
-                    Err(error) => return Ok(PreparationOutcome::Completed(Err(error))),
+                    Err(error) => {
+                        let error = if client.requirement_change_state(&commit_generation)?
+                            == RequirementChangeState::RestartRequired
+                        {
+                            requirement_restart_error(error)
+                        } else {
+                            error
+                        };
+                        return Ok(PreparationOutcome::Completed(Err(error)));
+                    }
                 };
                 if client.old_generation_commit_disposition(&commit_generation)?
                     == OldGenerationCommitDisposition::DiscardForReplacement
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
-                if let Some(managed) = managed
-                    && client.commit_runtime_python(commit_generation.clone(), managed)?
-                        == OldGenerationCommitDisposition::DiscardForReplacement
+                if let Some((managed, configuration)) = managed
+                    && client.commit_runtime_python(
+                        commit_generation.clone(),
+                        managed,
+                        configuration,
+                    )? == OldGenerationCommitDisposition::DiscardForReplacement
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
@@ -352,7 +451,15 @@ impl Client {
                 }
                 Ok(PreparationOutcome::Completed(Ok(())))
             });
-            let result = running.prepare_python(python_packages, includes_r, commit);
+            let result = running.prepare_python(
+                python_packages,
+                includes_r,
+                self.0
+                    .python_only
+                    .then(|| duckdb_extensions.clone())
+                    .flatten(),
+                commit,
+            );
             match result {
                 Ok(PreparationOutcome::Completed(Ok(()))) => {}
                 Ok(PreparationOutcome::Completed(Err(error))) => {
@@ -509,6 +616,7 @@ impl Client {
                 if let Some(duckdb_extensions) = duckdb_extensions {
                     environment.duckdb_extensions = duckdb_extensions;
                 }
+                self.publish_requirements(&environment);
                 Ok(disposition)
             }
             OldGenerationCommitDisposition::DiscardForReplacement => Ok(disposition),
@@ -536,7 +644,7 @@ impl Client {
         }
     }
 
-    pub(super) fn require_restart_for_requirement_changes(
+    pub(in crate::worker_client) fn require_restart_for_requirement_changes(
         &self,
         generation: &WorkerGeneration,
     ) -> Result<OldGenerationCommitDisposition, String> {

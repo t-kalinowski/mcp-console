@@ -8,7 +8,7 @@ use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, plat
 
 /// Identifies work admitted against one worker without exposing an epoch counter.
 #[derive(Clone)]
-pub(super) struct WorkerGeneration(Arc<()>);
+pub(crate) struct WorkerGeneration(Arc<()>);
 
 impl WorkerGeneration {
     fn new() -> Self {
@@ -37,7 +37,7 @@ struct WorkerStartup {
 }
 
 /// Keeps startup interruptible before and between its resolver processes.
-pub(super) struct WorkerStartupAdmission {
+pub(crate) struct WorkerStartupAdmission {
     client: Client,
     generation: WorkerGeneration,
 }
@@ -95,6 +95,17 @@ impl LifecycleControl {
             return Err("worker startup interrupted".to_string());
         }
         Ok(())
+    }
+
+    pub(super) fn ensure_generation(&self, expected: &WorkerGeneration) -> Result<(), String> {
+        match self.state {
+            LifecycleState::Ready if self.generation.is(expected) => Ok(()),
+            LifecycleState::Ready => {
+                Err("session restarted before the operation began".to_string())
+            }
+            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
+            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
+        }
     }
 
     fn startup_interrupted(&self) -> bool {
@@ -217,6 +228,14 @@ pub(super) struct ProcessStopHandles {
 
 impl ProcessStopHandles {
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
+        let (allowance, errors) = self.request_shutdown(deadline);
+        self.finish_shutdown(deadline, allowance, errors)
+    }
+
+    fn request_shutdown(
+        &self,
+        deadline: Instant,
+    ) -> (Option<platform::RelayRetirementAllowance>, Vec<String>) {
         let mut errors = Vec::new();
         let mut worker_allowance = None;
         // Queue worker shutdown before resolver cancellation can release a
@@ -233,6 +252,15 @@ impl ProcessStopHandles {
         {
             errors.push(error);
         }
+        (worker_allowance, errors)
+    }
+
+    fn finish_shutdown(
+        &self,
+        deadline: Instant,
+        worker_allowance: Option<platform::RelayRetirementAllowance>,
+        mut errors: Vec<String>,
+    ) -> Result<(), String> {
         // The barrier lets the ordered consumer apply failures and finish a
         // cancelled resolver callback before relay retirement is enforced.
         if let (Some(worker), Some(allowance)) = (self.worker.as_ref(), worker_allowance)
@@ -283,7 +311,57 @@ impl Drop for WorkerStartupAdmission {
 }
 
 impl Client {
-    pub(super) fn reserve_worker_startup(
+    #[cfg(any(unix, windows))]
+    pub(super) fn queue_startup_stdin(
+        &self,
+        generation: &WorkerGeneration,
+        input: String,
+    ) -> Result<(), String> {
+        if input.is_empty() {
+            return Ok(());
+        }
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        lifecycle.ensure_startup(generation)?;
+        if let Some(worker) = &lifecycle.processes.worker {
+            self.0
+                .unused_default
+                .store(false, std::sync::atomic::Ordering::Release);
+            worker.write_startup_stdin(input)
+        } else {
+            self.0
+                .startup_stdin
+                .lock()
+                .map_err(|_| "startup stdin lock poisoned")?
+                .push_str(&input);
+            Ok(())
+        }
+    }
+    pub(crate) async fn cancel_startup(&self, deadline: Instant) -> Result<(), String> {
+        let processes = self.close_lifecycle(deadline)?.unwrap_or_default();
+        tokio::task::spawn_blocking(move || {
+            let (allowance, errors) = processes.request_shutdown(deadline);
+            processes.finish_shutdown(deadline, allowance, errors)
+        })
+        .await
+        .map_err(|error| format!("startup shutdown task failed: {error}"))?
+    }
+
+    pub(super) fn has_live_worker(&self) -> Result<bool, String> {
+        Ok(self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?
+            .processes
+            .worker
+            .is_some())
+    }
+
+    pub(crate) fn reserve_worker_startup(
         &self,
         generation: &WorkerGeneration,
     ) -> Result<Option<Arc<WorkerStartupAdmission>>, String> {
@@ -314,7 +392,7 @@ impl Client {
         Ok(Some(owner))
     }
 
-    pub(super) fn ensure_startup(&self, generation: &WorkerGeneration) -> Result<(), String> {
+    pub(crate) fn ensure_startup(&self, generation: &WorkerGeneration) -> Result<(), String> {
         self.0
             .lifecycle
             .lock()
@@ -419,7 +497,10 @@ impl Client {
         defer_idle: bool,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartAttempt, String> {
-        let mut restart = if requirements.duckdb.is_empty()
+        let mut restart = if requirements.action == super::RequirementsAction::Add
+            && requirements.python_version.is_empty()
+            && requirements.exclude_newer.is_none()
+            && requirements.duckdb.is_empty()
             && requirements.python.is_empty()
             && requirements.r.is_empty()
         {
@@ -526,22 +607,31 @@ impl Client {
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
         self.ensure_generation(&generation)?;
+        let action = requirements.action;
+        let call_id = requirements.call_id;
         let delta = RequirementDelta::calculate(&environment, requirements)?;
-        if delta.is_empty() {
-            drop(environment);
-            return self.begin_restart(grace, control);
-        }
-        let resolved = self
-            .resolve_prestart_environment(&generation, &environment, delta)
-            .map_err(|failure| failure.into_message())?;
+        let resolved = if delta.is_empty() {
+            if action == super::RequirementsAction::Add {
+                drop(environment);
+                return self.begin_restart(grace, control);
+            }
+            // Even an unchanged replacement excludes uncommitted old-worker
+            // activations. Keep the environment locked through generation change.
+            environment.clone()
+        } else {
+            self.resolve_prestart_environment(&generation, &environment, delta)
+                .map_err(|failure| failure.into_message())?
+        };
 
-        self.commit_environment_and_begin_restart(
+        let restart = self.commit_environment_and_begin_restart(
             &generation,
             grace,
             &mut environment,
             resolved,
             control,
-        )
+        )?;
+        self.record_requirements(action, call_id, &environment);
+        Ok(restart)
     }
 
     fn commit_environment_and_begin_restart(
@@ -583,8 +673,15 @@ impl Client {
             .map(|active| active.evaluation.reserve_for_restart())
             .transpose()?;
         *environment = resolved;
+        self.record_accepted_python(environment);
+        self.publish_requirements(environment);
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::DiscardForReplacement);
+        self.0
+            .startup_stdin
+            .lock()
+            .map_err(|_| "startup stdin lock poisoned")?
+            .clear();
         Ok(RestartContext {
             processes,
             deadline,
@@ -774,7 +871,7 @@ impl Client {
         worker.finish_retirement()
     }
 
-    pub(super) fn admit(&self) -> Result<WorkerGeneration, String> {
+    pub(crate) fn admit(&self) -> Result<WorkerGeneration, String> {
         let lifecycle = self
             .0
             .lifecycle
@@ -841,14 +938,7 @@ impl Client {
             .lifecycle
             .lock()
             .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        match lifecycle.state {
-            LifecycleState::Ready if lifecycle.generation.is(expected) => Ok(()),
-            LifecycleState::Ready => {
-                Err("session restarted before the operation began".to_string())
-            }
-            LifecycleState::Restarting { .. } => Err("worker is restarting".to_string()),
-            LifecycleState::ShuttingDown { .. } => Err("worker is shutting down".to_string()),
-        }
+        lifecycle.ensure_generation(expected)
     }
 
     pub(super) fn ensure_ordinary_generation(
@@ -959,6 +1049,11 @@ impl Client {
             .transpose()?;
         let (processes, deadline, generation) =
             lifecycle.start_restart(grace, OldGenerationCommitDisposition::Commit);
+        self.0
+            .startup_stdin
+            .lock()
+            .map_err(|_| "startup stdin lock poisoned")?
+            .clear();
         Ok(RestartContext {
             processes,
             deadline,
@@ -1061,6 +1156,23 @@ impl Client {
                     } else {
                         lifecycle.processes.worker = Some(handle.clone());
                         lifecycle.startup = None;
+                        #[cfg(any(unix, windows))]
+                        {
+                            let input = std::mem::take(
+                                &mut *self
+                                    .0
+                                    .startup_stdin
+                                    .lock()
+                                    .map_err(|_| "startup stdin lock poisoned")?,
+                            );
+                            if !input.is_empty() {
+                                self.0
+                                    .unused_default
+                                    .store(false, std::sync::atomic::Ordering::Release);
+                                handle.write_startup_stdin(input)?;
+                            }
+                        }
+                        self.0.startup.send_modify(|_| {});
                         return Ok(());
                     }
                 }
@@ -1131,7 +1243,7 @@ impl Client {
         Ok(())
     }
 
-    pub(super) fn register_resolver_stop_handle(
+    pub(crate) fn register_resolver_stop_handle(
         &self,
         expected: &WorkerGeneration,
         handle: crate::resolver::ResolverStopHandle,
@@ -1203,22 +1315,33 @@ impl Client {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
         tokio::task::spawn_blocking(move || {
-            let preparation = client
+            let local = client
                 .0
-                .target
-                .as_ref()
-                .and_then(crate::target_session::Session::ssh_preparation)
-                .map(|preparation| {
-                    let preparation = preparation.clone();
-                    // The two SSH retirement bounds run together. A lost
-                    // preparation connection must not extend worker shutdown.
-                    std::thread::spawn(move || preparation.close())
-                });
-            let stopped = stop_handles.shutdown(deadline);
+                .local_preparation
+                .lock()
+                .expect("local preparation lock")
+                .clone();
+            let preparation = local.or_else(|| {
+                client
+                    .0
+                    .target
+                    .as_ref()
+                    .and_then(crate::target_session::Session::ssh_preparation)
+                    .cloned()
+            });
+            // Queue relay shutdown and resolver cancellation before Close can
+            // retire the preparation host and its control-input pipe.
+            let (allowance, errors) = stop_handles.request_shutdown(deadline);
+            let preparation = preparation.map(|preparation| {
+                // Resolver and worker retirement run together. A lost
+                // preparation connection must not extend worker shutdown.
+                std::thread::spawn(move || preparation.close())
+            });
+            let stopped = stop_handles.finish_shutdown(deadline, allowance, errors);
             let retired = client.finish_worker_retirement().map(|_| ());
             let preparation = preparation.map_or(Ok(()), |task| {
                 task.join()
-                    .map_err(|_| "SSH preparation shutdown task panicked")?
+                    .map_err(|_| "preparation shutdown task panicked")?
             });
             let worker = match (stopped, retired) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -1231,7 +1354,7 @@ impl Client {
                 (Ok(()), Ok(())) => Ok(()),
                 (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
                 (Err(error), Err(preparation_error)) => Err(format!(
-                    "{error}; additionally failed to retire SSH preparation: {preparation_error}"
+                    "{error}; additionally failed to retire preparation: {preparation_error}"
                 )),
             }
         })
@@ -1249,14 +1372,14 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_failure_preserves_an_unclaimed_assembled_response() {
-        let client = Client::with_arguments(
+        let client = Client::pending();
+        client.configure(crate::worker_client::ClientConfiguration::new(
             std::path::PathBuf::from("unused-worker"),
-            Vec::new(),
             None,
             false,
             crate::settings::SandboxSettings::default(),
-            None,
-        );
+        ));
+        client.finish_startup(Ok(()));
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),
             None,
@@ -1299,14 +1422,14 @@ mod tests {
 
     #[tokio::test]
     async fn failed_restart_excludes_a_delivered_response_but_keeps_later_output() {
-        let client = Client::with_arguments(
+        let client = Client::pending();
+        client.configure(crate::worker_client::ClientConfiguration::new(
             std::path::PathBuf::from("unused-worker"),
-            Vec::new(),
             None,
             false,
             crate::settings::SandboxSettings::default(),
-            None,
-        );
+        ));
+        client.finish_startup(Ok(()));
         let evaluation = Arc::new(super::super::Evaluation::new(
             crate::transcript::Transcript::new(true),
             None,

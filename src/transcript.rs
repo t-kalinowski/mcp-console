@@ -31,13 +31,31 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
+    python_preparation: bool,
+    r_available: bool,
     target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
+    pending_calls: Option<Vec<PendingCall>>,
+    next_pending_call_id: u64,
+}
+
+enum PendingCall {
+    Begin {
+        id: u64,
+        request_id: RequestId,
+        request: CallToolRequestParams,
+        at: DateTime<Utc>,
+    },
+    Finish {
+        call: Call,
+        response: Result<CallToolResponse, ErrorData>,
+    },
 }
 
 struct ActiveTranscript {
     directory: PathBuf,
+    public_directory: PathBuf,
     writer: BufWriter<File>,
     projections: Option<markdown::Writers>,
     pending_projection_failure: Option<String>,
@@ -63,22 +81,111 @@ pub(crate) struct Artifact {
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(std::env::current_dir(), dynamic_resolution, None)
+        Self::with_target(
+            std::env::current_dir(),
+            dynamic_resolution,
+            false,
+            true,
+            None,
+        )
     }
 
     pub(crate) fn with_target(
         working_directory: std::io::Result<PathBuf>,
         dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
         target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
+            python_preparation,
+            r_available,
             target,
             active: None,
             failure: None,
+            pending_calls: None,
+            next_pending_call_id: 0,
         })))
+    }
+
+    /// Retain early tool records until discovery supplies the recording metadata.
+    pub(crate) fn pending(working_directory: std::io::Result<PathBuf>) -> Self {
+        let transcript = Self::with_target(working_directory, false, false, false, None);
+        transcript.0.lock().expect("transcript lock").pending_calls = Some(Vec::new());
+        transcript
+    }
+
+    pub(crate) fn configure(&self, configured: Self) {
+        let (configuration, _) = configured.lock();
+        self.update(|state| {
+            state.dynamic_resolution = configuration.dynamic_resolution;
+            state.python_preparation = configuration.python_preparation;
+            state.r_available = configuration.r_available;
+            state.target = configuration.target.clone();
+            let pending = state
+                .pending_calls
+                .take()
+                .expect("recording metadata is supplied once");
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let next_call_id = state.next_pending_call_id;
+            let active = state.materialize()?;
+            active.next_call_id = next_call_id;
+            for record in pending {
+                match record {
+                    PendingCall::Begin {
+                        id,
+                        request_id,
+                        request,
+                        at,
+                    } => active.append(
+                        Event::ToolCall {
+                            call_id: id,
+                            request_id: &request_id,
+                            request: &request,
+                        },
+                        at,
+                    )?,
+                    PendingCall::Finish { call, response } => active.finish(
+                        call.id.expect("pending call id"),
+                        call.take_result_images()?,
+                        &response,
+                    )?,
+                }
+            }
+            Ok(())
+        });
+    }
+
+    pub(crate) fn abandon_pending(&self) {
+        let (mut state, _) = self.lock();
+        if state.pending_calls.is_some() {
+            // Startup already reports this failure. No recording metadata will
+            // arrive, so release early records and disable subsequent recording.
+            state.disable("runtime startup failed before recording metadata".into());
+        }
+    }
+
+    pub(crate) fn requirements_selected(
+        &self,
+        call_id: Option<u64>,
+        action: &str,
+        snapshot: &serde_json::Value,
+    ) {
+        self.update(|state| {
+            state.materialize()?.append(
+                Event::RequirementsSelected {
+                    call_id,
+                    action,
+                    snapshot,
+                },
+                Utc::now(),
+            )
+        });
     }
 
     pub(crate) fn target_generation(
@@ -97,6 +204,14 @@ impl Transcript {
         });
     }
 
+    pub(crate) fn python_environment_accepted(&self, packages: &[String]) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::PythonEnvironmentAccepted { packages }, Utc::now())
+        });
+    }
+
     pub(crate) fn begin(
         &self,
         request_id: &RequestId,
@@ -104,6 +219,24 @@ impl Transcript {
         request: &CallToolRequestParams,
     ) -> Call {
         self.update(|state| {
+            if let Some(pending) = &mut state.pending_calls {
+                state.next_pending_call_id += 1;
+                let id = state.next_pending_call_id;
+                let mut request = request.clone();
+                if !request_meta.is_empty() {
+                    request.meta = Some(request_meta.clone());
+                }
+                pending.push(PendingCall::Begin {
+                    id,
+                    request_id: request_id.clone(),
+                    request,
+                    at: Utc::now(),
+                });
+                return Ok(Call {
+                    id: Some(id),
+                    result_images: Arc::new(Mutex::new(None)),
+                });
+            }
             let active = state.materialize()?;
             active.next_call_id += 1;
             let call_id = active.next_call_id;
@@ -153,6 +286,13 @@ impl Transcript {
             return;
         };
         self.update(|state| {
+            if let Some(pending) = &mut state.pending_calls {
+                pending.push(PendingCall::Finish {
+                    call,
+                    response: response.clone(),
+                });
+                return Ok(());
+            }
             let images = call.take_result_images()?;
             state.active()?.finish(call_id, images, response)
         });
@@ -229,6 +369,8 @@ impl TranscriptState {
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
                 self.dynamic_resolution,
+                self.python_preparation,
+                self.r_available,
                 self.target.as_ref(),
             )?);
         }
@@ -246,6 +388,7 @@ impl TranscriptState {
             return false;
         }
         self.active = None;
+        self.pending_calls = None;
         self.failure = Some(error);
         true
     }
@@ -255,6 +398,8 @@ impl ActiveTranscript {
     fn create(
         working_directory: &Path,
         dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
         target: Option<&serde_json::Value>,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
@@ -265,8 +410,40 @@ impl ActiveTranscript {
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".agents/console/sessions");
+        let project_console = working_directory.join(".agents/console");
+        let in_project = match std::fs::metadata(&project_console) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {}: {error}",
+                    project_console.display()
+                ));
+            }
+        };
+        let console = if in_project {
+            project_console
+        } else {
+            crate::console_paths::home_console_directory()?
+                .ok_or_else(|| "HOME is not set".to_string())?
+        };
+        let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);
+        let public_directory = if in_project {
+            PathBuf::from(".agents/console/sessions").join(&run_id)
+        } else {
+            directory.clone()
+        };
+        if public_directory.to_str().is_none() {
+            return Err("recording path must be UTF-8".to_string());
+        }
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
@@ -307,6 +484,8 @@ impl ActiveTranscript {
                 quarto_path,
                 working_directory,
                 dynamic_resolution,
+                python_preparation,
+                r_available,
                 target,
             ))
         })();
@@ -317,6 +496,7 @@ impl ActiveTranscript {
 
         let mut transcript = Self {
             directory,
+            public_directory,
             writer,
             projections,
             pending_projection_failure,
@@ -330,6 +510,7 @@ impl ActiveTranscript {
                 session: "default",
                 working_directory: &working_directory_text,
                 dynamic_resolution,
+                python_preparation,
                 target,
             },
             started_at,

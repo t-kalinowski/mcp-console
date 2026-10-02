@@ -1,17 +1,19 @@
 #[cfg(windows)]
 pub(super) use crate::windows::resolver::Child;
-use std::io::{self, Write};
+use std::io;
+#[cfg(unix)]
+use std::io::Write;
 #[cfg(unix)]
 use std::mem::MaybeUninit;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 #[cfg(unix)]
-pub(super) use std::process::Child;
-use std::process::{ChildStdin, Command, ExitStatus};
-use std::sync::Arc;
+use std::process::{Child, ChildStdin};
+use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[derive(Clone)]
@@ -46,6 +48,7 @@ struct LocalControl {
     events: Sender<ResolverEvent>,
     control: Arc<AtomicU8>,
     cleanup: Arc<AtomicBool>,
+    waiting: Arc<Mutex<bool>>,
 }
 
 const CONTROL_NONE: u8 = 0;
@@ -66,45 +69,71 @@ enum ResolverInterrupt {
     AlreadyExited,
 }
 
-pub(super) struct ResolverOutput {
-    pub(super) status: ExitStatus,
-    pub(super) write_result: io::Result<()>,
-    pub(super) stdout: Vec<u8>,
-    pub(super) stderr: Vec<u8>,
+pub(crate) struct ResolverOutput {
+    pub(crate) status: ExitStatus,
+    pub(crate) write_result: io::Result<()>,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
 }
 
-pub(super) struct ResolverProcess {
+pub(crate) struct ResolverProcess {
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
     cleanup: Arc<AtomicBool>,
+    waiting: Arc<Mutex<bool>>,
 }
 
 impl ResolverProcess {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (events, event_receiver) = mpsc::channel();
         Self {
             events,
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
             cleanup: Arc::new(AtomicBool::new(false)),
+            waiting: Arc::new(Mutex::new(false)),
         }
     }
 
-    pub(super) fn stop_handle(&self) -> ResolverStopHandle {
+    pub(crate) fn stop_handle(&self) -> ResolverStopHandle {
         ResolverStopHandle::new(LocalControl {
             events: self.events.clone(),
             control: self.control.clone(),
             cleanup: self.cleanup.clone(),
+            waiting: self.waiting.clone(),
         })
     }
 
-    pub(super) fn watch_exit(&self, pid: u32) {
+    // Mark the spawned child active before publishing its stop handle. An
+    // interrupt in that gap must wait for the child's actual signal result.
+    pub(crate) fn watch_exit(&self, pid: u32) {
         self.cleanup.store(false, Ordering::SeqCst);
+        *self.waiting.lock().expect("resolver phase lock") = true;
         watch_resolver_exit(pid, self.events.clone());
     }
 
-    pub(super) fn wait(
+    fn finish_wait(&self, kind: &str) -> Result<(), String> {
+        let mut waiting = self.waiting.lock().expect("resolver phase lock");
+        let mut cancelled = false;
+        while let Ok(event) = self.event_receiver.try_recv() {
+            match event {
+                ResolverEvent::Interrupt { reply, .. } => {
+                    let _ = reply.send(Ok(()));
+                }
+                ResolverEvent::Cancel => cancelled = true,
+                ResolverEvent::Exited(_) => {}
+            }
+        }
+        *waiting = false;
+        if cancelled {
+            Err(format!("{kind} resolution cancelled"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn wait(
         &self,
         child: &mut Child,
         input: Receiver<io::Result<()>>,
@@ -114,6 +143,18 @@ impl ResolverProcess {
         kind: &str,
     ) -> Result<ResolverOutput, String> {
         wait_for_resolver(self, child, input, stdout, stderr, program, kind)
+    }
+
+    pub(crate) fn abort(
+        &self,
+        child: &mut Child,
+        program: &Path,
+        kind: &str,
+    ) -> Result<(), String> {
+        let result = stop_resolver(child, program, kind);
+        self.cleanup.store(result.is_ok(), Ordering::SeqCst);
+        let _ = self.finish_wait(kind);
+        result.map(|_| ())
     }
 }
 
@@ -130,6 +171,8 @@ impl ResolverControl for LocalControl {
         let (reply, response) = mpsc::channel();
         let marked = self.mark_control(CONTROL_INTERRUPTED);
         let clear_marker = marked.then(|| self.control.clone());
+        let waiting = self.waiting.lock().expect("resolver phase lock");
+        let wait_for_reply = *waiting;
         if self
             .events
             .send(ResolverEvent::Interrupt {
@@ -140,6 +183,10 @@ impl ResolverControl for LocalControl {
         {
             self.clear_control(CONTROL_INTERRUPTED, marked);
             return Ok(false);
+        }
+        drop(waiting);
+        if !wait_for_reply {
+            return Ok(true);
         }
         match response.recv() {
             Ok(result) => result.map(|()| true),
@@ -182,7 +229,7 @@ fn clear_control(state: &AtomicU8, control: u8, marked: bool) {
     }
 }
 
-pub(super) fn completed_write() -> Receiver<io::Result<()>> {
+pub(crate) fn completed_write() -> Receiver<io::Result<()>> {
     let (sender, receiver) = mpsc::channel();
     sender
         .send(Ok(()))
@@ -190,7 +237,7 @@ pub(super) fn completed_write() -> Receiver<io::Result<()>> {
     receiver
 }
 
-pub(super) fn read_output(
+pub(crate) fn read_output(
     mut output: impl io::Read + Send + 'static,
 ) -> Receiver<io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
@@ -202,6 +249,7 @@ pub(super) fn read_output(
     receiver
 }
 
+#[cfg(unix)]
 pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io::Result<()>> {
     let (sender, receiver) = mpsc::channel();
     let _ = thread::spawn(move || {
@@ -211,7 +259,7 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
 }
 
 #[cfg(unix)]
-pub(super) fn resolver_command(program: &Path) -> Command {
+pub(crate) fn resolver_command(program: &Path) -> Command {
     let mut command = Command::new(program);
     command.process_group(0);
     // SAFETY: the closure calls only libc signal functions after fork and
@@ -346,7 +394,10 @@ fn wait_for_resolver(
         program,
         kind,
         &resolver.cleanup,
-    )?;
+    );
+    let phase_result = resolver.finish_wait(kind);
+    let status = status?;
+    phase_result?;
     let write_result = receive_result(input, "stdin writer", kind)?;
     let stdout = receive_result(stdout, "stdout reader", kind)?
         .map_err(|error| format!("failed to read resolver stdout: {error}"))?;
@@ -399,11 +450,7 @@ fn resolver_has_exited(pid: u32) -> io::Result<bool> {
 }
 
 #[cfg(unix)]
-pub(super) fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-) -> Result<ExitStatus, String> {
+fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     if result < 0 {
@@ -442,7 +489,7 @@ pub(super) fn stop_resolver(
 }
 
 #[cfg(windows)]
-pub(super) fn resolver_command(program: &Path) -> Command {
+pub(crate) fn resolver_command(program: &Path) -> Command {
     use std::os::windows::process::CommandExt;
     let mut command = Command::new(program);
     command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
@@ -480,26 +527,11 @@ pub(super) fn stop_resolver(
     })
 }
 
-/// Rscript on Windows treats newlines in -e as command-line delimiters. Keep
-/// compiled-in source in the child environment and pass a fixed one-line loader.
-pub(super) fn r_expression(command: &mut Command, source: &'static str) -> &'static str {
-    #[cfg(windows)]
-    {
-        command.env("MCP_CONSOLE_RESOLVER_SOURCE", source.replace("\r\n", "\n"));
-        "base::eval(base::parse(text=base::Sys.getenv('MCP_CONSOLE_RESOLVER_SOURCE')),envir=base::globalenv())"
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = command;
-        source
-    }
-}
-
 #[cfg(unix)]
-pub(super) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
+pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
     command.spawn()
 }
 #[cfg(windows)]
-pub(super) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
+pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
     crate::windows::resolver::spawn(command)
 }

@@ -430,11 +430,15 @@ def run_initial_requirements_stdin_idempotent(relay: ScriptedRelay) -> None:
 
 
 def run_live_r_requirements_then_evaluate(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
+    relay.make_checkpoint(RELEASE_NAME)
     relay.ready()
     command = relay.receive()
     assert command.get("kind") == "prepare_r", command
     relay.send({"kind": "r_prepared", "library": command["library"]})
     relay.expect(EVALUATION)
+    relay.notify_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
+    relay.wait_for_checkpoint(RELEASE_NAME)
     relay.complete()
     relay.retire()
 

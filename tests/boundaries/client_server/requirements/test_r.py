@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -164,9 +165,10 @@ def test_prepares_and_uses_cran_packages(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
-          identical(dirname(find.package("praise")), .libPaths()[[1L]]),
-          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+          identical(dirname(find.package("praise")), .libPaths()[[managed_index]]),
+          identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
         )
         result <- dplyr::summarise(
           data.frame(value = c(40L, 2L)),
@@ -180,6 +182,61 @@ def test_prepares_and_uses_cran_packages(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_prepares_with_empty_stdin_then_restarts(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[prepared]"
+        client.send(stdin="", requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[prepared]"
+        client.send(control="restart", requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[starting new worker]\n[idle]", (
+            client.transcript[-1]
+        )
+
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            stopifnot(
+              identical(dirname(find.package("praise")), .libPaths()[[managed_index]])
+            )
+            sentinel <- 42L
+            worker_pid <- Sys.getpid()
+            praise::praise("ready")
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == '[1] "ready"\n'
+        client.send(stdin="", requirements={"r": ["praise"]})
+        assert last_result_text(client) == "[prepared]"
+        client.send(r="stopifnot(identical(Sys.getpid(), worker_pid)); sentinel")
+        assert last_result_text(client) == "[1] 42\n"
+
+        # Prepare a new package while replacing the live worker.
+        client.send(control="restart", requirements={"r": ["zeallot"]})
+        assert last_result_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        )
+        # fmt: r
+        r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            stopifnot(
+              !exists("sentinel"),
+              !exists("worker_pid"),
+              identical(dirname(find.package("praise")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
+            )
+            praise::praise("restarted")
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == '[1] "restarted"\n'
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_sends_r_cell_with_initial_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -190,8 +247,9 @@ def test_sends_r_cell_with_initial_requirements(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
-          identical(dirname(find.package("praise")), .libPaths()[[1L]])
+          identical(dirname(find.package("praise")), .libPaths()[[managed_index]])
         )
         praise::praise("ready")
         """)
@@ -217,7 +275,9 @@ def test_prepares_r_requirements_after_worker_startup(
     r = code(r"""
         sentinel <- 42L
         worker_pid <- Sys.getpid()
-        initial_library <- .libPaths()[[1L]]
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+        sandbox_library <- if (managed_index == 2L) .libPaths()[[1L]] else NULL
+        initial_library <- .libPaths()[[managed_index]]
         """)
     client.send(r=r)
     assert last_result_text(client) == "[done]"
@@ -227,8 +287,9 @@ def test_prepares_r_requirements_after_worker_startup(
         stopifnot(
           identical(sentinel, 42L),
           identical(Sys.getpid(), worker_pid),
+          is.null(sandbox_library) || identical(.libPaths()[[1L]], sandbox_library),
           !initial_library %in% .libPaths(),
-          identical(dirname(find.package("zeallot")), .libPaths()[[1L]])
+          identical(dirname(find.package("zeallot")), .libPaths()[[managed_index]])
         )
         42L
         """)
@@ -336,7 +397,8 @@ def test_failed_mixed_preparation_retains_live_python_activation(
             # fmt: r
             setup = code(r"""
                 invisible(reticulate::py_config())
-                cat(.libPaths()[[1L]])
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                cat(.libPaths()[[managed_index]])
                 """)
             client.send(r=setup)
             initial_library = Path(last_result_text(client))
@@ -458,15 +520,17 @@ def test_evaluates_with_default_managed_r(
         client.initialize_and_list_tools()
         # fmt: r
         r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(
-              identical(dirname(find.package("tidyverse")), .libPaths()[[1L]]),
-              identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
-              identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
-              identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
-              identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
-              identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
+              identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("yyjsonr")), .libPaths()[[managed_index]]),
               vapply(
-                c("ggplot2", "dplyr", "readr", "jsonlite"),
+                c("ggplot2", "dplyr", "readr", "jsonlite", "yyjsonr"),
                 requireNamespace,
                 logical(1L),
                 quietly = TRUE
@@ -490,6 +554,11 @@ def test_evaluates_with_default_managed_r(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "yyjsonr",
+            "jsonlite",
+            "pillar",
+            "tibble",
+            "utf8",
         }, runs
         client.send(
             requirements={"r": ["DBI", "duckdb", "arrow", "nanoarrow"]},
@@ -503,7 +572,7 @@ def test_evaluates_with_default_managed_r(
 def test_prepares_initial_r_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
+    environment, rscript = r_test_environment()
     initial_r = "praise"
     candidate_r = "zeallot"
     with tempfile.TemporaryDirectory() as temporary:
@@ -528,6 +597,27 @@ def test_prepares_initial_r_requirements(
         assert last_result_text(client) == "[prepared]"
 
         invalid_r = "not a valid requirement !!!"
+        reference = subprocess.run(
+            [
+                "ir",
+                "run",
+                "--rscript",
+                str(rscript),
+                "--with",
+                invalid_r,
+                "--isolated",
+                "--vanilla",
+                "-e",
+                "42",
+            ],
+            env=environment
+            | {"IR_NO_LOCAL_SOURCES": "1", "PKG_SUBPROCESS_TIMEOUT": "60000"},
+            cwd=workspace,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+        assert reference.returncode == 1, reference
         client.send(
             requirements={"r": [invalid_r]},
         )
@@ -541,6 +631,23 @@ def test_prepares_initial_r_requirements(
         assert error.endswith("Execution halted\nir: dependency resolution failed"), (
             error
         )
+        assert error == (
+            f"R package resolution failed with exit status: 1: {reference.stderr.strip()}"
+        ), error
+        # Keep the complete diagnostic; `ir` releases change pkg_deps arguments.
+        pak_call = next(
+            line for line in error.splitlines() if line.startswith("3. pak::pkg_deps(")
+        )
+        assert error.count(pak_call) == 1, error
+        result["content"][0]["text"] = error.replace(
+            pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)"
+        )
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "replacements": {
+                "ir_pkg_deps_arguments": "<ir-version-dependent arguments>",
+            },
+        }
 
         invalid_python = "example @ https://example.invalid/example.whl"
         client.send(
@@ -555,18 +662,19 @@ def test_prepares_initial_r_requirements(
 
         # fmt: r
         r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(
               identical(
                 dirname(find.package("praise")),
-                .libPaths()[[1L]]
+                .libPaths()[[managed_index]]
               ),
-              normalizePath(.libPaths()[[2L]]) ==
+              normalizePath(.libPaths()[[managed_index + 1L]]) ==
                 normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
             )
             42L
             """)
         client.send(r=r)
-        assert last_result_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
 
         client.send(
             requirements={"r": [initial_r]},
@@ -582,17 +690,18 @@ def test_prepares_initial_r_requirements(
 
         # fmt: r
         prepared_r = code(r"""
+            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(
               "py-yaml12" %in% reticulate::py_require()$packages,
               identical(
                 dirname(find.package("praise")),
-                .libPaths()[[1L]]
+                .libPaths()[[managed_index]]
               ),
               identical(
                 dirname(find.package("zeallot")),
-                .libPaths()[[1L]]
+                .libPaths()[[managed_index]]
               ),
-              normalizePath(.libPaths()[[2L]]) ==
+              normalizePath(.libPaths()[[managed_index + 1L]]) ==
                 normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
             )
             42L

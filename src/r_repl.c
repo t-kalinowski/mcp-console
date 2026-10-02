@@ -41,12 +41,16 @@ struct event_wait {
 
 static read_console_fn read_console;
 static check_interrupt_fn check_interrupt;
-static const volatile int *interrupts_pending;
+static volatile int *interrupts_pending;
+
+void mcp_r_record_interrupt(void) {
+    *interrupts_pending = 1;
+}
 
 void mcp_r_console_configure(
     read_console_fn read,
     check_interrupt_fn check,
-    const volatile int *pending
+    volatile int *pending
 ) {
     read_console = read;
     check_interrupt = check;

@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
 use std::io;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -13,13 +15,15 @@ use super::input::{finish_console_stdin_operation, read_console_stdin};
 use crate::cell::Language;
 use crate::worker_protocol::ConsoleChannel;
 
+mod parse;
+
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
 #[cfg(unix)]
 static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
 static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
-static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
-static SQL_EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
+// R's DLL REPL reads submitted source before Busy(1), then interactive input.
+static REPL_EVALUATING: AtomicBool = AtomicBool::new(false);
 type ReplInit = unsafe extern "C-unwind" fn();
 type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
 type TopLevelExec = unsafe extern "C-unwind" fn(
@@ -83,6 +87,7 @@ struct REvents {
 }
 
 pub(super) struct Runtime {
+    parser: parse::Parser,
     graphics: crate::r_graphics::Bridge,
     environment: crate::r_environment::Bridge,
 }
@@ -90,13 +95,10 @@ pub(super) struct Runtime {
 impl Runtime {
     pub(super) fn initialize() -> Result<Self, Box<dyn Error>> {
         Ok(Self {
+            parser: parse::Parser::initialize()?,
             graphics: crate::r_graphics::Bridge::initialize()?,
             environment: crate::r_environment::Bridge::initialize()?,
         })
-    }
-
-    pub(super) fn temporary_directory() -> Result<std::path::PathBuf, Box<dyn Error>> {
-        Ok(String::try_from(harp::parse_eval_base("base::tempdir()")?)?.into())
     }
 
     pub(super) fn idle(&self) -> Result<(), String> {
@@ -113,29 +115,20 @@ impl Runtime {
         )
     }
 
-    pub(super) fn begin_cell(&self, language: Language) -> Result<(), String> {
-        if !matches!(language, Language::Sql) {
-            defer_interrupts(|| self.graphics.begin(), check_interrupts)?;
-        }
-        if !matches!(language, Language::R) {
-            EVALUATION_STARTED.store(true, Ordering::SeqCst);
-        }
-        SQL_EVALUATION_STARTED.store(matches!(language, Language::Sql), Ordering::SeqCst);
-        Ok(())
+    pub(super) fn begin_graphics(&self) -> Result<(), String> {
+        defer_interrupts(|| self.graphics.begin(), check_interrupts)
     }
 
-    pub(super) fn finish_cell(&self, language: Language) -> Result<(), String> {
-        if !matches!(language, Language::R) {
-            EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        }
-        SQL_EVALUATION_STARTED.store(false, Ordering::SeqCst);
-        if !matches!(language, Language::Sql) {
-            defer_interrupts(|| self.graphics.finish(), check_interrupts)?;
-        }
-        Ok(())
+    pub(super) fn finish_graphics(&self) -> Result<(), String> {
+        defer_interrupts(|| self.graphics.finish(), check_interrupts)
     }
 
     pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
+        // Console reads during preflight are interactive input, never cell source.
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
+        if !self.parser.complete(&source)? {
+            return Ok(());
+        }
         evaluate_r_cell(source)
     }
 }
@@ -160,13 +153,14 @@ unsafe extern "C" {
     ) -> c_int;
     fn mcp_r_repl_configure(api: *const ReplApi);
     fn mcp_r_repl_run_cell(before_do_one: extern "C" fn()) -> c_int;
+    fn mcp_r_record_interrupt();
 }
 
 unsafe extern "C-unwind" {
     fn mcp_r_console_configure(
         read_console: ReadConsole,
         check_interrupt: CheckUserInterrupt,
-        interrupts_pending: *const c_int,
+        interrupts_pending: *mut c_int,
     );
     fn mcp_r_read_console(
         prompt: *const c_char,
@@ -174,24 +168,6 @@ unsafe extern "C-unwind" {
         length: c_int,
         add_history: c_int,
     ) -> c_int;
-}
-
-#[cfg(unix)]
-pub(super) fn normalize_interrupt_signal() -> io::Result<()> {
-    if unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) } == libc::SIG_ERR {
-        return Err(io::Error::last_os_error());
-    }
-    let mut signals = unsafe { std::mem::zeroed() };
-    if unsafe { libc::sigemptyset(&mut signals) } != 0
-        || unsafe { libc::sigaddset(&mut signals, libc::SIGINT) } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    let result =
-        unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) };
-    (result == 0)
-        .then_some(())
-        .ok_or_else(|| io::Error::from_raw_os_error(result))
 }
 
 pub(super) fn check_interrupts() {
@@ -222,10 +198,6 @@ pub(super) fn discard_interrupts() {
     unsafe {
         libr::set(libr::UserBreak, libr::Rboolean_FALSE)
     };
-    #[cfg(windows)]
-    if let Some(pending) = WINDOWS_INTERRUPT.get() {
-        pending.reset();
-    }
 }
 
 fn interrupt_pending() -> bool {
@@ -247,14 +219,12 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
-pub(crate) fn resolve_r(
-    packages: Vec<String>,
-) -> Result<crate::r_environment::ResolutionOutcome, String> {
-    // SQL callbacks can reenter R, but SQL evaluation does not resolve packages.
-    if SQL_EVALUATION_STARTED.load(Ordering::SeqCst) {
-        return Ok(crate::r_environment::ResolutionOutcome::Unavailable);
+fn acknowledge_console_interrupt() -> bool {
+    if !console_interrupt_pending() {
+        return false;
     }
-    core::resolve_r(packages)
+    discard_interrupts();
+    true
 }
 
 fn evaluate_r_cell(r: String) -> Result<(), String> {
@@ -273,14 +243,28 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
     }
 }
 
-pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
+pub(super) fn initialize_r(
+    installation: &crate::local_runtime::RInstallation,
+) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+    let r_home = &installation.home;
+    // Let the selected R launcher choose its configured default architecture
+    // when users start subprocesses through commandArgs()[1].
+    #[cfg(unix)]
+    let executable = r_home.join("bin/R");
+    #[cfg(windows)]
+    let executable = r_home.join("bin/R.exe");
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
-    let arguments = ["mcp-console", "--quiet", "--interactive", "--vanilla"]
-        .into_iter()
-        .map(CString::new)
-        .collect::<Result<Vec<_>, _>>()?;
+    let arguments = vec![
+        #[cfg(unix)]
+        CString::new(executable.as_os_str().as_bytes())?,
+        #[cfg(windows)]
+        CString::new(executable.to_string_lossy().as_bytes())?,
+        CString::new("--quiet")?,
+        CString::new("--interactive")?,
+        CString::new("--vanilla")?,
+    ];
     R_MAIN_ARGS
         .set(arguments)
         .map_err(|_| io::Error::other("R arguments were already initialized"))?;
@@ -291,6 +275,9 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
         .map(|argument| argument.as_ptr() as *mut c_char)
         .collect::<Vec<_>>();
 
+    // Python cells and startup hooks can mutate these paths before late R
+    // initialization. Restore the captured installation immediately before R starts.
+    installation.configure_environment();
     #[cfg(unix)]
     unsafe {
         libr::Rf_initialize_R(
@@ -305,13 +292,18 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
         libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
         libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
         libr::set(libr::ptr_R_Busy, Some(r_busy));
+    }
+    // Rf_initialize_R has read the system Renviron. Defer its effective package
+    // selection before setup_Rmainloop runs the base profile and .First.sys().
+    #[cfg(unix)]
+    let deferred = crate::python::defer_r_startup()?;
+    #[cfg(unix)]
+    unsafe {
         libr::setup_Rmainloop();
     }
 
     #[cfg(windows)]
-    unsafe {
-        initialize_windows_r(r_home, &mut argument_pointers)?;
-    }
+    let deferred = unsafe { initialize_windows_r(r_home, &mut argument_pointers)? };
 
     libraries.initialize_post_setup_r();
     unsafe {
@@ -320,44 +312,11 @@ pub(super) fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error
     harp::routines::r_register_routines();
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
+    // Preserve R's fatal-signal diagnostics. Its bootstrap SIGINT handler only
+    // records R's pending flag; attachment below retains that flag, transfers
+    // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
-    #[cfg(windows)]
-    if let Ok(handle) = std::env::var("MCP_CONSOLE_INTERRUPT_HANDLE") {
-        let handle = handle.parse::<usize>()? as *mut c_void;
-        let requests = unsafe { crate::windows::Event::from_inherited(handle)? };
-        let pending = crate::windows::Event::new()?;
-        super::input::initialize_windows_stdin(pending.clone())?;
-        WINDOWS_INTERRUPT
-            .set(pending.clone())
-            .map_err(|_| io::Error::other("interrupt event already initialized"))?;
-        // Windows R's console control handler uses UserBreak from a separate
-        // thread too. Reticulate also consults R_interrupts_pending when its
-        // Python signal handler runs. No R evaluation or allocation runs on this notification
-        // thread. CPython's signal API is explicitly safe without the GIL.
-        thread::Builder::new()
-            .name("worker-interrupt".into())
-            .spawn(move || {
-                while requests.wait(None).is_ok() {
-                    requests.reset();
-                    unsafe {
-                        libr::set(libr::UserBreak, libr::Rboolean_TRUE);
-                        libr::set(libr::R_interrupts_pending, 1);
-                    }
-                    crate::python::interrupt_windows();
-                    // Native libraries such as DuckDB install a CRT SIGINT
-                    // handler around their query loop. Invoke that handler as
-                    // well as setting R/Python's cooperative interrupt flags.
-                    unsafe {
-                        libc::raise(libc::SIGINT);
-                    }
-                    pending.set();
-                }
-            })?;
-        unsafe {
-            std::env::remove_var("MCP_CONSOLE_INTERRUPT_HANDLE");
-        }
-    }
-    Ok(())
+    Ok(deferred)
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
@@ -407,28 +366,33 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     R_CHECK_USER_INTERRUPT
         .set(check_interrupt)
         .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
-    unsafe { mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending) };
+    unsafe {
+        mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
+    }
+    super::interrupt::attach_r(super::interrupt::State {
+        signal: mcp_r_record_interrupt,
+        requested: interrupt_pending,
+        pending: console_interrupt_pending,
+        acknowledge: acknowledge_console_interrupt,
+    })?;
     Ok(())
 }
 
 fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
     defer_interrupts(|| graphics.begin(), check_interrupts)?;
-    EVALUATION_STARTED.store(true, Ordering::SeqCst);
     #[cfg(unix)]
-    {
-        let events = R_EVENTS
-            .get()
-            .expect("R event handlers should be initialized");
-        unsafe {
-            mcp_r_run_ready_handlers(
-                events.top_level_exec,
-                events.check_activity,
-                events.run_handlers,
-                r_input_handlers(),
-            );
-        }
+    let events = R_EVENTS
+        .get()
+        .expect("R event handlers should be initialized");
+    #[cfg(unix)]
+    unsafe {
+        mcp_r_run_ready_handlers(
+            events.top_level_exec,
+            events.check_activity,
+            events.run_handlers,
+            r_input_handlers(),
+        );
     }
-    EVALUATION_STARTED.store(false, Ordering::SeqCst);
     finish_console_stdin_operation()?;
     defer_interrupts(|| graphics.finish(), check_interrupts)?;
     observe_stdin_shutdown()
@@ -477,7 +441,7 @@ fn run_repl_cell() -> c_int {
 extern "C" fn before_repl_iteration() {
     // R may reuse buffered source without calling Busy(0), so reset before
     // every outer DLL step. Busy(1) latches evaluation in r_busy().
-    EVALUATION_STARTED.store(false, Ordering::SeqCst);
+    REPL_EVALUATING.store(false, Ordering::SeqCst);
 }
 
 extern "C-unwind" fn r_busy(which: c_int) {
@@ -485,7 +449,7 @@ extern "C-unwind" fn r_busy(which: c_int) {
     // afterwards. Ignore Busy(0): a nested R REPL can issue it before a
     // ReadConsole request that still belongs to the evaluation.
     if which != 0 {
-        EVALUATION_STARTED.store(true, Ordering::SeqCst);
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
     }
 }
 
@@ -585,7 +549,8 @@ extern "C-unwind" fn r_read_console(
     if !crate::sideband::available_in_process() {
         return console_eof(buf);
     }
-    if !EVALUATION_STARTED.load(Ordering::SeqCst) {
+    if matches!(core::cell_language(), Some(Language::R)) && !REPL_EVALUATING.load(Ordering::SeqCst)
+    {
         return match take_cell_source((buflen as usize) - 1) {
             Some(source) => write_console_input(buf, buflen, &source),
             None => console_eof(buf),
@@ -617,7 +582,7 @@ extern "C-unwind" fn r_read_console(
                 record_worker_failure(error);
                 return console_eof(buf);
             }
-            read
+            if read < 0 { -1 } else { c_int::from(read > 0) }
         }
         Err(error) => {
             record_worker_failure(error);
@@ -627,49 +592,15 @@ extern "C-unwind" fn r_read_console(
 }
 
 #[cfg(windows)]
-static WINDOWS_INTERRUPT: OnceLock<crate::windows::Event> = OnceLock::new();
-
-#[cfg(windows)]
-pub(super) fn normalize_interrupt_signal() -> io::Result<()> {
-    if unsafe {
-        libc::signal(
-            libc::SIGINT,
-            windows_interrupt_signal as *const () as libc::sighandler_t,
-        )
-    } == libc::SIG_ERR as libc::sighandler_t
-    {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
-extern "C" fn windows_interrupt_signal(_: c_int) {
-    // CRT signal handlers reset on delivery. Keep the default worker handler
-    // non-terminating; the notification thread owns the actual pending flags.
-    unsafe {
-        libc::signal(
-            libc::SIGINT,
-            windows_interrupt_signal as *const () as libc::sighandler_t,
-        );
-    }
-}
-
-#[cfg(windows)]
 extern "C-unwind" fn windows_events() {
-    if WINDOWS_INTERRUPT
-        .get()
-        .is_some_and(|event| event.wait(Some(std::time::Duration::ZERO)).unwrap_or(false))
-    {
-        WINDOWS_INTERRUPT.get().unwrap().reset();
-    }
+    super::interrupt::deliver_windows_r_interrupt();
 }
 
 #[cfg(windows)]
 unsafe fn initialize_windows_r(
     r_home: &std::path::Path,
     arguments: &mut [*mut c_char],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
     use std::mem::MaybeUninit;
     static STARTUP_PATHS: OnceLock<(CString, CString)> = OnceLock::new();
 
@@ -711,7 +642,10 @@ unsafe fn initialize_windows_r(
         libr::R_SetParams(&mut params);
         libr::graphapp::GA_initapp(0, std::ptr::null_mut());
         libr::readconsolecfg();
+    }
+    let deferred = crate::python::defer_r_startup()?;
+    unsafe {
         libr::setup_Rmainloop();
     }
-    Ok(())
+    Ok(deferred)
 }

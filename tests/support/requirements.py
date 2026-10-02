@@ -28,6 +28,19 @@ class Requirement:
 WORKER = Requirement(
     "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
 )
+# Match runtime selection so invalid R_HOME and broken PATH entries report errors.
+R = Requirement(
+    "R",
+    "R_HOME" in os.environ
+    or (
+        "PATH" in os.environ
+        and any(
+            os.path.lexists(Path(directory) / "R")
+            for directory in os.environ["PATH"].split(os.pathsep)
+        )
+    ),
+    "requires R_HOME or R on PATH",
+)
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},
@@ -88,6 +101,14 @@ NO_SANDBOX = Requirement(
 )
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
+FRAMEWORK_PYTHON = Path(
+    "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
+)
+PYTHON_FRAMEWORK = Requirement(
+    "framework Python",
+    FRAMEWORK_PYTHON.is_file(),
+    "requires a macOS framework Python installation",
+)
 OLD_PYTHON = Requirement(
     "Python before 3.10",
     sys.platform == "darwin" and SYSTEM_PYTHON.is_file(),
@@ -105,6 +126,16 @@ SYSTEM_FONTS = Requirement(
 def command(name: str) -> Requirement:
     return Requirement(
         name, shutil.which(name) is not None, f"{name} is missing from PATH"
+    )
+
+
+def joblib_processes() -> Requirement:
+    from joblib import cpu_count
+
+    return Requirement(
+        "joblib process pool",
+        cpu_count() >= 2,
+        "requires at least two effective joblib CPUs",
     )
 
 
@@ -134,9 +165,22 @@ LINUX_NATIVE = Requirement(
     "requires Linux ELF loading and seccomp",
 )
 
+NON_UTF8_FILENAMES = Requirement(
+    "non-UTF-8 filenames",
+    sys.platform == "linux",
+    "requires Linux; macOS rejects non-UTF-8 filenames",
+)
+
 
 LANDLOCK = Requirement(
     "Landlock filesystem enforcement",
     landlock_available(),
     "requires Landlock with truncate enforcement (ABI 3 or later)",
+)
+
+
+UNPRIVILEGED = Requirement(
+    "unprivileged filesystem access",
+    os.geteuid() != 0,
+    "requires an account without root permission bypass",
 )

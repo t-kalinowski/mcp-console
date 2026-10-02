@@ -53,6 +53,10 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 }
 
 impl Reader {
+    pub(crate) fn has_buffered_data(&self) -> bool {
+        !self.input.buffer().is_empty()
+    }
+
     fn new(pipe: Pipe) -> Self {
         Self {
             input: BufReader::new(pipe),

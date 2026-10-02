@@ -2,6 +2,7 @@
 
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -9,9 +10,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
-from support.checkpoints import wait_for_worker_file
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import build_interposer
 from support.normalization import (
     code,
     normalize_duckdb_progress,
@@ -20,6 +22,7 @@ from support.normalization import (
 from support.r import r_test_environment
 from support.records import Transcript
 from support.previews import assert_preview, cell_text, normalize_preview_paths
+from support.resolvers import normalize_duckdb_resolution_error
 from support.suites import run_this_suite
 
 
@@ -38,6 +41,19 @@ def test_uses_default_duckdb_extensions(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
+        inspected = client.send(requirements={"action": "get"})
+        assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+            "icu",
+            "json",
+            "sqlite",
+        ]
+        with sqlite3.connect(workspace / "audit.sqlite") as database:
+            database.execute("CREATE TABLE events (payload TEXT)")
+            database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
+        client.send(sql="SET autoinstall_known_extensions = false")
+        client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
+        client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
+        assert '"42"' in normalize_trailing_spaces(client), last_tool_text(client)
 
         sql = code(r"""
             SELECT
@@ -103,7 +119,9 @@ def test_restart_adds_r_and_duckdb_requirements(
         assert (
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
@@ -192,7 +210,9 @@ def test_prepares_and_loads_duckdb_extensions(
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
         assert "unknown core DuckDB extension" not in failure, failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(
             sql=(
@@ -317,6 +337,7 @@ def test_queries_a_ragnar_store_created_in_r(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
           identical(
             DBI::dbGetQuery(
@@ -325,7 +346,7 @@ def test_queries_a_ragnar_store_created_in_r(
             )$value,
             42L
           ),
-          identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+          identical(dirname(find.package("ragnar")), .libPaths()[[managed_index]])
         )
         embed_banana <- function(x) {
           out <- matrix(1, nrow = length(x), ncol = 2L)
@@ -505,14 +526,15 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "beta.md" in preview and "Bananas are yellow fruit" in preview
-    assert "alpha.md" not in preview
+    assert "beta.md" in preview and "Bananas are yellow fruit" in preview, preview
+    assert "alpha.md" not in preview, preview
 
     # fmt: r
     r = code(r"""
+        # Match the writable instance retained by the creator connection.
         reader <- ragnar::ragnar_store_connect(
           store_path,
-          read_only = TRUE
+          read_only = FALSE
         )
         reader_result <- ragnar::ragnar_retrieve(
           reader,
@@ -523,8 +545,8 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "alpha.md" in preview and "Apples are red fruit" in preview
-    assert "beta.md" not in preview
+    assert "alpha.md" in preview and "Apples are red fruit" in preview, preview
+    assert "beta.md" not in preview, preview
 
     sql = code(r"""
         SELECT origin FROM chunks ORDER BY origin
@@ -678,6 +700,9 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
         temporary_path = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"] = str(
+            build_interposer(temporary_path, "sql_interrupt_checkpoint")
+        )
         client = McpClient(
             binary,
             execution.serve(),
@@ -685,20 +710,20 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             current_directory=temporary_path,
         )
         passed = False
+        started = None
         try:
             client.initialize_and_list_tools()
+            # Place the FIFO in the worker's writable temporary directory.
             # fmt: r
             r = code(r"""
-                invisible(DBI::dbExecute(
-                  sql_connection(),
-                  "SET VARIABLE sql_interrupt_marker = ?",
-                  params = list(file.path(tempdir(), "sql-interrupt-started"))
-                ))
+                interrupt_started <- file.path(tempdir(), "sql-interrupt-started")
+                cat(interrupt_started, "\n", sep = "")
                 """)
             client.send(r=r)
-            output = last_tool_text(client)
-            assert output == "[done]", repr(output)
-
+            started = FifoCheckpoint.create(Path(last_tool_text(client).strip()))
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                "<SQL interrupt checkpoint>\n"
+            )
             sql = code(r"""
                 CREATE TABLE interrupt_state AS
                 SELECT CAST(42 AS INTEGER) AS answer
@@ -706,17 +731,34 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             client.send(sql=sql)
             assert last_tool_text(client) == "[done]"
 
+            # fmt: r
+            r = code(r"""
+                dyn.load(Sys.getenv("MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"))
+                invisible(DBI::dbExecute(sql_connection(), "SET threads = 1"))
+                invisible(DBI::dbExecute(sql_connection(), "SET enable_progress_bar = true"))
+                invisible(DBI::dbExecute(sql_connection(), "SET progress_bar_time = 0"))
+                query_started <- FALSE
+                options(duckdb.progress_display = function(percentage) {
+                  if (!query_started && percentage < 100) {
+                    query_started <<- TRUE
+                    invisible(.C(
+                      "wait_for_sql_interrupt",
+                      interrupt_started
+                    ))
+                  }
+                })
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
             sql = code(r"""
-                COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
-                SELECT sleep_ms(60000) AS waited
+                SELECT sum(i) AS total FROM range(1000000000000) AS t(i)
                 """)
             client.send(sql=sql, timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "sql-interrupt-started",
-                client,
-            )
+            # A marker in a preceding statement can race DuckDB's reset of its
+            # interrupt flag. Hold this query until its active handler has run.
+            started.wait("DuckDB query reached its progress callback")
             result = client.send(
                 control="interrupt",
                 timeout_ms=30_000,
@@ -735,6 +777,8 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
         finally:
             if not passed:
                 stop_client(client)
+            if started is not None:
+                started.close()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -879,7 +923,10 @@ def test_exposes_catalog_as_lazy_r_relations(
         """)
     client.send(r=r)
     assert last_tool_text(client) == (
-        "same connection: TRUE\nlazy table: TRUE\nlazy view: TRUE\n"
+        """same connection: TRUE
+lazy table: TRUE
+lazy view: TRUE
+"""
     )
 
     sql = code(r"""
@@ -896,7 +943,13 @@ def test_exposes_catalog_as_lazy_r_relations(
         writeLines(paste(values$label, values$value, values$doubled, sep = ":"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "a:2:4\nb:5:10\nc:11:22\n"
+    assert (
+        last_tool_text(client)
+        == """a:2:4
+b:5:10
+c:11:22
+"""
+    )
     return client.finish()
 
 
@@ -1246,15 +1299,6 @@ def normalize_duckdb_extension_error(client: McpClient) -> str:
     assert (download_urls, troubleshooting_urls) == (1, 1), output
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return output
-
-
-def duckdb_native_failure(failure: str) -> str:
-    native_failure = next(
-        line.strip().removeprefix("! ")
-        for line in failure.splitlines()
-        if "Failed to download extension" in line
-    )
-    return native_failure.partition(' at URL "')[0]
 
 
 if __name__ == "__main__":

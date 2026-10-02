@@ -22,6 +22,48 @@ from support.requirements import PROCESS_EVENTS
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class RCacheTests(unittest.TestCase):
+    def test_restored_libraries_retain_only_complete_package_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary)
+            packages = cache / "renv"
+            packages.mkdir()
+            package = packages / "jsonlite"
+            package.mkdir()
+            libraries = cache / "ir/libraries"
+            complete = libraries / "complete"
+            incomplete = libraries / "incomplete"
+            for library in (complete, incomplete):
+                library.mkdir(parents=True)
+                (library / "jsonlite").symlink_to(package, target_is_directory=True)
+            (incomplete / "duckdb").symlink_to(packages / "missing")
+            markers = cache / "ir/resolutions"
+            markers.mkdir()
+            (markers / "candidate").write_text(str(incomplete))
+
+            result = subprocess.run(
+                [sys.executable, ROOT / "scripts/prune-r-cache", cache],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("incomplete", result.stdout)
+            self.assertTrue((complete / "jsonlite").is_dir())
+            self.assertFalse(incomplete.exists())
+            self.assertTrue(package.is_dir())
+            self.assertTrue((markers / "candidate").is_file())
+
+    def test_empty_cache_needs_no_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                [sys.executable, ROOT / "scripts/prune-r-cache", temporary],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -40,7 +82,6 @@ class WorkflowTests(unittest.TestCase):
             shutil.copy2(source, self.root / name)
         self.environment = os.environ | {
             "XDG_CACHE_HOME": str(self.directory / "cache"),
-            "MCP_CONSOLE_CHECK_SLOTS": "1",
         }
         self.environment.pop("MCP_CONSOLE_CHECKOUT_LOCKS", None)
         self.environment.pop("MCP_CONSOLE_VALIDATION_RUN", None)
@@ -88,6 +129,10 @@ class WorkflowTests(unittest.TestCase):
             """,
         )
         subprocess.run(["git", "init", "-q", self.root], check=True)
+        # Fixture copies must not race Git's detached maintenance process.
+        subprocess.run(
+            ["git", "config", "maintenance.auto", "false"], cwd=self.root, check=True
+        )
         subprocess.run(["git", "add", "."], cwd=self.root, check=True)
         subprocess.run(
             [
@@ -192,6 +237,95 @@ class WorkflowTests(unittest.TestCase):
             "rerun: scripts/test --timeout 45 client_server/output/test_previews::example",
             result.stderr,
         )
+
+    def test_check_profiles_record_scope_and_forward_full_to_both_children(
+        self,
+    ) -> None:
+        for script in ("scripts/test", "scripts/check-core"):
+            self.write_script(
+                script,
+                # fmt: python
+                """
+                import sys
+
+                print(repr(sys.argv[1:]))
+                """,
+            )
+        for arguments, phases, test_arguments in (
+            ((), ["stage", "core", "transcripts"], "[]"),
+            (("--quick",), ["stage", "core", "transcripts"], "[]"),
+            (
+                ("--full",),
+                ["stage", "core", "transcripts", "installation"],
+                "['--full']",
+            ),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_command("scripts/check", *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = next(
+                    r for r in self.records() if r["command"] == ["check", *arguments]
+                )
+                self.assertEqual([p["name"] for p in record["phases"]], phases)
+                for phase in record["phases"]:
+                    if phase["name"] in {"core", "transcripts"}:
+                        self.assertEqual(
+                            Path(phase["log"]).read_text().strip(), test_arguments
+                        )
+
+    def test_core_profiles_keep_tooling_self_tests_in_full(self) -> None:
+        shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")
+        common = [
+            "runtime-sources",
+            "architecture",
+            "rust-format",
+            "clippy",
+            "rust-tests",
+        ]
+        tooling = [
+            "release-tests",
+            "staging-tests",
+            "runner-tests",
+            "workflow-tests",
+            "format-tests",
+            "development-tests",
+            "client-tests",
+        ]
+        for script in (
+            "scripts/validate_runtime_sources.py",
+            "tests/release.py",
+            "tests/staging.py",
+            "tests/transcript_runner.py",
+            "tests/workflow.py",
+            "tests/format.py",
+            "tests/development.py",
+            "tests/mcp_client.py",
+            "tests/architecture.py",
+            "scripts/cargo",
+        ):
+            self.write_script(script, 'print("checked")')
+        self.environment["PATH"] = (
+            f"{self.root / 'scripts'}{os.pathsep}{os.environ['PATH']}"
+        )
+        for arguments in ((), ("--quick",), ("--full",)):
+            with self.subTest(arguments=arguments):
+                result = self.run_command("scripts/check-core", *arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                record = next(
+                    r
+                    for r in self.records()
+                    if r["command"] == ["check-core", *arguments]
+                )
+                expected = (
+                    common[:1] + tooling + common[1:]
+                    if arguments == ("--full",)
+                    else common
+                )
+                self.assertEqual([p["name"] for p in record["phases"]], expected)
+                architecture = "[architecture] tests/architecture.py"
+                if arguments != ("--full",):
+                    architecture += " SandboxProcessBoundaryTests"
+                self.assertIn(architecture + "\n", result.stderr)
 
     def test_validation_output_is_kept_in_advertised_phase_logs(self) -> None:
         self.write_script(
@@ -470,9 +604,9 @@ class WorkflowTests(unittest.TestCase):
                     self.assertTrue(receipt[-1].startswith("stubborn ready "), receipt)
                     group = int(receipt[-1].rsplit(" ", 1)[1])
                     process.terminate()
-                    self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
                     # EOF also proves the stubborn writer has retired.
-                    process.communicate(timeout=10)
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 128 + signal.SIGTERM, output)
                 finally:
                     if group is not None:
                         try:
@@ -486,6 +620,82 @@ class WorkflowTests(unittest.TestCase):
                     "scripts/with-checkout", sys.executable, "-c", "pass"
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
+    def test_cancellation_preserves_status_with_only_zombie_group_members(self) -> None:
+        ready = FifoCheckpoint.create(self.directory / "zombie-ready")
+        release = FifoCheckpoint.create(self.directory / "reap-zombie")
+        for checkpoint in (ready, release):
+            self.addCleanup(checkpoint.close)
+        self.write_script(
+            "reaper.py",
+            # fmt: python
+            """
+            import os
+            import sys
+
+            group = int(sys.argv[1])
+            os.setpgid(0, 0)
+            child = os.fork()
+            if child == 0:
+                os.setpgid(0, group)
+                os._exit(0)
+            os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)
+            with open(os.environ["ZOMBIE_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            with open(os.environ["REAP_ZOMBIE"], "rb", buffering=0) as release:
+                assert release.read(1) == b"1"
+            os.waitpid(child, 0)
+            """,
+        )
+        self.write_script(
+            "parent.py",
+            # fmt: python
+            """
+            import os
+            import signal
+            import subprocess
+            import sys
+
+            reaper = subprocess.Popen(
+                [sys.executable, "reaper.py", str(os.getpgrp())],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"reaper ready {reaper.pid}", flush=True)
+            signal.pause()
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "parent.py"],
+            cwd=self.root,
+            env=self.environment
+            | {"ZOMBIE_READY": str(ready.path), "REAP_ZOMBIE": str(release.path)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        with Events() as events:
+            reaper = None
+            try:
+                assert process.stdout is not None
+                receipt = read_lines(process.stdout, 1, "zombie reaper setup")
+                reaper = int(receipt[-1].rsplit(" ", 1)[1])
+                events.watch_process(reaper)
+                ready.wait("exited child remains unreaped in the phase group")
+                process.terminate()
+                output, _ = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 128 + signal.SIGTERM, output)
+            finally:
+                release.release()
+                try:
+                    if reaper is not None:
+                        self.assertIn(reaper, events.wait(3))
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.communicate(timeout=10)
 
     def test_quit_retires_phase_before_releasing_ownership(self) -> None:
         self.write_script(
@@ -529,77 +739,14 @@ class WorkflowTests(unittest.TestCase):
         result = self.run_command("scripts/with-checkout", sys.executable, "-c", "pass")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_full_gate_budget_is_shared_across_checkouts(self) -> None:
+    def test_checks_in_separate_checkouts_run_concurrently(self) -> None:
         other = self.directory / "other"
         shutil.copytree(self.root, other)
         process = self.start_check()
         result = self.run_command("scripts/check", root=other)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("full-check budget is busy", result.stdout + result.stderr)
-        self.environment["MCP_CONSOLE_CHECK_SLOTS"] = "2"
-        result = self.run_command("scripts/check", root=other)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIsNone(process.poll())
         self.finish_check(process)
-
-    def test_empty_xdg_cache_keeps_budget_shared_across_checkouts(self) -> None:
-        self.environment["HOME"] = str(self.directory / "home")
-        self.environment["XDG_CACHE_HOME"] = ""
-        other = self.directory / "other"
-        shutil.copytree(self.root, other)
-        process = self.start_check()
-        result = self.run_command("scripts/check", root=other)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("full-check budget is busy", result.stderr)
-        self.assertFalse((self.root / "mcp-console").exists())
-        self.finish_check(process)
-
-    def test_relative_xdg_cache_is_rejected_before_running_phases(self) -> None:
-        self.environment["XDG_CACHE_HOME"] = ".cache"
-        result = self.run_command("scripts/check")
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertIn("XDG_CACHE_HOME must be an absolute path", result.stderr)
-        self.assertFalse((self.root / ".cache").exists())
-        self.assertEqual(self.records(), [])
-
-    def test_nested_check_reuses_later_slot_after_first_slot_is_released(self) -> None:
-        second, third = (self.directory / name for name in ("second", "third"))
-        for root in (second, third):
-            shutil.copytree(self.root, root)
-        self.environment["MCP_CONSOLE_CHECK_SLOTS"] = "2"
-        ready = FifoCheckpoint.create(self.directory / "nested-ready")
-        self.addCleanup(ready.close)
-        self.environment["NESTED_READY"] = str(ready.path)
-        self.write_script(
-            "scripts/check-core",
-            # fmt: python
-            """
-            import os
-            import subprocess
-            import sys
-
-            if os.environ.get("NESTED"):
-                with open(os.environ["NESTED_READY"], "wb", buffering=0) as receipt:
-                    receipt.write(b"1")
-                assert sys.stdin.buffer.read(1) == b"1"
-            else:
-                environment = os.environ | {"NESTED": "1"}
-                environment.pop("HOLD_STAGE", None)
-                subprocess.run(["scripts/check"], env=environment, check=True)
-            """,
-        )
-        shutil.copy2(self.root / "scripts/check-core", second / "scripts/check-core")
-        # The first holder and third caller use the ordinary, non-nesting fixture.
-        shutil.copy2(third / "scripts/check-core", self.root / "scripts/check-core")
-        first = self.start_check()
-        nested = self.start_check(second)
-        self.finish_check(first)
-        assert nested.stdin is not None
-        nested.stdin.write("1")
-        nested.stdin.flush()
-        ready.wait("nested check owns its inherited slot")
-        result = self.run_command("scripts/check", root=third)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.finish_check(nested)
 
     def test_nested_launch_error_records_failure_after_successful_phase(self) -> None:
         shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")

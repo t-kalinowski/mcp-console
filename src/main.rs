@@ -8,10 +8,14 @@ mod windows;
 mod cell;
 mod cli;
 mod config;
+mod console_paths;
 mod docker;
 mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
+#[cfg(unix)]
+mod jsonl;
+mod local_runtime;
 #[cfg(unix)]
 mod process_descriptors;
 #[cfg(any(unix, windows))]
@@ -73,6 +77,10 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        cli::Command::Resolve => match resolver::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::DockerSandboxOwner => match docker_sandbox::run_owner() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -105,10 +113,12 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::ImageRuntimeProbe => match target_launch::runtime_probe() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
+        cli::Command::ImageRuntimeProbe { python } => {
+            match target_launch::runtime::runtime_probe(python.as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::SshLaunch => match ssh::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -153,6 +163,7 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        python,
         source,
         policy,
         target,
@@ -170,6 +181,9 @@ fn run_server(
             return Err("Windows execution currently requires `serve --no-sandbox`".into());
         }
     }
+    if python.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("python selection requires the built-in worker and relay".into());
+    }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("Execution targets require the built-in worker and relay".into());
@@ -179,13 +193,15 @@ fn run_server(
     } else if no_sandbox {
         settings::SandboxSettings::default()
     } else {
-        sandbox::capture_policy(source, policy, writable_roots)?
+        sandbox::capture_policy(source.as_deref(), policy, writable_roots)?
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(server::run(worker, relay, no_sandbox, settings, target));
-    // `server::run` has already joined service and worker shutdown. Tokio's
+    let result = runtime.block_on(server::run(
+        worker, relay, no_sandbox, settings, target, python,
+    ));
+    // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.
     // The process exits immediately after this function returns.

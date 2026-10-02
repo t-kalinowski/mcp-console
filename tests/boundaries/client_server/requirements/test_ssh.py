@@ -7,14 +7,15 @@ import shutil
 import socket
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, last_tool_text
+from support.assertions import last_result_text, last_tool_text, wait_for_worker_ready
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
@@ -36,7 +37,7 @@ from support.suites import run_this_suite
 
 
 @requires(SSH, WORKER)
-def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcript:
+def test_initializes_during_remote_default_preparation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
@@ -47,7 +48,13 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         marker = remote / "installer-called"
         ir = remote_bin / "ir"
         ir.write_text(
-            "#!/bin/sh\nprintf called >> " + shlex.quote(str(marker)) + "\nexit 93\n"
+            "#!/bin/sh\nprintf called >> "
+            + shlex.quote(str(marker))
+            + "\nprintf 1 > "
+            + shlex.quote(str(remote / "started"))
+            + "\n/bin/dd bs=1 count=1 < "
+            + shlex.quote(str(remote / "release"))
+            + " > /dev/null 2>&1\nexit 93\n"
         )
         ir.chmod(0o755)
         r_environment, _ = r_test_environment()
@@ -65,23 +72,33 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         configure(
             local, remote, prefix, sandbox={"environment": {"PATH": "/workload-only"}}
         )
-        with localhost(root / "sshd") as environment:
+        with (
+            closing(FifoCheckpoint.create(remote / "started")) as started,
+            closing(FifoCheckpoint.create(remote / "release")) as release,
+            localhost(root / "sshd") as environment,
+        ):
             trap = poison_controller(root / "sshd", environment)
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, local
             ) as client:
-                client.initialize_and_list_tools()
-                schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
-                assert "requirements" in schema["properties"], schema
-                client.send()
-                assert last_result_text(client) == "\n[idle]"
-                client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
-                assert client.transcript[-1]["result"]["isError"] is True
-                client.finish()
+                try:
+                    started.wait("remote default preparation is blocked")
+                    client.initialize_and_list_tools()
+                    schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
+                    assert "requirements" in schema["properties"], schema
+                    client.request("ping")
+                    client.send(timeout_ms=0)
+                    assert last_result_text(client) == "[worker starting]"
+                    client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
+                    assert client.transcript[-1]["result"]["isError"] is True
+                    assert marker.read_text() == "called", "startup was duplicated"
+                    release.release()
+                    failure = client.send()
+                    assert failure["isError"] and "93" in str(failure), failure
+                    client.finish()
+                finally:
+                    release.release()
             assert not trap.exists(), "controller discovered an execution runtime"
-            assert not marker.exists(), (
-                "discovery, poll, or validation invoked installation"
-            )
             assert not (remote / "ir-cache").exists()
             assert not (remote / "uv-cache").exists()
             assert not (root / "sshd/controller-ir").exists()
@@ -89,7 +106,8 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         return [
             {
                 "remote_managed_schema": True,
-                "preparation_is_lazy": True,
+                "handshake_while_preparation_blocked": True,
+                "one_background_preparation": True,
                 "controller_runtime_unused": True,
             }
         ]
@@ -188,10 +206,10 @@ def managed_session(
             assert shutil.which("uv", path=environment["PATH"]) == str(
                 remote_bin / "uv"
             )
-        # Distinct host pathnames can share already downloaded artifacts in this
-        # localhost harness. The controller process is forbidden to use either.
-        # Always use a symlink, including without inherited cache configuration,
-        # to exercise the resolver's canonical library paths on every host.
+        # Share downloaded artifacts through distinct host pathnames in this
+        # localhost harness. The controller is forbidden to use either cache.
+        # Keep the aliases for worker path assertions, but give ir the stable
+        # root: its shared resolution records must outlive this session's alias.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
             cache = Path(
                 (environment.get(variable) or root / "ir-cache")
@@ -201,7 +219,9 @@ def managed_session(
             remote_cache = remote / f"{tool}-cache"
             cache.mkdir(parents=True, exist_ok=True)
             remote_cache.symlink_to(cache, target_is_directory=True)
-            environment[variable] = str(remote_cache)
+            environment[variable] = str(
+                remote_cache.resolve() if tool == "ir" else remote_cache
+            )
         if not bootstrap_uv:
             environment["UV_OFFLINE"] = "1"
             environment["UV_NO_CACHE"] = "1"
@@ -234,8 +254,6 @@ def managed_session(
                 binary, execution.serve(), controller, local, response_timeout=180
             ) as client:
                 client.initialize_and_list_tools()
-                assert not ir_run_records(ir_record)
-                assert not uv_tool_run_requirements(uv_record)
                 yield client, remote, ir_record, uv_record
             assert not trap.exists()
             assert not (root / "sshd/controller-ir").exists()
@@ -255,10 +273,13 @@ def test_bootstraps_managed_requirements_through_uv(
     ):
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
         assert "requirements" in schema["properties"], schema
-        client.send()
+        wait_for_worker_ready(client, "remote uv bootstrap")
         assert last_result_text(client) == "\n[idle]"
-        assert not uv_record.exists(), "discovery or polling invoked uv"
-        assert not (remote / "uv-tools").exists()
+        assert uv_record.exists(), "background startup did not bootstrap uv"
+        startup_arguments = [
+            json.loads(line) for line in uv_record.read_text().splitlines()
+        ]
+        assert any(args[:2] == ["tool", "run"] for args in startup_arguments)
 
         output = send_and_collect_runtime_python_resolution(
             client,

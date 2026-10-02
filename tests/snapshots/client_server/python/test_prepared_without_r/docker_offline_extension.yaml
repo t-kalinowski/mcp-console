@@ -1,0 +1,4 @@
+---
+worker_network_blocked: true
+prepared_extension_loaded: true
+controller_cache_unused: true

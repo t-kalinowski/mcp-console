@@ -47,6 +47,7 @@ def accepted(binary: Path, host: Path, *arguments: str) -> None:
         binary,
         arguments or ("serve", "--worker", "unused-worker"),
         current_directory=host,
+        record_in_project=False,
     ) as client:
         client.initialize_and_list_tools()
         _, stderr = client.finish_with_standard_error()
@@ -160,10 +161,22 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
         ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
         ("empty", "", "one mapping document"),
         ("sequence", "[]", "mapping"),
-        ("multiple documents", "---\n{}\n---\n{}", "one mapping document"),
+        ("tagged sequence", "!custom []", "mapping"),
+        ("tagged scalar", "!custom scalar", "mapping"),
+        (
+            "multiple documents",
+            """---
+{}
+---
+{}""",
+            "one mapping document",
+        ),
         ("malformed", "sandbox: [", "line"),
         ("top-level field", "profile: default", "profile"),
+        ("tagged unknown field", "!custom {profile: default}", "profile"),
         ("sandbox type", "sandbox: false", "sandbox"),
+        ("tagged sandbox type", "sandbox: !custom false", "sandbox"),
+        ("tagged nested sequence", "target: !custom {command: !args [42]}", "command"),
         ("sandbox sequence", "sandbox: []", "sandbox"),
         ("owned protocol", "sandbox: {version: 2}", "version is managed by Console"),
         (
@@ -171,8 +184,6 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
             "sandbox: {lifecycle: {parent_pid: null}}",
             "lifecycle is managed by Console",
         ),
-        ("custom scalar tag", "sandbox: {network: !custom restricted}", "tag"),
-        ("custom collection tag", "sandbox: !custom {}", "tag"),
         (
             "non-string key",
             "sandbox: {proxy: {enabled: true, domains: {1: allow}}}",

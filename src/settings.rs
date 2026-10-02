@@ -1,6 +1,7 @@
 //! Trusted application settings, captured before starting a session or workload.
 
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -83,6 +84,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    python: Option<std::path::PathBuf>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
     target: Option<Target>,
@@ -90,21 +92,37 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
-    pub source: Option<&'static str>,
+    pub python: Option<std::path::PathBuf>,
+    pub source: Option<String>,
     pub policy: SandboxSettings,
     pub target: Option<Target>,
     pub provider: Provider,
 }
 
 pub fn discover(overrides: &[String]) -> Result<Captured, String> {
-    let name = ".agents/console/config.yaml";
-    let Some(value) = crate::config::load(name, overrides)? else {
+    let project = Path::new(".agents/console/config.yaml");
+    let path = match std::fs::symlink_metadata(project) {
+        Ok(_) => Some(PathBuf::from(project)),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            crate::console_paths::home_console_directory()?
+                .map(|directory| directory.join("config.yaml"))
+        }
+        Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
+    };
+    let Some(value) = crate::config::load(path.as_deref(), overrides)? else {
         return Ok(Captured::default());
     };
     let name = if overrides.is_empty() {
-        name
+        path.expect("configuration came from a file")
+            .to_string_lossy()
+            .into_owned()
     } else {
-        "configuration with CLI overrides"
+        "configuration with CLI overrides".into()
     };
     let has_extends = value.get("extends").is_some();
     let mut project: Project =
@@ -148,7 +166,39 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .map_err(|error| format!("{name}: {error}"))?;
     }
     let target = project.target.filter(|target| !target.is_local_host());
+    let remote_python = target.is_some();
     Ok(Captured {
+        python: project
+            .python
+            .map(|path| {
+                if path.as_os_str().is_empty() {
+                    let default = match target.as_ref().map(|target| &target.compute) {
+                        Some(Compute::Docker(_) | Compute::DockerSandbox(_)) => {
+                            "select preinstalled target Python"
+                        }
+                        _ => "use uv",
+                    };
+                    return Err(format!(
+                        "python must name an executable; omit it to {default}"
+                    ));
+                }
+                if remote_python {
+                    Ok(path)
+                } else {
+                    let path = if let Ok(relative) = path.strip_prefix("~") {
+                        let home = std::env::var_os("HOME")
+                            .map(PathBuf::from)
+                            .filter(|home| home.is_absolute())
+                            .ok_or("configured Python home expansion requires an absolute HOME")?;
+                        home.join(relative)
+                    } else {
+                        path
+                    };
+                    std::path::absolute(path)
+                        .map_err(|error| format!("cannot locate configured Python: {error}"))
+                }
+            })
+            .transpose()?,
         source: Some(name),
         policy: project.sandbox,
         target,

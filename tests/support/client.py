@@ -76,6 +76,8 @@ class McpClient:
         pass_fds: tuple[int, ...] = (),
         response_timeout: float = 600,
         shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS,
+        record_in_project: bool = True,
+        use_home_configuration: bool = False,
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
@@ -85,6 +87,18 @@ class McpClient:
         if current_directory is None:
             assert self.temporary_directory is not None
             current_directory = Path(self.temporary_directory.name)
+        self.console_home: tempfile.TemporaryDirectory[str] | None = None
+        if not use_home_configuration:
+            self.console_home = tempfile.TemporaryDirectory()
+            environment = {
+                **(os.environ if environment is None else environment),
+                "MCP_CONSOLE_HOME": self.console_home.name,
+            }
+        if record_in_project:
+            (current_directory / ".agents").mkdir(
+                mode=0o700, parents=True, exist_ok=True
+            )
+            (current_directory / ".agents/console").mkdir(mode=0o700, exist_ok=True)
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
@@ -246,6 +260,14 @@ class McpClient:
         self.notify("notifications/initialized")
         self.request("tools/list")
 
+    def startup_error(self) -> str:
+        """Complete MCP discovery and observe a failed runtime through send."""
+        self.initialize_and_list_tools()
+        result = self.send(requirements={"action": "get"})
+        assert result["isError"], result
+        assert all(part["type"] == "text" for part in result["content"]), result
+        return "".join(part["text"] for part in result["content"])
+
     def _start_tool_call(self, name: str, **arguments: Any) -> TranscriptEntry:
         return self.start_request(
             "tools/call",
@@ -268,13 +290,15 @@ class McpClient:
         assert standard_error == "", standard_error
         return transcript
 
-    def finish_with_standard_error(self) -> tuple[Transcript, str]:
+    def finish_with_standard_error(
+        self, *, expected_exit_status: int = 0
+    ) -> tuple[Transcript, str]:
         deadline = self._cleanup_deadline()
         try:
             self._shutdown(deadline - SERVER_REAP_SECONDS)
             extra_output = self.stdout.read()
             standard_error = self.stderr.read()
-            assert self.process.returncode == 0, standard_error
+            assert self.process.returncode == expected_exit_status, standard_error
             assert extra_output == "", f"unexpected extra output: {extra_output}"
             return self.transcript, standard_error
         finally:
@@ -310,6 +334,8 @@ class McpClient:
             stream.close()
         if self.temporary_directory is not None:
             self.temporary_directory.cleanup()
+        if self.console_home is not None:
+            self.console_home.cleanup()
 
     def close(self) -> None:
         """Close input, allow staged retirement, then kill only the server PID."""

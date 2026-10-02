@@ -3,6 +3,86 @@
 ---
 send:
   requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse",
+              "yyjsonr"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+        - yyjsonr
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  requirements:
     r:
       - praise
     python:
@@ -175,8 +255,7 @@ result:
   content:
     - type: text
       text: >-
-        Invalid Error: HTTP Error: Failed to download extension
-        "not_a_real_duckdb_extension"
+        HTTP Error: Failed to download extension "not_a_real_duckdb_extension"
   isError: true
 ---
 send:

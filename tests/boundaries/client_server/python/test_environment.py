@@ -6,20 +6,27 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import assert_exact_interleaving, last_result_text
+from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
+from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
+from support.requirements import OLD_PYTHON, PROCESS_EVENTS, SYSTEM_PYTHON, requires
+from support.requirements import R
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -105,6 +112,7 @@ def test_preserves_configured_python_environment(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_preserves_empty_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -126,14 +134,22 @@ def test_preserves_empty_python_environment(
 def test_rejects_python_older_than_3_10(
     binary: Path, execution: Execution
 ) -> Transcript:
-    interpreter = SYSTEM_PYTHON
-    version = subprocess.run(
-        (interpreter, "-c", "import sys; print(sys.version_info[:2])"),
+    # Resolve Apple's dispatcher before entering the sandbox; its Xcode probes
+    # can emit unrelated diagnostics even when Python itself starts correctly.
+    probe = subprocess.run(
+        (
+            SYSTEM_PYTHON,
+            "-I",
+            "-c",
+            "import json, sys; print(json.dumps([sys.executable, sys.version_info[:2]]))",
+        ),
         check=True,
         capture_output=True,
         text=True,
     )
-    assert version.stdout.strip() == "(3, 9)", version.stdout
+    interpreter, version = json.loads(probe.stdout)
+    assert version == [3, 9], version
+    assert Path(interpreter).is_absolute() and Path(interpreter) != SYSTEM_PYTHON
 
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)
@@ -141,27 +157,18 @@ def test_rejects_python_older_than_3_10(
     client.initialize_and_list_tools()
     client.send(python="6 * 7")
     result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    version_failure = (
-        "Error: MCP Console requires Python 3.10 or later; "
-        "selected interpreter reports Python 3.9\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
+    assert result["isError"] is False, result
     output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        version_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + version_failure + worker_failure
+    assert output.startswith(
+        "Error: selected Python inspection failed (exit status: 1): Traceback"
+    ), output
+    assert output.endswith(
+        "RuntimeError: MCP Console requires Python 3.10 or later\n\n"
+    ), output
+    assert "[worker stopped" not in output, output
+    # Inspection rejects the selection before interpreter mutation. R remains usable.
+    client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE)); 42L")
+    assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
     return client.finish()
 
 
@@ -214,6 +221,7 @@ def managed_python_transcript(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_evaluates_with_default_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -221,6 +229,7 @@ def test_evaluates_with_default_managed_python(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_evaluates_with_explicit_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -288,15 +297,15 @@ def test_sends_python_cell_with_initial_requirements(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
 def test_compacts_native_duckdb_progress_bar(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
     # fmt: python
     python = code(r"""
         import os
         import tempfile
+        from pathlib import Path
 
         import duckdb
 
@@ -334,32 +343,84 @@ def test_compacts_native_duckdb_progress_bar(
 
         assert result[0] is not None
         assert progress.count(b"\r") >= 100
+        _ = Path("progress.bin").write_bytes(progress)
+        with open("progress-ready", "wb", buffering=0) as ready:
+            _ = ready.write(b"1")
+        with open("progress-release", "rb", buffering=0) as release:
+            assert release.read(1) == b"1"
         with os.fdopen(os.dup(1), "wb") as stdout:
             stdout.write(progress)
+        with open("completion-release", "rb", buffering=0) as release:
+            assert release.read(1) == b"1"
         """)
-    client.send(
-        python=python,
-        requirements={"python": ["duckdb==1.5.5"]},
-        timeout_ms=0,
-    )
-    assert last_result_text(client) == "\n[running; poll with an empty send]"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        with (
+            closing(FifoCheckpoint.create(root / "progress-ready")) as ready,
+            closing(FifoCheckpoint.create(root / "progress-release")) as release,
+            closing(FifoCheckpoint.create(root / "completion-release")) as completion,
+            McpClient(
+                binary,
+                execution.serve(
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                ),
+                no_r_environment(root),
+                current_directory=root,
+            ) as client,
+            Events() as events,
+        ):
+            client.initialize_and_list_tools()
+            try:
+                initial = client.start_send(
+                    python=python,
+                    requirements={"python": ["duckdb==1.5.5"]},
+                    timeout_ms=0,
+                )
+                ready.wait(
+                    "native DuckDB progress captured", timeout=client.response_timeout
+                )
+                client.receive(initial)
+                assert (
+                    last_result_text(client) == "\n[running; poll with an empty send]"
+                )
 
-    client.send(timeout_ms=220_000)
-    output = last_result_text(client)
-    assert "\r" not in output, repr(output)
-    final = output.rstrip()
-    assert final.count("% ▕") == 1, repr(final)
-    graphic, separator, elapsed = final.rpartition(" (")
-    assert graphic.startswith("100% ▕"), repr(final)
-    assert graphic.endswith("▏"), repr(final)
-    assert separator and elapsed.endswith(" elapsed)"), repr(final)
-    client.transcript[-1]["result"]["content"][0]["text"] = f"{graphic} (<elapsed>)\n"
-    client.transcript[-1]["transcript_normalization"] = {
-        "target": "result.content[0].text",
-        "elapsed": "omitted",
-        "trailing_progress_padding": "omitted",
-    }
-    return client.finish()
+                progress = (root / "progress.bin").read_bytes()
+                session = next((root / ".agents/console/sessions").iterdir())
+                raw = session / "outputs/call-000001.log"
+                events.watch_file(raw)
+                response = client.start_send(timeout_ms=220_000)
+                release.release()
+                # Native stdout and completion use independent transports. The
+                # public recording proves the server received every redraw before
+                # the worker is allowed to complete this response interval.
+                deadline = time.monotonic() + 10
+                while raw.read_bytes() != progress:
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0 and events.wait(remaining), (
+                        "native progress did not reach the server recording"
+                    )
+                completion.release()
+                client.receive(response)
+            finally:
+                release.release()
+                completion.release()
+            output = last_result_text(client)
+            assert "\r" not in output, repr(output)
+            final = output.rstrip()
+            assert final.count("% ▕") == 1, repr(final)
+            graphic, separator, elapsed = final.rpartition(" (")
+            assert graphic.startswith("100% ▕"), repr(final)
+            assert graphic.endswith("▏"), repr(final)
+            assert separator and elapsed.endswith(" elapsed)"), repr(final)
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                f"{graphic} (<elapsed>)\n"
+            )
+            client.transcript[-1]["transcript_normalization"] = {
+                "target": "result.content[0].text",
+                "elapsed": "omitted",
+                "trailing_progress_padding": "omitted",
+            }
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -384,7 +445,10 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     client.send(python=python)
     output = last_result_text(client)
     assert output.startswith(
-        "terminal columns: 200\npandas display.width: 200\nNumPy linewidth: 200\n"
+        """terminal columns: 200
+pandas display.width: 200
+NumPy linewidth: 200
+"""
     ), repr(output)
     for column in range(12):
         assert f"column_{column:02}" in output
@@ -394,6 +458,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_uses_200_column_default_after_r_initializes_python(
     binary: Path,
     execution: Execution,
@@ -425,6 +490,7 @@ def test_uses_200_column_default_after_r_initializes_python(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_prints_requirements_with_host_uv_cache(
     binary: Path, execution: Execution
 ) -> Transcript:

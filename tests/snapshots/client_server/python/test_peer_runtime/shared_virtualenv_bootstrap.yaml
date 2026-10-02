@@ -1,0 +1,112 @@
+---
+send:
+  python: |
+    import os
+    import sys
+    import numpy as np
+    assert np.arange(3).tolist() == [0, 1, 2]
+    assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
+    assert os.path.realpath(sys.prefix) == os.path.realpath(
+        os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
+    )
+    peer_value = 40
+    print("shared stdout")
+    sys.stderr.write("shared stderr\n")
+    peer_value + 1
+result:
+  content:
+    - type: text
+      text: |
+        shared stdout
+        shared stderr
+        41
+  isError: false
+---
+send:
+  python: |
+    peer_value += 2
+    raise ValueError("peer runtime sentinel")
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<mcp-console:python:e2>", line 2, in <module>
+        ValueError: peer runtime sentinel
+  isError: false
+---
+send:
+  python: |
+    (
+        peer_value,
+        "_mcp_console" not in globals(),
+        "_mcp_console" in sys.modules,
+    )
+result:
+  content:
+    - type: text
+      text: |
+        (42, True, True)
+  isError: false
+---
+send:
+  python: |
+    exec = None
+    eval = None
+    compile = None
+    peer_value
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  python: |
+    peer_value += 1
+    peer_value
+result:
+  content:
+    - type: text
+      text: |
+        43
+  isError: false
+---
+send:
+  python: |
+    import json
+    import subprocess
+    import builtins
+    import peer_module
+
+    assert peer_module.value == 41
+    assert os.environ["PYTHONPATH"] == os.environ["RETICULATE_PYTHONPATH"]
+    assert builtins.peer_bootstrap_count == 1
+    assert builtins.peer_bootstrap == (sys.prefix, sys.prefix, sys.executable), (
+        builtins.peer_bootstrap
+    )
+    expected = [
+        sys.executable,
+        sys.prefix,
+        sys.exec_prefix,
+        sys.base_prefix,
+        sys.base_exec_prefix,
+    ]
+    assert sys.executable == os.environ["MCP_CONSOLE_TEST_PYTHON"], (
+        sys.executable,
+        os.environ["MCP_CONSOLE_TEST_PYTHON"],
+    )
+    assert os.path.dirname(sys.executable) not in sys.path, sys.path
+    assert os.environ["VIRTUAL_ENV"] == sys.prefix
+    program = "import sys, json; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix]))"
+    for command in (sys.executable, "python"):
+        child = json.loads(subprocess.check_output([command, "-c", program], text=True))
+        assert child == expected, (child, expected)
+    print("selected environment retained by interpreter and children")
+result:
+  content:
+    - type: text
+      text: |
+        selected environment retained by interpreter and children
+  isError: false

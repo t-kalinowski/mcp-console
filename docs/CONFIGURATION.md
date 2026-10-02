@@ -1,73 +1,85 @@
-# Configuration layering
+# Configuration
 
-`serve` and ordinary `sandbox` launches read `.agents/console/config.yaml` beneath the current directory, then apply each `-c KEY=VALUE` or `--config KEY=VALUE` in command-line order.
-Options may appear before or after the subcommand.
-Only the current directory is searched; an absent file starts with an empty configuration.
-An unreadable file or malformed YAML prevents launch.
-Overrides change the configuration for this launch without editing the file.
+`serve` and ordinary `sandbox` launches load configuration in this order:
+
+1. `.agents/console/config.yaml` in the launch directory, or the home Console `config.yaml` **only if the project file is absent**.
+2. Each `-c KEY=VALUE` / `--config KEY=VALUE`, in command-line order.
+
+No ancestor directories are searched.
+An unreadable or invalid project file fails launch rather than falling back.
+With neither file, configuration starts empty.
+Overrides may appear before or after the subcommand and do not edit files.
 
 ```sh
 mcp-console serve -c extends=:workspace
 mcp-console -c extends=:workspace serve -c sandbox.network=enabled
-mcp-console sandbox -c 'sandbox.environment={LABEL: analysis, MODE: "batch"}' -- Rscript analysis.R
+mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analysis.R
 ```
+
+See [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
+
+## Console home
+
+The home Console directory is `~/.agents/console`.
+Set `MCP_CONSOLE_HOME` to an absolute directory to relocate fallback `config.yaml` and `sessions/` without changing `HOME` or R, Python, uv, and provider storage.
+Empty or relative values are errors when fallback is needed; `~` is not expanded.
+
+Project configuration and project recordings take precedence independently: configuration requires the project file, while recordings require only an existing project `.agents/console` directory.
+See [recording](RECORDING.md).
+
+## Python environment selection
+
+Select an existing interpreter with:
+
+```yaml
+python: .venv/bin/python
+```
+
+This overrides inherited `RETICULATE_PYTHON`, is retained across restarts, and is unavailable with custom workers.
+Paths, including bare filenames, are relative to the launch directory locally or `target.workspace` on an execution target.
+The controller does not resolve target paths.
+
+For local selection, a leading `~` expands using the controller's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
+Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
+
+Explicit selection uses preinstalled Python packages and bypasses managed Python preparation.
+Without R or an explicit selection, local/SSH sessions use uv on the execution host.
+Prepared Docker/SBX targets always use preinstalled packages: their probe tries the explicit selection, then `RETICULATE_PYTHON`, then `python3` / `python` on the workload PATH.
+A broken selected interpreter is an error, not a reason to fall back.
+See [runtime selection](BUILTIN_RUNTIME.md).
 
 ## Keys and values
 
-Dotted keys address nested mappings.
-For example, `-c foo.bar=baz` contributes `{foo: {bar: baz}}`, and `-c 'foo.bar={baz: [far, faz]}'` contributes a nested mapping and list.
-The application validates the resulting configuration against its current schema; these illustrative `foo` keys are not current application settings.
-See [sandbox configuration](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for supported settings.
+Dotted assignment keys address nested mappings, not list indexes.
+For a literal dotted key, supply its containing object:
 
-Inline values accept:
+```sh
+mcp-console serve -c 'sandbox.environment={"APP.VERSION": "v1", COUNT: "42"}'
+```
 
-- Bare strings, quoted strings, YAML booleans, finite numbers, and `null`.
-- Lists such as `[far, faz]` or `["far", "faz"]`.
-- Objects such as `{baz: [far, faz]}`, `{"baz":["far","faz"]}`, or `{baz = [far, faz]}`.
-  Objects and lists can nest, and trailing commas are accepted.
+Inline values accept YAML strings, booleans, finite numbers, `null`, nested lists, and objects.
+Objects accept `:` or `=`, including mixed separators; trailing commas are allowed.
+Quotes follow YAML rules.
+This is not a TOML parser and performs no variable expansion or file inclusion.
+YAML tags are ignored; the underlying values still undergo validation.
 
-Object entries may use either `:` or `=`; the same value can mix them.
-Scalar types follow the project's YAML loader.
-Single and double quotes use YAML quoting rules, including doubled single quotes and double-quoted escapes.
-This is an inline value syntax, not a full TOML document parser.
-There is no variable expansion or file inclusion.
-
-Quote a value that must remain a string, such as `-c 'sandbox.environment.COUNT="42"'` or `-c 'sandbox.environment.EMPTY=""'`.
-An assignment without a value is an error.
-The shell removes its own quotes first, so quote the entire assignment when it contains spaces or shell punctuation.
-
-Dots in the assignment key separate mapping keys; they do not index lists.
-For a literal dotted key, supply its containing object: `-c 'sandbox.environment={"APP.VERSION": "v1"}'`.
-Object keys are literal strings, including unquoted keys; whitespace around assignment keys, path components, and values is ignored.
+Quote strings that resemble numbers or booleans.
+An empty assignment is invalid; use `""` for an empty string.
+Quote the whole assignment for the shell when it contains spaces or punctuation.
 
 ## Merge rules
 
-Each override forms a nested mapping and merges into the previous configuration:
+Mappings merge recursively.
+Lists, scalars, and explicit `null` replace the previous value.
+A mapping replaces a non-mapping, but an empty mapping does **not** clear an existing mapping.
+To clear and rebuild one, assign `null`, then the new mapping in a later override.
+Only the final result is validated.
 
-- Mappings merge recursively by key, preserving keys omitted from the override.
-- Lists replace the entire previous value; they do not append or merge by index.
-- Scalars and `null` replace the previous value.
-  `null` remains an explicit value, rather than deleting the key.
-- A mapping replaces a previous scalar, list, or `null` with a mapping.
-  An empty mapping merges without clearing an existing mapping.
+These rules are schema-independent: changing `kind` or `extends` does not remove inherited siblings.
+Defaults, profile expansion, application decoding, and native-policy validation happen afterward; `--writable-root` adds grants after layering.
 
-Later assignments take precedence over earlier assignments.
-For example, `-c 'sandbox.environment={KEEP: project, CHANGE: first}' -c sandbox.environment.CHANGE=last` retains `KEEP` and changes `CHANGE` to `last`.
-To clear an inherited mapping before rebuilding it, replace it with `null`, then supply the new mapping in a later override.
-Only the final configuration is validated against the application schema.
+Settings are captured once and reused across worker generations.
+Execution hosts consume that captured input without rediscovering YAML.
+Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides.
 
-These rules apply to every key, including `kind` and `extends`; the layering module has no field-specific merge rules.
-Changing a discriminator does not remove sibling fields inherited from the project file.
-Configuration defaults, built-in profile expansion, target selection, and native policy validation happen after layering.
-Existing `--writable-root` grants are added after layering; `--no-sandbox` retains its documented execution behavior.
-
-The server captures the resulting settings once and retains them across worker restarts.
-Selected execution hosts consume that captured configuration without rediscovering the controller's project file or CLI arguments.
-The explicit native `sandbox --config-env` interface and the internal `--settings-env` interface already supply a complete captured input and reject `-c` overrides.
-
-## Implementation
-
-`src/config.rs` loads an optional mapping from a caller-supplied path and applies ordered overrides to a JSON-compatible value tree.
-`src/config/inline.rs` parses inline structure, while `src/config/yaml.rs` owns YAML loading and scalar conversion.
-These modules contain no application field names or configuration types.
-`src/settings.rs` selects the project path and decodes the merged value into the current application schema.
+The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).

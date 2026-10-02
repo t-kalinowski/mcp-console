@@ -4,9 +4,11 @@
 send:
   python: |
     import errno
+    import json
     import os
     from pathlib import Path
     import socket
+    from urllib.parse import urlsplit
 
     host = Path(os.environ["MCP_CONSOLE_TEST_PROJECT"])
     configured = os.environ["MCP_CONSOLE_TEST_CONFIGURED"] == "1"
@@ -22,10 +24,15 @@ send:
             assert not allowed and error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
         else:
             assert allowed, name
+    # A proxy listener can reuse a host port in its network namespace.
+    proxy_ports = {
+        urlsplit(os.environ.get(key, "")).port
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    }
+    ports = json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"])
+    port = next(port for port in ports if port not in proxy_ports)
     try:
-        socket.create_connection(
-            ("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2
-        )
+        socket.create_connection(("127.0.0.1", port), timeout=2)
     except OSError:
         pass
     else:
@@ -53,9 +60,11 @@ result:
 send:
   python: |
     import errno
+    import json
     import os
     from pathlib import Path
     import socket
+    from urllib.parse import urlsplit
 
     host = Path(os.environ["MCP_CONSOLE_TEST_PROJECT"])
     configured = os.environ["MCP_CONSOLE_TEST_CONFIGURED"] == "1"
@@ -71,10 +80,15 @@ send:
             assert not allowed and error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
         else:
             assert allowed, name
+    # A proxy listener can reuse a host port in its network namespace.
+    proxy_ports = {
+        urlsplit(os.environ.get(key, "")).port
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    }
+    ports = json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"])
+    port = next(port for port in ports if port not in proxy_ports)
     try:
-        socket.create_connection(
-            ("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2
-        )
+        socket.create_connection(("127.0.0.1", port), timeout=2)
     except OSError:
         pass
     else:
@@ -104,9 +118,11 @@ result:
 send:
   python: |
     import errno
+    import json
     import os
     from pathlib import Path
     import socket
+    from urllib.parse import urlsplit
 
     host = Path(os.environ["MCP_CONSOLE_TEST_PROJECT"])
     configured = os.environ["MCP_CONSOLE_TEST_CONFIGURED"] == "1"
@@ -122,10 +138,15 @@ send:
             assert not allowed and error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
         else:
             assert allowed, name
+    # A proxy listener can reuse a host port in its network namespace.
+    proxy_ports = {
+        urlsplit(os.environ.get(key, "")).port
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    }
+    ports = json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"])
+    port = next(port for port in ports if port not in proxy_ports)
     try:
-        socket.create_connection(
-            ("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2
-        )
+        socket.create_connection(("127.0.0.1", port), timeout=2)
     except OSError:
         pass
     else:
@@ -156,9 +177,11 @@ result:
 send:
   python: |
     import errno
+    import json
     import os
     from pathlib import Path
     import socket
+    from urllib.parse import urlsplit
 
     host = Path(os.environ["MCP_CONSOLE_TEST_PROJECT"])
     configured = os.environ["MCP_CONSOLE_TEST_CONFIGURED"] == "1"
@@ -174,10 +197,15 @@ send:
             assert not allowed and error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
         else:
             assert allowed, name
+    # A proxy listener can reuse a host port in its network namespace.
+    proxy_ports = {
+        urlsplit(os.environ.get(key, "")).port
+        for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
+    }
+    ports = json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"])
+    port = next(port for port in ports if port not in proxy_ports)
     try:
-        socket.create_connection(
-            ("127.0.0.1", int(os.environ["MCP_CONSOLE_TEST_PORT"])), timeout=2
-        )
+        socket.create_connection(("127.0.0.1", port), timeout=2)
     except OSError:
         pass
     else:

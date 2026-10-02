@@ -4,7 +4,7 @@ import json
 import os
 import sys
 import tempfile
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -29,6 +29,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
+from boundaries.client_server._harness import ZodFixtureControl
 
 TEXT_BUDGET = 8 * 1024
 
@@ -62,11 +63,18 @@ def check_preview(binary: Path, execution: Execution, scenario: str) -> Transcri
         session = next((Path(temporary) / ".agents/console/sessions").iterdir())
         raw = (session / "outputs/call-000001.log").read_bytes()
         assert raw.startswith(b"preview head\n")
-        assert raw.endswith(b"\npreview tail: final diagnostic\nafter final image\n")
+        assert raw.endswith(b"""
+preview tail: final diagnostic
+after final image
+""")
         if scenario == "preview redraw":
             assert (
                 text
-                == "preview head\nprogress final\npreview tail: final diagnostic\nafter final image\n"
+                == """preview head
+progress final
+preview tail: final diagnostic
+after final image
+"""
             )
         else:
             assert "omitted" in text
@@ -230,7 +238,8 @@ def test_keeps_tail_when_recording_is_disabled(
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         (workspace / ".agents").mkdir()
-        (workspace / ".agents/console").write_text("occupied")
+        (workspace / ".agents/console").mkdir()
+        (workspace / ".agents/console/sessions").write_text("occupied")
         with McpClient(
             binary,
             execution.serve("--worker", str(worker)),
@@ -261,9 +270,15 @@ def test_preserves_active_prompt_and_state_after_text_flood(
     binary: Path, execution: Execution
 ) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
-    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+    environment = os.environ.copy()
+    with ZodFixtureControl() as control, ExitStack() as resources:
+        control.configure(environment)
+        client = resources.enter_context(
+            McpClient(binary, execution.serve("--worker", str(worker)), environment)
+        )
         client.initialize_and_list_tools()
         client.send(r="preview prompt")
+        control.connect(client)
         text = last_tool_text(client)
         assert len(text.encode()) <= TEXT_BUDGET
         assert text.startswith("prompt output head\n")
@@ -279,8 +294,12 @@ def test_preserves_active_prompt_and_state_after_text_flood(
             pattern=CONTROL_OMISSION,
         )
         normalize_preview_paths(client)
-        client.send(stdin="answer\n")
-        assert last_tool_text(client) == "received answer\n"
+        client.send(stdin="answer\n", timeout_ms=0)
+        assert last_tool_text(client) == "\n[waiting for stdin]"
+        control.send_control(0, "read_preview_input")
+        control.wait_for(0, "preview_input_processed")
+        client.send()
+        assert last_tool_text(client) == "received answer\n", last_tool_text(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 

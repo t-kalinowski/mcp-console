@@ -27,10 +27,18 @@ BINARY = Path(
 
 
 class Session:
-    def __init__(self, environment=None, *, relay=None):
+    def __init__(self, environment=None, *, relay=None, python=None):
         self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
+        (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
         command = [str(BINARY), "serve", "--no-sandbox"]
+        if python is not None:
+            command.extend(["-c", f"python={json.dumps(str(python))}"])
+        if environment is None:
+            environment = dict(os.environ, RETICULATE_PYTHON=sys.executable)
+        environment = dict(
+            environment, MCP_CONSOLE_HOME=str(Path(self.directory.name) / "home")
+        )
         if relay is not None:
             command.extend(["--worker", str(BINARY), "--relay", str(relay)])
         self.process = subprocess.Popen(
@@ -173,6 +181,171 @@ class WindowsPackaging(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def test_r_without_python(self):
+        environment = dict(
+            os.environ, PATH=str(Path(os.environ["SystemRoot"]) / "System32")
+        )
+        environment.pop("RETICULATE_PYTHON", None)
+        session = Session(environment)
+        self.addCleanup(session.close)
+        session.initialize()
+        self.assertIn("42", json.dumps(session.send(r="answer <- 42L; answer")))
+        self.assertIn("42", json.dumps(session.send(r="answer")))
+        self.assertIn(
+            "FALSE", json.dumps(session.send(control="restart", r="exists('answer')"))
+        )
+
+    def test_python_sleep_interrupt(self):
+        session = self.session()
+        session.send(python="import time; saved = 42")
+        for initialize_r in (False, True):
+            with self.subTest(initialize_r=initialize_r):
+                if initialize_r:
+                    self.assertIn("42", json.dumps(session.send(r="42")))
+                self.assertIn(
+                    "running;",
+                    json.dumps(session.send(python="time.sleep(60)", timeout_ms=100)),
+                )
+                result = session.send(control="interrupt", timeout_ms=2000)
+                self.assertIn("KeyboardInterrupt", json.dumps(result))
+                self.assertNotIn("running;", json.dumps(result))
+                self.assertIn("42", json.dumps(session.send(python="saved")))
+
+    def test_python_without_r(self):
+        environment = dict(
+            os.environ,
+            PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
+            RETICULATE_PYTHON=sys.executable,
+        )
+        environment.pop("R_HOME", None)
+        session = Session(environment)
+        self.addCleanup(session.close)
+        session.initialize()
+        # fmt: python
+        result = session.send(
+            python=dedent("""
+                import ctypes
+
+                assert ctypes.windll.kernel32.GetModuleHandleW("R.dll") == 0
+                answer = 42
+                print("Python alone:", answer)
+                """)
+        )
+        self.assertIn("Python alone: 42", json.dumps(result))
+        self.assertFalse(result.get("isError"), result)
+        result = session.send(
+            python="name = input('Name: '); print(name)", timeout_ms=100
+        )
+        self.assertIn("waiting for stdin", json.dumps(result))
+        self.assertIn(
+            "caf\u00e9",
+            json.dumps(session.send(stdin="caf\u00e9\n"), ensure_ascii=False),
+        )
+        result = session.send(python="while True: pass", timeout_ms=100)
+        self.assertIn("running;", json.dumps(result))
+        result = session.send(control="interrupt", timeout_ms=2000)
+        self.assertIn("KeyboardInterrupt", json.dumps(result))
+        self.assertNotIn("running;", json.dumps(result))
+        self.assertIn("42", json.dumps(session.send(python="answer")))
+        result = session.send(r="42")
+        self.assertTrue(result.get("isError"), result)
+        self.assertIn("R cells are unavailable", json.dumps(result))
+        result = session.send(
+            control="restart", python="print('fresh', 'answer' in globals())"
+        )
+        self.assertIn("fresh False", json.dumps(result))
+
+    def test_r_initializes_before_python(self):
+        session = self.session()
+        # fmt: r
+        result = session.send(
+            r=dedent("""
+                r_value <- 41L
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                cat("R without Python")
+                """)
+        )
+        self.assertIn("R without Python", json.dumps(result))
+        result = session.send(python="python_value = 42; print(r.r_value)")
+        self.assertIn("41", json.dumps(result))
+        self.assertNotIn("Traceback", json.dumps(result))
+        result = session.send(
+            r="stopifnot(py$python_value == 42L); cat('bridge ready')"
+        )
+        self.assertIn("bridge ready", json.dumps(result))
+
+    def test_selected_virtualenv_with_unicode_path(self):
+        directory = tempfile.TemporaryDirectory(prefix="console Python \u03bb ")
+        self.addCleanup(directory.cleanup)
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", directory.name], check=True
+        )
+        executable = Path(directory.name) / "Scripts/python.exe"
+        session = Session(python=executable)
+        self.addCleanup(session.close)
+        session.initialize()
+        # fmt: python
+        source = dedent("""
+            import os, sys, subprocess, json
+
+            assert sys.prefix != sys.base_prefix
+            child = json.loads(
+                subprocess.check_output(
+                    [sys.executable, "-c", "import sys, json; print(json.dumps(sys.prefix))"],
+                    text=True,
+                )
+            )
+            assert os.path.samefile(sys.prefix, child)
+            print("virtualenv retained")
+            """)
+        self.assertIn("virtualenv retained", json.dumps(session.send(python=source)))
+        self.assertIn(
+            "virtualenv retained",
+            json.dumps(session.send(control="restart", python=source)),
+        )
+
+    def test_windows_requirements_are_explicitly_unavailable(self):
+        session = self.session()
+        schema = session.request("tools/list", {})
+        self.assertNotIn("sql", schema["tools"][0]["inputSchema"]["properties"])
+        self.assertEqual(
+            schema["tools"][0]["inputSchema"]["properties"]["requirements"][
+                "properties"
+            ]["action"]["enum"],
+            ["get"],
+        )
+        result = session.send(requirements={"action": "add", "python": ["six"]})
+        self.assertTrue(result.get("isError"), result)
+        self.assertIn("unavailable", json.dumps(result))
+        self.assertIn("42", json.dumps(session.send(python="42")))
+
+    def test_python_initializes_before_r(self):
+        session = Session()
+        self.addCleanup(session.close)
+        session.initialize()
+        # fmt: python
+        result = session.send(
+            python=dedent("""
+                import ctypes
+                import sys
+
+                assert ctypes.windll.kernel32.GetModuleHandleW("R.dll") == 0
+                python_value = 41
+                print("python without R")
+                """)
+        )
+        self.assertFalse(result.get("isError"), result)
+        self.assertIn("python without R", json.dumps(result))
+        self.assertNotIn("AssertionError", json.dumps(result))
+        self.assertIn("42", json.dumps(session.send(r="r_value <- 42; r_value")))
+        self.assertIn("42", json.dumps(session.send(python="print(python_value + 1)")))
+        self.assertIn("42", json.dumps(session.send(r="r_value")))
+        self.assertIn(
+            "41", json.dumps(session.send(r="reticulate::py_eval('python_value')"))
+        )
+        self.assertIn("41", json.dumps(session.send(r="py$python_value")))
+        self.assertIn("42", json.dumps(session.send(python="r.r_value")))
+
     def relay_session(self, scenario):
         directory = tempfile.TemporaryDirectory(prefix="console relay ")
         self.addCleanup(directory.cleanup)
@@ -221,7 +394,7 @@ class WindowsConsole(unittest.TestCase):
             },
         )
 
-    def test_startup_eof_cancels_resolver(self):
+    def test_startup_eof_cancels_python_inspection(self):
         with tempfile.TemporaryDirectory(prefix="console startup ") as directory:
             root = Path(directory)
             ready = socket.socket()
@@ -237,15 +410,15 @@ class WindowsConsole(unittest.TestCase):
 }
 """)
             subprocess.run(
-                ["rustc", str(source), "-o", str(root / "R.exe")], check=True
+                ["rustc", str(source), "-o", str(root / "python.exe")], check=True
             )
             environment = dict(
                 os.environ,
                 PATH=str(root) + os.pathsep + os.environ["PATH"],
+                RETICULATE_PYTHON=str(root / "python.exe"),
                 TEST_RESOLVER_PID=str(root / "child.pid"),
                 TEST_READY_ADDR=f"127.0.0.1:{ready.getsockname()[1]}",
             )
-            environment.pop("R_HOME", None)
             process = subprocess.Popen(
                 [str(BINARY), "serve", "--no-sandbox"],
                 cwd=root,
@@ -270,7 +443,7 @@ class WindowsConsole(unittest.TestCase):
                     )
                 process.communicate(timeout=5)
 
-    def test_resolver_descendants_are_retired(self):
+    def test_python_inspection_descendants_are_retired(self):
         with tempfile.TemporaryDirectory(prefix="console resolver ") as directory:
             root = Path(directory)
             source = root / "resolver.rs"
@@ -286,11 +459,12 @@ class WindowsConsole(unittest.TestCase):
 }
 """)
             subprocess.run(
-                ["rustc", str(source), "-o", str(root / "ir.exe")], check=True
+                ["rustc", str(source), "-o", str(root / "python.exe")], check=True
             )
             environment = dict(
                 os.environ,
                 PATH=str(root) + os.pathsep + os.environ["PATH"],
+                RETICULATE_PYTHON=str(root / "python.exe"),
                 TEST_RESOLVER_PID=str(root / "child.pid"),
             )
             session = Session(environment)
@@ -301,7 +475,10 @@ class WindowsConsole(unittest.TestCase):
             try:
                 session.initialize()
                 result = session.send(r="1L")
-                self.assertIn("requires `ir`", json.dumps(result))
+                self.assertTrue(result.get("isError"), result)
+                self.assertIn(
+                    "invalid selected Python configuration", json.dumps(result)
+                )
                 pid = int((root / "child.pid").read_text())
                 handle = kernel.OpenProcess(0x100000, False, pid)
                 if handle:
@@ -351,7 +528,9 @@ class WindowsConsole(unittest.TestCase):
 
     def test_r_startup_paths_survive_later_cells_and_restart(self):
         with tempfile.TemporaryDirectory(prefix="console user home ") as user_home:
-            session = Session(dict(os.environ, R_USER=user_home))
+            session = Session(
+                dict(os.environ, R_USER=user_home, RETICULATE_PYTHON=sys.executable)
+            )
             self.addCleanup(session.close)
             session.initialize()
             for generation in range(2):
@@ -373,7 +552,7 @@ class WindowsConsole(unittest.TestCase):
                 self.assertFalse(result.get("isError"), result)
                 self.assertIn("startup paths intact", json.dumps(result))
 
-    def test_python_sql_and_errors(self):
+    def test_python_errors_preserve_state(self):
         session = self.session()
         result = session.send(
             # fmt: python
@@ -386,9 +565,6 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn("42", json.dumps(result))
         result = session.send(python="windows_value + 3")
         self.assertIn("43", json.dumps(result))
-        result = session.send(sql="select 42 as answer")
-        self.assertFalse(result.get("isError"), result)
-        self.assertIn("42", json.dumps(result))
         result = session.send(python="raise ValueError('windows error')")
         self.assertIn("ValueError: windows error", json.dumps(result))
         result = session.send(python="windows_value")
@@ -422,9 +598,9 @@ class WindowsConsole(unittest.TestCase):
         for expected in ["raw stdout", "raw stderr", "caf\u00e9 \u03bb \u6f22\u5b57"]:
             self.assertIn(expected, text)
 
-    def test_managed_python_and_interrupt(self):
+    def test_python_plots_and_interrupt(self):
         environment = dict(os.environ)
-        environment.pop("RETICULATE_PYTHON", None)
+        environment["RETICULATE_PYTHON"] = sys.executable
         session = Session(environment)
         self.addCleanup(session.close)
         session.initialize()
@@ -515,22 +691,6 @@ class WindowsConsole(unittest.TestCase):
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-
-    def test_sql_interrupt_preserves_catalog(self):
-        session = self.session()
-        result = session.send(sql="CREATE TABLE saved AS SELECT 42 AS answer")
-        self.assertFalse(result.get("isError"), result)
-        for initialize_python in [False, True]:
-            if initialize_python:
-                self.assertIn("42", json.dumps(session.send(python="42")))
-            result = session.send(
-                sql="SELECT SUM(SIN(i)) FROM range(1000000000) AS t(i)", timeout_ms=100
-            )
-            self.assertIn("running", json.dumps(result))
-            result = session.send(control="interrupt", timeout_ms=3000)
-            self.assertNotIn("running;", json.dumps(result))
-            result = session.send(sql="SELECT * FROM saved")
-            self.assertIn("42", json.dumps(result))
 
     def test_stdin_preserves_control_bytes(self):
         session = self.session()

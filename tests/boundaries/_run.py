@@ -2,6 +2,8 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "py-yaml12>=0.2.0",
+#     "joblib",
+#     "numpy",
 #     "anyio>=4.9",
 #     "mcp==2.*,>=2.2.0",
 #     "anthropic[mcp]>=1.4.0",
@@ -13,6 +15,7 @@
 # ///
 
 import argparse
+import json
 import math
 import os
 import pickle
@@ -21,7 +24,7 @@ import shlex
 import signal
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,6 +54,17 @@ actions = parser.add_mutually_exclusive_group()
 actions.add_argument("--list", action="store_true", dest="list_tests")
 actions.add_argument("--locate", metavar="SELECTOR")
 parser.add_argument("--update", action="store_true")
+profiles = parser.add_mutually_exclusive_group()
+profiles.add_argument(
+    "--quick",
+    action="store_true",
+    help="alias for the default smoke profile; explicit selectors keep their scope",
+)
+profiles.add_argument(
+    "--full",
+    action="store_true",
+    help="run all capability-applicable cases when no selectors are supplied",
+)
 parser.add_argument(
     "--timeout",
     type=float,
@@ -65,8 +79,8 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=max(2, os.cpu_count() or 2),
-    help="number of transcript cases to run concurrently (default: at least 2)",
+    default=2 * max(2, os.cpu_count() or 2),
+    help="number of transcript cases to run concurrently (default: twice the CPU count, at least 4)",
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
@@ -109,7 +123,11 @@ from support.snapshots import (
     snapshot_path,
 )
 
-binary = root / "target" / "release" / "mcp-console"
+binary = Path(
+    os.environ.get(
+        "MCP_CONSOLE_TEST_BINARY", root / "target" / "release" / "mcp-console"
+    )
+).absolute()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path
@@ -222,6 +240,8 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
         initialization_case,
     )
     for index, execution in enumerate(modes):
+        started = time.monotonic()
+        status = "failed"
         try:
             recorded = case(binary) if execution is None else case(binary, execution)
             mode_snapshots = check_recording(
@@ -235,10 +255,22 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 "execution modes produced different companion snapshots"
             )
             checked.update(mode_snapshots)
+            status = "passed"
         except BaseException as error:
             if execution is not None:
                 error.add_note(f"execution mode: {execution.name}")
             raise
+        finally:
+            if timing_path := os.environ.get("MCP_CONSOLE_TEST_TIMINGS"):
+                timing = {
+                    "selector": f"{suite_name}::{case_name}",
+                    "execution": execution.name if execution is not None else None,
+                    "status": status,
+                    "elapsed_seconds": time.monotonic() - started,
+                }
+                # One append write per record; parallel cases share the file.
+                with open(timing_path, "ab", buffering=0) as output:
+                    output.write((json.dumps(timing) + "\n").encode())
 
     return checked
 
@@ -276,11 +308,18 @@ class RunningCase:
 
 class ProgressReporter:
     def __init__(
-        self, *, update: bool, full_update: bool, jobs: int, timeout: float
+        self,
+        *,
+        update: bool,
+        full_update: bool,
+        jobs: int,
+        timeout: float,
     ) -> None:
         self.update = update
         self.full_update = full_update
         self.rerun = ["scripts/test"]
+        if full_update:
+            self.rerun.append("--full")
         if update:
             self.rerun.append("--update")
         if full_update and jobs != parser.get_default("jobs"):
@@ -355,7 +394,11 @@ class ProgressReporter:
 
 
 def selected_cases(
-    suites: dict[str, Path], selectors: list[str], *, report: bool = True
+    suites: dict[str, Path],
+    selectors: Sequence[str],
+    *,
+    report: bool = True,
+    check_requirements: bool = True,
 ) -> list[tuple[str, str, Path]]:
     selected_suites: dict[str, list[str] | None] = {}
     if selectors:
@@ -392,7 +435,8 @@ def selected_cases(
         selected.extend(
             (suite_name, case_name, suite_path)
             for case_name in case_names
-            if available_executions(
+            if not check_requirements
+            or available_executions(
                 cases[case_name], f"{suite_name}::{case_name}", report=report
             )
         )
@@ -412,8 +456,13 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
         owner = snapshot.parent / snapshot.name.split(".", 1)[0]
+        other_platform = bool(
+            ({"darwin", "linux"} - {sys.platform}) & set(snapshot.name.split(".")[1:])
+        )
         stale = snapshot in orphans or (
-            owner in checked_cases and snapshot not in checked_snapshots
+            owner in checked_cases
+            and snapshot not in checked_snapshots
+            and not other_platform
         )
 
         if stale:
@@ -587,29 +636,35 @@ def main() -> None:
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
-    orphans = orphan_snapshots(suites)
-    full_update = (
-        options.update
-        and not options.selectors
-        and not options.list_tests
-        and options.locate is None
-    )
+    # The global audit imports every suite, including external provider probes.
+    # Keep smoke and focused runs confined to their selected suites.
+    full_selection = options.full and not options.selectors and options.locate is None
+    orphans = orphan_snapshots(suites) if full_selection else []
+    full_update = options.update and full_selection and not options.list_tests
     if orphans and not full_update:
         for orphan in orphans:
             print(f"orphan snapshot: {orphan.relative_to(root)}", file=sys.stderr)
-        raise SystemExit("run scripts/test --update to remove orphan snapshots")
+        raise SystemExit("run scripts/test --full --update to remove orphan snapshots")
 
-    if options.list_tests:
-        for suite_name, suite_path in suites.items():
-            cases = load_suite(suite_path)
-            for case_name in cases:
-                print(f"{suite_name}::{case_name}")
-        return
     if options.locate is not None:
         locate(suites, options.locate)
         return
 
-    selected = selected_cases(suites, options.selectors, report=not options.build)
+    selectors = options.selectors
+    if not selectors and not options.full:
+        from _profiles import SMOKE
+
+        selectors = SMOKE
+    selected = selected_cases(
+        suites,
+        selectors,
+        report=not options.build,
+        check_requirements=not options.list_tests,
+    )
+    if options.list_tests:
+        for suite_name, case_name, _ in selected:
+            print(f"{suite_name}::{case_name}")
+        return
     if options.build:
         arguments = sys.argv[1:]
         arguments.remove("--build")
@@ -619,7 +674,7 @@ def main() -> None:
             sys.executable,
             [sys.executable, str(root / "checkout_workflow.py"), "test", *arguments],
         )
-    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
+    assert binary.is_file(), f"{binary} is missing; run scripts/test"
     checked_snapshots: set[Path] = set()
     initialization: list[tuple[str, str, Path]] = []
     for index, (suite_name, case_name, _) in enumerate(selected):
@@ -651,7 +706,7 @@ def main() -> None:
             checked_snapshots=checked_snapshots,
             reporter=reporter,
         )
-        if options.update and not options.selectors:
+        if full_update:
             prune_stale_snapshots(checked_snapshots, orphans)
     finally:
         reporter.close()

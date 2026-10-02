@@ -72,7 +72,8 @@ else:
     def current_process_identity(pid: int) -> ProcessIdentity | None:
         try:
             fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # Exit can remove the entry before open or invalidate an open stat file.
             return None
         return (pid, int(fields[19]), 0)
 
@@ -151,7 +152,7 @@ def host_process_id(process_id: int, owner: int) -> int:
                 matches.append(pid)
             for task in Path(f"/proc/{pid}/task").iterdir():
                 pending.extend(map(int, (task / "children").read_text().split()))
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             # Other descendants may exit while the gated fixture remains alive.
             continue
     assert len(matches) == 1, (process_id, owner, matches)

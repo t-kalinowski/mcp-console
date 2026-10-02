@@ -73,8 +73,11 @@ class InstallationTests(unittest.TestCase):
                     }
                     """)
             )
-            for name in ("r_graphics.c", "r_repl.c"):
-                (source / "src" / name).touch()
+            # Exercise the build script with empty native sources at their real paths.
+            for native_source in (ROOT / "src").rglob("*.c"):
+                destination = source / native_source.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.touch()
             runner_source = directory / "runner"
             workspace = runner_source / "codex-rs"
             workspace.mkdir(parents=True)
@@ -124,13 +127,15 @@ class InstallationTests(unittest.TestCase):
                         fn main() {
                             let mut build = cc::Build::new();
                             build.file("value.c");
-                            if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
-                                && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap"
-                            {
+                            let libcap = std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
+                                && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap";
+                            if libcap {
                                 build.define("LINK_LIBCAP", None);
-                                println!("cargo:rustc-link-lib=cap");
                             }
                             build.compile("value");
+                            if libcap {
+                                println!("cargo:rustc-link-lib=cap");
+                            }
                         }
                         """)
                 )
@@ -208,6 +213,7 @@ class InstallationTests(unittest.TestCase):
                     "UV_TOOL_DIR": str(directory / "tools"),
                     "UV_TOOL_BIN_DIR": str(directory / "bin"),
                     "CARGO_TARGET_DIR": str(source / "target"),
+                    "XDG_CACHE_HOME": str(directory / "cache"),
                     "RUSTUP_TOOLCHAIN": console_toolchain,
                     "GIT_CONFIG_COUNT": "1",
                     "GIT_CONFIG_KEY_0": f"url.{runner_source.as_uri()}.insteadOf",
@@ -276,18 +282,16 @@ class InstallationTests(unittest.TestCase):
             )
 
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="mcp-console-install-") as temporary:
+        # Hiding the build artifacts below uses a rename on this filesystem.
+        with tempfile.TemporaryDirectory(
+            prefix="mcp-console-install-", dir=ROOT.parent
+        ) as temporary:
             directory = Path(temporary)
             source = directory / "source"
             target = ROOT / "target"
             environment = os.environ.copy()
-            # Reuse the checkout already prepared by the caller's build. The
-            # native-flags regression separately exercises automatic fetching.
-            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
-            environment.setdefault(
-                "MCP_CONSOLE_SANDBOX_SOURCE",
-                str(ROOT / "target/sandbox-runner-cache" / pin["commit"]),
-            )
+            # Automatic staging shares the caller's pinned source/build cache.
+            # An explicit source override is retained for CI and release builds.
             environment |= {
                 "CARGO_TARGET_DIR": str(target),
                 "UV_TOOL_DIR": str(directory / "uv-tools"),
