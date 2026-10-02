@@ -16,6 +16,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.processes import host_process_id, process_exists
+from support.r import r_test_environment
 from support.suites import run_this_suite
 
 
@@ -110,7 +111,7 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
         """)
     uv.write_text(f"#!{sys.executable}\n" + source)
     uv.chmod(0o755)
-    environment = os.environ.copy()
+    environment, _ = r_test_environment()
     environment.pop("RETICULATE_PYTHON", None)
     environment["RETICULATE_UV"] = str(uv)
     environment["RETICULATE_CHECK_REQUIRED_PACKAGES"] = "true"
@@ -119,15 +120,10 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
 
 def initialize_managed_client(client: McpClient) -> None:
     client.initialize_and_list_tools()
-    # Match the manifest to these standard-library and fixture-module environments
-    # before startup; they do not provide the normal NumPy/pandas seed.
-    client.send(
-        # fmt: r
-        r=code("""
-            reticulate::py_require(character(), action = "set")
-            """)
-    )
-    assert last_result_text(client) == "[done]", last_result_text(client)
+    # These environments omit the NumPy/pandas seed. Replace the unused
+    # prewarmed worker through the public API before arranging runtime state.
+    client.send(requirements={"action": "set", "python": []})
+    assert last_result_text(client) == "[prepared]", last_result_text(client)
 
 
 def write_distribution(root: Path, name: str, module: str, version: str) -> None:
@@ -725,6 +721,8 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment = managed_environments(root)
+        # R-only bootstrap leaves Python selection lazy for R interoperability.
+        environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
         with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(requirements={"python": ["console-initial-fixture"]})
@@ -758,8 +756,10 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
                     """)
             )
             assert last_result_text(client) == "[done]", last_result_text(client)
-            client.send(python="import console_unloaded; console_unloaded.origin")
-            assert last_result_text(client) == "'initial'\n", last_result_text(client)
+            client.send(
+                r='reticulate::py_run_string("import console_unloaded; print(console_unloaded.origin)")'
+            )
+            assert last_result_text(client) == "initial\n", last_result_text(client)
             client.send(
                 # fmt: r
                 r=code("""
@@ -772,7 +772,7 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             assert last_result_text(client) == "[done]", last_result_text(client)
             client.send(requirements={"python": ["console-activation-fixture"]})
             assert last_result_text(client) == "[prepared]", last_result_text(client)
-            return client.finish()
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -806,8 +806,7 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
             with McpClient(
                 binary, execution.serve(*arguments), environment, root
             ) as client:
-                client.initialize_and_list_tools()
-                client.send(control="restart")
+                initialize_managed_client(client)
                 client.send(requirements={"python": ["console-activation-fixture"]})
                 assert last_result_text(client) == "[prepared]", last_result_text(
                     client
@@ -887,6 +886,7 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment = managed_environments(root)
+        environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
         environment["TMPDIR"] = str(root)
         checkpoints = []
         try:
@@ -931,7 +931,7 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
                         """)
                 )
                 evaluation = client.start_send(
-                    python="print('initialized')", timeout_ms=0
+                    r="invisible(reticulate::py_config())", timeout_ms=0
                 )
                 ready.wait("initial environment probe")
                 child_pid = host_process_id(
@@ -944,6 +944,7 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
                 client.send(control="interrupt", timeout_ms=30_000)
                 assert not process_exists(child_pid), (child_pid, client.transcript[-1])
                 hook.unlink()
+                assert last_result_text(client) == "\n", repr(last_result_text(client))
                 client.send(
                     # fmt: r
                     r=code("""
@@ -956,11 +957,11 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
                 assert last_result_text(client) == "[done]", last_result_text(client)
                 client.send(sql="SELECT answer FROM startup_state")
                 assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
-                client.send(python="print('initialized')")
+                client.send(r="reticulate::py_run_string(\"print('initialized')\")")
                 assert last_result_text(client) == "initialized\n", last_result_text(
                     client
                 )
-                return client.finish()
+                return client.finish()[3:]
         finally:
             for checkpoint in checkpoints:
                 checkpoint.close()

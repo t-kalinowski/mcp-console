@@ -155,6 +155,9 @@ pub(crate) enum ConsoleChannel {
 pub(crate) enum WorkerMessage {
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
+    RuntimeInitialized {
+        interrupted: bool,
+    },
     ConsoleOutput {
         data: String,
     },

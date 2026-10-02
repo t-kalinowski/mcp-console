@@ -113,7 +113,7 @@ impl Worker {
 pub(super) struct WorkerShutdownHandle;
 
 impl WorkerShutdownHandle {
-    pub(super) fn interrupt(&self) -> Result<(), String> {
+    pub(super) fn interrupt(&self, _evaluation: Option<&super::Evaluation>) -> Result<(), String> {
         Err("worker interrupts are supported only on macOS".to_string())
     }
 

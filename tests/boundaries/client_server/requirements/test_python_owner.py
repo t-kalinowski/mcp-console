@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
 from pathlib import Path
 
@@ -96,7 +97,8 @@ def test_prepares_without_reticulate_environment_mutators(
 def test_materializes_lazy_declarations_without_initializing_python(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.send(
             # fmt: r
@@ -131,14 +133,15 @@ def test_materializes_lazy_declarations_without_initializing_python(
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
 def test_initializes_with_lazy_exclusion_date(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.send(
             # fmt: r
@@ -148,8 +151,8 @@ def test_initializes_with_lazy_exclusion_date(
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        client.send(python="1 + 1")
-        assert last_result_text(client) == "2\n", last_result_text(client)
+        client.send(r='reticulate::py_eval("1 + 1")')
+        assert last_result_text(client) == "[1] 2\n", last_result_text(client)
         client.send(control="restart")
         client.send(
             # fmt: r
@@ -166,7 +169,7 @@ def test_initializes_with_lazy_exclusion_date(
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -239,7 +242,8 @@ def test_preserves_live_reticulate_requirement_rules(
 def test_refreshes_numpy_configuration_after_live_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.send(
             # fmt: r
@@ -270,7 +274,7 @@ def test_refreshes_numpy_configuration_after_live_preparation(
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)

@@ -1,13 +1,12 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
-  r: |
-    reticulate::py_require(character(), action = "set")
+  requirements:
+    action: set
+    python: []
 result:
   content:
     - type: text
-      text: "[done]"
+      text: "[prepared]"
   isError: false
 ---
 send:
@@ -34,7 +33,7 @@ result:
   isError: false
 ---
 send:
-  python: print('initialized')
+  r: invisible(reticulate::py_config())
   timeout_ms: 0
 result:
   content:
@@ -50,7 +49,7 @@ send:
 result:
   content:
     - type: text
-      text: "[done]"
+      text: "\n"
   isError: false
 ---
 send:
@@ -78,7 +77,7 @@ result:
   isError: false
 ---
 send:
-  python: print('initialized')
+  r: reticulate::py_run_string("print('initialized')")
 result:
   content:
     - type: text

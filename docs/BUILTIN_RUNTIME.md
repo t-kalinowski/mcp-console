@@ -11,7 +11,9 @@ Cells are not transactions: an error can leave earlier effects in place.
 Restart or worker loss discards all live state; accepted requirements remain in the server for replacement workers.
 
 The default worker starts in the background while MCP discovery remains usable.
-Worker readiness does not initialize every language: R, Python, and managed SQL start on demand.
+Worker transport readiness precedes background initialization of enabled R and Python on the serialized interpreter thread.
+Startup hooks run even without submitted code; their output, plots, and input prompts remain available through `send`.
+SQL bridge setup accompanies runtime initialization; managed DuckDB connections and first-query work remain lazy.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
 
@@ -115,7 +117,10 @@ Private Console frames are omitted, but user, standard-library, and third-party 
 An uncaught `SystemExit` terminates the worker; catching it is normal control flow, and an exit in a background thread ends only that thread.
 
 Console owns CPython initialization with or without R.
-Independent Python use does not initialize R; R-side selection compatibility may require it.
+An explicit or host-resolved Python selection initializes before optional R setup; unresolved R-side selection uses the compatibility adapter.
+Bare R remains usable when that adapter is unavailable.
+When unresolved discovery finds no Python interpreter, background initialization finishes with R alone; an actual Python request still reports the selection error.
+Explicit selection errors and incompatible interpreters retain their ordinary failure behavior.
 Startup services are connected before executable `.pth` files and `sitecustomize` run.
 Completed site processing is not repeated on later setup or bridge attachment.
 `RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for Python and its children.
@@ -138,10 +143,10 @@ Explicit Python environments and bare/prepared targets require installed package
 ## R and Python interoperability
 
 Reticulate supplies the on-demand bridge: Python uses `r.name` for R globals and functions; R uses `py$name` for Python globals.
-The first actual `r` access can initialize R.
+An actual `r` access can initialize R when shared bootstrap has not completed it.
 Conversion follows reticulate's rules; objects/proxies do not survive worker replacement.
 
-R-only cells need not start Python.
+An R-only configuration need not start Python.
 Ordinary Python need not attach reticulate.
 Both interpreters and reentrant bridge calls share the worker's owning thread.
 

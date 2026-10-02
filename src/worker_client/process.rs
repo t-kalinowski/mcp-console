@@ -156,6 +156,8 @@ impl WorkerRuntime {
         on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, SendFailure> {
         let super::WorkerSpec {
+            builtin,
+            languages,
             target,
             local_runtime,
             executable,
@@ -225,6 +227,9 @@ impl WorkerRuntime {
                 "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
                 if dynamic_resolution { "1" } else { "0" },
             );
+            if let Some(languages) = languages {
+                languages.configure(&mut command);
+            }
             if !no_sandbox {
                 let mut settings = sandbox_settings.clone();
                 crate::settings::preserve_environment(&mut settings, command.get_envs())?;
@@ -287,7 +292,7 @@ impl WorkerRuntime {
         let relay_stdout_observer = relay_stdout.duplicate().map_err(|e| e.to_string())?;
         let child = Arc::new(Mutex::new(child));
 
-        let operation = WorkerOperationState::new();
+        let operation = WorkerOperationState::new(builtin);
         let interrupts = InterruptRequests::new();
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let (ready_commit_sender, ready_commit_receiver) = mpsc::channel();
@@ -749,11 +754,13 @@ fn collected_errors(errors: Vec<String>) -> Result<(), String> {
 impl Worker {
     pub(super) fn reserve_environment_preparation(
         &self,
+        replacing: bool,
     ) -> Result<
         super::events::EnvironmentPreparationReservation,
         super::EnvironmentPreparationAdmissionFailure,
     > {
-        self.operation.reserve_environment_preparation()
+        self.operation
+            .reserve_environment_preparation(replacing, self.relay.commands.events.clone())
     }
 
     pub(super) fn prepare_r(
@@ -814,6 +821,12 @@ impl Worker {
         if let Err(error) = evaluation.attach_writer(self.stdin.clone()) {
             self.operation.fail(error.clone());
             return Err(error);
+        }
+        self.operation.wait_for_bootstrap()?;
+        if evaluation.bootstrap_interrupted()? {
+            // The receipt marks logical admission, even when this evaluator did
+            // not start waiting until bootstrap had already been interrupted.
+            return self.operation.abort_bootstrap_cell();
         }
         if let Err(error) = self
             .relay
@@ -896,7 +909,23 @@ impl Worker {
         {
             self.shutdown_after_failure()
         } else {
-            self.finish_retirement().map_err(Into::into)
+            // Connection cancellation already owns shutdown. Its readiness
+            // wakeup precedes relay retirement; do not kill that relay while
+            // it is still responsible for stopping and reaping the worker.
+            let process = self.shutdown_started.deadline().and_then(|deadline| {
+                self.shutdown_handle()
+                    .finish_shutdown(deadline, RelayRetirementAllowance::Always)
+            });
+            match (process, self.finish_retirement()) {
+                (Ok(()), retirement) => retirement.map_err(Into::into),
+                (Err(error), Ok(outcome)) => {
+                    Err(super::WorkerRetirementFailure::new(error, outcome))
+                }
+                (Err(error), Err(retirement)) => Err(super::WorkerRetirementFailure::new(
+                    format!("{error}; additionally failed to retire worker I/O: {retirement}"),
+                    None,
+                )),
+            }
         };
         match retirement {
             Ok(outcome) => SendFailure::from(message).worker_outcome(outcome),
@@ -1178,6 +1207,15 @@ impl ShutdownAcceptance {
         Ok(())
     }
 
+    fn deadline(&self) -> Result<Instant, String> {
+        self.0
+            .lock()
+            .map_err(|_| "worker relay shutdown state lock poisoned".to_string())?
+            .as_ref()
+            .map(|request| request.deadline)
+            .ok_or_else(|| "worker relay shutdown was not requested".to_string())
+    }
+
     fn observed_by_deadline(&self) -> Result<bool, String> {
         let request = self
             .0
@@ -1197,7 +1235,8 @@ impl WorkerShutdownHandle {
         self.stdin.send(data)
     }
 
-    pub(super) fn interrupt(&self) -> Result<(), String> {
+    pub(super) fn interrupt(&self, evaluation: Option<&super::Evaluation>) -> Result<(), String> {
+        self.operation.interrupt_bootstrap_cell(evaluation)?;
         self.interrupts.request(&self.commands)
     }
 
@@ -1214,8 +1253,8 @@ impl WorkerShutdownHandle {
         worker_deadline: Instant,
         completion_deadline: Instant,
     ) -> (RelayRetirementAllowance, Result<(), String>) {
-        self.ready_commit.finish(ReadyCommitOutcome::Retiring);
         let requested = self.shutdown_started.request(worker_deadline);
+        self.ready_commit.finish(ReadyCommitOutcome::Retiring);
         let allowance = if self
             .commands
             .shutdown(worker_deadline, completion_deadline)

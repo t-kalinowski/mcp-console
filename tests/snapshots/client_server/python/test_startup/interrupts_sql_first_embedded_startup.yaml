@@ -23,7 +23,7 @@ result:
           File "<string>", line 109, in initialize_site
           File "<frozen site>", line <line>, in main
           File "<frozen site>", line <line>, in execsitecustomize
-          File "<site-packages>/sitecustomize.py", line 14, in <module>
+          File "<site-packages>/sitecustomize.py", line 15, in <module>
             input("startup interrupt> ")
           File "<string>", line 50, in _console_input
         KeyboardInterrupt

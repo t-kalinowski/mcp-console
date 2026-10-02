@@ -1,4 +1,7 @@
 .onLoad <- function(libname, pkgname) {
+  if (!interactive()) {
+    return(invisible(NULL))
+  }
   python <- Sys.getenv("MCP_CONSOLE_TEST_EARLY_PYTHON", unset = "")
   if (nzchar(python)) {
     Sys.setenv(RETICULATE_PYTHON = python)
@@ -20,6 +23,9 @@
 }
 
 .onAttach <- function(libname, pkgname) {
+  if (!interactive()) {
+    return(invisible(NULL))
+  }
   if (identical(Sys.getenv("MCP_CONSOLE_TEST_STARTUP_PLOTS"), "1")) {
     graphics::plot(3:1)
   }

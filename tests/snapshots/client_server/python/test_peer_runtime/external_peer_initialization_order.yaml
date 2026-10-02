@@ -6,9 +6,8 @@ send:
 
     hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
     hooks.mkdir(exist_ok=True)
-    _ = (hooks / "sitecustomize.py").write_text(
-        "import builtins\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\n"
-    )
+    _ = (hooks / "sitecustomize.py").write_text('import builtins\nimport sys\nfrom pathlib import Path\n\nif sys.argv[0] == "" and "_mcp_console_services" in sys.modules:\n    if not getattr(builtins, "peer_bootstrap_interrupted", False) and Path(__file__).with_suffix(".defer").exists():\n        Path(__file__).with_suffix(".defer").unlink()\n        builtins.peer_bootstrap_interrupted = True\n        input("defer R startup> ")\n    builtins.peer_startups = getattr(builtins, "peer_startups", 0) + 1\n')
+    (hooks / "sitecustomize.defer").touch()
 result:
   content:
     - type: text
@@ -133,9 +132,8 @@ send:
 
     hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
     hooks.mkdir(exist_ok=True)
-    _ = (hooks / "sitecustomize.py").write_text(
-        "import builtins\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\n"
-    )
+    _ = (hooks / "sitecustomize.py").write_text('import builtins\nimport sys\nfrom pathlib import Path\n\nif sys.argv[0] == "" and "_mcp_console_services" in sys.modules:\n    if not getattr(builtins, "peer_bootstrap_interrupted", False) and Path(__file__).with_suffix(".defer").exists():\n        Path(__file__).with_suffix(".defer").unlink()\n        builtins.peer_bootstrap_interrupted = True\n        input("defer R startup> ")\n    builtins.peer_startups = getattr(builtins, "peer_startups", 0) + 1\n')
+    (hooks / "sitecustomize.defer").touch()
 result:
   content:
     - type: text

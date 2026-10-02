@@ -480,8 +480,8 @@ base::local(
       invisible()
     }
     evaluate_impl <- function() {
-      if (identical(source, "select")) {
-        return(selected_python())
+      if (source %in% c("select", "select_optional")) {
+        return(selected_python(optional = identical(source, "select_optional")))
       }
       if (identical(source, "attach")) {
         attached_python_config()

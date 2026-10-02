@@ -1,6 +1,6 @@
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 
-use super::PendingPythonCandidate;
+use super::{PendingPythonCandidate, WorkerEvent};
 use crate::relay_protocol::RelayEvent;
 use crate::worker_client::{
     Evaluation, IdleResponseSnapshot, OutputTape, PreparationOutcome, PythonPreparationCommit,
@@ -11,6 +11,8 @@ use crate::worker_client::{
 pub(in crate::worker_client) struct WorkerOperationState(Arc<OperationStateCell>);
 
 struct OperationState {
+    bootstrap: Bootstrap,
+    bootstrap_suspended: bool,
     operation: Option<Operation>,
     failure: Option<String>,
     relay_exit_caused_failure: bool,
@@ -18,6 +20,13 @@ struct OperationState {
     runtime_r_callback: Option<RuntimeRCallbackPhase>,
     environment_preparation_reserved: bool,
     retiring: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Bootstrap {
+    Disabled,
+    Running,
+    Finished,
 }
 
 struct OperationStateCell {
@@ -33,6 +42,7 @@ enum RuntimeRCallbackPhase {
 
 pub(in crate::worker_client) struct EnvironmentPreparationReservation {
     operation: WorkerOperationState,
+    bootstrap_events: Option<mpsc::Sender<WorkerEvent>>,
 }
 
 struct Operation {
@@ -55,6 +65,7 @@ enum OperationKind {
 
 pub(super) enum Route {
     Cell(Arc<Evaluation>),
+    Bootstrap,
     Preparation,
     Idle,
 }
@@ -71,9 +82,15 @@ pub(in crate::worker_client) enum OperationResult {
 }
 
 impl WorkerOperationState {
-    pub(in crate::worker_client) fn new() -> Self {
+    pub(in crate::worker_client) fn new(builtin: bool) -> Self {
         Self(Arc::new(OperationStateCell {
             state: Mutex::new(OperationState {
+                bootstrap: if builtin {
+                    Bootstrap::Running
+                } else {
+                    Bootstrap::Disabled
+                },
+                bootstrap_suspended: false,
                 operation: None,
                 failure: None,
                 relay_exit_caused_failure: false,
@@ -86,16 +103,113 @@ impl WorkerOperationState {
         }))
     }
 
+    pub(in crate::worker_client) fn wait_for_bootstrap(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        while matches!(state.bootstrap, Bootstrap::Running) {
+            state.ensure_running()?;
+            state = self
+                .0
+                .runtime_r_reply
+                .wait(state)
+                .map_err(|_| "worker operation state lock poisoned".to_string())?;
+        }
+        state.ensure_running()
+    }
+
+    pub(super) fn finish_bootstrap(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if !matches!(state.bootstrap, Bootstrap::Running) {
+            return Err("worker sent an unexpected runtime initialization result".into());
+        }
+        if state.idle_input.is_some() {
+            return Err("worker completed with an outstanding input request".into());
+        }
+        if let Some(OperationKind::Cell(evaluation)) =
+            state.operation.as_ref().map(|operation| &operation.kind)
+        {
+            evaluation.input_complete()?;
+        }
+        if state.runtime_r_callback.is_some() {
+            return Err(
+                "worker initialized runtimes before completing runtime R activation".into(),
+            );
+        }
+        state.bootstrap = Bootstrap::Finished;
+        drop(state);
+        self.0.runtime_r_reply.notify_all();
+        Ok(())
+    }
+
+    pub(in crate::worker_client) fn interrupt_bootstrap_cell(
+        &self,
+        evaluation: Option<&Evaluation>,
+    ) -> Result<(), String> {
+        // Serialize interrupt admission with release of the waiting cell.
+        // kill(SIGINT) acknowledges dispatch, not worker-side observation.
+        let state = self.lock()?;
+        if matches!(state.bootstrap, Bootstrap::Running)
+            && let Some(evaluation) = evaluation
+        {
+            evaluation.interrupt_bootstrap()?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::worker_client) fn abort_bootstrap_cell(&self) -> Result<(), String> {
+        let operation = self
+            .lock()?
+            .operation
+            .take()
+            .ok_or("interrupted bootstrap has no waiting cell")?;
+        let OperationKind::Cell(evaluation) = operation.kind else {
+            return Err("interrupted bootstrap did not own a waiting cell".into());
+        };
+        evaluation.complete_cell_after_grace();
+        Ok(())
+    }
+
     pub(in crate::worker_client) fn reserve_environment_preparation(
         &self,
+        replacing: bool,
+        events: mpsc::Sender<WorkerEvent>,
     ) -> Result<
         EnvironmentPreparationReservation,
         crate::worker_client::EnvironmentPreparationAdmissionFailure,
     > {
         use crate::worker_client::EnvironmentPreparationAdmissionFailure::{Busy, Infrastructure};
 
+        if replacing {
+            // An ordered dispatcher barrier lets in-flight callbacks finish
+            // before the preparation owner takes the environment lock.
+            let (admitted, receiver) = mpsc::sync_channel(1);
+            events
+                .send(WorkerEvent::SuspendBootstrap { admitted })
+                .map_err(|_| Infrastructure("worker event dispatcher stopped".into()))?;
+            receiver
+                .recv()
+                .map_err(|_| Infrastructure("worker bootstrap reservation stopped".into()))?
+                .map_err(Infrastructure)?;
+            return Ok(EnvironmentPreparationReservation {
+                operation: self.clone(),
+                bootstrap_events: Some(events),
+            });
+        }
         let mut state = self.lock().map_err(Infrastructure)?;
         state.ensure_available().map_err(Infrastructure)?;
+        while matches!(state.bootstrap, Bootstrap::Running) {
+            if state.idle_input.is_some() {
+                return Err(Busy(
+                    "runtime startup requested input; supply stdin before preparing requirements"
+                        .into(),
+                ));
+            }
+            state = self
+                .0
+                .runtime_r_reply
+                .wait(state)
+                .map_err(|_| Infrastructure("worker operation state lock poisoned".into()))?;
+            state.ensure_available().map_err(Infrastructure)?;
+        }
         if state.runtime_r_callback.is_some() {
             return Err(Busy(
                 "requirements were not prepared because an idle runtime R callback owns environment changes"
@@ -110,7 +224,29 @@ impl WorkerOperationState {
         state.environment_preparation_reserved = true;
         Ok(EnvironmentPreparationReservation {
             operation: self.clone(),
+            bootstrap_events: None,
         })
+    }
+
+    pub(super) fn bootstrap_suspended(&self) -> Result<bool, String> {
+        Ok(self.lock()?.bootstrap_suspended)
+    }
+
+    pub(super) fn resume_bootstrap(&self) -> Result<(), String> {
+        self.lock()?.bootstrap_suspended = false;
+        Ok(())
+    }
+
+    pub(super) fn suspend_bootstrap(&self) -> Result<(), String> {
+        let mut state = self.lock()?;
+        state.ensure_available()?;
+        if matches!(state.bootstrap, Bootstrap::Disabled) || state.environment_preparation_reserved
+        {
+            return Err("worker cannot reserve unused bootstrap replacement".into());
+        }
+        state.environment_preparation_reserved = true;
+        state.bootstrap_suspended = true;
+        Ok(())
     }
 
     pub(in crate::worker_client) fn begin_cell(
@@ -246,6 +382,7 @@ impl WorkerOperationState {
                 return;
             };
             state.retiring = true;
+            state.bootstrap_suspended = false;
             state.runtime_r_callback = None;
             state.environment_preparation_reserved = false;
             state
@@ -291,6 +428,7 @@ impl WorkerOperationState {
             Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
                 Route::Preparation
             }
+            None if matches!(state.bootstrap, Bootstrap::Running) => Route::Bootstrap,
             None => Route::Idle,
         };
         publish(route)
@@ -390,6 +528,7 @@ impl WorkerOperationState {
                 }
                 state.idle_input = Some(rendered.clone());
                 output.push_notice_line(format!("input requested: {rendered}"));
+                self.0.runtime_r_reply.notify_all();
                 Ok(())
             }
         }
@@ -557,6 +696,9 @@ impl Drop for EnvironmentPreparationReservation {
         if let Ok(mut state) = self.operation.0.state.lock() {
             state.environment_preparation_reserved = false;
         }
+        if let Some(events) = &self.bootstrap_events {
+            let _ = events.send(WorkerEvent::ResumeBootstrap);
+        }
     }
 }
 
@@ -584,14 +726,19 @@ impl OperationKind {
 
 impl OperationState {
     fn ensure_available(&self) -> Result<(), String> {
+        self.ensure_running()?;
+        if self.operation.is_some() {
+            return Err("worker already has an active operation".to_string());
+        }
+        Ok(())
+    }
+
+    fn ensure_running(&self) -> Result<(), String> {
         if let Some(error) = self.failure.as_ref() {
             return Err(error.clone());
         }
         if self.retiring {
             return Err("worker is retiring".to_string());
-        }
-        if self.operation.is_some() {
-            return Err("worker already has an active operation".to_string());
         }
         Ok(())
     }
@@ -608,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn cell_admission_captures_an_inflight_idle_route_as_prelude() {
         let output = OutputTape::new();
-        let operation = WorkerOperationState::new();
+        let operation = WorkerOperationState::new(false);
         let evaluation = Arc::new(Evaluation::new(
             crate::transcript::Transcript::new(true),
             None,
@@ -653,7 +800,9 @@ mod tests {
         operation
             .with_route(|route| match route {
                 Route::Cell(evaluation) => evaluation.output(Output, "cell output".to_string()),
-                Route::Preparation | Route::Idle => panic!("cell route was not installed"),
+                Route::Bootstrap | Route::Preparation | Route::Idle => {
+                    panic!("cell route was not installed")
+                }
             })
             .unwrap();
         evaluation.complete_cell(Ok(()));

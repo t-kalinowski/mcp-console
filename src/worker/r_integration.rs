@@ -51,7 +51,9 @@ fn initialize(installation: &RInstallation) -> Result<(), String> {
     crate::python::configure_r_environment().map_err(|error| error.to_string())?;
     let runtime = Rc::new(embedded_r::Runtime::initialize().map_err(|error| error.to_string())?);
     RUNTIME.with(|slot| *slot.borrow_mut() = Some(runtime.clone()));
-    if core::cell_language().is_some_and(|language| !matches!(language, crate::cell::Language::Sql))
+    if core::bootstrapping()
+        || core::cell_language()
+            .is_some_and(|language| !matches!(language, crate::cell::Language::Sql))
     {
         runtime.begin_graphics()?;
     }

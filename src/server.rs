@@ -11,7 +11,6 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use arguments::{Requirements, SendArguments, SendControl};
-use presentation::{LANGUAGES_ENV, Languages};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     handler::server::{
@@ -25,6 +24,8 @@ use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
 use crate::worker_client::WORKER_SHUTDOWN_GRACE;
+
+use crate::cell::{LANGUAGES_ENV, Languages};
 
 #[derive(Clone)]
 struct ConsoleServer {

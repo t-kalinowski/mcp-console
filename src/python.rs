@@ -102,6 +102,14 @@ pub(crate) fn ensure_initialized() -> Result<bool, String> {
     let selection = SELECTION
         .get()
         .ok_or("Python capability is not configured")?;
+    if crate::worker::bootstrapping()
+        && selection.python.is_none()
+        && std::env::var_os("MCP_CONSOLE_EXECUTION_COMPUTE").is_some()
+    {
+        // Prepared targets already probed genuine Python absence. Preserve
+        // their R-only capability instead of entering unresolved R discovery.
+        return Ok(true);
+    }
     if !crate::worker::r_initialized()
         && let Some(python) = &selection.python
     {
@@ -128,9 +136,25 @@ pub(crate) fn ensure_initialized() -> Result<bool, String> {
     // R declarations and selection callbacks genuinely require R. Only an
     // unresolved compatibility selection enters this path.
     crate::worker::ensure_r()?;
+    if crate::worker::bootstrapping() {
+        // A bare R library can genuinely lack the Python selection adapter.
+        // Its advertised Python field is not an installed runtime capability;
+        // eager startup must leave ordinary R cells usable in that session.
+        let available = harp::parse_eval_base(r#"requireNamespace("reticulate", quietly = TRUE)"#)
+            .and_then(bool::try_from)
+            .map_err(|error| error.to_string())?;
+        if !available {
+            return Ok(true);
+        }
+    }
     let adapter = adapter().ok_or("R selection adapter is unavailable")?;
-    let Some(selected) = adapter.select()? else {
-        return Ok(false);
+    let selected = match adapter.select(crate::worker::bootstrapping())? {
+        reticulate::Selection::Selected(selected) => selected,
+        // Discovery ran its ordinary callbacks and found no interpreter. This
+        // completes optional bootstrap; an actual Python cell still reports
+        // the selection error through the ordinary, required path.
+        reticulate::Selection::Unavailable => return Ok(true),
+        reticulate::Selection::Incomplete => return Ok(false),
     };
     startup::initialize_native(&selected, adapter.managed)
 }

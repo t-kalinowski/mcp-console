@@ -15,6 +15,12 @@ pub(super) struct Adapter {
     pub(super) managed: bool,
 }
 
+pub(super) enum Selection {
+    Selected(NativePython),
+    Unavailable,
+    Incomplete,
+}
+
 pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"RETICULATE_REMAP_OUTPUT_STREAMS", c"0", true)?;
     // R is already embedded. Keep the interoperability marker independently
@@ -23,13 +29,13 @@ pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"R_SESSION_INITIALIZED", &marker, true)
 }
 
-// When Python is already live, install selection hooks before R startup
-// packages can enter reticulate. R-first startup retains external adoption.
+// Install callbacks before eager startup packages can request input or enter
+// reticulate. Late R startup also protects an already running Python identity.
 // Called after R reads the system Renviron, before it loads default packages.
 // This and R's own bootstrap environment writes require no concurrent native
 // environment access. See the unresolved constraint in docs/ARCHITECTURE.md.
 pub(crate) fn defer_r_startup() -> Result<Option<Option<std::ffi::OsString>>, String> {
-    if super::library::initialized_selection()?.is_none() {
+    if super::library::initialized_selection()?.is_none() && !crate::worker::bootstrapping() {
         return Ok(None);
     }
     let packages = std::env::var_os("R_DEFAULT_PACKAGES");
@@ -115,7 +121,7 @@ impl Adapter {
 
     pub(super) fn ensure_initialized(&self) -> Result<bool, String> {
         if !self.completed.get() {
-            let Some(selected) = self.select()? else {
+            let Selection::Selected(selected) = self.select(false)? else {
                 return Ok(false);
             };
             if let Err(error) = super::initialize_selected(&selected) {
@@ -136,16 +142,25 @@ impl Adapter {
         Ok(self.completed.get())
     }
 
-    pub(super) fn select(&self) -> Result<Option<NativePython>, String> {
+    pub(super) fn select(&self, optional: bool) -> Result<Selection, String> {
         // Discovery and serialization share the existing R interrupt boundary.
-        self.bridge
-            .evaluate_completed_string("select")?
-            .filter(|selected| !selected.is_empty())
-            .map(|selected| {
-                serde_json::from_str(&selected)
-                    .map_err(|error| format!("invalid selected Python configuration: {error}"))
+        let source = if optional {
+            "select_optional"
+        } else {
+            "select"
+        };
+        let Some(selected) = self.bridge.evaluate_completed_string(source)? else {
+            return Ok(Selection::Incomplete);
+        };
+        if selected.is_empty() {
+            return Ok(Selection::Incomplete);
+        }
+        serde_json::from_str::<Option<NativePython>>(&selected)
+            .map(|selected| match selected {
+                Some(selected) => Selection::Selected(selected),
+                None => Selection::Unavailable,
             })
-            .transpose()
+            .map_err(|error| format!("invalid selected Python configuration: {error}"))
     }
 
     fn cancel_selection(&self) -> Result<(), String> {
