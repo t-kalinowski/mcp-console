@@ -23,7 +23,13 @@ def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
     with tempfile.TemporaryDirectory() as temporary:
         worker_read, relay_write = os.pipe()
         relay_read, worker_write = os.pipe()
-        environment = dict(os.environ, TMPDIR=temporary)
+        # Exercise the output callback without user startup or default packages.
+        environment = dict(
+            os.environ,
+            TMPDIR=temporary,
+            R_PROFILE_USER=os.devnull,
+            R_DEFAULT_PACKAGES="NULL",
+        )
         environment["MCP_CONSOLE_SIDEBAND_READ_FD"] = str(worker_read)
         environment["MCP_CONSOLE_SIDEBAND_WRITE_FD"] = str(worker_write)
         process = subprocess.Popen(

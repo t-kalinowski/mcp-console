@@ -823,10 +823,6 @@ def test_interrupts_python_dbapi_provider_probe(
             r = code(r"""
                 probe_started <- tempfile("mcp-console-sql-probe-started-")
                 probe_release <- tempfile("mcp-console-sql-probe-release-")
-                Sys.setenv(
-                  MCP_CONSOLE_SQL_PROBE_STARTED = probe_started,
-                  MCP_CONSOLE_SQL_PROBE_RELEASE = probe_release
-                )
                 cat(probe_started, probe_release, sep = "\n")
                 """)
             client.send(r=r)
@@ -879,12 +875,8 @@ def test_interrupts_python_dbapi_provider_probe(
                         previous_wakeup = signal.set_wakeup_fd(wakeup_write)
                         try:
                             with (
-                                open(
-                                    os.environ["MCP_CONSOLE_SQL_PROBE_STARTED"], "wb", buffering=0
-                                ) as started,
-                                open(
-                                    os.environ["MCP_CONSOLE_SQL_PROBE_RELEASE"], "rb", buffering=0
-                                ) as release,
+                                open(r.probe_started, "wb", buffering=0) as started,
+                                open(r.probe_release, "rb", buffering=0) as release,
                             ):
                                 assert (
                                     wait_for_probe_interrupt(

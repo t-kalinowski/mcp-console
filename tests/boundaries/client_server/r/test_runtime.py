@@ -8,6 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from boundaries.client_server.python.test_peer_runtime import (
+    DEFER_R_STARTUP,
+    defer_r_bootstrap,
+)
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -100,8 +104,13 @@ def test_uses_selected_r_resource_directories(
         )
         expected = "R and its children use the selected resource directories\n"
         assert reference == expected, reference
+        modules = root / "modules"
+        modules.mkdir()
+        (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
+        environment["RETICULATE_PYTHONPATH"] = str(modules)
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
+            defer_r_bootstrap(client)
             wait_for_evaluation_output(
                 client,
                 "Python changed R paths before R initialization\n",

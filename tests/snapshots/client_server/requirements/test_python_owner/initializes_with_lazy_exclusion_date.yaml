@@ -1,6 +1,4 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
   r: |
     reticulate::py_require(exclude_newer = "2026-09-01")
@@ -12,12 +10,12 @@ result:
   isError: false
 ---
 send:
-  python: 1 + 1
+  r: reticulate::py_eval("1 + 1")
 result:
   content:
     - type: text
       text: |
-        2
+        [1] 2
   isError: false
 ---
 send:

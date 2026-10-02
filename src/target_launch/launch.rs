@@ -120,6 +120,9 @@ fn launch(
             .env_remove("MCP_CONSOLE_MANAGED_PYTHON")
             .env_remove("MCP_CONSOLE_PREINSTALLED");
     }
+    // Controller presentation owns enabled languages, independent of the
+    // execution host and workload policy environment.
+    bootstrap.languages.configure(&mut command);
     command.env_remove(crate::settings::ENVIRONMENT);
     crate::settings::preserve_environment(&mut policy, command.get_envs())?;
     if native {
@@ -180,7 +183,10 @@ fn launch(
         if native {
             command.arg(&executable);
         }
-        command.arg("worker-relay").arg(&executable).arg("worker");
+        command
+            .arg("worker-relay")
+            .arg(&executable)
+            .args(["worker", "--bootstrap-runtimes"]);
         (OutputKind::Relay, None)
     };
     let result = supervise(

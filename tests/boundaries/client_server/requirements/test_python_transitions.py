@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 import sys
 import tempfile
 from contextlib import ExitStack
@@ -30,7 +31,8 @@ from support.suites import run_this_suite
 def test_owns_managed_python_transitions(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         # Instrument the old planner, then exercise only public declarations,
         # explicit preparation, and automatic imports through the console.
@@ -62,10 +64,12 @@ def test_owns_managed_python_transitions(
         assert last_tool_text(client) == "[prepared]"
         client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(python="import yaml12; yaml12.__name__")
+        client.send(
+            r='reticulate::py_run_string("import yaml12; print(yaml12.__name__)")'
+        )
         assert last_tool_text(client) == (
             "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
-            "'yaml12'\n"
+            "yaml12\n"
         ), last_tool_text(client)
         # fmt: r
         r = code(r"""
@@ -100,9 +104,11 @@ def test_owns_managed_python_transitions(
         assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(requirements={"python": ["packaging"]})
         assert last_tool_text(client) == "[prepared]"
-        client.send(python="import packaging; packaging.__name__")
-        assert last_tool_text(client) == "'packaging'\n"
-        return client.finish()
+        client.send(
+            r='reticulate::py_run_string("import packaging; print(packaging.__name__)")'
+        )
+        assert last_tool_text(client) == "packaging\n"
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -165,6 +171,7 @@ def test_preserves_preparation_restoration_and_live_noops(
         environment, record = recording_uv_environment(
             directory, fail_requirement="py-yaml12"
         )
+        environment["MCP_CONSOLE_LANGUAGES"] = "r"
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             # fmt: r
@@ -193,7 +200,7 @@ def test_preserves_preparation_restoration_and_live_noops(
             client.send(r=r)
             assert last_tool_text(client) == "[done]", last_tool_text(client)
             Path(environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"]).unlink()
-            client.send(python="None")
+            client.send(r="invisible(reticulate::py_config())")
             assert last_tool_text(client) == "[done]", last_tool_text(client)
             resolutions = uv_tool_run_requirements(record)
             # fmt: r
@@ -263,7 +270,7 @@ def test_preserves_preparation_restoration_and_live_noops(
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]", last_tool_text(client)
-            return client.finish()
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)

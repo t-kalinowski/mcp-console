@@ -27,6 +27,7 @@ from support.requirements import R, requires
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
+from boundaries.client_server.python.test_setup import deferred_selection_client
 
 
 @executions(DIRECT, SANDBOXED)
@@ -994,52 +995,51 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 def test_restarts_after_python_bridge_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
-        python_worker_marker <- TRUE
-        Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
-        invisible(suppressMessages(base::trace(
-          "py_discover_config",
-          tracer = quote(base::signalCondition(base::structure(
-            base::list(message = "synthetic interrupt", call = NULL),
-            class = c("interrupt", "condition")
-          ))),
-          print = FALSE,
-          where = asNamespace("reticulate")
-        )))
-        """)
-    client.send(r=r)
-    client.send(python="6 * 7")
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    python_failure = (
-        "Error in py_discover_config(required_module, use_environment) : \n"
-        "  Python specified in RETICULATE_PYTHON "
-        "(/mcp-console-missing-python) does not exist\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
-    output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        python_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
-    client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_result_text(client) == "[1] FALSE\n"
-    client.send(python="6 * 7")
-    assert last_result_text(client) == "42\n"
-    return client.finish()
+    with deferred_selection_client(binary, execution.serve()) as client:
+        # fmt: r
+        r = code(r"""
+            python_worker_marker <- TRUE
+            Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
+            invisible(suppressMessages(base::trace(
+              "py_discover_config",
+              tracer = quote(base::signalCondition(base::structure(
+                base::list(message = "synthetic interrupt", call = NULL),
+                class = c("interrupt", "condition")
+              ))),
+              print = FALSE,
+              where = asNamespace("reticulate")
+            )))
+            """)
+        client.send(r=r)
+        client.send(python="6 * 7")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True
+        bridge_failure = "Python bridge failed during R evaluation\n"
+        python_failure = (
+            "Error in py_discover_config(required_module, use_environment) : \n"
+            "  Python specified in RETICULATE_PYTHON "
+            "(/mcp-console-missing-python) does not exist\n"
+        )
+        worker_failure = (
+            "[worker sideband read failed: worker sideband closed]\n"
+            "[worker exited with status 1]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        output = result["content"][0]["text"]
+        assert output.endswith(worker_failure), output
+        assert_exact_interleaving(
+            output.removesuffix(worker_failure),
+            bridge_failure,
+            python_failure,
+        )
+        result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
+        client.send(r='exists("python_worker_marker", inherits = FALSE)')
+        assert last_result_text(client) == "[1] FALSE\n"
+        client.send(python="6 * 7")
+        assert last_result_text(client) == "42\n"
+        return client.finish()
 
 
 if __name__ == "__main__":

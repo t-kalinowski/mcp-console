@@ -1,0 +1,3 @@
+---
+startup_output_image_and_input_wait_for_deferred_activation: true
+failed_replacement_resumes_original_worker: true

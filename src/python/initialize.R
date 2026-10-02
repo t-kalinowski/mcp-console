@@ -33,7 +33,8 @@ base::local(
     select_python <- function(
       required_module = NULL,
       use_environment = NULL,
-      run_before_initialized = FALSE
+      run_before_initialized = FALSE,
+      optional = FALSE
     ) {
       if (is.null(namespace)) {
         asNamespace("reticulate")
@@ -121,6 +122,11 @@ base::local(
         stop(paste(message, hint, sep = "\n"), call. = FALSE)
       }
       if (is.null(config)) {
+        # Background initialization may finish with R alone. Explicit hints,
+        # incompatible interpreters, and discovery errors still fail normally.
+        if (optional) {
+          return(FALSE)
+        }
         python_not_found(
           "Installation of Python not found, Python bindings not loaded."
         )
@@ -161,19 +167,22 @@ base::local(
       invisible()
     }
 
-    state$selected_python <- function() {
+    state$selected_python <- function(optional = FALSE) {
       # Extend a fresh selection's cleanup through serialization. A cached
       # selection may already belong to a running interpreter.
       pending <- is.null(selected) &&
         !reticulate::py_available(initialize = FALSE)
       on.exit(if (pending && !is.null(selected)) cancel_selection(), add = TRUE)
       config <- tryCatch(
-        select_python(run_before_initialized = TRUE),
+        select_python(run_before_initialized = TRUE, optional = optional),
         console_python_inspection_error = function(error) {
           message("Error: ", conditionMessage(error))
           NULL
         }
       )
+      if (identical(config, FALSE)) {
+        return("null")
+      }
       # Inspection has not committed an interpreter or environment. Report
       # its failure as cell output and leave the existing worker retryable.
       if (is.null(config)) {

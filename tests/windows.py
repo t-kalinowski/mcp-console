@@ -28,7 +28,9 @@ BINARY = Path(
 
 
 class Session:
-    def __init__(self, environment=None, *, relay=None, python=None):
+    def __init__(
+        self, environment=None, *, relay=None, python=None, defer_bootstrap=False
+    ):
         self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
         (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
@@ -40,6 +42,22 @@ class Session:
         environment = dict(
             environment, MCP_CONSOLE_HOME=str(Path(self.directory.name) / "home")
         )
+        self.defer_bootstrap = defer_bootstrap
+        if defer_bootstrap:
+            # Interrupt retryable Python setup before eager bootstrap enters R.
+            # The test's first cell then chooses which runtime to finish first.
+            (Path(self.directory.name) / "sitecustomize.py").write_text(
+                dedent("""
+                    import builtins
+                    import sys
+
+                    if sys.argv[0] == "" and "_mcp_console_services" in sys.modules:
+                        if not getattr(builtins, "bootstrap_deferred", False):
+                            builtins.bootstrap_deferred = True
+                            input("defer bootstrap> ")
+                    """)
+            )
+            environment["RETICULATE_PYTHONPATH"] = self.directory.name
         if relay is not None:
             command.extend(["--worker", str(BINARY), "--relay", str(relay)])
         self.process = subprocess.Popen(
@@ -94,6 +112,26 @@ class Session:
             b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n'
         )
         self.process.stdin.flush()
+
+        if self.defer_bootstrap:
+            result = self.send(
+                python="raise AssertionError('interrupted bootstrap ran fixture cell')",
+                timeout_ms=0,
+            )
+            deadline = time.monotonic() + self.timeout
+            while (
+                "waiting for stdin" not in json.dumps(result)
+                and time.monotonic() < deadline
+            ):
+                result = self.send(timeout_ms=1000)
+            assert "defer bootstrap> " in json.dumps(result), result
+            assert "waiting for stdin" in json.dumps(result), result
+            result = self.send(control="interrupt", timeout_ms=10_000)
+            assert "KeyboardInterrupt" in json.dumps(result), result
+            assert "interrupted bootstrap ran fixture cell" not in json.dumps(result), (
+                result
+            )
+            assert "running;" not in json.dumps(result), result
 
     def send(self, **arguments):
         return self.request("tools/call", {"name": "send", "arguments": arguments})
@@ -189,7 +227,7 @@ class WindowsConsole(unittest.TestCase):
         # including both runtime initialization orders and a shared send.
         for order in ("python", "python-r", "r-python"):
             with self.subTest(order=order):
-                session = Session()
+                session = Session(defer_bootstrap=True)
                 try:
                     session.initialize()
                     if order == "r-python":
@@ -247,7 +285,7 @@ class WindowsConsole(unittest.TestCase):
                     session.close()
 
     def test_interrupt_and_following_cell_keep_input_and_state_separate(self):
-        session = self.session()
+        session = self.session(defer_bootstrap=True)
         session.send(python="history = []")
         for initialize_r in (False, True):
             if initialize_r:
@@ -378,7 +416,7 @@ class WindowsConsole(unittest.TestCase):
         )
 
     def test_python_sleep_interrupt(self):
-        session = self.session()
+        session = self.session(defer_bootstrap=True)
         session.send(python="import time; saved = 42")
         for initialize_r in (False, True):
             with self.subTest(initialize_r=initialize_r):
@@ -394,7 +432,7 @@ class WindowsConsole(unittest.TestCase):
                 self.assertIn("42", json.dumps(session.send(python="saved")))
 
     def test_interrupt_then_input_after_r_attachment(self):
-        session = self.session()
+        session = self.session(defer_bootstrap=True)
         self.assertIn("42", json.dumps(session.send(python="saved = 42; saved")))
         self.assertIn(
             "running;",
@@ -470,7 +508,7 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn("fresh False", json.dumps(result))
 
     def test_r_initializes_before_python(self):
-        session = self.session()
+        session = self.session(defer_bootstrap=True)
         # fmt: r
         result = session.send(
             r=dedent("""
@@ -528,13 +566,28 @@ class WindowsConsole(unittest.TestCase):
             ]["action"]["enum"],
             ["get"],
         )
+        tool = schema["tools"][0]
+        self.assertIn("Packages must be preinstalled", tool["description"])
+        self.assertIn(
+            "managed dependency resolution and SQL are not yet supported",
+            tool["description"],
+        )
+        self.assertIn("initialize in the background", tool["description"])
+        for language in ("r", "python"):
+            self.assertIn(
+                "must be preinstalled",
+                tool["inputSchema"]["properties"][language]["description"],
+            )
+        control = tool["inputSchema"]["properties"]["control"]["description"]
+        self.assertIn("cooperative interruption", control)
+        self.assertNotIn("SIGINT", control)
         result = session.send(requirements={"action": "add", "python": ["six"]})
         self.assertTrue(result.get("isError"), result)
         self.assertIn("unavailable", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(python="42")))
 
     def test_python_initializes_before_r(self):
-        session = Session()
+        session = Session(defer_bootstrap=True)
         self.addCleanup(session.close)
         session.initialize()
         # fmt: python
@@ -720,8 +773,8 @@ class WindowsConsole(unittest.TestCase):
                     )
                 session.close()
 
-    def session(self):
-        session = Session()
+    def session(self, *, defer_bootstrap=False):
+        session = Session(defer_bootstrap=defer_bootstrap)
         self.addCleanup(session.close)
         session.initialize()
         return session
@@ -765,7 +818,10 @@ class WindowsConsole(unittest.TestCase):
                     r=dedent("""
                         stopifnot(
                           identical(normalizePath(R.home()), normalizePath(Sys.getenv("R_HOME"))),
-                          identical(normalizePath(path.expand("~")), normalizePath(Sys.getenv("R_USER")))
+                          identical(
+                            normalizePath(path.expand("~")),
+                            normalizePath(Sys.getenv("R_USER"))
+                          )
                         )
                         loadNamespace("splines")
                         stopifnot(file.exists(system.file("DESCRIPTION", package = "splines")))

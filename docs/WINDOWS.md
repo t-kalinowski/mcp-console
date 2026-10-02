@@ -30,7 +30,7 @@ Select Python with the project `python` setting or `-c 'python="C:/path/to/pytho
 Use the actual interpreter or virtualenv executable, not a Windows App Execution Alias.
 Install packages into that interpreter before starting the session; `matplotlib` is needed for Python plots.
 Install R packages into the selected R library before startup; install `reticulate` for the R/Python bridge.
-Python selection is inspected at startup, while interpreter initialization remains lazy.
+Python selection is inspected at startup, and enabled interpreters initialize in the background before the first cell.
 
 The server waits for an MCP client on standard input; it does not open an interactive terminal.
 Configure clients with command `mcp-console` and arguments `["serve", "--no-sandbox"]`.

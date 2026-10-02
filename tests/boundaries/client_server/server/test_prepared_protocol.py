@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.docker_sandbox import calls, cli_peer, configure, workspace
 from support.requirements import POSIX, requires
 from support.suites import run_this_suite
@@ -88,6 +88,38 @@ def test_native_probe_projects_capabilities_without_controller_paths(
 
 
 @requires(POSIX)
+def test_prepared_bootstrap_withholds_and_runs_first_cell_once(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("bootstrap-input")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            # A short deadline admits the cell while the prepared worker's
+            # startup prompt blocks initialization. Polling must not replay it.
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "target startup> "]\n[waiting for stdin]',
+                "prepared worker startup prompt",
+                python="first_cell = 42",
+                timeout_ms=10,
+            )
+            client.send(timeout_ms=0)
+            assert last_result_text(client) == "\n[waiting for stdin]"
+            assert not (root / "peer/evaluations").exists()
+            wait_for_evaluation_output(
+                client, "provider peer\n", "prepared first cell", stdin="continue\n"
+            )
+            evaluations = (root / "peer/evaluations").read_text().splitlines()
+            assert [json.loads(line) for line in evaluations] == [
+                {"kind": "evaluate", "language": "python", "source": "first_cell = 42"}
+            ]
+            client.finish()
+        assert not (root / "peer/vms").exists()
+        return client.transcript[3:]
+
+
+@requires(POSIX)
 def test_r_only_probe_projects_optional_python(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")
@@ -136,10 +168,36 @@ def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
 
 
 @requires(POSIX)
+def test_rejects_target_without_interpreter_bootstrap_protocol(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("prior-bootstrap-protocol")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            error = client.startup_error()
+            assert "expected protocol 10" in error, error
+            assert "received protocol 8" in error, error
+            client.stdin.close()
+            assert client.stdout.read(timeout=30) == ""
+            diagnostics = client.stderr.read(timeout=30)
+            assert "expected protocol 10" in diagnostics, diagnostics
+            assert client.process.wait(timeout=5) != 0
+        operations = calls(root)
+        executions = [call["args"] for call in operations if call["args"][0] == "exec"]
+        assert len(executions) == 1 and executions[0][-1] == "docker-sandbox-probe", (
+            executions
+        )
+        assert not (root / "peer/vms").exists()
+        return [
+            {"older_target_rejected": True, "probe_retired_before_worker_launch": True}
+        ]
+
+
+@requires(POSIX)
 def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 7"),
+        ("probe-version", "expected protocol 10"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),

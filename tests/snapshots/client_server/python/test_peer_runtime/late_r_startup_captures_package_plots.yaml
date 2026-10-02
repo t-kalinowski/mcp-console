@@ -23,7 +23,7 @@ send:
   r: |
     stopifnot(
       "mcpconsoleearlypython" %in% getOption("defaultPackages"),
-      !isTRUE(reticulate::py_config()$ephemeral),
+      identical(isTRUE(reticulate::py_config()$ephemeral), FALSE),
       identical(search()[[2L]], "tools:mcp-console"),
       identical(find("py")[[1L]], "tools:mcp-console"),
       identical(find("sql_connection")[[1L]], "tools:mcp-console"),
@@ -64,10 +64,11 @@ send:
     import json
     import subprocess
 
-    assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
-    assert os.path.realpath(sys.prefix) == os.path.realpath(
-        os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
-    )
+    if not False:
+        assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
+        assert os.path.realpath(sys.prefix) == os.path.realpath(
+            os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
+        )
     assert id(early_object) == early_identity
     assert sys.executable == early_executable
     assert (
@@ -122,7 +123,7 @@ send:
   r: |
     stopifnot(
       "mcpconsoleearlypython" %in% getOption("defaultPackages"),
-      !isTRUE(reticulate::py_config()$ephemeral),
+      identical(isTRUE(reticulate::py_config()$ephemeral), FALSE),
       identical(search()[[2L]], "tools:mcp-console"),
       identical(find("py")[[1L]], "tools:mcp-console"),
       identical(find("sql_connection")[[1L]], "tools:mcp-console"),
@@ -163,10 +164,11 @@ send:
     import json
     import subprocess
 
-    assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
-    assert os.path.realpath(sys.prefix) == os.path.realpath(
-        os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
-    )
+    if not False:
+        assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
+        assert os.path.realpath(sys.prefix) == os.path.realpath(
+            os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
+        )
     assert id(early_object) == early_identity
     assert sys.executable == early_executable
     assert (

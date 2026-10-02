@@ -280,9 +280,13 @@ pub(crate) fn acknowledge_python_interrupt() -> bool {
     if PYTHON_COMMITS.with_borrow(|stack| !stack.is_empty()) {
         return false;
     }
-    R_STATE
+    let interrupted = R_STATE
         .get()
-        .map_or_else(acknowledge_native_interrupt, |state| (state.acknowledge)())
+        .map_or_else(acknowledge_native_interrupt, |state| (state.acknowledge)());
+    if interrupted {
+        super::core::record_bootstrap_interrupt();
+    }
+    interrupted
 }
 
 #[cfg(unix)]

@@ -11,23 +11,32 @@ This page defines their order and partial effects.
 
 MCP initialization, tool discovery, and pings do not wait for runtime discovery, default preparation, or built-in worker startup.
 The interface comes from captured configuration, not installed-runtime availability.
-One shared startup owner prepares and prelaunches the real worker; languages initialize on first use.
+One shared startup owner prepares and prelaunches the real worker.
+After transport readiness connects resolver, input, and output services, the built-in worker initializes enabled R and Python on its serialized thread without waiting for code.
+Explicit or host-resolved Python selections start through the native facade; unresolved R-side selection retains its compatibility rules.
+SQL bridges accompany runtime setup; managed DuckDB connections and queries remain lazy.
 Custom workers remain lazy.
 
 A structurally valid early cell immediately reserves the evaluation slot.
 Its single observation deadline starts at call entry, including shared startup and deferred preparation.
 Expiry returns `[running; poll with an empty send]`; the cell stays accepted and runs at most once.
+Its evaluation frame waits behind interpreter bootstrap; timeout and polling never replay it.
 An empty poll or `get` without an accepted cell can instead return `[worker starting]`.
 `timeout_ms=0` observes immediately; it does not skip validation or create another worker.
 
 Early standalone requirements that time out before readiness have **not** been accepted and must be submitted again.
 Early code-free stdin is buffered for its generation; a cell's bundled stdin waits for its requirements.
+Startup hooks can emit output, plots, errors, and managed input requests without a submitted cell.
+An empty poll can return `[idle]` while interpreters initialize after transport readiness; it does not certify initialization completion.
 Before discovery finishes, control needing configuration can time out without applying; any bundled cell is explicitly reported as not run.
 
 Requirements already admitted when discovery finishes can select the initial candidate.
 Later early declarations use the same preparation transaction after shared startup.
 Changed requirements may replace an **unused** prewarmed worker after successful preparation and confirmed retirement, without an explicit restart.
-Once code or stdin has reached it, normal live/restart rules apply.
+Initialization alone does not make that worker used; user code or nonempty stdin ends this exception.
+Replacement serializes bootstrap callbacks with preparation and confirms old-worker retirement before launching the successor.
+Configured hooks can run once in each new generation, including a replacement before the first cell.
+Once user code or nonempty stdin has reached it, normal live/restart rules apply.
 Prewarming must not change the user's effective declaration semantics.
 
 Cancellation before admission leaves no accepted cell.

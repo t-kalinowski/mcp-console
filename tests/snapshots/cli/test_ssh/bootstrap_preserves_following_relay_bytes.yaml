@@ -1,6 +1,9 @@
 ---
 kind: ready
 ---
+kind: runtime_initialized
+interrupted: false
+---
 kind: console_output
 data: |
   coalesced frame

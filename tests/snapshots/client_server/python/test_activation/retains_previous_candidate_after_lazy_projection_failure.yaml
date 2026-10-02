@@ -1,13 +1,12 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
-  r: |
-    reticulate::py_require(character(), action = "set")
+  requirements:
+    action: set
+    python: []
 result:
   content:
     - type: text
-      text: "[done]"
+      text: "[prepared]"
   isError: false
 ---
 send:
@@ -57,12 +56,14 @@ result:
   isError: false
 ---
 send:
-  python: import console_unloaded; console_unloaded.origin
+  r: >-
+    reticulate::py_run_string("import console_unloaded;
+    print(console_unloaded.origin)")
 result:
   content:
     - type: text
       text: |
-        'initial'
+        initial
   isError: false
 ---
 send:

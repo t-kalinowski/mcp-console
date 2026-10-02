@@ -207,6 +207,13 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
+        // A requirements replacement commits its environment before the old
+        // worker retires. Its delayed startup activation belongs to the old
+        // generation and must not be checked against the replacement manifest.
+        let disposition = self.old_generation_commit_disposition(&generation)?;
+        if disposition == OldGenerationCommitDisposition::DiscardForReplacement {
+            return Ok(disposition);
+        }
         if environment.custom_worker {
             return Err("custom worker reported a managed Python activation".to_string());
         }

@@ -1,0 +1,31 @@
+---
+send:
+  python: first_cell = 42
+  timeout_ms: 10
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "target startup> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [waiting for stdin]
+  isError: false
+---
+send:
+  stdin: |
+    continue
+result:
+  content:
+    - type: text
+      text: |
+        provider peer
+  isError: false

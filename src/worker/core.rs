@@ -14,6 +14,26 @@ static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecD
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static CELL_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
+static BOOTSTRAPPING: AtomicBool = AtomicBool::new(false);
+static BOOTSTRAP_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn bootstrapping() -> bool {
+    BOOTSTRAPPING.load(Ordering::Relaxed)
+}
+
+pub(super) fn set_bootstrapping(active: bool) {
+    BOOTSTRAPPING.store(active, Ordering::Relaxed);
+}
+
+pub(crate) fn record_bootstrap_interrupt() {
+    if bootstrapping() {
+        BOOTSTRAP_INTERRUPTED.store(true, Ordering::Relaxed);
+    }
+}
+
+pub(super) fn bootstrap_interrupted() -> bool {
+    BOOTSTRAP_INTERRUPTED.load(Ordering::Relaxed)
+}
 
 pub(super) fn begin_cell(language: Language) {
     *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = Some(language);

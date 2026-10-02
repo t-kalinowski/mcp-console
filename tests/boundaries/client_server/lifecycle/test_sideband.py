@@ -25,7 +25,8 @@ def test_worker_adopts_both_pipes_and_isolates_fork_and_exec(
     environment["MCP_CONSOLE_TEST_CLOSED_PROBE"] = str(
         wrapper.with_name("sideband_closed.py")
     )
-    # Custom workers do not receive the built-in dependency preparation.
+    # A custom launcher wrapping the internal worker retains the on-demand
+    # protocol: it receives neither default preparation nor bootstrap completion.
     with tempfile.TemporaryDirectory() as temporary:
         environment["RETICULATE_PYTHON"] = str(
             resolve_managed_python(binary, execution, Path(temporary))

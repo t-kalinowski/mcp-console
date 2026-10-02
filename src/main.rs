@@ -73,7 +73,7 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::Worker => match worker::run() {
+        cli::Command::Worker { bootstrap_runtimes } => match worker::run(bootstrap_runtimes) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
