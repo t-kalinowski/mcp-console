@@ -30,7 +30,7 @@ from support.processes import (
     live_processes,
 )
 from support.normalization import code
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.records import Transcript
 from support.resolvers import ir_run_records, recording_ir_environment
@@ -38,6 +38,37 @@ from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, command, re
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
+
+
+@requires(NATIVE_FIXTURES)
+def test_connection_closure_joins_preparation_owner(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        environment = selected_python(root, python)
+        environment.pop("R_HOME", None)
+        environment.update(
+            {
+                "PATH": str(root),
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "preparation_reap_interposer")
+                ),
+                "MCP_CONSOLE_TEST_REAP_PID": str(root / "resolver-pid"),
+                "MCP_CONSOLE_TEST_REAP_DONE": str(root / "reaped"),
+            }
+        )
+        with McpClient(binary, DIRECT.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(python="42")
+            assert last_result_text(client) == "42\n"
+            client.finish()
+            assert (root / "resolver-pid").exists(), (
+                "resolver did not acknowledge closure"
+            )
+            assert (root / "reaped").exists(), (
+                "server exited before reaping preparation"
+            )
+            return [{"preparation_owner_joined_before_server_exit": True}]
 
 
 @executions(DIRECT, SANDBOXED)
