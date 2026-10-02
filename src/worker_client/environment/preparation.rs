@@ -123,47 +123,15 @@ impl Client {
         } else {
             Ok(None)
         };
-        let mut pending_requirements = Some(requirements);
-        let available_environment = match environment.try_lock() {
-            Ok(environment) => {
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements
-                        .take()
-                        .expect("environment requirements were already consumed"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-                self.require_explicit_restart(&delta)?;
-                Some((environment, delta))
-            }
-            Err(std::sync::TryLockError::WouldBlock) => None,
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err("worker environment lock poisoned".to_string());
-            }
-        };
-        let (mut environment, delta) = match available_environment {
-            Some(snapshot) => snapshot,
-            None => {
-                let environment = environment
-                    .lock()
-                    .map_err(|_| "worker environment lock poisoned".to_string())?;
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements
-                        .take()
-                        .expect("environment requirements were already consumed"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-                self.require_explicit_restart(&delta)?;
-                (environment, delta)
-            }
-        };
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        self.ensure_generation(generation)?;
+        let delta = RequirementDelta::calculate(&environment, requirements)?;
+        if delta.is_empty() {
+            return Ok(PrepareResult::Prepared);
+        }
+        self.require_explicit_restart(&delta)?;
         if self.0.python_only && !replace_default {
             match &*worker {
                 WorkerState::Initial => {}
