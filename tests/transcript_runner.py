@@ -289,7 +289,9 @@ class TranscriptRunnerFixture(unittest.TestCase):
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts" / "test", scripts / "test")
-        shutil.copy2(ROOT / "checkout_workflow.py", self.root / "checkout_workflow.py")
+        shutil.copy2(
+            ROOT / "scripts/checkout_workflow.py", scripts / "checkout_workflow.py"
+        )
         commands = self.root / "commands"
         commands.mkdir()
         cargo = commands / "cargo"
@@ -542,7 +544,9 @@ class TranscriptRunnerTests(TranscriptRunnerFixture):
         scripts = self.root / "scripts"
         scripts.mkdir()
         shutil.copy2(ROOT / "scripts/test", scripts / "test")
-        shutil.copy2(ROOT / "checkout_workflow.py", self.root / "checkout_workflow.py")
+        shutil.copy2(
+            ROOT / "scripts/checkout_workflow.py", scripts / "checkout_workflow.py"
+        )
         commands = self.root / "commands"
         commands.mkdir()
         cargo = commands / "cargo"

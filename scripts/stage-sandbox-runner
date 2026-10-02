@@ -12,17 +12,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-if sys.platform == "win32":
-    from windows_checkout import checkout_owner, exclusive
-
-    def cache_directory():
-        cache = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
-        if not cache.is_absolute():
-            fail("XDG_CACHE_HOME must be an absolute path")
-        return cache
-else:
-    from checkout_workflow import cache_directory, checkout_owner, exclusive
+from checkout_workflow import cache_directory, checkout_owner, exclusive
 
 TARGETS = (
     "aarch64-apple-darwin",

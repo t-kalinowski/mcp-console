@@ -15,7 +15,9 @@ The release workflow does not publish Windows wheels; Windows source checkouts c
 Install Rust's MSVC toolchain, Visual Studio's C++ build tools and Windows SDK, Python 3.11 or newer, and uv.
 For R execution, install current x64 R and set `R_HOME` to its installation directory (or place R on `PATH`).
 R is not required to build or run Python-only sessions.
-Windows builds stage the pinned native sandbox executable and both Windows helpers. Install CMake for the companion build. Cargo-only builds first need `python scripts/stage-sandbox-runner`.
+Windows builds stage the pinned native sandbox executable and both Windows helpers.
+Install CMake for the companion build.
+Cargo-only builds first need `python scripts/stage-sandbox-runner`.
 
 From PowerShell in the repository root:
 
@@ -47,20 +49,18 @@ Recording follows the shared [recording directory discovery](RECORDING.md), incl
 
 ## Native sandbox
 
-`mcp-console sandbox-setup` explicitly provisions the Console sandbox accounts and
-network rules through Windows UAC. Run it interactively, then use
-`mcp-console sandbox-setup --status` to check readiness. Ordinary sandbox launches
-fail with setup guidance if provisioning is missing; they do not silently retry
-unsandboxed or choose a weaker backend. Setup uses Console accounts, separate from
-Codex accounts. Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
+`mcp-console sandbox-setup` explicitly provisions the Console sandbox accounts and network rules through Windows UAC.
+Run it interactively, then use `mcp-console sandbox-setup --status` to check readiness.
+Ordinary sandbox launches fail with setup guidance if provisioning is missing; they do not silently retry unsandboxed or choose a weaker backend.
+Setup uses Console accounts, separate from Codex accounts.
+Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
 
 The default elevated backend enforces restricted networking and filesystem writes.
 `:workspace`, `:read-only`, and `--writable-root` use native policy composition.
 Private storage is exported through `TMPDIR`, `TEMP`, and `TMP`.
 Standalone execution uses the same bundle: `mcp-console sandbox -- python script.py`.
 
-For explicitly network-enabled workloads, the restricted-token backend avoids
-account provisioning:
+For explicitly network-enabled workloads, the restricted-token backend avoids account provisioning:
 
 ```yaml
 sandbox:
@@ -70,18 +70,16 @@ sandbox:
 
 It restricts writes but requires host reads; read-deny policies are rejected.
 `windows_state_dir` optionally selects an absolute persistent state directory; use the matching `sandbox-setup --state-dir PATH` when provisioning.
-Use one stable directory per Windows user: accounts and firewall policy are machine
-resources, and capability ACL entries persist on filesystem objects.
-Managed proxy configuration, custom cleanup timeouts, and Unix-only backend options
-are unsupported and fail before target launch.
+Use one stable directory per Windows user: accounts and firewall policy are machine resources, and capability ACL entries persist on filesystem objects.
+Managed proxy configuration, custom cleanup timeouts, and Unix-only backend options are unsupported and fail before target launch.
 
-The native runner owns a non-breakaway Job for each workload. It terminates remaining
-descendants and confirms zero active processes before reporting exit. Only that
-receipt permits a replacement generation and private-storage removal. Cleanup failure
-retains storage and blocks replacement. The Windows frontend waits for the runner;
-forced frontend termination does not confirm cleanup. Process handles monitor both
-the frontend and session owner. Runner/helper death can terminate Jobs, but does not
-guarantee storage deletion.
+The native runner owns a non-breakaway Job for each workload.
+It terminates remaining descendants and confirms zero active processes before reporting exit.
+Only that receipt permits a replacement generation and private-storage removal.
+Cleanup failure retains storage and blocks replacement.
+The Windows frontend waits for the runner; forced frontend termination does not confirm cleanup.
+Process handles monitor both the frontend and session owner.
+Runner/helper death can terminate Jobs, but does not guarantee storage deletion.
 
 ## Lifecycle and platform differences
 
@@ -115,26 +113,45 @@ Native sandbox acceptance covers policy enforcement, stdio/exit propagation, pri
 Native runtime acceptance covers Python-first and R-first startup, each runtime without the other, a Unicode virtualenv path, both bridge directions, input, active and idle interrupts including Python sleep and same-call following cells, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
 `tests/windows.py` includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
 It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir/uv arguments, real environment materialization, failures, interrupts, and descendant retirement.
-Run native commands exclusively in a checkout; the Unix checkout workflow and transcript suites are not Windows validation targets. `python scripts/stage-sandbox-runner` and Windows packaging share native checkout/source locks.
-Windows source and wheel packaging serialize through a blocking native lock in `.dev-workflow/checkout.lock`.
+Run native commands exclusively in a checkout.
+The shared workflows choose Windows acceptance rather than the Unix transcript/sandbox suites.
+The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
+Python 3.11 or newer is required; CI uses Python 3.13.
 
 ```powershell
-python scripts/stage-sandbox-runner
-cargo fmt --all --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
-python scripts/validate_runtime_sources.py
-python tests/architecture.py
-cargo build
-python tests/windows.py -v
-uv build --wheel --out-dir target/windows-wheels
+scripts/preflight.cmd
+scripts/stage-sandbox-runner.cmd
+scripts/test.cmd --list
+scripts/test.cmd --locate WindowsConsole.test_python_without_r
+scripts/test.cmd WindowsConsole.test_python_without_r
+scripts/format.cmd
+scripts/check.cmd
+scripts/check.cmd --full
+scripts/with-checkout.cmd cargo build
+scripts/review-diff.cmd origin/main
 ```
+
+`preflight` is read-only; its Windows inventory currently skips companion inspection and unsupported controller capabilities.
+Stage the Windows companion with `scripts/stage-sandbox-runner.cmd` before native build, test, or check commands; packaging stages it automatically.
+R is optional in its inventory so Python-only setups can be inspected; the complete acceptance suite needs both runtimes.
+Failed optional R probes remain visible in the inventory without failing preflight; required tool and probe failures still fail it.
+`test` builds `target/debug/mcp-console.exe` unless `MCP_CONSOLE_TEST_BINARY` selects an installed executable; no selectors runs all native cases.
+`check` validates embedded sources, architecture, Rust formatting, Clippy, Rust tests, and native acceptance.
+`--full` adds supported tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
+`format` runs ruff, yamark, rustfmt, and air, reports every failure, and only returns failure with `--strict`.
+Install those formatters separately; missing tools and host policy blocks are reported rather than silently ignored.
+
+Build, test, and packaging entry points share `.dev-workflow/checkout.lock`, outside `target`.
+Use `with-checkout` for direct build commands.
+Independent workflows fail when busy; source/wheel packaging waits, and nested packaging reuses the workflow's owner.
+Windows workflow phases use Jobs to retire descendants on completion or cancellation before releasing the lock.
+These are development-command ownership guarantees; they do not add sandboxing to evaluated user code.
 
 The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticulate` and `jsonlite`.
 Resolver acceptance also needs uv and package repository access; use `ir` 0.4.0 or later if it is on PATH.
 For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.
 Tests use `rustc` to build small process fixtures.
-R source validation additionally needs `Rscript` on `PATH` and `LC_ALL=C`.
+R source validation finds `Rscript.exe` under `R_HOME` (including `bin/x64`) or on `PATH`, and uses `LC_ALL=C` for the syntax checker.
 
 Windows error 4551 during process creation indicates a host application-control block.
 Local executables and downloaded interpreter DLLs must be permitted by the host policy; this is separate from Console sandbox support.

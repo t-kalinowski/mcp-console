@@ -74,14 +74,20 @@ class WorkflowTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         (self.root / "tests").mkdir()
         (self.root / "target").mkdir()
-        for name in ("check", "test", "with-checkout"):
+        for name in (
+            "check",
+            "test",
+            "with-checkout",
+            "checkout_workflow.py",
+            "build_backend.py",
+        ):
             source = ROOT / "scripts" / name
             shutil.copy2(source, self.root / "scripts" / name)
-        for name in ("checkout_workflow.py", "build_backend.py"):
-            source = ROOT / name
-            shutil.copy2(source, self.root / name)
         self.environment = os.environ | {
             "XDG_CACHE_HOME": str(self.directory / "cache"),
+            "PYTHONPATH": str(self.root / "scripts")
+            + os.pathsep
+            + os.environ.get("PYTHONPATH", ""),
         }
         self.environment.pop("MCP_CONSOLE_CHECKOUT_LOCKS", None)
         self.environment.pop("MCP_CONSOLE_VALIDATION_RUN", None)
@@ -304,6 +310,8 @@ class WorkflowTests(unittest.TestCase):
             "scripts/cargo",
         ):
             self.write_script(script, 'print("checked")')
+        # Exercise a shebang alias whose spelling differs from this interpreter.
+        (self.root / "scripts/python3").symlink_to(sys.executable)
         self.environment["PATH"] = (
             f"{self.root / 'scripts'}{os.pathsep}{os.environ['PATH']}"
         )
@@ -322,7 +330,13 @@ class WorkflowTests(unittest.TestCase):
                     else common
                 )
                 self.assertEqual([p["name"] for p in record["phases"]], expected)
-                architecture = "[architecture] tests/architecture.py"
+                interpreter = next(
+                    phase["command"][0]
+                    for phase in record["phases"]
+                    if phase["name"] == "architecture"
+                )
+                self.assertTrue(Path(interpreter).samefile(sys.executable))
+                architecture = f"[architecture] {interpreter} tests/architecture.py"
                 if arguments != ("--full",):
                     architecture += " SandboxProcessBoundaryTests"
                 self.assertIn(architecture + "\n", result.stderr)
@@ -748,15 +762,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(process.poll())
         self.finish_check(process)
 
-    def test_nested_launch_error_records_failure_after_successful_phase(self) -> None:
+    def test_missing_nested_script_records_failure_after_successful_phase(self) -> None:
         shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")
         self.write_script("scripts/validate_runtime_sources.py", 'print("checked")')
         result = self.run_command("scripts/check")
         self.assertNotEqual(result.returncode, 0)
         record = next(r for r in self.records() if r["command"] == ["check-core"])
         self.assertEqual(record["phases"][0]["exit_status"], 0)
-        self.assertEqual(record["phases"][1]["exit_status"], 1)
-        self.assertEqual(record["exit_status"], 1)
+        # Python now launches repository scripts explicitly on every platform;
+        # a missing script is Python's exit status 2, not a shebang exec error.
+        self.assertEqual(record["phases"][1]["exit_status"], 2)
+        self.assertEqual(record["exit_status"], 2)
 
     def test_wrapped_command_preserves_stdout_and_stderr(self) -> None:
         self.write_script(

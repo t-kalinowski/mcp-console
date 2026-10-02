@@ -99,7 +99,11 @@ path = "main.rs"
                 [*git, "rev-parse", "HEAD"], text=True
             ).strip()
             (root / "scripts").mkdir()
-            for source in ("scripts/stage-sandbox-runner", "windows_checkout.py"):
+            for source in (
+                "scripts/stage-sandbox-runner",
+                "scripts/checkout_workflow.py",
+                "scripts/checkout_windows.py",
+            ):
                 shutil.copyfile(ROOT / source, root / source)
             (root / "sandbox-runner.json").write_text(
                 json.dumps(

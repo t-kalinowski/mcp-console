@@ -14,10 +14,11 @@ R/libR/packages are not build or Python-only execution prerequisites.
 
 Experimental Windows source builds use the MSVC toolchain, Windows SDK, and CMake and stage all three native sandbox executables; see [Windows setup and validation](docs/WINDOWS.md).
 Windows packaging holds a blocking native checkout lock through wheel creation and replaces any staged Unix companion files with the pinned Windows bundle.
-The Unix staging and checkout-wrapper instructions below apply to macOS and Linux.
+The platform-specific staging instructions below cover macOS and Linux.
+Windows direct build commands use `scripts/with-checkout.cmd` and share ownership with packaging; `scripts/check.cmd --full` exercises local wheel and source installation.
 
 On macOS, install Xcode Command Line Tools.
-Ubuntu builds need a C toolchain, `pkg-config`, libcap development files, libcurl development files for R resolver bootstrap, and binutils (`readelf`/`strip`).
+Ubuntu builds need a C toolchain, `pkg-config`, libcap development files, libcurl development files for R resolver bootstrap, and binutils (`readelf` / `strip`).
 Packages may need additional system libraries.
 Runtime Linux installations need the helper's system dependencies, including dynamically linked libcap when selected.
 
@@ -49,7 +50,8 @@ libexec/mcp-console-sandbox
 share/licenses/mcp-console/{LICENSE,NOTICE}
 ```
 
-Windows uses `.exe` suffixes and additionally bundles `mcp-console-sandbox-setup.exe` and `mcp-console-sandbox-runner.exe` under `libexec`; all helpers are verified before launch or setup. Windows binaries are not processed by Unix strip tools.
+Windows uses `.exe` suffixes and additionally bundles `mcp-console-sandbox-setup.exe` and `mcp-console-sandbox-runner.exe` under `libexec`; all helpers are verified before launch or setup.
+Windows binaries are not processed by Unix strip tools.
 
 Linux also bundles `libexec/bwrap` and Bubblewrap license, notice, and source metadata.
 Staging strips distributed binaries, records SHA-256 digests, and rejects inherited `CODEX_BWRAP_SOURCE_DIR` / `CODEX_SKIP_BWRAP_BUILD`, even empty.
@@ -60,7 +62,7 @@ Dynamic libcap is not bundled; static libcap requires a nonempty `MCP_CONSOLE_LI
 The build does not certify that supplied license text.
 Wheel smoke verifies notices, source identity, helper digest, and actual linkage.
 
-`build_backend.py` owns staging through wheel creation.
+`scripts/build_backend.py` owns staging through wheel creation.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.
 On Windows, Cargo keeps each complete companion bundle in a content-addressed directory under `libexec` and binds the executable to it.
 Older bundles remain available to active sandboxes; rebuilding never replaces their running helpers.

@@ -87,42 +87,18 @@ jobs:
           packages: |
             any::reticulate
             any::jsonlite
-      - name: Check native Windows code
+      - name: Inventory Windows development prerequisites
         run: |
-          python scripts/stage-sandbox-runner
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python scripts/validate_runtime_sources.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/architecture.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo fmt --all --check
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo clippy --all-targets --all-features -- -D warnings
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo test --all-targets --all-features
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo build
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/windows.py -v
-      - name: Build and exercise installed Windows wheel
+          scripts/preflight.cmd --json
+      - name: Stage native Windows sandbox
+        run: scripts/stage-sandbox-runner.cmd
+      - name: Run native Windows development and installation checks
         run: |
-          uv build --wheel --out-dir target/windows-wheels
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          uv venv target/windows-install
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $wheel = (Get-ChildItem target/windows-wheels/*.whl).FullName
-          uv pip install --python target/windows-install/Scripts/python.exe $wheel
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $env:MCP_CONSOLE_TEST_BINARY = "$pwd/target/windows-install/Scripts/mcp-console.exe"
-          python tests/windows.py -v
-      - name: Check Windows source installation
-        run: |
-          uv pip install --reinstall --python target/windows-install/Scripts/python.exe .
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $env:MCP_CONSOLE_TEST_BINARY = "$pwd/target/windows-install/Scripts/mcp-console.exe"
-          python tests/windows.py WindowsConsole.test_python_initializes_before_r WindowsConsole.test_r_initializes_before_python -v
+          scripts/check.cmd --full
       - name: Save Windows caches
-        if: github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        if: >-
+          github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit !=
+          'true'
         uses: actions/cache/save@v6
         with:
           path: |
@@ -382,7 +358,7 @@ jobs:
           # Only exact matches skip packaging. On a miss, Maturin invokes Cargo
           # using the build data restored above, including earlier revisions.
           key: >-
-            release-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-maturin-${{ steps.tools.outputs.maturin_version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
+            release-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-maturin-${{ steps.tools.outputs.maturin_version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'scripts/build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
 
       - name: Build Rust test targets
         run: cargo test --locked --no-run --all-targets --all-features
