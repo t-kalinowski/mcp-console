@@ -119,7 +119,11 @@ impl ConsoleServer {
             *description = description
                 .as_str()
                 .unwrap_or_default()
-                .replace("SIGINT from the active host resolver or live worker", "a cooperative interrupt from the live worker").into();
+                .replace(
+                    "SIGINT from the active host resolver or live worker",
+                    "a cooperative interrupt from the live worker",
+                )
+                .into();
         }
         // Omission carries meaning for get/reset. Do not advertise payload defaults.
         for property in properties

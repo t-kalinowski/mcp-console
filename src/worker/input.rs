@@ -169,58 +169,60 @@ pub(super) fn read_console_stdin(
         let byte = unsafe { buf.add(length) };
         #[cfg(unix)]
         let count = {
-        let wakeup = INTERRUPT_WAKEUP
-            .get()
-            .expect("interrupt wakeup initialized");
-        let mut descriptors = [
-            libc::pollfd {
-                fd: libc::STDIN_FILENO,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: wakeup.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            },
-        ];
-        let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, -1) };
-        if ready == 0 {
-            continue;
-        }
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
+            let wakeup = INTERRUPT_WAKEUP
+                .get()
+                .expect("interrupt wakeup initialized");
+            let mut descriptors = [
+                libc::pollfd {
+                    fd: libc::STDIN_FILENO,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: wakeup.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+            ];
+            let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, -1) };
+            if ready == 0 {
                 continue;
             }
-            return Err(format!("R worker stdin poll failed: {error}"));
-        }
-        if descriptors[1].revents != 0 {
-            let mut bytes = [0u8; 64];
-            unsafe { libc::read(wakeup.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len()) };
-        }
-        let descriptor = &descriptors[0];
-        if descriptor.revents == 0 {
-            continue;
-        }
-        if descriptor.revents & libc::POLLNVAL != 0 {
-            return Err("R worker stdin descriptor is invalid".to_string());
-        }
-        if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
-            return Err(format!(
-                "R worker stdin poll returned unexpected events {}",
-                descriptor.revents
-            ));
-        }
-        if interrupted() {
-            return cancel_console_stdin_read(buf, length);
-        }
-        unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) }
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(format!("R worker stdin poll failed: {error}"));
+            }
+            if descriptors[1].revents != 0 {
+                let mut bytes = [0u8; 64];
+                unsafe { libc::read(wakeup.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len()) };
+            }
+            let descriptor = &descriptors[0];
+            if descriptor.revents == 0 {
+                continue;
+            }
+            if descriptor.revents & libc::POLLNVAL != 0 {
+                return Err("R worker stdin descriptor is invalid".to_string());
+            }
+            if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
+                return Err(format!(
+                    "R worker stdin poll returned unexpected events {}",
+                    descriptor.revents
+                ));
+            }
+            if interrupted() {
+                return cancel_console_stdin_read(buf, length);
+            }
+            unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) }
         };
         #[cfg(windows)]
         let count = {
             wait_windows_stdin().map_err(|error| format!("worker stdin wait failed: {error}"))?;
-            if interrupted() { return cancel_console_stdin_read(buf, length); }
+            if interrupted() {
+                return cancel_console_stdin_read(buf, length);
+            }
             unsafe { libc::read(0, byte.cast(), 1) as isize }
         };
         if count == 1 {

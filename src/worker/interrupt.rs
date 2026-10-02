@@ -393,8 +393,12 @@ extern "C" fn windows_signal(_: libc::c_int) {
 
 #[cfg(windows)]
 pub(super) fn normalize_signal() -> io::Result<()> {
-    if unsafe { libc::signal(libc::SIGINT, windows_signal as *const () as libc::sighandler_t) }
-        == libc::SIG_ERR as libc::sighandler_t
+    if unsafe {
+        libc::signal(
+            libc::SIGINT,
+            windows_signal as *const () as libc::sighandler_t,
+        )
+    } == libc::SIG_ERR as libc::sighandler_t
     {
         return Err(io::Error::last_os_error());
     }
@@ -480,7 +484,8 @@ pub(crate) fn with_python_interrupt<T>(
     check_python_selection_interrupt()?;
     let wakeup = WINDOWS_WAKEUP.get().expect("interrupt initialized");
     wakeup.reset();
-    let (finished, completion) = crate::windows::notification().map_err(|error| error.to_string())?;
+    let (finished, completion) =
+        crate::windows::notification().map_err(|error| error.to_string())?;
     std::thread::scope(|scope| {
         let watcher = std::sync::Mutex::new(None);
         let result = operation(&|handle| {

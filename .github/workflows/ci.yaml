@@ -30,10 +30,13 @@ jobs:
     runs-on: windows-latest
     env:
       LC_ALL: C
-      UV_CACHE_DIR: ${{ runner.temp }}/console-windows-cache/uv
-      R_LIBS_USER: ${{ runner.temp }}/console-windows-r
     steps:
       - uses: actions/checkout@v7
+      - name: Set Windows dependency directories
+        shell: pwsh
+        run: |
+          "UV_CACHE_DIR=$env:RUNNER_TEMP/console-windows-cache/uv" >> $env:GITHUB_ENV
+          "R_LIBS_USER=$env:RUNNER_TEMP/console-windows-r" >> $env:GITHUB_ENV
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"

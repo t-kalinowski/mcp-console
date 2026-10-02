@@ -12,7 +12,8 @@ pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSIO
 pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 #[cfg(unix)]
-pub(crate) const RESOLUTION_UNAVAILABLE: &str = "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console";
+pub(crate) const RESOLUTION_UNAVAILABLE: &str =
+    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console";
 #[cfg(windows)]
 pub(crate) const RESOLUTION_UNAVAILABLE: &str = "dynamic environment resolution is unavailable on Windows; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";

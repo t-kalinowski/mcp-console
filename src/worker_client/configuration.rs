@@ -187,7 +187,10 @@ impl ClientConfiguration {
                 })
                 .transpose()?;
             if r_home.is_none() && selected.is_none() {
-                return Err("no R or Python runtime found; set R_HOME or select Python with -c python=PATH".into());
+                return Err(
+                    "no R or Python runtime found; set R_HOME or select Python with -c python=PATH"
+                        .into(),
+                );
             }
             local_runtime = Some(crate::local_runtime::Selection {
                 r_home,

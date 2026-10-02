@@ -113,7 +113,6 @@ pub(crate) struct ManagedRResolverConfiguration {
     rscript: PathBuf,
 }
 
-
 impl ManagedRResolverConfiguration {
     pub(crate) fn resolve_uv(
         &self,
@@ -149,7 +148,6 @@ impl ManagedRResolverConfiguration {
         })
     }
 }
-
 
 pub(crate) fn discover(
     python: &super::ManagedPythonResolverConfiguration,

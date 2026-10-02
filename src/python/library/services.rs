@@ -177,9 +177,7 @@ fn callback(operation: impl FnOnce(&Services) -> Result<*mut PyObject, String>) 
         .get()
         .expect("Python services initialized before callbacks");
     let result = catch_unwind(AssertUnwindSafe(|| {
-        if std::process::id() != services.pid
-            || std::thread::current().id() != services.thread
-        {
+        if std::process::id() != services.pid || std::thread::current().id() != services.thread {
             return Err("console service requires the main worker thread".to_string());
         }
         operation(services)

@@ -64,8 +64,7 @@ pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
 use managed_python::resolve_python_manifest;
 #[cfg(unix)]
 pub(crate) use managed_python::{
-    resolve_python_manifest_for_remote, resolve_python_version,
-    resolve_python_version_for_remote,
+    resolve_python_manifest_for_remote, resolve_python_version, resolve_python_version_for_remote,
 };
 #[cfg(unix)]
 pub(crate) use managed_r::{
