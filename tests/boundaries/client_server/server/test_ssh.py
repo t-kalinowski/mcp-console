@@ -183,6 +183,7 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
                     client,
                     '[input requested: "R before Python discovery> "]\n[waiting for stdin]',
                     "R startup before unresolved Python selection",
+                    completion_timeout_seconds=client.response_timeout,
                     r="startup_value + 1L",
                     timeout_ms=0,
                 )

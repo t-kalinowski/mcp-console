@@ -91,7 +91,13 @@ def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
                 python="raise AssertionError('interrupted bootstrap ran setup cell')",
                 timeout_ms=0,
             )
-            client.send(stdin="\n")
+            wait_for_evaluation_output(
+                client,
+                None,
+                "deferred selection bootstrap interruption",
+                completion_timeout_seconds=client.response_timeout,
+                stdin="\n",
+            )
             assert client.transcript[-1]["result"].get("isError") is not True
             assert "AssertionError" not in last_result_text(client)
             client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")

@@ -755,7 +755,10 @@ def managed_bootstrap(binary: Path, execution: Execution):
         ) as client:
             try:
                 reached.wait("first generation bootstrap", timeout=600)
-                yield client, release, reached, identities
+                worker = capture_process_identity(
+                    host_process_id(int(identities.read_text()), client.process.pid)
+                )
+                yield client, release, reached, identities, worker
             finally:
                 release.release()
 
@@ -764,7 +767,13 @@ def managed_bootstrap(binary: Path, execution: Execution):
 def test_first_declaration_replaces_blocked_bootstrap(
     binary: Path, execution: Execution
 ) -> list:
-    with managed_bootstrap(binary, execution) as (client, release, reached, identities):
+    with managed_bootstrap(binary, execution) as (
+        client,
+        release,
+        reached,
+        identities,
+        worker,
+    ):
         client.initialize_and_list_tools()
         client.send(
             python="counter = 1; input('first cell> ')",
@@ -775,7 +784,14 @@ def test_first_declaration_replaces_blocked_bootstrap(
         assert last_result_text(client) == RUNNING
         reached.wait("replacement generation bootstrap", timeout=600)
         workers = identities.read_text().splitlines()
-        assert len(workers) == 2 and workers[0] != workers[1], workers
+        assert len(workers) == 2, workers
+        assert (
+            capture_process_identity(
+                host_process_id(int(workers[-1]), client.process.pid)
+            )
+            != worker
+        )
+        assert not live_processes([worker]), "previous bootstrap worker survived"
         release.release()
         wait_for_evaluation_output(
             client,
@@ -794,7 +810,13 @@ def test_first_declaration_replaces_blocked_bootstrap(
 def test_failed_declaration_preserves_bootstrap_and_reset_remains_allowed(
     binary: Path, execution: Execution
 ) -> list:
-    with managed_bootstrap(binary, execution) as (client, release, reached, identities):
+    with managed_bootstrap(binary, execution) as (
+        client,
+        release,
+        reached,
+        identities,
+        worker,
+    ):
         client.initialize_and_list_tools()
         root = release.path.parent
         inventory = root / "inventories.json"
@@ -820,7 +842,14 @@ def test_failed_declaration_preserves_bootstrap_and_reset_remains_allowed(
         assert last_result_text(client) == RUNNING
         reached.wait("reset starts its replacement bootstrap", timeout=600)
         workers = identities.read_text().splitlines()
-        assert len(workers) == 2 and workers[0] != workers[1], workers
+        assert len(workers) == 2, workers
+        assert (
+            capture_process_identity(
+                host_process_id(int(workers[-1]), client.process.pid)
+            )
+            != worker
+        )
+        assert not live_processes([worker]), "previous bootstrap worker survived"
         release.release()
         wait_for_evaluation_output(client, "1\n", "cell after first reset")
         return client.finish()[3:]

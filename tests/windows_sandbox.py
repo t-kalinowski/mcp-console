@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -28,7 +29,17 @@ def workspace():
     try:
         yield root
     finally:
-        shutil.rmtree(root)
+        # Windows can retain an executable's image mapping briefly after its
+        # waited-for process exits. Retry only that sharing violation.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                shutil.rmtree(root)
+                break
+            except OSError as error:
+                if error.winerror != 32 or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.05)
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
