@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -233,6 +234,7 @@ def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transc
     with gated_discovery(binary) as (client, release):
         client.initialize_and_list_tools()
         pending = client.start_send(r="stop('cancelled request must not execute')")
+        wait_for_send_admission(client)
         client.send(r="stop('another cell must not execute')", timeout_ms=0)
         assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])
@@ -244,6 +246,34 @@ def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transc
         transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
         assert "fixture R discovery failed" in errors, errors
         return transcript + [{"stderr": errors}]
+
+
+def wait_for_send_admission(client: McpClient) -> None:
+    # Writing a request does not mean its handler has reserved the cell yet.
+    # Discovery is gated, so an empty observation can only report startup or
+    # the pending send's exclusive wait claim. Never submit a competing cell
+    # until that public receipt proves admission.
+    deadline = time.monotonic() + 30
+    first_poll = len(client.transcript)
+    while True:
+        result = client.send(timeout_ms=0)
+        if result.get("isError"):
+            assert result == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "[worker evaluation is already being polled]",
+                    }
+                ],
+                "isError": True,
+            }, result
+            break
+        assert result["content"] == [{"type": "text", "text": "[worker starting]"}], (
+            result
+        )
+        assert time.monotonic() < deadline, "pending send did not claim its evaluation"
+    # Only the scheduling-dependent startup observations are incidental.
+    client.transcript[first_poll:] = [client.transcript[-1]]
 
 
 @requires(R)
@@ -295,6 +325,7 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
     ):
         client.initialize_and_list_tools()
         pending = client.start_send(r="cancelled_cell_ran <- TRUE")
+        wait_for_send_admission(client)
         client.send(r="stop('another cell must not execute')", timeout_ms=0)
         assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])

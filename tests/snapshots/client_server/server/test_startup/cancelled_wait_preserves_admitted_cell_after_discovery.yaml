@@ -5,6 +5,14 @@ send:
   r: cancelled_cell_ran <- TRUE
 ---
 send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[worker evaluation is already being polled]"
+  isError: true
+---
+send:
   r: stop('another cell must not execute')
   timeout_ms: 0
 result:

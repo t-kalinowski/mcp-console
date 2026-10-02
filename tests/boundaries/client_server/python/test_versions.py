@@ -726,7 +726,10 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
+        client.send(
+            requirements={"r": ["DBI"]},
+            timeout_ms=int(client.response_timeout * 1_000),
+        )
         assert last_result_text(client) == "[prepared]"
         uv_record.write_text("", encoding="utf-8")
         resolver_record.write_text("", encoding="utf-8")

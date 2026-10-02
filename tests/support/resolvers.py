@@ -541,6 +541,6 @@ def send_and_collect_runtime_python_resolution(
         None,
         "automatic Python resolution",
         expected_error=None,
-        completion_timeout_seconds=240,
+        completion_timeout_seconds=client.response_timeout,
         **arguments,
     )
