@@ -48,7 +48,10 @@ class StagingTests(unittest.TestCase):
         self.roots = [self.directory / name for name in ("first", "second")]
         for root in self.roots:
             (root / "scripts").mkdir(parents=True)
-            for name in ("scripts/stage-sandbox-runner", "checkout_workflow.py"):
+            for name in (
+                "scripts/stage-sandbox-runner",
+                "scripts/checkout_workflow.py",
+            ):
                 shutil.copyfile(ROOT / name, root / name)
             (root / "sandbox-runner.json").write_text(json.dumps(self.pin))
         commands = self.directory / "commands"

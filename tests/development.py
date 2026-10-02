@@ -131,13 +131,17 @@ unstaged
                 self.assertNotEqual(result.returncode, 0)
                 self.assertTrue(result.stderr)
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "Unix capabilities; Windows preflight is covered by windows_workflow.py",
+    )
     def test_preflight_inventories_artifacts_and_optional_skips_without_building(
         self,
     ) -> None:
         for name in (
             "scripts/preflight",
             "scripts/stage-sandbox-runner",
-            "checkout_workflow.py",
+            "scripts/checkout_workflow.py",
             "sandbox-runner.json",
         ):
             target = self.root / name

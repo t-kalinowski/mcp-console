@@ -688,7 +688,12 @@ def main() -> None:
         # are valid. The execution child consumes the prepared release binary.
         os.execv(
             sys.executable,
-            [sys.executable, str(root / "checkout_workflow.py"), "test", *arguments],
+            [
+                sys.executable,
+                str(root / "scripts/checkout_workflow.py"),
+                "test",
+                *arguments,
+            ],
         )
     assert binary.is_file(), f"{binary} is missing; run scripts/test"
     checked_snapshots: set[Path] = set()

@@ -1,35 +1,40 @@
-#!/bin/sh
+#!/usr/bin/env python3
+"""Run every formatter, reporting failures; --strict also fails the command."""
 
-set -eu
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
 
-cd "${0%/*}/.."
-
-strict=0
-case "${1-}" in
-    '') ;;
-    --strict) strict=1; shift ;;
-    *) echo 'usage: scripts/format [--strict]' >&2; exit 2 ;;
-esac
-[ "$#" -eq 0 ] || { echo 'usage: scripts/format [--strict]' >&2; exit 2; }
-failed=0
-
-format() {
-    name=$1
-    shift
-    if "$@"; then
-        echo "$name: ok"
-    else
-        status=$?
-        echo "$name: failed ($status)"
-        failed=1
-    fi
-}
-
-format ruff ruff format
-format yamark yamark format --wrap sentence
-format rustfmt cargo fmt --all
-format air air format .
-
-if [ "$strict" -eq 1 ]; then
-    exit "$failed"
-fi
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--strict", action="store_true")
+options = parser.parse_args()
+os.chdir(Path(__file__).resolve().parent.parent)
+failed = False
+for name, command in (
+    (
+        "ruff",
+        [
+            "ruff",
+            "format",
+            ".",
+            *sorted(
+                str(path)
+                for path in Path("scripts").iterdir()
+                if path.is_file() and not path.suffix
+            ),
+        ],
+    ),
+    ("yamark", ["yamark", "format", "--wrap", "sentence"]),
+    ("rustfmt", ["cargo", "fmt", "--all"]),
+    ("air", ["air", "format", "."]),
+):
+    try:
+        status = subprocess.call([shutil.which(command[0]) or command[0], *command[1:]])
+    except OSError as error:
+        print(f"{name}: {error}")
+        status = 127
+    print(f"{name}: failed ({status})" if status else f"{name}: ok", flush=True)
+    failed |= bool(status)
+raise SystemExit(int(failed and options.strict))
