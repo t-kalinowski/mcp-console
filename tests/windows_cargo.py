@@ -139,6 +139,25 @@ path = "main.rs"
             ):
                 self.assertTrue((root / "wheel-data/data/libexec" / name).is_file())
 
+            staged = [root / "target/sandbox-runner-build.json"] + [
+                path for path in (root / "wheel-data/data").rglob("*") if path.is_file()
+            ]
+            for path in staged:
+                os.utime(path, ns=(1_600_000_000_000_000_000,) * 2)
+            timestamps = {path: path.stat().st_mtime_ns for path in staged}
+            repeated = subprocess.run(
+                result.args,
+                cwd=root,
+                env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertEqual(
+                {path: path.stat().st_mtime_ns for path in staged}, timestamps
+            )
+
     def test_rebuild_preserves_running_companion(self):
         with tempfile.TemporaryDirectory(prefix="console cargo ") as temporary:
             root = Path(temporary)

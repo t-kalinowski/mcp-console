@@ -47,7 +47,8 @@ def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
     if (
         not path.exists()
         or path.read_bytes() != contents
-        or stat.S_IMODE(path.stat().st_mode) != mode
+        # Windows reports the read-only attribute, not POSIX permission bits.
+        or (sys.platform != "win32" and stat.S_IMODE(path.stat().st_mode) != mode)
     ):
         path.write_bytes(contents)
         path.chmod(mode)
