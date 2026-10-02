@@ -38,8 +38,8 @@ Use `scripts/check` as the ordinary final gate; `--full` is for explicitly reque
 Report commands actually run and any unavailable coverage.
 CI is the comprehensive merge gate.
 
-Windows x64 supports experimental local `serve --no-sandbox` with preinstalled R and Python.
-SQL, managed dependency resolution, sandboxing, and Windows SSH/Docker/SBX controllers are deferred.
+Windows x64 supports experimental local sandboxed and `serve --no-sandbox` sessions with preinstalled R and Python.
+SQL, managed dependency resolution, and Windows SSH/Docker/SBX controllers are deferred.
 Follow [Windows validation](docs/WINDOWS.md#validation); the Unix checkout wrappers do not run on Windows.
 Run native build and validation commands exclusively in the checkout; Windows packaging holds a blocking native checkout lock outside `target`.
 

@@ -1,5 +1,9 @@
 """Prepare the private companion before Maturin builds a wheel."""
 
+import argparse
+import json
+import os
+import runpy
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -43,47 +47,12 @@ def build_editable(
         )
 
 
-def _lock_windows(descriptor: int) -> None:
-    import ctypes
-    from ctypes import wintypes
-    import msvcrt
-
-    class Overlapped(ctypes.Structure):
-        _fields_ = [
-            ("Internal", ctypes.c_size_t),
-            ("InternalHigh", ctypes.c_size_t),
-            ("Offset", wintypes.DWORD),
-            ("OffsetHigh", wintypes.DWORD),
-            ("hEvent", wintypes.HANDLE),
-        ]
-
-    lock_file = ctypes.WinDLL("kernel32", use_last_error=True).LockFileEx
-    lock_file.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        wintypes.DWORD,
-        ctypes.POINTER(Overlapped),
-    ]
-    lock_file.restype = wintypes.BOOL
-    overlapped = Overlapped()
-    # The file handle is synchronous. An exclusive lock without
-    # LOCKFILE_FAIL_IMMEDIATELY blocks until available, unlike LK_LOCK's retries.
-    # Closing the file releases the one-byte lock after the complete build.
-    if not lock_file(
-        msvcrt.get_osfhandle(descriptor), 2, 0, 1, 0, ctypes.byref(overlapped)
-    ):
-        raise ctypes.WinError(ctypes.get_last_error())
-
-
 @contextmanager
 def _checkout_owner(root: Path) -> Iterator[None]:
     if sys.platform == "win32":
-        directory = root / ".dev-workflow"
-        directory.mkdir(exist_ok=True)
-        with (directory / "checkout.lock").open("a") as lock:
-            _lock_windows(lock.fileno())
+        from windows_checkout import checkout_owner
+
+        with checkout_owner(root):
             yield
     else:
         from checkout_workflow import checkout_owner
@@ -97,15 +66,18 @@ def _staged_companion() -> Iterator[None]:
     root = Path(__file__).resolve().parent
     with _checkout_owner(root):
         if sys.platform == "win32":
-            # Windows currently packages only the unsandboxed executable. Avoid
-            # silently shipping a companion staged for another platform.
-            if any(
-                (root / "wheel-data/data" / name).exists()
-                for name in ("libexec", "share")
-            ):
-                raise RuntimeError(
-                    "Windows builds require a checkout without staged Unix companion files"
-                )
+            # Call in-process while retaining the native checkout lock. A
+            # separate Python child cannot inherit LockFileEx ownership.
+            staging = runpy.run_path(str(root / "scripts/stage-sandbox-runner"))
+            args = argparse.Namespace(
+                checkout=Path(source)
+                if (source := os.environ.get("MCP_CONSOLE_SANDBOX_SOURCE"))
+                else None,
+                target=None,
+            )
+            staging["stage_locked"](
+                args, json.loads((root / "sandbox-runner.json").read_text())
+            )
         else:
             subprocess.run(
                 [sys.executable, str(root / "scripts/stage-sandbox-runner")], check=True
