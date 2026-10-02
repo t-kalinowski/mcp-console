@@ -44,7 +44,7 @@ with (root / "ready").open("wb", buffering=0) as gate:
 with (root / "events").open("rb", buffering=0) as gate:
     assert gate.read(1) == b"1"
 frame(2, {"kind": "python_activated", "requirements": requirements})
-frame(2, {"kind": "runtime_initialized", "complete": True})
+frame(2, {"kind": "runtime_initialized", "interrupted": False})
 frame(2, {"kind": "console_output", "data": "after activation\n"})
 frame(
     2,

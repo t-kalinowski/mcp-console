@@ -24,8 +24,9 @@ The [worker protocol](WORKER_PROTOCOL.md) owns the inherited fd and worker-messa
 ## Target launch envelope
 
 SSH, Docker, and SBX wrap unchanged relay JSONL using [`src/target_launch.rs`](../src/target_launch.rs).
-The current launch version is **9**, with matching Console package version required independently.
-Version 9 also carries enabled languages captured on the controller; execution-host ambient values and workload policy cannot replace that selection.
+The current launch version is **10**, with matching Console package version required independently.
+Version 10 distinguishes interrupted interpreter bootstrap from other incomplete setup.
+Version 9 carries enabled languages captured on the controller; execution-host ambient values and workload policy cannot replace that selection.
 Version 8 introduced the built-in interpreter-bootstrap completion event after transport readiness, preventing older target workers from leaving an admitted cell waiting indefinitely.
 Increment launch compatibility for incompatible envelope or relay changes, even between development builds sharing a package version.
 SSH preparation has its own protocol and connection.

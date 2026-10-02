@@ -669,8 +669,8 @@ fn handle_semantic_event(
             callbacks.fail_python_activation()?;
             Ok(())
         }
-        RelayEvent::RuntimeInitialized { complete } => {
-            if !complete {
+        RelayEvent::RuntimeInitialized { interrupted } => {
+            if interrupted {
                 callbacks.interrupt_bootstrap_cell()?;
             }
             operation.finish_bootstrap()

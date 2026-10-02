@@ -2,7 +2,7 @@
 kind: ready
 ---
 kind: runtime_initialized
-complete: true
+interrupted: false
 ---
 kind: console_output
 data: |

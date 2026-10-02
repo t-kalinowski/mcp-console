@@ -20,7 +20,8 @@ pub(crate) use coordinator::run;
 pub(crate) use core::{
     bootstrapping, emit_output, mark_shutting_down, publish_plot, publish_python_activation,
     publish_python_activation_failure, publish_r_activation, publish_r_activation_failure,
-    record_worker_failure, resolve_python, resolve_python_version, resolve_r,
+    record_bootstrap_interrupt, record_worker_failure, resolve_python, resolve_python_version,
+    resolve_r,
 };
 #[cfg(unix)]
 pub(crate) use input::{PythonInput, python_interrupt_wakeup, read_python_input};

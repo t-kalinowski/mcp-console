@@ -64,7 +64,7 @@ pub(crate) enum RelayEvent {
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     RuntimeInitialized {
-        complete: bool,
+        interrupted: bool,
     },
     ConsoleOutput {
         data: String,
@@ -161,7 +161,9 @@ impl From<WorkerMessage> for RelayEvent {
     fn from(message: WorkerMessage) -> Self {
         match message {
             WorkerMessage::Ready => Self::Ready,
-            WorkerMessage::RuntimeInitialized { complete } => Self::RuntimeInitialized { complete },
+            WorkerMessage::RuntimeInitialized { interrupted } => {
+                Self::RuntimeInitialized { interrupted }
+            }
             WorkerMessage::ConsoleOutput { data } => Self::ConsoleOutput { data },
             WorkerMessage::ConsoleDiagnostic { data } => Self::ConsoleDiagnostic { data },
             WorkerMessage::Image { data, mime_type } => Self::Image { data, mime_type },

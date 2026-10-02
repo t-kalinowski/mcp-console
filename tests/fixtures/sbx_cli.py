@@ -216,14 +216,14 @@ elif args[0] == "exec":
         if initializing:
             frame(2, {"kind": "input_requested", "prompt": "target startup> "})
         else:
-            frame(2, {"kind": "runtime_initialized", "complete": True})
+            frame(2, {"kind": "runtime_initialized", "interrupted": False})
         for line in source:
             command = json.loads(line)
             if command["kind"] == "stdin":
                 assert initializing and command["data"] == "continue\n", command
                 initializing = False
                 frame(2, {"kind": "input_received"})
-                frame(2, {"kind": "runtime_initialized", "complete": True})
+                frame(2, {"kind": "runtime_initialized", "interrupted": False})
             elif command["kind"] == "evaluate":
                 assert not initializing, "cell reached worker before runtime bootstrap"
                 with (root / "evaluations").open("a") as stream:

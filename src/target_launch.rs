@@ -16,10 +16,10 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v9 also carries the controller-owned language selection. v8 introduced
-// interpreter bootstrap completion. Host preparation is unchanged.
-pub(crate) const VERSION: u32 = 9;
-pub(crate) const SSH_VERSION: u32 = 9;
+// v10 distinguishes interrupted bootstrap from other incomplete setup.
+// Host preparation is unchanged.
+pub(crate) const VERSION: u32 = 10;
+pub(crate) const SSH_VERSION: u32 = 10;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;

@@ -131,6 +131,7 @@ impl Bridge {
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
             if interrupted {
+                crate::worker::record_bootstrap_interrupt();
                 return Ok(None);
             }
             return Err(format!(

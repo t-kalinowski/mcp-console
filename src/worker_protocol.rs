@@ -156,7 +156,7 @@ pub(crate) enum WorkerMessage {
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     RuntimeInitialized {
-        complete: bool,
+        interrupted: bool,
     },
     ConsoleOutput {
         data: String,

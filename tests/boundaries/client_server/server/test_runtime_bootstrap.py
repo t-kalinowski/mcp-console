@@ -56,6 +56,7 @@ def python_bootstrap(
     sans_r: bool,
     output: bool = True,
     fail_once: bool = False,
+    startup_error: bool = False,
     server_environment: dict[str, str] | None = None,
 ):
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
@@ -91,11 +92,15 @@ def python_bootstrap(
                     if failure.exists():
                         failure.unlink()
                         os._exit(47)
+                    if {startup_error!r}:
+                        raise BaseException("ordinary bootstrap failure")
                     builtins.bootstrap_input = input("startup> ")
                 """),
         )
         environment = selected_python(root, python)
-        environment["MCP_CONSOLE_LANGUAGES"] = "python,sql"
+        environment["MCP_CONSOLE_LANGUAGES"] = (
+            "r,python,sql" if startup_error else "python,sql"
+        )
         environment.update(server_environment or {})
         if sans_r:
             environment.pop("R_HOME", None)
@@ -218,6 +223,30 @@ def test_failed_bootstrap_withholds_cell_and_replaces_worker(
         client.send(python="counter")
         assert last_result_text(client) == "1\n"
         return client.finish()[3:]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_incomplete_bootstrap_preserves_waiting_cell(
+    binary: Path, execution: Execution
+) -> list:
+    with python_bootstrap(
+        binary, execution, sans_r=False, output=False, startup_error=True
+    ) as (client, release):
+        client.initialize_and_list_tools()
+        client.send(r="counter <- 1L; counter", timeout_ms=0)
+        assert last_result_text(client) == RUNNING
+        release.release()
+        output = wait_for_evaluation_output(
+            client,
+            lambda text: text.endswith("[1] 1\n"),
+            "ordinary bootstrap failure preserves admitted R cell",
+        )
+        assert "BaseException: ordinary bootstrap failure" in output, output
+        client.send(r="counter <- counter + 1L; counter")
+        assert last_result_text(client) == "[1] 2\n", last_result_text(client)
+        client.finish()
+        return [{"ordinary_bootstrap_failure_preserves_waiting_cell": True}]
 
 
 def queued_input(client: McpClient, release: FifoCheckpoint) -> list:

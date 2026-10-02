@@ -56,22 +56,22 @@ Every frame has a string `kind` plus exactly the fields listed below.
 
 ### Worker to server
 
-| Kind                                                       | Fields                                                   |
-| ---------------------------------------------------------- | -------------------------------------------------------- |
-| `ready`, `completed`, `python_prepared`                    | —                                                        |
-| `runtime_initialized`                                      | `complete`: boolean; built-in interpreter bootstrap only |
-| `console_output`, `console_diagnostic`                     | `data`: string                                           |
-| `image`                                                    | `data`: valid base64 string; `mime_type`: string         |
-| `input_requested`                                          | `prompt`: string                                         |
-| `input_received`, `input_cancelled`                        | —                                                        |
-| `r_prepared`, `r_activated`                                | `library`: string                                        |
-| `r_preparation_failed`                                     | `message`: string                                        |
-| `resolve_r`                                                | `packages`: string[]                                     |
-| `r_activation_failed`                                      | `library`: string; `message`: string                     |
-| `resolve_python`                                           | `request`: Python resolution request                     |
-| `resolve_python_version`                                   | `request`: object with required `constraints`: string[]  |
-| `python_activated`, `python_activation_failed`             | `requirements`: complete Python manifest                 |
-| `python_preparation_failed`, `python_preparation_rejected` | `message`: string                                        |
+| Kind                                                       | Fields                                                      |
+| ---------------------------------------------------------- | ----------------------------------------------------------- |
+| `ready`, `completed`, `python_prepared`                    | —                                                           |
+| `runtime_initialized`                                      | `interrupted`: boolean; built-in interpreter bootstrap only |
+| `console_output`, `console_diagnostic`                     | `data`: string                                              |
+| `image`                                                    | `data`: valid base64 string; `mime_type`: string            |
+| `input_requested`                                          | `prompt`: string                                            |
+| `input_received`, `input_cancelled`                        | —                                                           |
+| `r_prepared`, `r_activated`                                | `library`: string                                           |
+| `r_preparation_failed`                                     | `message`: string                                           |
+| `resolve_r`                                                | `packages`: string[]                                        |
+| `r_activation_failed`                                      | `library`: string; `message`: string                        |
+| `resolve_python`                                           | `request`: Python resolution request                        |
+| `resolve_python_version`                                   | `request`: object with required `constraints`: string[]     |
+| `python_activated`, `python_activation_failed`             | `requirements`: complete Python manifest                    |
+| `python_preparation_failed`, `python_preparation_rejected` | `message`: string                                           |
 
 For example:
 
@@ -116,7 +116,8 @@ No request carries an arbitrary resolver environment map.
 Startup diagnostics may use raw stdout/stderr before it.
 For the built-in worker, readiness means command admission is available, not that either interpreter has initialized.
 Enabled R and Python then initialize on the existing serialized worker thread; hooks may emit output, images, input, resolver, and activation messages before evaluation.
-Bootstrap ends with `{"kind":"runtime_initialized","complete":true}`; interrupted retryable setup reports `complete:false`.
+The bootstrap attempt ends with `{"kind":"runtime_initialized","interrupted":false}`; an actual interrupt reports `interrupted:true`.
+Other incomplete setup preserves an admitted cell, allowing its language to retry initialization as needed.
 It sends no `completed` frame and consumes no Python user-cell filename ID.
 The server withholds an accepted cell's `evaluate` frame until bootstrap finishes, while delivering its stdin normally.
 An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete setup in the same interpreter.
