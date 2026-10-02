@@ -59,7 +59,17 @@ class WindowsRelay(unittest.TestCase):
             stderr=subprocess.PIPE,
         )
         self.addCleanup(self.stop, process)
-        with listener.accept()[0] as ready:
+        try:
+            ready = listener.accept()[0]
+        except TimeoutError:
+            if process.poll() is not None:
+                output, errors = process.communicate()
+                self.fail(
+                    f"relay exited before fixture readiness ({process.returncode}): "
+                    f"{output.decode(errors='replace')}{errors.decode(errors='replace')}"
+                )
+            raise
+        with ready:
             ready.settimeout(10)
             with ready.makefile("rb") as stream:
                 pid = int(stream.readline())
