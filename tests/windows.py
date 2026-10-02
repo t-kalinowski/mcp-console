@@ -566,6 +566,21 @@ class WindowsConsole(unittest.TestCase):
             ]["action"]["enum"],
             ["get"],
         )
+        tool = schema["tools"][0]
+        self.assertIn("Packages must be preinstalled", tool["description"])
+        self.assertIn(
+            "managed dependency resolution and SQL are not yet supported",
+            tool["description"],
+        )
+        self.assertIn("initialize in the background", tool["description"])
+        for language in ("r", "python"):
+            self.assertIn(
+                "must be preinstalled",
+                tool["inputSchema"]["properties"][language]["description"],
+            )
+        control = tool["inputSchema"]["properties"]["control"]["description"]
+        self.assertIn("cooperative interruption", control)
+        self.assertNotIn("SIGINT", control)
         result = session.send(requirements={"action": "add", "python": ["six"]})
         self.assertTrue(result.get("isError"), result)
         self.assertIn("unavailable", json.dumps(result))
