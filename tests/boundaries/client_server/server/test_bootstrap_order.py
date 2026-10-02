@@ -27,6 +27,15 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
             check_bootstrap_completion_requires_input_termination(
                 binary, active=active, complete=complete
             )
+    return check_deferred_startup_output(binary, exceed_limit=False)
+
+
+@requires(WORKER, NATIVE_FIXTURES)
+def test_rejects_excess_deferred_startup_output(binary: Path) -> list:
+    return check_deferred_startup_output(binary, exceed_limit=True)
+
+
+def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
         root = Path(temporary).resolve()
         profile = resources.enter_context(closing(AllocationProfile(root)))
@@ -74,7 +83,9 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
             RETICULATE_PYTHON="managed",
             CONSOLE_BOOTSTRAP_ORDER_BINARY=str(binary),
             CONSOLE_BOOTSTRAP_ORDER_ROOT=str(root),
-            CONSOLE_BOOTSTRAP_ORDER_NOISE="8192",
+            # With excess output, the frame crossing 16 MiB has left the
+            # bounded SSH transport before the producer's published checkpoint.
+            CONSOLE_BOOTSTRAP_ORDER_NOISE="32768" if exceed_limit else "8192",
         )
         environment.update(profile.environment)
         peer = FIXTURES / "bootstrap_order_peer.py"
@@ -109,6 +120,23 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
                     "intentional candidate failure"
                     in preparation["result"]["content"][0]["text"]
                 ), preparation
+                if exceed_limit:
+                    deadline = time.monotonic() + 3
+                    while True:
+                        result = client.send(timeout_ms=0)
+                        output = last_result_text(client)
+                        if result["isError"]:
+                            assert (
+                                "deferred bootstrap retention exceeds 16 MiB" in output
+                            )
+                            break
+                        assert all(item["type"] == "text" for item in result["content"])
+                        assert "after activation" not in output, output
+                        assert time.monotonic() < deadline, (
+                            "spool overflow did not fail"
+                        )
+                    client.finish()
+                    return [{"excess_deferred_startup_output_fails_worker": True}]
                 notice = "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']"
                 content = []
                 deadline = time.monotonic() + client.response_timeout

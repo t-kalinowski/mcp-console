@@ -1,11 +1,13 @@
 //! Preserve suspended sideband order without retaining the stream in memory.
 
 use std::fs::File;
-use std::io::{BufRead as _, BufReader, Seek as _, SeekFrom, Write as _};
+use std::io::{self, BufRead as _, BufReader, Seek as _, SeekFrom, Write as _};
 use std::os::fd::FromRawFd as _;
 use std::os::unix::ffi::OsStrExt as _;
 
 use crate::relay_protocol::RelayEvent;
+
+const MAX_SPOOL_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Default)]
 pub(super) struct DeferredEvents {
@@ -32,9 +34,8 @@ impl DeferredEvents {
             .file
             .seek(SeekFrom::Start(spool.written))
             .map_err(spool_error)?;
-        serde_json::to_writer(&mut spool.file, event).map_err(spool_error)?;
-        spool.file.write_all(b"\n").map_err(spool_error)?;
-        spool.written = spool.file.stream_position().map_err(spool_error)?;
+        serde_json::to_writer(&mut *spool, event).map_err(spool_error)?;
+        spool.write_all(b"\n").map_err(spool_error)?;
         Ok(())
     }
 
@@ -93,6 +94,23 @@ impl Spool {
             read: 0,
             written: 0,
         })
+    }
+}
+
+impl io::Write for Spool {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() as u64 > MAX_SPOOL_BYTES - self.written {
+            return Err(io::Error::other(
+                "deferred bootstrap retention exceeds 16 MiB",
+            ));
+        }
+        let written = self.file.write(bytes)?;
+        self.written += written as u64;
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.file.flush()
     }
 }
 
