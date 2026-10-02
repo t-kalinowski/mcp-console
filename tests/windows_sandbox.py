@@ -118,11 +118,14 @@ class WindowsSandbox(unittest.TestCase):
             source = BINARY.resolve().parent.parent
             (root / "bin").mkdir()
             shutil.copy2(BINARY, root / "bin/mcp-console.exe")
-            shutil.copytree(source / "libexec", root / "libexec")
-            shutil.copytree(source / "share", root / "share")
-            helper = root / "libexec/mcp-console-sandbox-runner.exe"
-            with helper.open("ab") as stream:
-                stream.write(b"modified")
+            for directory in ("libexec", "share"):
+                if (source / directory).exists():
+                    shutil.copytree(source / directory, root / directory)
+            helpers = list((root / "libexec").rglob("mcp-console-sandbox-runner.exe"))
+            self.assertTrue(helpers)
+            for helper in helpers:
+                with helper.open("ab") as stream:
+                    stream.write(b"modified")
             result = subprocess.run(
                 [str(root / "bin/mcp-console.exe"), "sandbox-setup", "--status"],
                 check=False,

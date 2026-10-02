@@ -18,6 +18,7 @@ from threading import Thread
 from textwrap import dedent
 import unittest
 
+from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
 from windows_sandbox import WindowsSandbox  # noqa: F401 -- include sandbox acceptance
 

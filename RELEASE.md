@@ -62,6 +62,9 @@ Wheel smoke verifies notices, source identity, helper digest, and actual linkage
 
 `build_backend.py` owns staging through wheel creation.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.
+On Windows, Cargo keeps each complete companion bundle in a content-addressed directory under `libexec` and binds the executable to it.
+Older bundles remain available to active sandboxes; rebuilding never replaces their running helpers.
+Installed wheels retain the flat layout above and the same digest verification.
 `target/sandbox-runner-build.json` describes staged files under `wheel-data/data`.
 Obsolete generated files are reconciled on staging.
 

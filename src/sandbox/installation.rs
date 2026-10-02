@@ -14,6 +14,14 @@ pub(super) fn private_runner() -> Result<PathBuf, String> {
             .parent()
             .and_then(|directory| directory.parent())
             .ok_or_else(|| io::Error::other("executable has no installation prefix"))?;
+        #[cfg(windows)]
+        let native_prefix = prefix.join(NATIVE_BUNDLE);
+        #[cfg(windows)]
+        let prefix = if native_prefix.is_dir() {
+            native_prefix.as_path()
+        } else {
+            prefix // Installed wheels carry the same verified bundle flat.
+        };
         for (relative, expected) in ARTIFACTS {
             // Native helper selection prefers a suitable trusted host bwrap.
             // The runner verifies the bundled helper's embedded digest and
