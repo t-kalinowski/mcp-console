@@ -56,12 +56,8 @@ send:
             previous_wakeup = signal.set_wakeup_fd(wakeup_write)
             try:
                 with (
-                    open(
-                        r.probe_started, "wb", buffering=0
-                    ) as started,
-                    open(
-                        r.probe_release, "rb", buffering=0
-                    ) as release,
+                    open(r.probe_started, "wb", buffering=0) as started,
+                    open(r.probe_release, "rb", buffering=0) as release,
                 ):
                     assert (
                         wait_for_probe_interrupt(
@@ -117,7 +113,7 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 254, in dispatch
-          File "<mcp-console:python:e1>", line 49, in pause_provider_probe
+          File "<mcp-console:python:e1>", line 45, in pause_provider_probe
         KeyboardInterrupt
   isError: false
 ---
