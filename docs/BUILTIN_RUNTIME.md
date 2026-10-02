@@ -13,7 +13,8 @@ Restart or worker loss discards all live state; accepted requirements remain in 
 The default worker starts in the background while MCP discovery remains usable.
 Worker transport readiness precedes background initialization of enabled R and Python on the serialized interpreter thread.
 Startup hooks run even without submitted code; their output, plots, and input prompts remain available through `send`.
-SQL bridge setup accompanies runtime initialization; managed DuckDB connections and first-query work remain lazy.
+When SQL is enabled and its optional provider is installed, bootstrap opens the managed DuckDB connection; first-query work remains lazy.
+An absent provider can be prepared on later SQL demand.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
 
@@ -152,7 +153,7 @@ Both interpreters and reentrant bridge calls share the worker's owning thread.
 
 ## SQL and DuckDB
 
-Managed SQL uses one lazy in-memory DuckDB connection and persistent catalog.
+Managed SQL uses one in-memory DuckDB connection and persistent catalog.
 With R available it belongs to R/DBI; without R it belongs to Python/DB-API.
 SQL-only use still needs one of those adapters.
 DuckDB CLI dot commands are not supported.

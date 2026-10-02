@@ -85,7 +85,8 @@ The accepted first cell retains its admission and is never replayed.
 Worker readiness is not interpreter initialization.
 One coordinator initializes enabled interpreters and runs cells on a single owning thread.
 Bootstrap owns a graphics scope without marking user code active; startup output and plots use the ordinary output tape.
-Managed SQL connections and first-query work remain lazy.
+Enabled SQL opens its managed connection during bootstrap when its optional provider is installed; first-query work remains lazy.
+Custom workers retain lazy initialization, and an absent provider can be prepared on later SQL demand.
 An explicit or host-resolved Python selection can start without R.
 Unresolved R-side selection hints use R's compatibility adapter when installed; its absence does not prevent bare R use.
 Background selection also permits an ordinary absent-interpreter discovery result, preserving R without treating selection errors as absence.
@@ -101,7 +102,7 @@ Do not split evaluators across threads without a new ownership design.
 [Runtime limitations](BUILTIN_RUNTIME.md#current-limitations) include the remaining late-R-startup environment constraint.
 
 SQL routes to an R DBI or Python DB-API provider.
-R capability selects the default managed provider independently of initialization order; without R, DuckDB is created lazily in Python.
+R capability selects the default managed provider independently of initialization order; without R, Python owns the managed DuckDB connection.
 Explicitly selected connections remain user-owned.
 The [runtime guide](BUILTIN_RUNTIME.md) owns connection and interoperability rules.
 
@@ -166,6 +167,8 @@ The server owns an ordered output tape across generations.
 It selects finite output cuts for responses, retains bounded text beginnings and tails, admits images separately, and adds lifecycle notices.
 The final text budget is 8 KiB including notices.
 Raw-file retention and inline omission are separate; collection stays bounded even when recording fails.
+Startup diagnostics use this tape, including preparation and launcher stderr on Unix.
+Each diagnostic producer retains its own incomplete UTF-8 scalar until more bytes arrive or that producer closes.
 
 One recoverable response remains owned until local delivery or cancellation settles it.
 Controlled sends can combine earlier output with a following cell; a failed delivery restores the whole combined region, not just its last part.
@@ -177,6 +180,8 @@ A journaled result likewise records assembly, not receipt.
 The controller records calls and assembled output independently of the private protocols.
 The journal is authoritative; Markdown and Quarto are projections, not worker checkpoints.
 Paths, formats, failure behavior, and rendering safety are covered in [recordings](RECORDING.md).
+Startup and idle output can be recorded before a tool call; discovery fills in pending recording metadata without replacing the session owner.
+Discovery failure retains pending calls and their results alongside the startup failure, with unavailable metadata left unknown.
 
 ## Where to look in source
 
@@ -192,7 +197,3 @@ Paths, formats, failure behavior, and rendering safety are covered in [recording
 
 Follow these owners into their modules rather than maintaining a parallel file inventory in prose.
 Public evidence is organized by the [tested process boundaries](../tests/boundaries/README.md).
-
-Startup diagnostics use the session output tape, including preparation and launcher stderr on Unix.
-Startup and idle output can be recorded before a tool call; discovery fills in pending recording metadata without replacing the session owner.
-Enabled SQL opens its managed connection during the existing runtime bootstrap when its optional provider is installed.
