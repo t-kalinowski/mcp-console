@@ -1675,11 +1675,12 @@ runner: released
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
 
-    def test_failure_cancels_hanging_sibling_without_another_failure(self) -> None:
+    def test_failure_limit_finishes_running_sibling(self) -> None:
         selector = "client_server/server/test_tools::hangs"
         failure = "client_server/server/test_tools::failure_beside_hang"
+        queued = "client_server/server/test_tools::selected"
         with self.hanging_runner(
-            "--timeout", "60", "--jobs", "2", selector, failure
+            "--timeout", "60", "--jobs", "2", selector, failure, queued
         ) as (
             process,
             started,
@@ -1689,14 +1690,22 @@ runner: released
             self.assertTrue(ready, "hanging case did not start")
             self.assertEqual(os.read(started, 1), b"1")
             self.assertEqual(os.write(release_failure, b"1"), 1)
+            assert process.stderr is not None
+            receipt = read_lines(process.stderr, 3, "failure limit receipt")
+            self.assertIn(f"{failure}: failed", receipt)
+            with (self.root / "hang-release").open("wb", buffering=0) as release:
+                self.assertEqual(release.write(b"1"), 1)
             stdout, stderr = process.communicate(timeout=10)
+            stderr = "\n".join(receipt) + "\n" + stderr
             self.assertNotEqual(process.returncode, 0, stdout)
             self.assertIn(f"{failure}: failed", stderr)
             self.assertIn("runner: deliberate mismatch", stderr)
-            self.assertIn(f"{selector}: cancelled", stdout + stderr)
+            self.assertNotIn(f"{selector}: cancelled", stdout + stderr)
             self.assertNotIn(f"{selector}: failed", stdout + stderr)
             self.assertNotIn("timed out", stderr)
             self.assertNotIn("multiple transcript cases failed", stderr)
+            self.assertIn("1 of 3 transcript cases failed; not started: 1", stderr)
+            self.assertFalse((self.root / "selected.marker").exists())
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
 
@@ -1709,7 +1718,7 @@ runner: released
         self.assertIn("KeyboardInterrupt", result.stderr)
         self.assertNotIn(f"{selector}: cancelled", result.stdout + result.stderr)
 
-    def test_cancelled_cleanup_preserves_the_original_failure(self) -> None:
+    def test_user_cancellation_preserves_the_original_failure(self) -> None:
         selector = "client_server/server/test_tools::fails_before_cleanup"
         failure = "client_server/server/test_tools::failure_beside_hang"
         with self.hanging_runner(
@@ -1719,14 +1728,19 @@ runner: released
             self.assertTrue(ready, "failed case did not enter its cleanup")
             self.assertEqual(os.read(started, 1), b"1")
             self.assertEqual(os.write(release_failure, b"1"), 1)
+            assert process.stderr is not None
+            receipt = read_lines(process.stderr, 3, "failure limit receipt")
+            self.assertIn(f"{failure}: failed", receipt)
+            process.send_signal(signal.SIGINT)
             stdout, stderr = process.communicate(timeout=10)
+            stderr = "\n".join(receipt) + "\n" + stderr
             self.assertNotEqual(process.returncode, 0, stdout)
             self.assertIn(f"{failure}: failed", stderr)
             self.assertIn("runner: deliberate mismatch", stderr)
             self.assertIn(f"{selector}: cancelled", stdout + stderr)
             self.assertIn("AssertionError: original failure before cleanup", stderr)
             self.assertIn("KeyboardInterrupt", stderr)
-            self.assertNotIn("multiple transcript cases failed", stderr)
+            self.assertIn("multiple transcript cases failed", stderr)
 
     def assert_signal_retires_case(self, number: signal.Signals) -> None:
         selector = "client_server/server/test_tools::hangs"
@@ -2139,6 +2153,68 @@ runner: orphan
                     os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
 
+    def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
+        names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
+        for snapshot in self.snapshots.glob("*.yaml"):
+            snapshot.unlink()
+        programs = ["from pathlib import Path\n"]
+        for index, name in enumerate(names):
+            programs.append(
+                # fmt: python
+                code("""
+                    def test_NAME(binary: Path):
+                        (binary.parents[2] / "NAME.marker").touch()
+                        assert SUCCEEDS, "failure in NAME"
+                        return [{"runner": "NAME"}]
+                    """)
+                .replace("NAME", name)
+                .replace("SUCCEEDS", repr(index not in failures))
+            )
+            (self.snapshots / f"{name}.yaml").write_text(f"---\nrunner: {name}\n...\n")
+        self.suite.write_text("\n".join(programs))
+        selectors = [f"client_server/server/test_tools::{name}" for name in names]
+        (self.boundaries / "_profiles.py").write_text(f"SMOKE = {selectors!r}\n")
+        return names
+
+    def test_collects_all_failures_through_fifteen_percent(self) -> None:
+        names = self.write_failure_collection_suite({0, 7, 19})
+        for arguments in ((), ("--full",)):
+            with self.subTest(arguments=arguments):
+                for marker in self.root.glob("*.marker"):
+                    marker.unlink()
+                result = self.run_runner("--jobs", "1", *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(
+                    sorted(path.stem for path in self.root.glob("*.marker")),
+                    sorted(names),
+                )
+                self.assertIn("3 of 20 transcript cases failed", result.stderr)
+                for index in (0, 7, 19):
+                    self.assertIn(f"failure in {names[index]}", result.stderr)
+                self.assertNotIn("Stopping", result.stderr)
+
+    def test_stops_starting_cases_above_fifteen_percent(self) -> None:
+        names = self.write_failure_collection_suite({0, 1, 2, 3})
+        result = self.run_runner("--full", "--jobs", "1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            sorted(path.stem for path in self.root.glob("*.marker")),
+            sorted(names[:4]),
+        )
+        self.assertIn("4 of 20 transcript cases failed", result.stderr)
+        self.assertIn("more than 15%", result.stderr)
+        self.assertIn("not started: 16", result.stderr)
+
+    def test_reports_diagnostics_for_more_than_fifteen_failures(self) -> None:
+        names = self.write_failure_collection_suite(set(range(20)))
+        # Initialization fails first; the other 19 cases are already admitted
+        # together when the failure limit is crossed.
+        result = self.run_runner("--full", "--jobs", "20")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("20 of 20 transcript cases failed", result.stderr)
+        for name in names:
+            self.assertIn(f"AssertionError: failure in {name}", result.stderr)
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):
@@ -2164,12 +2240,13 @@ runner: orphan
             self.assertEqual(os.write(release_first, b"1"), 1)
             assert process.stderr is not None
             # Descriptor reads avoid buffering part of the receipt above the pipe.
-            receipt = read_lines(process.stderr, 2, "first failure receipt")
+            receipt = read_lines(process.stderr, 3, "first failure limit receipt")
             self.assertEqual(
                 receipt,
                 [
                     "client_server/server/test_tools::first_failure: failed",
                     "rerun: scripts/test client_server/server/test_tools::first_failure",
+                    "Stopping new cases: 1 of 3 transcript cases failed (more than 15%); finishing running cases.",
                 ],
             )
             observed_stderr = "\n".join(receipt) + "\n"

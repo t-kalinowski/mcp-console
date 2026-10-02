@@ -24,6 +24,7 @@ from boundaries.server_relay._harness import (
     _wait_for_recorded_tool_result,
 )
 from support.assertions import tool_text as _tool_text
+from support.assertions import wait_for_worker_ready
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -186,6 +187,9 @@ def test_control_only_interrupt_preserves_controlled_completion_marker(
     client = ServerRelayClient(
         binary, "controlled_completion_then_interrupt", execution=execution
     )
+    # MCP initialization does not await configuration. A zero-timeout control
+    # requires it, and this scenario tests completion after that startup phase.
+    wait_for_worker_ready(client.client, "configuration before controlled restart")
     result = client.send(
         control="restart",
         r="controlled cell completed before later interrupt",

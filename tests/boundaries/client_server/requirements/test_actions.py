@@ -31,7 +31,11 @@ from support.checkpoints import FifoCheckpoint
 
 
 def inspect(client: McpClient) -> dict:
-    result = client.send(requirements={"action": "get"})
+    # Initial inspection includes cold preparation, not just manifest lookup.
+    result = client.send(
+        requirements={"action": "get"},
+        timeout_ms=int(client.response_timeout * 1_000),
+    )
     assert not result.get("isError"), result
     snapshot = result["structuredContent"]
     assert json.loads(last_tool_text(client)) == snapshot
@@ -243,7 +247,7 @@ def test_interrupted_replacement_preserves_worker(
         client = McpClient(binary, execution.serve(), environment)
         try:
             client.initialize_and_list_tools()
-            client.send(
+            client.expect(
                 python="import os; marker = 42; pid = os.getpid()",
                 requirements={"action": "set"},
             )
@@ -256,7 +260,8 @@ def test_interrupted_replacement_preserves_worker(
             started.wait("replacement resolver")
             assert inspect(client) == old
             interrupt = client.start_send(control="interrupt")
-            interrupted.wait("interrupted replacement resolver")
+            # Signal handling is a checkpoint, not a scheduling benchmark.
+            interrupted.wait("interrupted replacement resolver", timeout=30)
             assert inspect(client) == old
             interrupt_release.release()
             client.receive(pending)
