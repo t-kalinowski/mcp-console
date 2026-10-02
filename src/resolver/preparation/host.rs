@@ -3,10 +3,12 @@ use std::io::{self, BufReader};
 use std::path::PathBuf;
 use std::sync::{Mutex, mpsc};
 use std::thread;
+#[cfg(unix)]
 use std::time::Instant;
 
 use super::{Discovery, Input, Mode, NativeDiscovery, Operation, Output, Selections};
 use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
+#[cfg(unix)]
 use crate::target_launch::transfer::{Io, duplicate};
 
 struct Context {
@@ -85,6 +87,12 @@ impl Context {
             .parent()
             .and_then(std::path::Path::parent)
             .ok_or("remote Rscript has no R home")?;
+        #[cfg(windows)]
+        let home = if home.file_name().is_some_and(|name| name == "bin") {
+            home.parent().ok_or("Rscript has no R home")?
+        } else {
+            home
+        };
         let discovery = Discovery {
             managed: bootstrap.is_some(),
             selections: Selections {
@@ -92,10 +100,13 @@ impl Context {
                 python: configured_python,
                 native_python: None,
             },
+            #[cfg(unix)]
             local_r_home_bytes: local.then(|| {
                 use std::os::unix::ffi::OsStrExt;
                 home.as_os_str().as_bytes().to_vec()
             }),
+            #[cfg(windows)]
+            local_r_home_bytes: None,
             local_has_uv: local.then(|| python.has_uv()),
             native: None,
         };
@@ -282,11 +293,14 @@ fn perform<T>(
 }
 
 pub(super) fn run(local: bool) -> Result<(), String> {
+    #[cfg(unix)]
     let mut input = Io::new(
         duplicate(0)?,
         None,
         (!local).then(|| Instant::now() + super::SETUP_TIMEOUT),
     )?;
+    #[cfg(windows)]
+    let mut input = io::stdin();
     let first: Input = if local {
         super::read_jsonl(&mut input)?
     } else {
@@ -305,6 +319,7 @@ pub(super) fn run(local: bool) -> Result<(), String> {
     if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
         return Err("incompatible SSH preparation protocol or Console build".into());
     }
+    #[cfg(unix)]
     if !local {
         if !matches!(mode, Mode::Auto | Mode::R) {
             return Err("SSH preparation requires runtime discovery".into());
@@ -332,14 +347,21 @@ pub(super) fn run(local: bool) -> Result<(), String> {
             }
         }
     }
+    #[cfg(windows)]
+    let _ = (workspace, &mut selections);
     let (events, received) = mpsc::channel();
     let (outgoing, output) = mpsc::channel::<Output>();
+    #[cfg(unix)]
     let (input_cancelled, input_cancel) = io::pipe().map_err(|e| e.to_string())?;
+    #[cfg(unix)]
     let (output_cancelled, output_cancel) = io::pipe().map_err(|e| e.to_string())?;
     let input_events = events.clone();
     let input_task = thread::spawn(move || {
         let result = (|| {
+            #[cfg(unix)]
             let mut input = BufReader::new(Io::new(duplicate(0)?, Some(input_cancelled), None)?);
+            #[cfg(windows)]
+            let mut input = BufReader::new(io::stdin());
             loop {
                 input_events
                     .send(Event::Input(Ok(if local {
@@ -359,7 +381,10 @@ pub(super) fn run(local: bool) -> Result<(), String> {
     let output_events = events.clone();
     let output_task = thread::spawn(move || {
         let result = (|| {
+            #[cfg(unix)]
             let mut writer = Io::new(duplicate(1)?, Some(output_cancelled), None)?;
+            #[cfg(windows)]
+            let mut writer = io::stdout();
             for message in output {
                 message.write(&mut writer, local)?;
             }
@@ -479,15 +504,29 @@ pub(super) fn run(local: bool) -> Result<(), String> {
     let _ = worker
         .join()
         .map_err(|_| "remote preparation executor panicked")?;
-    drop(input_cancel);
-    let _ = input_task.join();
+    #[cfg(unix)]
+    {
+        drop(input_cancel);
+        let _ = input_task.join();
+    }
+    // The Windows inherited standard handles are synchronous. These I/O
+    // threads belong to this resolve process, which exits after all resolver
+    // Jobs have retired. A caller retaining stdin cannot delay that exit.
+    #[cfg(windows)]
+    drop(input_task);
     if failure.is_none() && confirmed {
         let _ = outgoing.send(Output::Closed);
     } else {
+        #[cfg(unix)]
         drop(output_cancel);
     }
     drop(outgoing);
+    #[cfg(unix)]
     let _ = output_task.join();
+    #[cfg(windows)]
+    if failure.is_none() {
+        let _ = output_task.join();
+    }
     failure.map_or(Ok(()), Err)
 }
 

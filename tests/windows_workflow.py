@@ -298,7 +298,14 @@ class WindowsWorkflow(unittest.TestCase):
             )
 
     def test_native_discovery_and_installed_binary_skip_builds(self):
-        for name in ("windows.py", "windows_runner.py", "windows_relay.py"):
+        for name in (
+            "windows.py",
+            "windows_runner.py",
+            "windows_relay.py",
+            "windows_cargo.py",
+            "windows_resolver.py",
+            "windows_sandbox.py",
+        ):
             path = self.root / "tests" / name
             path.parent.mkdir(exist_ok=True)
             shutil.copy2(ROOT / "tests" / name, path)

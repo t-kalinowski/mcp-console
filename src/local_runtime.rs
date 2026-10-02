@@ -4,18 +4,19 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
-pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
-pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 #[cfg(unix)]
+pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
+// SQL is not exposed on Windows, so startup does not load its native adapter.
+#[cfg(windows)]
+pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &[];
+pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 pub(crate) const RESOLUTION_UNAVAILABLE: &str =
     "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console";
-#[cfg(windows)]
-pub(crate) const RESOLUTION_UNAVAILABLE: &str = "dynamic environment resolution is unavailable on Windows; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -51,7 +52,7 @@ impl Selection {
         std::env::var_os("R_HOME").is_some() || crate::resolver::find_path_entry("R").is_some()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn python(
         configured: Option<OsString>,
         resolver: &crate::resolver::execution::PythonConfiguration,
@@ -76,7 +77,7 @@ impl Selection {
         )
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn python_on_host(
         configured: Option<OsString>,
         resolver: &crate::resolver::ManagedPythonResolverConfiguration,
@@ -107,7 +108,7 @@ impl Selection {
         Ok((selection, managed))
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn python_with(
         configured: Option<OsString>,
         has_uv: bool,
@@ -138,8 +139,10 @@ impl Selection {
         let selected = inspect(&executable, on_started)?;
         // Default and requested extensions share the host cache across generations.
         let duckdb_extension_directory = managed.as_ref().and_then(|_| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
+            let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+            #[cfg(windows)]
+            let home = home.or_else(|| std::env::var_os("USERPROFILE"));
+            home.map(PathBuf::from)
                 .filter(|home| home.is_absolute())
                 .map(|home| home.join(".duckdb/extensions"))
         });
@@ -159,14 +162,14 @@ impl Selection {
         self.r_home.is_none()
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn prepare_default_duckdb_extensions(
         &self,
         managed: Option<&ManagedPython>,
         resolver: &crate::resolver::execution::PythonConfiguration,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<std::collections::BTreeSet<String>, String> {
-        let Some(managed) = managed else {
+        let Some(managed) = managed.filter(|_| !DEFAULT_DUCKDB_EXTENSIONS.is_empty()) else {
             return Ok(Default::default());
         };
         let directory = self

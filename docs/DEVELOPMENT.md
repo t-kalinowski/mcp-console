@@ -8,8 +8,9 @@ Read [AGENTS.md](../AGENTS.md) for change and publishing rules, [architecture](A
 The workflow commands support macOS, Linux, and native Windows.
 On Windows, use their `.cmd` launchers from PowerShell or Command Prompt, such as `scripts/preflight.cmd` and `scripts/check.cmd`.
 Alternatively, invoke any development entry point explicitly with Python, such as `python scripts/check`; this also uses the selected interpreter for nested commands.
-Windows selects [native acceptance and installation checks](WINDOWS.md#validation) for local unsandboxed R/Python; run them exclusively in the checkout.
-Windows packaging skips companion staging and shares the checkout lock with the development commands.
+Windows selects [native acceptance and installation checks](WINDOWS.md#validation) for local R/Python, sandboxing, and managed dependency resolution; run them exclusively in the checkout.
+Windows staging and packaging share native checkout/source ownership with the development commands.
+Run `scripts/stage-sandbox-runner.cmd` before native build, test, or check commands; packaging stages its own companion bundle.
 Shared workflow helpers and the packaging backend live under `scripts/`; `pyproject.toml` selects that directory for isolated source builds.
 
 `scripts/preflight` inventories tools, runtimes, companion staging, and caches; `--json` produces structured output.
@@ -134,7 +135,7 @@ Review the diff, embedded-program indentation, and `git diff --check` after form
 A shared fixture change may need snapshots from other platforms; a local skip does not validate them.
 
 On macOS/Linux, the default `scripts/check` stages the companion, validates extracted runtime sources and architecture, checks Rust formatting and Clippy, runs debug Rust tests, builds the release executable, and runs the explicit smoke transcript profile.
-On Windows, it skips companion staging, performs the same source and Rust checks, builds the debug executable, and runs the native acceptance suite.
+On Windows, it uses the previously staged companion, performs the same source and Rust checks, builds the debug executable, and runs the native acceptance suite.
 `--quick` is an alias for this default, not a narrower check.
 
 The full gate adds platform-applicable repository-tooling self-tests, all capability-applicable acceptance cases, and source/wheel installation checks.

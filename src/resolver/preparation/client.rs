@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use std::io::{self, BufReader, Read};
+#[cfg(unix)]
+use std::io;
+use std::io::{BufReader, Read};
 use std::process::Stdio;
 use std::sync::{
     Arc, Mutex,
@@ -11,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use super::{Discovery, Input, Mode, Operation, Output, Selections};
 use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
+#[cfg(unix)]
 use crate::target_launch::transfer::Io;
 
 #[derive(Clone)]
@@ -138,15 +141,23 @@ impl Preparation {
         selections: Selections,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let command = session.command_for("ssh-prepare")?;
-        let open = Input::Open {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-            workspace: session.target.workspace.clone(),
-            selections,
-            mode: Mode::Auto,
-        };
-        Self::open_with(command, session.blocked.clone(), open, false, on_started)
+        #[cfg(not(unix))]
+        {
+            let _ = (session, selections, on_started);
+            Err("SSH preparation requires macOS or Linux".into())
+        }
+        #[cfg(unix)]
+        {
+            let command = session.command_for("ssh-prepare")?;
+            let open = Input::Open {
+                version: super::VERSION,
+                build: env!("CARGO_PKG_VERSION").into(),
+                workspace: session.target.workspace.clone(),
+                selections,
+                mode: Mode::Auto,
+            };
+            Self::open_with(command, session.blocked.clone(), open, false, on_started)
+        }
     }
 
     pub(crate) fn open_local(
@@ -173,11 +184,16 @@ impl Preparation {
         local: bool,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+        #[cfg(unix)]
+        command.stdin(Stdio::piped()).stdout(Stdio::piped());
+        command.stderr(Stdio::inherit());
+        #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
+        #[cfg(windows)]
+        let (aborted, abort) = crate::windows::notification().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let (stdin, stdout) = crate::windows::command_pipes(&mut command, aborted.clone())
+            .map_err(|e| e.to_string())?;
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "cannot start {} preparation: {error}",
@@ -186,14 +202,23 @@ impl Preparation {
         })?;
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
+        #[cfg(unix)]
         let (aborted, abort) = io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
         let stdout = child.stdout.take().expect("preparation stdout");
+        #[cfg(unix)]
         let stdin = child.stdin.take().expect("preparation stdin");
+        #[cfg(unix)]
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let reader_abort = aborted;
         let read_events = events.clone();
         let reader = thread::spawn(move || {
             let result = (|| {
+                #[cfg(unix)]
                 let mut input = BufReader::new(Io::new(stdout, Some(reader_abort), None)?);
+                #[cfg(windows)]
+                let mut input = BufReader::new(stdout.with_cancel(reader_abort));
                 loop {
                     let message = if local {
                         super::read_jsonl(&mut input)?
@@ -219,7 +244,10 @@ impl Preparation {
         let write_events = events.clone();
         let writer = thread::spawn(move || {
             let result = (|| {
+                #[cfg(unix)]
                 let mut output = Io::new(stdin, Some(aborted), None)?;
+                #[cfg(windows)]
+                let mut output = stdin;
                 for message in writes {
                     if local {
                         super::write_jsonl(&mut output, &message)?;

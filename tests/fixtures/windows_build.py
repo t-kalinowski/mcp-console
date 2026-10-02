@@ -27,6 +27,12 @@ for name in (
     setattr(maturin, name, build)
 sys.modules["maturin"] = maturin
 
+# The public hooks retain real checkout ownership while the companion build is
+# replaced with an inert stage, just as Maturin is replaced above.
+root = Path(__file__).resolve().parent
+(root / "scripts").mkdir(exist_ok=True)
+(root / "scripts/stage-sandbox-runner").write_text("def stage_locked(*args): pass\n")
+(root / "sandbox-runner.json").write_text("{}")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 build_backend = import_module("build_backend")
 

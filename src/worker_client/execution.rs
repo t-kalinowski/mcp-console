@@ -342,7 +342,7 @@ impl Client {
     ) -> Result<(), SendFailure> {
         let replacing = matches!(&*worker, WorkerState::Stopped);
         if !matches!(&*worker, WorkerState::Running(_)) {
-            #[cfg(unix)]
+            #[cfg(any(unix, windows))]
             if let Some(preparation) = &*self
                 .0
                 .local_preparation

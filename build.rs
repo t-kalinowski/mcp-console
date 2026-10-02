@@ -15,7 +15,7 @@ fn main() {
 
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("macos" | "linux")
+        Ok("macos" | "linux" | "windows")
     ) {
         bind_private_runner();
     }
@@ -54,12 +54,37 @@ fn bind_private_runner() {
             .expect("invalid private sandbox runner build manifest");
     assert_eq!(build["source_revision"], pin["commit"]);
     assert_eq!(build["target"].as_str(), Some(target.as_str()));
+    // Windows locks running executables. Keep each complete native bundle at
+    // an immutable path, including helpers an older runner may launch later.
+    // Wheels retain their flat layout, owned by the packaging backend.
+    let native_bundle = if target.contains("windows") {
+        let digest = Sha256::digest(serde_json::to_vec(&build).unwrap());
+        let digest_hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        format!("libexec/mcp-console-{digest_hex}")
+    } else {
+        String::new()
+    };
+    let prefix = prefix.join(&native_bundle);
     let mut artifacts = String::new();
     let mut bundle = vec![
-        ("mcp-console-sandbox", "libexec/mcp-console-sandbox"),
         ("LICENSE", "share/licenses/mcp-console/LICENSE"),
         ("NOTICE", "share/licenses/mcp-console/NOTICE"),
     ];
+    if target.contains("windows") {
+        bundle.extend([
+            ("mcp-console-sandbox.exe", "libexec/mcp-console-sandbox.exe"),
+            (
+                "mcp-console-sandbox-setup.exe",
+                "libexec/mcp-console-sandbox-setup.exe",
+            ),
+            (
+                "mcp-console-sandbox-runner.exe",
+                "libexec/mcp-console-sandbox-runner.exe",
+            ),
+        ]);
+    } else {
+        bundle.push(("mcp-console-sandbox", "libexec/mcp-console-sandbox"));
+    }
     if target.contains("linux") {
         bundle.extend([
             ("bwrap", "libexec/bwrap"),
@@ -141,6 +166,7 @@ fn bind_private_runner() {
     let generated = output.join("sandbox_runner_installation.rs");
     let contents = format!(
         "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
+             #[cfg(windows)] const NATIVE_BUNDLE: &str = {native_bundle:?};\n\
              const ARTIFACTS: &[(&str, [u8; 32])] = &[{artifacts}];\n",
     );
     if !generated.exists() || std::fs::read(&generated).unwrap() != contents.as_bytes() {

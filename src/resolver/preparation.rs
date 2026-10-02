@@ -1,4 +1,4 @@
-#![cfg_attr(not(unix), allow(dead_code))]
+#![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 //! Private preparation traffic, separate from the relay stream. The owner keeps
 //! trusted startup choices; each operation completes and retires its own resolver
 //! groups before returning a result. Session manifests and activation stay local.
@@ -8,15 +8,15 @@ use crate::worker_protocol::PythonRequirementManifest;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod client;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod host;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 mod unsupported;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use client::Preparation;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::Preparation;
 
 const VERSION: u32 = 5;
@@ -287,10 +287,10 @@ pub(crate) fn run() -> Result<(), String> {
 }
 
 pub(crate) fn run_local() -> Result<(), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     return host::run(true);
-    #[cfg(not(unix))]
-    Err("host resolution requires macOS or Linux".into())
+    #[cfg(not(any(unix, windows)))]
+    Err("host resolution requires macOS, Linux, or Windows".into())
 }
 
 #[derive(Clone, Deserialize, Serialize)]

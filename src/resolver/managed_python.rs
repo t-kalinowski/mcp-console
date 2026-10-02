@@ -28,7 +28,7 @@ struct ResolverInput<'a> {
     exclude_newer: Option<&'a str>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn resolve_python_manifest(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
@@ -425,7 +425,7 @@ fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()

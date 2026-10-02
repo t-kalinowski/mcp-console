@@ -1,9 +1,10 @@
-//! Apply launch requirements and replace the frontend with the verified runner.
+//! Apply launch requirements and hand off to the verified native runner.
 
 use super::{MARKER, installation};
 use crate::settings::SandboxSettings;
 use serde_json::{Value, json};
 use std::ffi::OsString;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, ExitCode};
 
@@ -16,6 +17,7 @@ pub(super) fn run(
     settings_env: Option<&str>,
     mut settings: SandboxSettings,
 ) -> Result<ExitCode, String> {
+    #[cfg(unix)]
     if let Some(pid) = parent
         && unsafe { libc::getppid() } as u32 != pid
     {
@@ -23,8 +25,8 @@ pub(super) fn run(
             "sandbox owner {pid} is not the launcher's current parent"
         ));
     }
-    // The runner captures and monitors this same caller after exec. No waiting
-    // adapter changes its direct-parent identity or retains a standard stream.
+    // Unix exec preserves the caller. Windows waits while the native runner
+    // watches both this frontend and the supplied generation owner.
     let mut runner = Command::new(installation::private_runner()?);
     if let Some(name) = settings_env {
         runner.env_remove(name);
@@ -36,6 +38,10 @@ pub(super) fn run(
         // This is also the serve path: an ambient value never selects policy.
         settings.insert("version".into(), installation::PROTOCOL_VERSION.into());
         let mut lifecycle = json!({"private_tmp": {"environment": ["TMPDIR"]}});
+        #[cfg(windows)]
+        {
+            lifecycle["private_tmp"]["environment"] = json!(["TMPDIR", "TEMP", "TMP"]);
+        }
         if let Some(parent) = parent {
             lifecycle["parent_pid"] = parent.into();
             lifecycle["sigterm"] = "retire".into();
@@ -48,16 +54,28 @@ pub(super) fn run(
     if config_env != Some(MARKER) {
         runner.env(MARKER, "1");
     }
-    let error = runner
+    runner
         .args(["--config-env", config_env.unwrap_or(CONFIGURATION), "--"])
         .args(command)
         .env_remove("DYLD_INSERT_LIBRARIES")
-        .env_remove("LD_PRELOAD")
-        .exec();
-    let detail = if error.raw_os_error() == Some(libc::E2BIG) {
-        "argument/environment size limit exceeded (E2BIG); reduce the launch environment or use the private runner descriptor transport".to_owned()
-    } else {
-        error.to_string()
-    };
-    Err(format!("failed to launch private sandbox runner: {detail}"))
+        .env_remove("LD_PRELOAD");
+    #[cfg(windows)]
+    {
+        let status = runner
+            .status()
+            .map_err(|error| format!("failed to launch private sandbox runner: {error}"))?;
+        // Preserve all 32 status bits, including Windows exception statuses.
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    #[cfg(unix)]
+    let error = runner.exec();
+    #[cfg(unix)]
+    {
+        let detail = if error.raw_os_error() == Some(libc::E2BIG) {
+            "argument/environment size limit exceeded (E2BIG); reduce the launch environment or use the private runner descriptor transport".to_owned()
+        } else {
+            error.to_string()
+        };
+        Err(format!("failed to launch private sandbox runner: {detail}"))
+    }
 }

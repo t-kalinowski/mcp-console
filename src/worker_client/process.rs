@@ -467,6 +467,13 @@ impl RelayProcess {
             Ok(false) => {}
             Err(error) => errors.push(error),
         }
+        if cfg!(windows) && !self.no_sandbox {
+            // Shutdown/EOF is already queued to the relay. Windows has no
+            // SIGTERM equivalent: killing the waiting frontend would discard
+            // the native runner's Job-retirement receipt. Wait for that receipt
+            // within the existing deadline; forced termination remains failure.
+            return collected_errors(errors);
+        }
         // SAFETY: the direct child remains unreaped here, so its PID cannot be
         // reused before `kill` returns.
         if let Err(error) = request_child_retirement(&mut self.child) {

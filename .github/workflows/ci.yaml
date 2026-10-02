@@ -90,6 +90,8 @@ jobs:
       - name: Inventory Windows development prerequisites
         run: |
           scripts/preflight.cmd --json
+      - name: Stage native Windows sandbox
+        run: scripts/stage-sandbox-runner.cmd
       - name: Run native Windows development and installation checks
         run: |
           scripts/check.cmd --full

@@ -19,6 +19,7 @@ TARGETS = (
     "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
 )
 
 
@@ -27,8 +28,14 @@ def fail(message: str) -> None:
 
 
 def git_output(checkout: Path, *arguments: str) -> str:
+    # Pinned cache prefixes plus Codex source paths can exceed Windows MAX_PATH.
+    options = ["-c", "core.longpaths=true"] if sys.platform == "win32" else []
     result = subprocess.run(
-        ["git", *arguments], cwd=checkout, capture_output=True, text=True, check=False
+        ["git", *options, *arguments],
+        cwd=checkout,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         fail(result.stderr.strip() or result.stdout.strip())
@@ -40,7 +47,8 @@ def write_if_changed(path: Path, contents: bytes, mode: int) -> None:
     if (
         not path.exists()
         or path.read_bytes() != contents
-        or stat.S_IMODE(path.stat().st_mode) != mode
+        # Windows reports the read-only attribute, not POSIX permission bits.
+        or (sys.platform != "win32" and stat.S_IMODE(path.stat().st_mode) != mode)
     ):
         path.write_bytes(contents)
         path.chmod(mode)
@@ -99,14 +107,19 @@ def main() -> None:
             for key in ("repository", "commit"):
                 output.write(f"{key}={pin[key]}\n")
         return
-    if sys.platform not in {"darwin", "linux"}:
+    if sys.platform not in {"darwin", "linux", "win32"}:
         fail(f"building private runner artifacts is unsupported on {sys.platform}")
 
+    with checkout_owner(ROOT):
+        stage_locked(args, pin)
+
+
+def stage_locked(args, pin):
     checkout = runner_checkout(args, pin)
     # Keep ownership beside the source, outside Git and Cargo's mutable output.
     # Explicit source overrides and automatic selection share this same lock.
     source_lock = checkout.with_name(f"{checkout.name}.stage.lock")
-    with checkout_owner(ROOT), exclusive([source_lock], "sandbox source", wait=True):
+    with exclusive([source_lock], "sandbox source", wait=True):
         stage(args, pin)
 
 
@@ -143,8 +156,9 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
     head = git_output(checkout, "rev-parse", "HEAD")
     if head != pin["commit"]:
         fail(f"source checkout is at {head}, expected {pin['commit']}")
-    if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
-        fail("source checkout is not clean")
+    status = git_output(checkout, "status", "--porcelain", "--untracked-files=all")
+    if status:
+        fail(f"source checkout is not clean:\n{status}")
 
     with (workspace / "rust-toolchain.toml").open("rb") as stream:
         channel = tomllib.load(stream)["toolchain"]["channel"]
@@ -200,6 +214,7 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
         environment["CODEX_BWRAP_SHA256"] = hashlib.sha256(
             staged_helper.read_bytes()
         ).hexdigest()
+    windows = "windows" in target
     subprocess.run(
         [
             *toolchain,
@@ -211,6 +226,18 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
             "codex-mcp-console-sandbox",
             "--bin",
             "mcp-console-sandbox",
+            *(
+                [
+                    "-p",
+                    "codex-windows-sandbox",
+                    "--bin",
+                    "mcp-console-sandbox-setup",
+                    "--bin",
+                    "mcp-console-sandbox-runner",
+                ]
+                if windows
+                else []
+            ),
             "--target",
             target,
         ],
@@ -223,7 +250,16 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
     licenses = data / "share/licenses/mcp-console"
     libexec.mkdir(parents=True, exist_ok=True)
     artifacts = []
-    for name in ("mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])):
+    names = (
+        [
+            "mcp-console-sandbox.exe",
+            "mcp-console-sandbox-setup.exe",
+            "mcp-console-sandbox-runner.exe",
+        ]
+        if windows
+        else ["mcp-console-sandbox", *(["bwrap"] if "linux" in target else [])]
+    )
+    for name in names:
         # Strip a temporary copy so unchanged Cargo inputs keep their mtimes.
         staged = libexec / f".{name}"
         shutil.copyfile(staged_helper if name == "bwrap" else binaries / name, staged)
@@ -234,7 +270,7 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
             if "linux" in target
             else ["xcrun", "strip", "-S", "-x"]
         )
-        if name != "bwrap":
+        if name != "bwrap" and not windows:
             subprocess.run([*strip, str(staged)], check=True)
         destination = libexec / name
         write_if_changed(destination, staged.read_bytes(), 0o755)

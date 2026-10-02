@@ -80,9 +80,9 @@ impl ClientConfiguration {
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         let local_runtime;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let local_preparation;
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         let (r, duckdb_extensions, python, r_resolver) =
             if !crate::local_runtime::Selection::r_is_present() {
                 let (preparation, discovery) =
@@ -122,7 +122,7 @@ impl ClientConfiguration {
                 local_preparation = Some(preparation);
                 let python = Some(match managed {
                     Some(selected) => PythonEnvironment::Managed { selected, resolver },
-                    None => PythonEnvironment::bare(configured_python),
+                    None => PythonEnvironment::bare(configured_python.clone()),
                 });
                 (None, extensions, python, RResolver::Disabled)
             } else {
@@ -131,12 +131,22 @@ impl ClientConfiguration {
                         crate::resolver::preparation::Mode::R,
                         on_started,
                     )?;
+                #[cfg(unix)]
                 use std::os::unix::ffi::OsStringExt;
+                #[cfg(unix)]
                 let home = PathBuf::from(OsString::from_vec(
                     discovery
                         .local_r_home_bytes
                         .ok_or("local R discovery has no R home")?,
                 ));
+                #[cfg(windows)]
+                let home = PathBuf::from(
+                    discovery
+                        .selections
+                        .r_home
+                        .clone()
+                        .ok_or("local R discovery has no R home")?,
+                );
                 local_runtime = Some(crate::local_runtime::Selection {
                     r_home: Some(home),
                     python: None,
@@ -158,62 +168,56 @@ impl ClientConfiguration {
                                         .local_has_uv
                                         .ok_or("local R discovery has no uv result")?,
                                 },
-                            configured_python,
+                            configured_python: configured_python.clone(),
                         }),
                     )
                 } else {
                     (
                         None,
                         Default::default(),
-                        Some(PythonEnvironment::bare(configured_python)),
+                        Some(PythonEnvironment::bare(configured_python.clone())),
                         RResolver::Disabled,
                     )
                 }
             };
-        #[cfg(not(unix))]
-        let local_preparation = None;
+        // Preserve Windows' independent peer runtimes even in a bare R session. An
+        // explicit Python selection is inspected by the same preparation owner.
         #[cfg(windows)]
-        let (r, duckdb_extensions, python, r_resolver) = {
-            let r_home = if crate::local_runtime::Selection::r_is_present() {
-                Some(harp::command::r_home_setup().map_err(|error| error.to_string())?)
-            } else {
-                None
-            };
-            let executable = configured_python
-                .clone()
-                .filter(|value| !value.is_empty())
+        let mut local_runtime = local_runtime;
+        #[cfg(windows)]
+        if let Some(runtime) = &mut local_runtime
+            && runtime.python.is_none()
+        {
+            let explicit = configured_python
+                .filter(|value| !value.is_empty() && value != "managed")
                 .or_else(|| {
-                    crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
+                    matches!(r_resolver, RResolver::Disabled)
+                        .then(|| {
+                            crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
+                        })
+                        .flatten()
                 });
-            let selected = executable
-                .as_deref()
-                .map(|value| {
-                    let executable = crate::python::explicit_executable(value)?;
-                    crate::python::inspect_native(&executable, on_started)
-                })
-                .transpose()?;
-            if r_home.is_none() && selected.is_none() {
-                return Err(
-                    "no R or Python runtime found; set R_HOME or select Python with -c python=PATH"
-                        .into(),
-                );
-            }
-            local_runtime = Some(crate::local_runtime::Selection {
-                r_home,
-                python: selected.map(|selected| crate::local_runtime::Python {
+            if let Some(explicit) = explicit {
+                let preparation = local_preparation.as_ref().expect("local preparation");
+                let selected = crate::python::explicit_executable(&explicit)
+                    .and_then(|executable| {
+                        preparation.call(
+                            crate::resolver::preparation::Operation::InspectPython { executable },
+                            on_started,
+                        )
+                    })
+                    .map_err(|error| match preparation.close() {
+                        Ok(()) => error,
+                        Err(cleanup) => format!("{error}; {cleanup}"),
+                    })?;
+                runtime.python = Some(crate::local_runtime::Python {
                     selected: Box::new(selected),
-                    explicit: executable,
+                    explicit: Some(explicit),
                     managed: false,
                     duckdb_extension_directory: None,
-                }),
-            });
-            (
-                None,
-                Default::default(),
-                Some(PythonEnvironment::bare(configured_python)),
-                RResolver::Disabled,
-            )
-        };
+                });
+            }
+        }
         let mut configuration = Self::with_arguments(
             program,
             vec![

@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
+
+from windows_sandbox import workspace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -22,11 +23,9 @@ if __name__ == "__main__":
     if sys.platform != "win32":
         raise SystemExit("native Windows installation checks require Windows")
     os.chdir(ROOT)
-    with (
-        checkout_owner(ROOT),
-        tempfile.TemporaryDirectory(prefix="console install ") as temporary,
-    ):
-        directory = Path(temporary)
+    # Restricted tokens must be able to traverse the installed executable's
+    # directory. Private TemporaryDirectory ACLs only admit owner/admin/system.
+    with checkout_owner(ROOT), workspace() as directory:
         wheels = directory / "wheels"
         venv = directory / "venv"
         run("uv", "build", "--wheel", "--out-dir", wheels)
