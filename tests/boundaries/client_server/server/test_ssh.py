@@ -141,8 +141,6 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
         commands.mkdir()
         home.mkdir()
         (commands / "sh").symlink_to(shutil.which("sh"))
-        if sys.platform == "linux" and execution == SANDBOXED:
-            (commands / "bwrap").symlink_to(shutil.which("bwrap"))
         workload = {
             "R_HOME": environment["R_HOME"],
             "PATH": str(commands),
@@ -179,17 +177,13 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
                     "properties"
                 ]
                 assert {"r", "python"} <= properties.keys(), properties
-                wait_for_evaluation_output(
-                    client,
+                client.expect(
                     '[input requested: "R before Python discovery> "]\n[waiting for stdin]',
-                    "R startup before unresolved Python selection",
                     r="startup_value + 1L",
                     timeout_ms=0,
                 )
-                wait_for_evaluation_output(
-                    client,
+                client.expect(
                     "[1] 42\n",
-                    "R cell after Python absence",
                     stdin="continue\n",
                 )
                 client.send(

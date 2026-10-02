@@ -1,9 +1,9 @@
 # Architecture
 
-The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local unsandboxed sessions with preinstalled packages.
-Windows uses native pipe/event/process primitives, and Python inspection runs in a kill-on-close Job entered before executing code; cancellation and normal completion require confirmed empty Jobs.
-These Jobs own inspection processes, not evaluated user code.
-Windows managed dependency resolution, SQL, and remote controllers are deferred.
+The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
+Windows uses native pipe/event/process primitives, and resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code; cancellation and normal completion require confirmed empty Jobs.
+These Jobs own trusted host preparation and inspection processes, not evaluated user code, and are not sandboxes.
+Windows SQL and remote controllers are deferred.
 
 Console separates session management from code execution.
 The server owns what survives a worker; the worker owns live language state.
@@ -21,14 +21,15 @@ MCP client
 server ───── resolve ───── dependency resolvers       trusted host
   │
   ▼
-sandbox frontend → private native runner            same PID
+sandbox frontend → private native runner            same PID on Unix
   │
   ▼
 relay ───── worker                                  sandboxed workload
             └─ R, Python, SQL
 ```
 
-The frontend verifies the installed companion and execs it with immutable launch configuration.
+The frontend verifies the installed companion and passes immutable launch configuration.
+Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
 Native enforcement, private storage, and descendant supervision belong to that runner, not to Console's relay.
 
 [SSH](SSH.md) places the launcher, relay, worker, and preparation owner on the remote host.
@@ -67,7 +68,11 @@ Early cells reserve the ordinary evaluation slot while startup finishes.
 There is no cell queue.
 A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
 Connection closure cancels startup through the existing preparation/provider owners and waits for their cleanup contract.
+The preparation close barrier joins its owner thread after protocol closure and child reaping, so the server cannot exit with resolver cleanup still in flight.
+If the owner failed, closing retains its protocol error instead of replacing it with a generic stopped-owner error.
+A failed close handshake kills the preparation child before joining I/O and reaping, without starting a second exit allowance.
 It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
+Retirement cancels an in-flight Python bootstrap inspection without reporting that cancellation as a Python setup error.
 
 Initialization alone does not consume the unused-worker replacement exception.
 Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.

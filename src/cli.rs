@@ -37,6 +37,16 @@ pub struct ConfigOverrides {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Provision the native Windows sandbox accounts and network rules
+    #[cfg(windows)]
+    SandboxSetup {
+        /// Persistent Windows sandbox state directory
+        #[arg(long, value_name = "PATH")]
+        state_dir: Option<PathBuf>,
+        /// Report setup readiness without provisioning
+        #[arg(long)]
+        status: bool,
+    },
     /// Run the MCP server over standard input and output
     Serve {
         #[command(flatten)]

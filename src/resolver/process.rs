@@ -1,7 +1,6 @@
 #[cfg(windows)]
 pub(super) use crate::windows::resolver::Child;
 use std::io;
-#[cfg(unix)]
 use std::io::Write;
 #[cfg(unix)]
 use std::mem::MaybeUninit;
@@ -9,7 +8,8 @@ use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 #[cfg(unix)]
-use std::process::{Child, ChildStdin};
+pub(super) use std::process::Child;
+use std::process::ChildStdin;
 use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -249,7 +249,6 @@ pub(crate) fn read_output(
     receiver
 }
 
-#[cfg(unix)]
 pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io::Result<()>> {
     let (sender, receiver) = mpsc::channel();
     let _ = thread::spawn(move || {

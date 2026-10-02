@@ -219,10 +219,8 @@ result:
           ]
         }
         uv output:
-        × No solution found when resolving tool dependencies:
-          ╰─▶ Because absent-fixture-distribution was not found in the package
-              registry and you require absent-fixture-distribution, we can conclude
-              that your requirements are unsatisfiable.
+        error: No solution found when resolving tool dependencies
+          cause: Because absent-fixture-distribution was not found in the package registry and you require absent-fixture-distribution, we can conclude that your requirements are unsatisfiable.
   isError: true
 ---
 send:

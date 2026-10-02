@@ -1,4 +1,4 @@
-//! Native handles used by the unsandboxed Windows process boundary.
+//! Native handles used by the Windows process boundary.
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::sync::Arc;
@@ -271,6 +271,12 @@ pub(crate) fn available(handle: RawHandle) -> io::Result<usize> {
 /// Both ends are opened before spawning. No name or listening endpoint remains
 /// available to another process, and only explicitly marked handles inherit.
 pub(crate) fn pipe(read_async: bool, write_async: bool) -> io::Result<(OwnedHandle, OwnedHandle)> {
+    let mut security = pipe_security::PipeSecurity::new()?;
+    let attributes = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: (&raw mut security.descriptor).cast(),
+        bInheritHandle: 0,
+    };
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let name: Vec<u16> = format!(
         r"\\.\pipe\mcp-console-{}-{}",
@@ -291,7 +297,7 @@ pub(crate) fn pipe(read_async: bool, write_async: bool) -> io::Result<(OwnedHand
             65536,
             65536,
             0,
-            std::ptr::null(),
+            &attributes,
         )
     };
     if server == INVALID_HANDLE_VALUE {
@@ -329,4 +335,5 @@ pub(crate) fn inherit(handle: RawHandle, inherit: bool) -> io::Result<()> {
     Ok(())
 }
 
+mod pipe_security;
 pub(crate) mod resolver;

@@ -633,6 +633,13 @@ pub(super) fn environment_call(name: &CStr, request: &str) -> Result<Option<Stri
             (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
         (api.dec_ref)(argument);
         if result.is_null() {
+            if crate::worker::is_shutting_down() {
+                // Retirement cancels the host inspection callback. The old
+                // interpreter cannot complete setup and has no user error to
+                // display; let its coordinator finish the shutdown boundary.
+                (api.err_clear)();
+                return Ok(None);
+            }
             if (api.err_exception_matches)(api.keyboard_interrupt as *mut PyObject) != 0 {
                 if name == c"initialize" {
                     // Startup's R adapter rethrows the retained exception;

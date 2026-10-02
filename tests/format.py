@@ -4,6 +4,7 @@
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,17 +23,19 @@ class FormatTests(unittest.TestCase):
             commands.mkdir()
             for failure in (False, True):
                 for name in ("ruff", "yamark", "cargo", "air"):
-                    path = commands / name
+                    path = commands / (name + ".cmd" if os.name == "nt" else name)
                     status = 7 if failure and name == "yamark" else 0
                     path.write_text(
-                        f"#!/bin/sh\necho {name} >> attempts\nexit {status}\n"
+                        f"@echo off\necho {name}>> attempts\nexit /b {status}\n"
+                        if os.name == "nt"
+                        else f"#!/bin/sh\necho {name} >> attempts\nexit {status}\n"
                     )
                     path.chmod(0o755)
                 for arguments in ([], ["--strict"]):
                     with self.subTest(failure=failure, arguments=arguments):
                         (root / "attempts").write_text("")
                         result = subprocess.run(
-                            [scripts / "format", *arguments],
+                            [sys.executable, scripts / "format", *arguments],
                             cwd=root,
                             env=os.environ | {"PATH": str(commands)},
                             capture_output=True,

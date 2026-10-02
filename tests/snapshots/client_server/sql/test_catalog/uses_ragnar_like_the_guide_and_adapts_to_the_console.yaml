@@ -1,5 +1,5 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as r-sql MCP initialization for this execution mode
 ---
 send:
   sql: |
@@ -46,6 +46,7 @@ send:
       )
       ragnar::ragnar_store_insert(store, chunks)
     }
+    stopifnot(!reticulate::py_available(initialize = FALSE))
     writeLines("created store under the worker tempdir")
 result:
   content:

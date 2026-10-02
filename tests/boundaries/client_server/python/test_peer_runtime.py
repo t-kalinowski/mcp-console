@@ -171,17 +171,13 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
         """)
     client.expect("Python live; R absent\n", python=source)
     if trigger == "r-cell":
-        wait_for_evaluation_output(
-            client,
+        client.expect(
             "[done]",
-            "late R cell attachment",
             r="peer_from_r <- 41L; stopifnot(reticulate::py_eval('persistent is not None'))",
         )
     else:
-        wait_for_evaluation_output(
-            client,
+        client.expect(
             "[done]",
-            "late Python-side R attachment",
             python="assert 3 < r.pi < 4; assert int(r['sum(c(20, 21))']) == 41",
         )
         assert last_result_text(client) == "[done]", client.transcript[-1]
@@ -362,10 +358,8 @@ def test_late_attachment_preserves_environment_metadata(
                     python="peer_object = object(); peer_identity = id(peer_object)",
                 )
                 # fmt: r
-                wait_for_evaluation_output(
-                    client,
+                client.expect(
                     "environment metadata retained\n",
-                    "late attachment metadata",
                     r=code("""
                     config <- reticulate::py_config()
                     sys <- reticulate::import("sys")
@@ -421,10 +415,8 @@ def test_interrupt_wakes_input_before_and_after_attachment(
                 defer_r_bootstrap(client)
                 for attached in (False, True):
                     if attached:
-                        wait_for_evaluation_output(
-                            client,
+                        client.expect(
                             "[done]",
-                            "input interrupt after R attachment",
                             python="assert int(r['42L']) == 42",
                         )
                         assert last_result_text(client) == "[done]", client.transcript[
@@ -603,10 +595,7 @@ def test_idle_preparation_keeps_r_uninitialized(
                 print("idle preparation uses the Python owner")
                 """)
             client.expect("idle preparation uses the Python owner\n", python=source)
-            wait_for_evaluation_output(
-                client,
-                "[done]",
-                "managed R attachment after idle preparation",
+            client.expect(
                 r='stopifnot("packaging" %in% reticulate::py_require()$packages, isTRUE(reticulate::py_config()$ephemeral))',
             )
             return client.finish()[3:]

@@ -116,6 +116,9 @@ def test_initializes_and_lists_tools(
         "python-managed.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True, python_managed=True
         ),
+        "r-sql.yaml": _initializes_and_lists_tools(
+            binary, execution, languages="r,sql"
+        ),
     }
     if execution == SANDBOXED:
         companions["proxy.yaml"] = _initializes_and_lists_tools(
@@ -123,10 +126,6 @@ def test_initializes_and_lists_tools(
         )
         companions["workspace.yaml"] = _initializes_and_lists_tools(
             binary, execution, workspace_profile=True
-        )
-    else:
-        companions["r-sql.yaml"] = _initializes_and_lists_tools(
-            binary, execution, languages="r,sql"
         )
     companions["ssh.yaml"] = _initializes_and_lists_tools(
         binary, execution, bare=True, workspace_profile=True, ssh=True

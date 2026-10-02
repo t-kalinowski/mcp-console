@@ -59,7 +59,7 @@ impl ConsoleServer {
                 .unwrap_or_default()
                 .replace(
                     "SIGINT from the active host resolver or live worker",
-                    "a cooperative interrupt from the live worker",
+                    "termination of the active host resolver or a cooperative interrupt from the live worker",
                 )
                 .into();
         }
@@ -133,7 +133,7 @@ impl ConsoleServer {
         if builtin {
             configure_windows(description, properties);
         }
-        if prepared.is_some() || cfg!(windows) {
+        if prepared.is_some() {
             let requirements = properties
                 .get_mut("requirements")
                 .expect("requirements schema");
@@ -158,24 +158,24 @@ fn configure_windows(description: &mut String, properties: &mut Map<String, Valu
         .split_once("\n\nSend one complete")
         .expect("send description");
     *description = format!(
-        "Persistent R and Python workbench for local unsandboxed execution on Windows. State persists across calls. Enabled runtimes initialize in the background and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Packages must be preinstalled; managed dependency resolution and SQL are not yet supported.\n\nSend one complete{remaining}"
+        "Persistent R and Python workbench for local execution on Windows. State persists across calls. Enabled runtimes initialize in the background and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
     ).replace("`r`, `python`, or `sql`", "`r` or `python`");
-    for (field, text) in [
+    // Retain shared runtime and preparation guidance, but omit SQL-only helpers.
+    for (field, start, end) in [
         (
             "r",
-            "One complete R cell in persistent global state. Expressions display automatically and plots return as PNG images. Use readline() for managed stdin. R packages must be preinstalled. When both runtimes and reticulate are available, reticulate::py_eval() accesses Python state. Omit for polling or stdin-only calls.",
+            " With R-owned managed DuckDB active,",
+            " Default-device plots",
         ),
-        (
-            "python",
-            "One complete Python cell in persistent global state. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. Packages must be preinstalled in the selected interpreter. With R and reticulate available, r.name reads R globals. Omit for polling or stdin-only calls.",
-        ),
-        (
-            "control",
-            "Applies lifecycle control alone or before compatible same-call fields. interrupt requests cooperative interruption of the live worker and preserves state; compatible input is queued before the 100-millisecond interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects and unread stdin, retains the selected runtimes, and sends same-call input and code only to the replacement worker.",
-        ),
+        ("python", " Select a user-owned DB-API", " At cell end,"),
     ] {
         if let Some(property) = properties.get_mut(field) {
-            property["description"] = text.into();
+            let text = property["description"]
+                .as_str()
+                .expect("language description");
+            let (before, remaining) = text.split_once(start).expect("SQL guidance");
+            let (_, after) = remaining.split_once(end).expect("plot guidance");
+            property["description"] = format!("{before}{end}{after}").into();
         }
     }
 }

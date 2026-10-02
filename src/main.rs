@@ -60,6 +60,16 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides.values;
     match cli.command {
+        #[cfg(windows)]
+        cli::Command::SandboxSetup { status, state_dir } => {
+            match sandbox::windows_setup(status, state_dir) {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         cli::Command::Serve {
             worker,
             relay,
@@ -176,9 +186,6 @@ fn run_server(
     {
         if target.is_some() {
             return Err("Windows currently supports local execution only".into());
-        }
-        if !no_sandbox {
-            return Err("Windows execution currently requires `serve --no-sandbox`".into());
         }
     }
     if python.is_some() && (worker.is_some() || relay.is_some()) {

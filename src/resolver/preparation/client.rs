@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use std::io::{self, BufReader, Read};
+#[cfg(unix)]
+use std::io;
+use std::io::{BufReader, Read};
 use std::process::Stdio;
 use std::sync::{
     Arc, Mutex,
@@ -11,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use super::{Discovery, Input, Mode, Operation, Output, Selections};
 use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
+#[cfg(unix)]
 use crate::target_launch::transfer::Io;
 
 #[derive(Clone)]
@@ -19,15 +22,14 @@ pub(crate) struct Preparation(Arc<Connection>);
 struct Connection {
     events: mpsc::Sender<Event>,
     sequence: AtomicU64,
-    closed: AtomicBool,
+    owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
     blocked: Arc<Mutex<Option<String>>>,
     local: bool,
-    owner: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.events.send(Event::Close(None));
+        let _ = self.events.send(Event::Close);
     }
 }
 
@@ -103,7 +105,7 @@ enum Event {
     Received(Result<Output, String>),
     WriteFailed(String),
     Exited,
-    Close(Option<mpsc::Sender<Result<(), String>>>),
+    Close,
 }
 
 struct Pending {
@@ -140,22 +142,30 @@ impl Preparation {
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let command = session.command_for("ssh-prepare")?;
-        let open = Input::Open {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-            workspace: session.target.workspace.clone(),
-            selections,
-            mode: Mode::Auto,
-        };
-        Self::open_with(
-            command,
-            session.blocked.clone(),
-            open,
-            false,
-            diagnostics,
-            on_started,
-        )
+        #[cfg(not(unix))]
+        {
+            let _ = (session, selections, diagnostics, on_started);
+            Err("SSH preparation requires macOS or Linux".into())
+        }
+        #[cfg(unix)]
+        {
+            let command = session.command_for("ssh-prepare")?;
+            let open = Input::Open {
+                version: super::VERSION,
+                build: env!("CARGO_PKG_VERSION").into(),
+                workspace: session.target.workspace.clone(),
+                selections,
+                mode: Mode::Auto,
+            };
+            Self::open_with(
+                command,
+                session.blocked.clone(),
+                open,
+                false,
+                diagnostics,
+                on_started,
+            )
+        }
     }
 
     pub(crate) fn open_local(
@@ -184,11 +194,23 @@ impl Preparation {
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        #[cfg(unix)]
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            let _ = diagnostics;
+            command.stderr(Stdio::inherit());
+        }
+        #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
+        #[cfg(windows)]
+        let (aborted, abort) = crate::windows::notification().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let (stdin, stdout) = crate::windows::command_pipes(&mut command, aborted.clone())
+            .map_err(|e| e.to_string())?;
         let mut child = command.spawn().map_err(|error| {
             format!(
                 "cannot start {} preparation: {error}",
@@ -197,26 +219,40 @@ impl Preparation {
         })?;
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
+        #[cfg(unix)]
         let (aborted, abort) = io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
         let stdout = child.stdout.take().expect("preparation stdout");
+        #[cfg(unix)]
         let stdin = child.stdin.take().expect("preparation stdin");
-        let stderr = child.stderr.take().expect("preparation stderr");
+        #[cfg(unix)]
         let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
-        let diagnostic_events = events.clone();
-        let diagnostic_reader = thread::spawn(move || {
-            if let Err(error) = crate::process_output::forward(stderr, diagnostic_exit, diagnostics)
-            {
-                let _ = diagnostic_events.send(Event::Received(Err(format!(
-                    "{} stderr read failed: {error}",
-                    label(local)
-                ))));
-            }
-        });
+        #[cfg(unix)]
+        let diagnostic_reader = {
+            let stderr = child.stderr.take().expect("preparation stderr");
+            let diagnostic_events = events.clone();
+            thread::spawn(move || {
+                if let Err(error) =
+                    crate::process_output::forward(stderr, diagnostic_exit, diagnostics)
+                {
+                    let _ = diagnostic_events.send(Event::Received(Err(format!(
+                        "{} stderr read failed: {error}",
+                        label(local)
+                    ))));
+                }
+            })
+        };
+        #[cfg(unix)]
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let reader_abort = aborted;
         let read_events = events.clone();
         let reader = thread::spawn(move || {
             let result = (|| {
+                #[cfg(unix)]
                 let mut input = BufReader::new(Io::new(stdout, Some(reader_abort), None)?);
+                #[cfg(windows)]
+                let mut input = BufReader::new(stdout.with_cancel(reader_abort));
                 loop {
                     let message = if local {
                         super::read_jsonl(&mut input)?
@@ -242,7 +278,10 @@ impl Preparation {
         let write_events = events.clone();
         let writer = thread::spawn(move || {
             let result = (|| {
+                #[cfg(unix)]
                 let mut output = Io::new(stdin, Some(aborted), None)?;
+                #[cfg(windows)]
+                let mut output = stdin;
                 for message in writes {
                     if local {
                         super::write_jsonl(&mut output, &message)?;
@@ -259,38 +298,45 @@ impl Preparation {
         let exit_events = events.clone();
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
+                #[cfg(unix)]
                 drop(notify_diagnostic_exit);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
         let (reply, response) = mpsc::channel();
-        let connection = Self(Arc::new(Connection {
-            events: events.clone(),
-            sequence: AtomicU64::new(1),
-            closed: AtomicBool::new(false),
-            blocked: blocked.clone(),
-            local,
-            owner: Mutex::default(),
-        }));
         let pending = Pending {
             id: 0,
             state: state.clone(),
             reply,
             chunks: None,
         };
+        let owner_blocked = blocked.clone();
         let owner = thread::spawn(move || {
-            let _ = run(received, &outgoing, pending, open, &blocked, local);
+            let result = run(received, &outgoing, pending, open, &owner_blocked, local);
             drop(outgoing);
             drop(abort);
-            let _ = writer.join();
-            let _ = reader.join();
-            if !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+            // Do not extend failed protocol retirement with a second exit wait.
+            // Kill before joining I/O and reaping.
+            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
                 let _ = child.kill();
             }
-            let _ = child.wait();
+            let _ = writer.join();
+            let _ = reader.join();
+            let reaped = child
+                .wait()
+                .map(|_| ())
+                .map_err(|error| format!("cannot reap {}: {error}", label(local)));
+            #[cfg(unix)]
             let _ = diagnostic_reader.join();
+            result.and(reaped)
         });
-        *connection.0.owner.lock().expect("preparation owner lock") = Some(owner);
+        let connection = Self(Arc::new(Connection {
+            events: events.clone(),
+            sequence: AtomicU64::new(1),
+            owner: Mutex::new(Some(owner)),
+            blocked,
+            local,
+        }));
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
@@ -319,7 +365,7 @@ impl Preparation {
             Ok(discovery) => Ok((connection, discovery)),
             Err(error) => {
                 // Startup has no Client to own shutdown after discovery fails.
-                // Finish the close handshake before the MCP process can exit.
+                // Join preparation cleanup before the MCP process can exit.
                 match connection.close() {
                     Ok(()) => Err(error),
                     Err(cleanup) => Err(format!("{error}; {cleanup}")),
@@ -376,24 +422,16 @@ impl Preparation {
     }
 
     pub(crate) fn close(&self) -> Result<(), String> {
-        if self.0.closed.swap(true, Ordering::SeqCst) {
+        // Hold the lock through the join so every close caller waits for the
+        // owner to reap its child, even after Closed and EOF arrive.
+        let mut owner = self.0.owner.lock().map_err(|_| "preparation owner lock")?;
+        let Some(owner) = owner.take() else {
             return Ok(());
-        }
-        let (reply, response) = mpsc::channel();
-        let result = self
-            .0
-            .events
-            .send(Event::Close(Some(reply)))
-            .map_err(|_| format!("{} owner stopped", label(self.0.local)))
-            .and_then(|()| {
-                response.recv().map_err(|_| {
-                    format!("{} shutdown lost its acknowledgment", label(self.0.local))
-                })?
-            });
-        if let Some(owner) = self.0.owner.lock().expect("preparation owner lock").take() {
-            owner.join().map_err(|_| "preparation owner panicked")?;
-        }
-        result
+        };
+        let _ = self.0.events.send(Event::Close);
+        owner
+            .join()
+            .map_err(|_| format!("{} owner panicked", label(self.0.local)))?
     }
 }
 
@@ -409,7 +447,6 @@ fn run(
     let mut active = Some(initial);
     let mut controls: VecDeque<(u64, ResolverControlOutcome, Option<ControlReply>)> =
         VecDeque::new();
-    let mut closing = Vec::new();
     let mut close_requested = false;
     let mut hello = false;
     let mut setup_deadline = (!local).then(|| Instant::now() + super::SETUP_TIMEOUT);
@@ -555,10 +592,7 @@ fn run(
                         retirement_deadline = None;
                     }
                 }
-                Event::Close(reply) => {
-                    if let Some(reply) = reply {
-                        closing.push(reply);
-                    }
+                Event::Close => {
                     if !close_requested {
                         outgoing
                             .send(Input::Close)
@@ -600,9 +634,6 @@ fn run(
         if let Some(reply) = reply {
             let _ = reply.send(Err(format!("{owner} control lost its acknowledgment")));
         }
-    }
-    for reply in closing {
-        let _ = reply.send(result.clone());
     }
     result
 }

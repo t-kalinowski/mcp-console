@@ -61,8 +61,23 @@ def normalize_python_traceback_paths(error: str) -> str:
     return error
 
 
+def normalize_onnx_device_probe(output: str) -> str:
+    # DuckDB's VSS extension probes host devices when ONNX Runtime loads.
+    # Azure's synthetic PCI paths can warn once per process, independently of
+    # the database operation. Keep every other diagnostic, including IO errors.
+    return re.sub(
+        r"(?m)^\x1b\[0;93m[^\n]+ \[W:onnxruntime:Default, "
+        r"device_discovery\.cc:\d+ GetPciBusId\] Skipping pci_bus_id for PCI path at "
+        r'"/sys/devices/[^"\n]+" because filename "[^"\n]+" did not match expected '
+        r"pattern of \[0-9a-f\]\+:\[0-9a-f\]\+:\[0-9a-f\]\+\[\.\]\[0-9a-f\]\+"
+        r"\x1b\[m\n",
+        "",
+        output,
+    )
+
+
 def normalize_duckdb_progress(client: McpClient) -> str:
-    output = last_tool_text(client)
+    output = normalize_onnx_device_probe(last_tool_text(client))
     sections = output.split("\r")
     assert all(
         not section.strip() or section.startswith("DuckDB progress:")

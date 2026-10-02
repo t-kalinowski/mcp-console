@@ -10,7 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import SANDBOXED
-from support.normalization import code, normalize_duckdb_progress
+from support.normalization import (
+    code,
+    normalize_duckdb_progress,
+    normalize_onnx_device_probe,
+)
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, requires
@@ -29,15 +33,18 @@ def test_creates_ragnar_store_after_workspace_write_denial_on_linux(
     binary: Path,
 ) -> Transcript:
     return creates_ragnar_store_after_workspace_write_denial(
-        binary, "Read-only file system"
+        binary, "Read-only file system", languages="r,sql"
     )
 
 
 def creates_ragnar_store_after_workspace_write_denial(
-    binary: Path, denial: str
+    binary: Path, denial: str, *, languages: str | None = None
 ) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
+    if languages is not None:
+        # Match Rscript without loading optional Python document converters.
+        environment["MCP_CONSOLE_LANGUAGES"] = languages
     # fmt: r
     r = code(r"""
         ragnar::ragnar_store_create(
@@ -85,7 +92,7 @@ def creates_ragnar_store_after_workspace_write_denial(
                     ))
                     """),
             )
-            reference = json.loads(last_tool_text(client))
+            reference = normalize_onnx_device_probe(json.loads(last_tool_text(client)))
             assert output == reference, (output, reference)
             assert not (workspace / "knowledge.ragnar.duckdb").exists()
             for entry in (denied, client.transcript[-1]):

@@ -43,13 +43,13 @@ pub(crate) struct ManagedR {
     // Serde's Unix OsString representation preserves native path bytes in JSON.
     pub(super) r_libs: OsString,
     // Executable selection never travels in a preparation request.
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[serde(skip)]
     pub(super) rscript: PathBuf,
     pub(super) requirements: Vec<String>,
 }
 impl ManagedR {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn on_host(mut self, rscript: &Path) -> Self {
         self.rscript = rscript.to_path_buf();
         self
@@ -78,7 +78,7 @@ impl ManagedR {
         &self.library
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(crate) fn rscript(&self) -> &Path {
         &self.rscript
     }

@@ -312,7 +312,8 @@ def test_queries_a_ragnar_store_created_in_r(
     binary: Path, execution: Execution
 ) -> Transcript:
     environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
+    # These R/SQL operations do not use ragnar's Python document converters.
+    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
     client = McpClient(
@@ -388,6 +389,7 @@ def test_queries_a_ragnar_store_created_in_r(
           )
         ))
         invisible(DBI::dbExecute(connection, "USE knowledge"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
         writeLines("ragnar store ready")
         """)
     client.send(r=r)
@@ -443,7 +445,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     execution: Execution,
 ) -> Transcript:
     environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
+    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
     client = McpClient(
@@ -489,6 +491,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
           )
           ragnar::ragnar_store_insert(store, chunks)
         }
+        stopifnot(!reticulate::py_available(initialize = FALSE))
         writeLines("created store under the worker tempdir")
         """)
     client.send(r=r)
