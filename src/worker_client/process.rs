@@ -521,7 +521,7 @@ impl RelayProcess {
             Ok(false) => {}
             Err(error) => errors.push(error),
         }
-        if let Err(error) = self.child.kill()
+        if let Err(error) = kill_child(&mut self.child)
             && error.raw_os_error() != Some(libc::ESRCH)
         {
             errors.push(format!("failed to stop the worker launcher: {error}"));
@@ -673,7 +673,7 @@ fn retire_after_exit_observer_failure(mut child: Child, error: String) -> String
     let mut reaped =
         observe_and_reap_child(&mut child, LAUNCHER_RETIREMENT_GRACE, &mut errors).is_some();
     if !reaped {
-        if let Err(kill_error) = child.kill()
+        if let Err(kill_error) = kill_child(&mut child)
             && kill_error.raw_os_error() != Some(libc::ESRCH)
         {
             errors.push(format!("failed to stop the worker launcher: {kill_error}"));
@@ -1502,7 +1502,19 @@ fn request_child_retirement(child: &mut Child) -> std::io::Result<()> {
 }
 #[cfg(windows)]
 fn request_child_retirement(child: &mut Child) -> std::io::Result<()> {
-    child.kill()
+    kill_child(child)
+}
+
+fn kill_child(child: &mut Child) -> std::io::Result<()> {
+    let result = child.kill();
+    // TerminateProcess can report access denied if the process exited between
+    // our last observation and the kill. Only confirmed exit makes that benign;
+    // Child retains the status for the owner's subsequent wait and retirement.
+    #[cfg(windows)]
+    if result.is_err() && matches!(child.try_wait(), Ok(Some(_))) {
+        return Ok(());
+    }
+    result
 }
 #[cfg(windows)]
 fn relay_stdout_closed(handle: &OwnedFd) -> Result<bool, String> {

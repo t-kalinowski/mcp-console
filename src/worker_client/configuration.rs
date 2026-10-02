@@ -176,9 +176,12 @@ impl ClientConfiguration {
             } else {
                 None
             };
-            let executable = configured_python.clone().or_else(|| {
-                crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
-            });
+            let executable = configured_python
+                .clone()
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
+                });
             let selected = executable
                 .as_deref()
                 .map(|value| {

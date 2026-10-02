@@ -38,7 +38,7 @@ unsafe extern "system" {
 
 fn main() -> io::Result<()> {
     match std::env::var("TEST_RELAY_SCENARIO").unwrap().as_str() {
-        "stall_shutdown" => {
+        "stall_shutdown" | "exit_shutdown" => {
             println!(r#"{{"kind":"ready"}}"#);
             io::stdout().flush()?;
             for line in io::stdin().lock().lines() {
@@ -46,6 +46,9 @@ fn main() -> io::Result<()> {
                 if line.contains(r#""kind":"shutdown""#) {
                     println!(r#"{{"kind":"shutdown_started"}}"#);
                     io::stdout().flush()?;
+                    if std::env::var("TEST_RELAY_SCENARIO").unwrap() == "exit_shutdown" {
+                        return Ok(());
+                    }
                     std::thread::sleep(Duration::from_secs(60));
                 } else if line.contains(r#""kind":"evaluate""#) {
                     println!(r#"{{"kind":"console_output","data":"42\n"}}"#);

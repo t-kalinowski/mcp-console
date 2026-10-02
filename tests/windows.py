@@ -59,7 +59,7 @@ class Session:
             self.messages.put(json.loads(line))
         self.messages.put(None)
 
-    def request(self, method, params):
+    def request(self, method, params, *, close_input=False):
         self.sequence += 1
         message = {
             "jsonrpc": "2.0",
@@ -69,6 +69,8 @@ class Session:
         }
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
         self.process.stdin.flush()
+        if close_input:
+            self.process.stdin.close()
         while True:
             response = self.messages.get(timeout=self.timeout)
             if response is None:
@@ -181,6 +183,62 @@ class WindowsPackaging(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def test_empty_python_selection_uses_available_runtimes(self):
+        r_home = (
+            os.environ.get("R_HOME")
+            or subprocess.check_output(["R", "RHOME"], text=True).strip()
+        )
+        system_path = str(Path(os.environ["SystemRoot"]) / "System32")
+        for with_python in (False, True):
+            with self.subTest(with_python=with_python):
+                environment = dict(
+                    os.environ,
+                    R_HOME=r_home,
+                    RETICULATE_PYTHON="",
+                    PATH=(
+                        str(Path(sys.executable).parent) + os.pathsep
+                        if with_python
+                        else ""
+                    )
+                    + system_path,
+                )
+                session = Session(environment)
+                try:
+                    session.initialize()
+                    self.assertIn("42", json.dumps(session.send(r="42L")))
+                    if with_python:
+                        self.assertIn("43", json.dumps(session.send(python="43")))
+                finally:
+                    session.close()
+
+    def test_eof_preserves_first_send_response(self):
+        # A custom worker keeps this independent of runtime preparation, which
+        # EOF may cancel. The malformed call never needs to launch the worker.
+        session = Session(relay=BINARY)
+        self.addCleanup(session.close)
+        session.initialize()
+        session.request("tools/list", {})
+        # Span multiple input chunks so physical EOF can arrive while the
+        # asynchronous transport is still collecting the complete request.
+        result = session.request(
+            "tools/call",
+            {"name": "send", "arguments": {"r": "1" + " " * 131072, "python": "1"}},
+            close_input=True,
+        )
+        self.assertEqual(
+            result,
+            {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "only one of `r`, `python`, or `sql` may be supplied",
+                    }
+                ],
+                "isError": True,
+            },
+        )
+        self.assertEqual(session.process.wait(timeout=10), 0)
+
     def test_r_without_python(self):
         # Capture R before removing the interpreter launchers from PATH.
         r_home = (
@@ -216,6 +274,35 @@ class WindowsConsole(unittest.TestCase):
                 result = session.send(control="interrupt", timeout_ms=2000)
                 self.assertIn("KeyboardInterrupt", json.dumps(result))
                 self.assertNotIn("running;", json.dumps(result))
+                self.assertIn("42", json.dumps(session.send(python="saved")))
+
+    def test_interrupt_then_input_after_r_attachment(self):
+        session = self.session()
+        self.assertIn("42", json.dumps(session.send(python="saved = 42; saved")))
+        self.assertIn(
+            "running;",
+            json.dumps(session.send(python="while True: pass", timeout_ms=100)),
+        )
+        self.assertIn(
+            "KeyboardInterrupt",
+            json.dumps(session.send(control="interrupt", timeout_ms=2000)),
+        )
+        self.assertIn("42", json.dumps(session.send(r="42L")))
+        for iteration in range(12):
+            with self.subTest(iteration=iteration):
+                result = session.send(r="repeat { Sys.sleep(0) }", timeout_ms=50)
+                self.assertIn("running;", json.dumps(result))
+                result = session.send(control="interrupt", timeout_ms=2000)
+                self.assertNotIn("running;", json.dumps(result))
+                for arguments in (
+                    {"r": "readline('R input: ')"},
+                    {"python": "input('Python input: ')"},
+                ):
+                    result = session.send(**arguments, timeout_ms=50)
+                    self.assertIn("waiting for stdin", json.dumps(result))
+                    result = session.send(control="interrupt", timeout_ms=2000)
+                    self.assertNotIn("running;", json.dumps(result))
+                    self.assertNotIn("waiting for stdin", json.dumps(result))
                 self.assertIn("42", json.dumps(session.send(python="saved")))
 
     def test_python_without_r(self):
@@ -387,6 +474,15 @@ class WindowsConsole(unittest.TestCase):
         self.assertFalse(result.get("isError"), result)
         self.assertIn("42", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(r="42")))
+
+    def test_restart_while_relay_exits_on_shutdown(self):
+        session = self.relay_session("exit_shutdown")
+        self.assertIn("42", json.dumps(session.send(r="42")))
+        for generation in range(12):
+            with self.subTest(generation=generation):
+                result = session.send(control="restart", r="42", timeout_ms=10000)
+                self.assertFalse(result.get("isError"), result)
+                self.assertIn("42", json.dumps(result))
 
     def test_relay_setup_error_reaches_mcp(self):
         session = self.relay_session("block_sideband")

@@ -57,6 +57,7 @@ Blocked synchronous relay output may leave an I/O thread until relay process exi
 
 Windows MCP input has one reader and a bounded 128 KiB queue shared between startup and the running transport.
 Startup EOF cancels active Python inspection once the reader observes it; queue backpressure can delay EOF observation until input is consumed.
+After startup finishes, EOF is reported only after the queued MCP input is consumed, preserving final request responses.
 Windows uses a UTF-8 executable manifest, UTF-16 Python configuration, and native executable suffixes.
 The built-in worker uses the C runtime's inherited stdin descriptor because R subprocess helpers can clear the Windows standard-handle table.
 
