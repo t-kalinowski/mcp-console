@@ -19,7 +19,7 @@ prepare_metadata_for_build_wheel = maturin.prepare_metadata_for_build_wheel
 def build_sdist(
     sdist_directory: str, config_settings: dict[str, Any] | None = None
 ) -> str:
-    with _checkout_owner(Path(__file__).resolve().parent):
+    with _checkout_owner(Path(__file__).resolve().parent.parent):
         return maturin.build_sdist(sdist_directory, config_settings)
 
 
@@ -53,7 +53,7 @@ def _checkout_owner(root: Path) -> Iterator[None]:
 
 @contextmanager
 def _staged_companion() -> Iterator[None]:
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     with _checkout_owner(root):
         if sys.platform == "win32":
             # Windows currently packages only the unsandboxed executable. Avoid

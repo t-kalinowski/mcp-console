@@ -880,7 +880,8 @@ class ReleaseScriptTests(unittest.TestCase):
             script = root / "scripts" / STAGE_SCRIPT.name
             shutil.copyfile(STAGE_SCRIPT, script)
             shutil.copyfile(
-                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+                ROOT / "scripts/checkout_workflow.py",
+                root / "scripts/checkout_workflow.py",
             )
             pin = {"repository": "fixture/runner", "commit": "a" * 40}
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
@@ -904,7 +905,8 @@ class ReleaseScriptTests(unittest.TestCase):
             scripts.mkdir(parents=True)
             shutil.copyfile(STAGE_SCRIPT, scripts / STAGE_SCRIPT.name)
             shutil.copyfile(
-                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+                ROOT / "scripts/checkout_workflow.py",
+                root / "scripts/checkout_workflow.py",
             )
             placeholder = root / "wheel-data/data/.gitignore"
             placeholder.parent.mkdir(parents=True)
@@ -1418,7 +1420,8 @@ class RuntimeSourceValidationTests(unittest.TestCase):
             script = root / "scripts/validate_runtime_sources.py"
             shutil.copyfile(ROOT / "scripts/validate_runtime_sources.py", script)
             shutil.copyfile(
-                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+                ROOT / "scripts/checkout_workflow.py",
+                root / "scripts/checkout_workflow.py",
             )
             r_home = root / "selected-R"
             (r_home / "bin").mkdir(parents=True)

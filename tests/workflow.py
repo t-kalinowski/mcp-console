@@ -74,14 +74,20 @@ class WorkflowTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         (self.root / "tests").mkdir()
         (self.root / "target").mkdir()
-        for name in ("check", "test", "with-checkout"):
+        for name in (
+            "check",
+            "test",
+            "with-checkout",
+            "checkout_workflow.py",
+            "build_backend.py",
+        ):
             source = ROOT / "scripts" / name
             shutil.copy2(source, self.root / "scripts" / name)
-        for name in ("checkout_workflow.py", "build_backend.py"):
-            source = ROOT / name
-            shutil.copy2(source, self.root / name)
         self.environment = os.environ | {
             "XDG_CACHE_HOME": str(self.directory / "cache"),
+            "PYTHONPATH": str(self.root / "scripts")
+            + os.pathsep
+            + os.environ.get("PYTHONPATH", ""),
         }
         self.environment.pop("MCP_CONSOLE_CHECKOUT_LOCKS", None)
         self.environment.pop("MCP_CONSOLE_VALIDATION_RUN", None)

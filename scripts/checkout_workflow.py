@@ -378,7 +378,7 @@ def main() -> None:
     full = options.arguments == ["--full"]
     if options.mode in {"run", "phase"} and not options.arguments:
         parser.error("run requires a command")
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parent.parent
     os.chdir(root)
     if options.mode == "phase":
         # The new session has its final group identity here, before exec.

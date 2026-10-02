@@ -59,7 +59,7 @@ Dynamic libcap is not bundled; static libcap requires a nonempty `MCP_CONSOLE_LI
 The build does not certify that supplied license text.
 Wheel smoke verifies notices, source identity, helper digest, and actual linkage.
 
-`build_backend.py` owns staging through wheel creation.
+`scripts/build_backend.py` owns staging through wheel creation.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.
 `target/sandbox-runner-build.json` describes staged files under `wheel-data/data`.
 Obsolete generated files are reconciled on staging.

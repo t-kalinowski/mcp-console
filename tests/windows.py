@@ -159,13 +159,18 @@ class WindowsPackaging(unittest.TestCase):
                     tempfile.TemporaryDirectory(prefix="console packaging ")
                 )
             )
-            for source in (
+            (root / "scripts").mkdir()
+            for name in (
                 "build_backend.py",
                 "checkout_workflow.py",
                 "checkout_windows.py",
-                "tests/fixtures/windows_build.py",
             ):
-                (root / Path(source).name).write_bytes((ROOT / source).read_bytes())
+                (root / "scripts" / name).write_bytes(
+                    (ROOT / "scripts" / name).read_bytes()
+                )
+            (root / "windows_build.py").write_bytes(
+                (ROOT / "tests/fixtures/windows_build.py").read_bytes()
+            )
 
             def start(hook):
                 process = subprocess.Popen(

@@ -10,6 +10,7 @@ On Windows, use their `.cmd` launchers from PowerShell or Command Prompt, such a
 Alternatively, invoke any development entry point explicitly with Python, such as `python scripts/check`; this also uses the selected interpreter for nested commands.
 Windows selects [native acceptance and installation checks](WINDOWS.md#validation) for local unsandboxed R/Python; run them exclusively in the checkout.
 Windows packaging skips companion staging and shares the checkout lock with the development commands.
+Shared workflow helpers and the packaging backend live under `scripts/`; `pyproject.toml` selects that directory for isolated source builds.
 
 `scripts/preflight` inventories tools, runtimes, companion staging, and caches; `--json` produces structured output.
 It does not install or build.

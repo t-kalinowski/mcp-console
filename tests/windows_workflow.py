@@ -26,8 +26,6 @@ class WindowsWorkflow(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         shutil.copytree(ROOT / "scripts", self.root / "scripts")
-        for source in [*ROOT.glob("checkout_*.py"), ROOT / "build_backend.py"]:
-            shutil.copy2(source, self.root / source.name)
         (self.root / "tests").mkdir()
         shutil.copy2(
             ROOT / "tests/windows_runner.py", self.root / "tests/windows_runner.py"

@@ -141,7 +141,7 @@ unstaged
         for name in (
             "scripts/preflight",
             "scripts/stage-sandbox-runner",
-            "checkout_workflow.py",
+            "scripts/checkout_workflow.py",
             "sandbox-runner.json",
         ):
             target = self.root / name
