@@ -96,7 +96,7 @@ Every visible top-level expression may autoprint.
 Parse errors reject the whole cell without running earlier expressions or changing `.Last.value`, `.Traceback`, history, task callbacks, or `options(error)`.
 Evaluation and print errors are console outcomes; they preserve earlier effects and leave the worker usable.
 
-R event handlers, including `later` callbacks, run while idle.
+On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.
 The initial display width is 200 columns and remains user-configurable.
@@ -246,7 +246,8 @@ Recordings are not checkpoints and cannot recover data a language printer never 
 **Initialize R before starting background threads that may access the native process environment.** R bootstrap reads and mutates environment variables; Console's interpreter thread and the GIL cannot serialize arbitrary native threads.
 Partial R initialization or unsafe bridge/startup failure can require restart even when ordinary Python remains usable.
 
-macOS and Linux are supported; Windows is not.
+macOS and Linux are supported.
+Windows x64 supports experimental [local unsandboxed R and Python](WINDOWS.md) with preinstalled dependencies; SQL and managed dependency resolution are deferred.
 Native enforcement and descendant retirement have explicit [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 `--no-sandbox` removes native enforcement/descendant cleanup but not an outer Docker/SBX resource.
 Preparation remains a separate [trusted host operation](REQUIREMENTS.md#host-resolution-and-trust).

@@ -14,18 +14,32 @@ def describe() -> dict[str, str]:
     if sys.version_info < (3, 10):
         raise RuntimeError("MCP Console requires Python 3.10 or later")
 
-    framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
-    root_name = "PYTHONFRAMEWORKPREFIX" if framework else "LIBDIR"
-    root = sysconfig.get_config_var(root_name)
-    library_name = sysconfig.get_config_var("LDLIBRARY")
-    if not root or not library_name:
-        raise RuntimeError(
-            "selected Python has no shared embedding library configuration"
-        )
-    if Path(library_name).is_absolute():
-        raise RuntimeError("selected Python returned an invalid shared library name")
+    if sys.platform == "win32":
+        # The running interpreter exposes its exact DLL, also in virtualenvs.
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        filename = kernel.GetModuleFileNameW
+        filename.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        filename.restype = ctypes.c_uint32
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = filename(sys.dllhandle, buffer, len(buffer))
+        if not length or length == len(buffer):
+            raise ctypes.WinError(ctypes.get_last_error())
+        library = Path(buffer.value)
+    else:
+        framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
+        root_name = "PYTHONFRAMEWORKPREFIX" if framework else "LIBDIR"
+        root = sysconfig.get_config_var(root_name)
+        library_name = sysconfig.get_config_var("LDLIBRARY")
+        if not root or not library_name:
+            raise RuntimeError(
+                "selected Python has no shared embedding library configuration"
+            )
+        if Path(library_name).is_absolute():
+            raise RuntimeError(
+                "selected Python returned an invalid shared library name"
+            )
 
-    library = Path(root) / library_name
+        library = Path(root) / library_name
     if not library.is_absolute() or not library.is_file():
         raise RuntimeError(f"selected Python embedding library is missing: {library}")
 

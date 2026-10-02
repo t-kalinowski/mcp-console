@@ -40,7 +40,7 @@ struct EvaluationState {
     /// Releasing its response reservation must not revive late task failures.
     retired: bool,
     restart_handoff: Option<Response>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
 }
@@ -126,7 +126,7 @@ impl Evaluation {
                 waiting: false,
                 retired: false,
                 restart_handoff: None,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 stdin: None,
                 pending_stdin: String::new(),
             }),
@@ -326,7 +326,7 @@ impl Evaluation {
         if let Some(report_at) = state.input_report_at.as_mut() {
             *report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(writer) = &state.stdin {
             writer.send(stdin)?;
             return Ok(());
@@ -335,7 +335,7 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn attach_writer(&self, writer: super::platform::StdinSender) -> Result<(), String> {
         let mut state = self
             .state

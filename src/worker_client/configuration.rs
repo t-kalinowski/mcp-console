@@ -71,14 +71,13 @@ impl ClientConfiguration {
         python: Option<PathBuf>,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
-        #[cfg(not(unix))]
-        let python_resolver = crate::resolver::ManagedPythonResolverConfiguration::capture();
         let configured_python = python
             .map(PathBuf::into_os_string)
             .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         let local_runtime;
+        #[cfg(unix)]
         let local_preparation;
         #[cfg(unix)]
         let (r, duckdb_extensions, python, r_resolver) =
@@ -170,18 +169,48 @@ impl ClientConfiguration {
             };
         #[cfg(not(unix))]
         let local_preparation = None;
-        #[cfg(not(unix))]
-        let (r, duckdb_extensions, python, r_resolver) = (
-            Option::<crate::resolver::ManagedR>::None,
-            Default::default(),
-            Some(PythonEnvironment::builtin(
-                configured_python,
-                python_resolver,
+        #[cfg(windows)]
+        let (r, duckdb_extensions, python, r_resolver) = {
+            let r_home = if crate::local_runtime::Selection::r_is_present() {
+                Some(harp::command::r_home_setup().map_err(|error| error.to_string())?)
+            } else {
+                None
+            };
+            let executable = configured_python
+                .clone()
+                .filter(|value| !value.is_empty())
+                .or_else(|| {
+                    crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
+                });
+            let selected = executable
+                .as_deref()
+                .map(|value| {
+                    let executable = crate::python::explicit_executable(value)?;
+                    crate::python::inspect_native(&executable, on_started)
+                })
+                .transpose()?;
+            if r_home.is_none() && selected.is_none() {
+                return Err(
+                    "no R or Python runtime found; set R_HOME or select Python with -c python=PATH"
+                        .into(),
+                );
+            }
+            local_runtime = Some(crate::local_runtime::Selection {
+                r_home,
+                python: selected.map(|selected| crate::local_runtime::Python {
+                    selected: Box::new(selected),
+                    explicit: executable,
+                    managed: false,
+                    duckdb_extension_directory: None,
+                }),
+            });
+            (
                 None,
-                on_started,
-            )?),
-            RResolver::Discover,
-        );
+                Default::default(),
+                Some(PythonEnvironment::bare(configured_python)),
+                RResolver::Disabled,
+            )
+        };
         let mut configuration = Self::with_arguments(
             program,
             vec![OsString::from("worker")],

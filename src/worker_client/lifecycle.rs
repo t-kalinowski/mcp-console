@@ -311,7 +311,7 @@ impl Drop for WorkerStartupAdmission {
 }
 
 impl Client {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn queue_startup_stdin(
         &self,
         generation: &WorkerGeneration,
@@ -1156,7 +1156,7 @@ impl Client {
                     } else {
                         lifecycle.processes.worker = Some(handle.clone());
                         lifecycle.startup = None;
-                        #[cfg(unix)]
+                        #[cfg(any(unix, windows))]
                         {
                             let input = std::mem::take(
                                 &mut *self

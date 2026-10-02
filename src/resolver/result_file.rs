@@ -2,16 +2,35 @@
 
 use std::fs::File;
 use std::io::{Read as _, Seek as _};
+#[cfg(unix)]
 use std::os::fd::FromRawFd as _;
+#[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::{Path, PathBuf};
 
 pub(crate) struct ResultFile {
     path: PathBuf,
     file: File,
+    #[cfg(windows)]
+    _temporary: tempfile::TempPath,
 }
 
 impl ResultFile {
+    #[cfg(windows)]
+    pub(crate) fn create(directory: &Path) -> Result<Self, String> {
+        let result = tempfile::Builder::new()
+            .prefix("mcp-console-result-")
+            .tempfile_in(directory)
+            .map_err(|error| error.to_string())?;
+        let (file, temporary) = result.into_parts();
+        Ok(Self {
+            path: temporary.to_path_buf(),
+            file,
+            _temporary: temporary,
+        })
+    }
+
+    #[cfg(unix)]
     pub(crate) fn create(directory: &Path) -> Result<Self, String> {
         let mut template = directory
             .join("mcp-console-result-XXXXXX")

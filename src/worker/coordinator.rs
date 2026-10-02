@@ -24,6 +24,8 @@ pub(crate) fn run() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_session() -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    crate::windows::configure_worker_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
         crate::local_runtime::WorkerSelection {
@@ -86,6 +88,27 @@ fn reexec_with_r_library_path(
 }
 
 impl Coordinator {
+    #[cfg(windows)]
+    fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
+        loop {
+            r.idle()?;
+            let message = match core::next_command()? {
+                CommandReadiness::Ready(message) => Some(message),
+                CommandReadiness::Waiting => core::receive_idle_command()?,
+            };
+            // The relay signals interrupts before forwarding the next command,
+            // but their watcher may still be publishing native/Python state.
+            interrupt::finish_windows_publication().map_err(|error| error.to_string())?;
+            r.idle()?;
+            if let Some(message) = take_worker_failure() {
+                return Err(message);
+            }
+            if let Some(message) = message {
+                return Ok(message);
+            }
+        }
+    }
+
     fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             if !self.handle(Self::wait_for_message(&self.r)?)? {
@@ -185,6 +208,7 @@ impl Coordinator {
         Ok(true)
     }
 
+    #[cfg(unix)]
     fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
         loop {
             let sideband_fd = match core::next_command()? {
@@ -258,6 +282,6 @@ fn evaluate_cell(
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/fixtures/native_worker.rs"]
 mod tests;

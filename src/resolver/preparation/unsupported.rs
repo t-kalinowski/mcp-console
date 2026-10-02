@@ -5,6 +5,13 @@ use crate::resolver::ResolverStopHandle;
 pub(crate) struct Preparation;
 
 impl Preparation {
+    pub(crate) fn open_local(
+        _: super::Mode,
+        _: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, super::Discovery), String> {
+        Err("managed dependency resolution is not yet supported on Windows; install packages before starting Console".into())
+    }
+
     pub(crate) fn open(
         _session: &crate::ssh::Session,
         _selections: Selections,

@@ -66,7 +66,7 @@ pub(crate) fn inspect_native(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
+    let mut child = crate::resolver::process::spawn_resolver(&mut command).map_err(|error| {
         format!("failed to inspect selected Python executable `{selected}`: {error}")
     })?;
     let stdout = read_output(child.stdout.take().expect("inspection stdout is piped"));

@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(dead_code))]
 //! Private preparation traffic, separate from the relay stream. The owner keeps
 //! trusted startup choices; each operation completes and retires its own resolver
 //! groups before returning a result. Session manifests and activation stay local.

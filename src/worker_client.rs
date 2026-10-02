@@ -12,14 +12,14 @@ mod lifecycle;
 mod output;
 mod send;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod events;
 
-#[cfg(unix)]
-#[path = "worker_client/unix.rs"]
+#[cfg(any(unix, windows))]
+#[path = "worker_client/process.rs"]
 mod platform;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
