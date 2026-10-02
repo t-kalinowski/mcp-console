@@ -454,10 +454,7 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
                     '[input requested: "R startup> "]\n[waiting for stdin]',
                     "R startup input",
                 )
-                client.send(stdin="R state\n")
-                assert last_result_text(client) == '[1] "R state"\n', last_result_text(
-                    client
-                )
+                client.expect('[1] "R state"\n', stdin="R state\n")
                 client.send(
                     r='stopifnot(!"duckdb" %in% loadedNamespaces()); bootstrap_value'
                 )
@@ -634,8 +631,12 @@ def test_cancelled_response_preserves_bootstrap_and_first_cell(
             '[input requested: "startup> "]\n[waiting for stdin]',
             "cancelled response startup input",
         )
-        client.send(stdin="continue\n")
-        assert last_result_text(client) == "1\n", last_result_text(client)
+        wait_for_evaluation_output(
+            client,
+            "1\n",
+            "cancelled response first cell completes after startup input",
+            stdin="continue\n",
+        )
         client.send(python="counter")
         assert last_result_text(client) == "1\n"
         return client.finish()[3:]

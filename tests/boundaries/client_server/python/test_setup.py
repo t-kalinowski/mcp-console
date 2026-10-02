@@ -93,7 +93,7 @@ def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
             )
             wait_for_evaluation_output(
                 client,
-                None,
+                "Error: fixture bootstrap interrupt\n",
                 "deferred selection bootstrap interruption",
                 completion_timeout_seconds=client.response_timeout,
                 stdin="\n",
