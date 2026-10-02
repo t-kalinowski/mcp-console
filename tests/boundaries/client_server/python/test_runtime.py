@@ -250,11 +250,9 @@ def returns_matplotlib_plots(
                 reticulate::py_require("matplotlib")
                 invisible(reticulate::py_config())
                 """)
-            client.send(r=r)
-            assert last_result_text(client) == "[done]"
+            client.expect(r=r)
         else:
-            client.send(requirements={"python": ["matplotlib"]})
-            assert last_result_text(client) == "[prepared]"
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -423,7 +421,7 @@ after show
 def test_inherits_explicit_matplotlib_config(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         explicit = temporary / "explicit"
         explicit.mkdir()
@@ -441,12 +439,11 @@ def test_inherits_explicit_matplotlib_config(
         environment["MATPLOTLIBRC"] = str(explicit_rc)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
-        client = McpClient(binary, execution.serve(), environment)
-        client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
+        client = clients.enter_context(
+            McpClient(binary, execution.serve(), environment)
         )
-        assert last_result_text(client) == "[prepared]"
+        client.initialize_and_list_tools()
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -497,7 +494,7 @@ def test_inherits_xdg_matplotlib_config(
 def inherits_matplotlib_config(
     binary: Path, execution: Execution, *, xdg: bool
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         home = temporary / "home"
         config_root = temporary / "xdg-config" if xdg else home / ".config"
@@ -556,12 +553,11 @@ def inherits_matplotlib_config(
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
-        client = McpClient(binary, execution.serve(), environment)
-        client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
+        client = clients.enter_context(
+            McpClient(binary, execution.serve(), environment)
         )
-        assert last_result_text(client) == "[prepared]"
+        client.initialize_and_list_tools()
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
