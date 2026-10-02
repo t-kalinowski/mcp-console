@@ -85,6 +85,7 @@ impl Integration {
         Ok(Self)
     }
 
+    #[cfg(unix)]
     pub(super) fn wait_for_activity(&self, sideband_fd: libc::c_int) -> Result<bool, String> {
         if initialized() {
             embedded_r::wait_for_activity(sideband_fd)

@@ -12,7 +12,11 @@ pub(crate) struct Bridge {
 
 impl Bridge {
     pub(crate) fn initialize(initializer: &str, language: &'static str) -> Result<Self, String> {
+        #[cfg(unix)]
         let library = libloading::os::unix::Library::this();
+        #[cfg(windows)]
+        let library = libloading::os::windows::Library::open_already_loaded("R.dll")
+            .map_err(|e| e.to_string())?;
         let try_eval = unsafe {
             *library
                 .get::<TryEval>(b"R_tryEval\0")

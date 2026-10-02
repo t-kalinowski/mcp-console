@@ -95,7 +95,7 @@ def matching_lines(
         for line_number, line in candidates:
             if forbidden.search(line):
                 matches.append(
-                    f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}"
+                    f"{path.relative_to(ROOT).as_posix()}:{line_number}: {line.strip()}"
                 )
     return list(dict.fromkeys(matches))
 
@@ -230,7 +230,7 @@ class ArchitectureCheckTests(unittest.TestCase):
             ),
             ("server.rs", "use crate::{sandbox, server};", "depends on"),
             (
-                "worker_client/unix.rs",
+                "worker_client/process.rs",
                 "use super::{sandbox as private};",
                 "depends on",
             ),

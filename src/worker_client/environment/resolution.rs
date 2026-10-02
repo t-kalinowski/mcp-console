@@ -359,7 +359,7 @@ impl Client {
                         session.protocol().0
                     )
                 } else {
-                    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console".into()
+                    crate::local_runtime::RESOLUTION_UNAVAILABLE.into()
                 };
                 return Err(EnvironmentResolutionFailure::Host(message));
             }

@@ -80,7 +80,7 @@ impl Client {
                 .await
                 .map_err(|error| format!("startup interrupt task failed: {error}"))??;
             if let Some((generation, input)) = startup_stdin {
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 self.queue_startup_stdin(&generation, input)?;
             }
             tokio::time::sleep(INTERRUPT_GRACE).await;
@@ -301,7 +301,7 @@ impl Client {
                     self.ensure_ordinary_generation(&generation)?;
                     let mut startup = self.0.startup.subscribe();
                     let mut stdin = stdin;
-                    #[cfg(unix)]
+                    #[cfg(any(unix, windows))]
                     if !self.startup_finished()
                         && let Some(input) = stdin.take()
                     {
@@ -509,7 +509,7 @@ impl Client {
             }
         }
         if !self.0.dynamic_resolution && !self.0.python_preparation {
-            return Err("dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console".into());
+            return Err(crate::local_runtime::RESOLUTION_UNAVAILABLE.into());
         }
         Ok(())
     }

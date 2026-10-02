@@ -1,9 +1,15 @@
 use std::ffi::OsString;
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod event_writer;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub(crate) fn run(command_line: &[OsString]) -> Result<(), String> {
+    windows::run(command_line)
+}
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn run(_command_line: &[OsString]) -> Result<(), String> {
     Err("the worker relay is currently supported only on macOS".to_string())
 }

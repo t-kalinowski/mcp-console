@@ -774,13 +774,21 @@ def _mcp_console_configure_environment(
     for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
         # Framework launchers and embedding can retain different spellings of
         # the same directory (for example /var and /private/var on macOS).
-        if _os.path.realpath(getattr(_sys, name)) != _os.path.realpath(expected[name]):
+        try:
+            matches = _os.path.samefile(getattr(_sys, name), expected[name])
+        except OSError:
+            matches = False
+        if not matches:
             raise RuntimeError(
                 f"embedded Python {name} differs from the selected environment: "
                 f"{getattr(_sys, name)!r} != {expected[name]!r}"
             )
     executable = expected["embedding"]["python"]
-    if not _os.path.samefile(_sys.executable, executable):
+    try:
+        matches = _os.path.samefile(_sys.executable, executable)
+    except OSError:
+        matches = False
+    if not matches:
         raise RuntimeError("embedded Python executable differs from host selection")
     # Match an interactive interpreter: imports follow the current workspace,
     # including a later os.chdir(), rather than the selected executable's bin.

@@ -1,4 +1,6 @@
 mod arguments;
+#[cfg(windows)]
+mod input_windows;
 mod presentation;
 mod startup;
 use std::error::Error;
@@ -443,6 +445,8 @@ pub async fn run(
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
+    #[cfg(not(windows))]
+    let input = tokio::io::stdin();
     let server = ConsoleServer::new(
         input_closed.clone(),
         worker,
@@ -455,7 +459,20 @@ pub async fn run(
     .map_err(std::io::Error::other)?;
     let startup = server.startup.clone();
     let deliveries = server.deliveries.clone();
-    let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
+    #[cfg(windows)]
+    let input = {
+        let startup = startup.clone();
+        let closed = input_closed.clone();
+        input_windows::Input::new(move || {
+            // Physical EOF can cancel unfinished preparation even if protocol
+            // output is blocked. Once startup finishes, ShutdownReader alone
+            // reports EOF after the queued MCP input has been consumed.
+            if !startup.runtime().worker.startup_finished() {
+                closed.close();
+            }
+        })?
+    };
+    let input = ShutdownReader::new(input, input_closed);
     let transport = crate::server_transport::ServerTransport::new(
         input,
         tokio::io::stdout(),

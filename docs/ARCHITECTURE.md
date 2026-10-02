@@ -1,5 +1,10 @@
 # Architecture
 
+The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local unsandboxed sessions with preinstalled packages.
+Windows uses native pipe/event/process primitives, and Python inspection runs in a kill-on-close Job entered before executing code; cancellation and normal completion require confirmed empty Jobs.
+These Jobs own inspection processes, not evaluated user code.
+Windows managed dependency resolution, SQL, and remote controllers are deferred.
+
 Console separates session management from code execution.
 The server owns what survives a worker; the worker owns live language state.
 A relay connects them, and a native runner or compute provider enforces the execution boundary.
@@ -67,7 +72,7 @@ It joins owned shutdown before retiring relay I/O so the relay can stop and reap
 Initialization alone does not consume the unused-worker replacement exception.
 Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
 Once a callback is deferred, later output, images, and input events from that worker sideband wait behind it; independent stdout, stderr, and retirement observations remain responsive.
-Deferred events use an anonymous mode-0600 temporary spool capped at 16 MiB; the dispatcher resumes them in order before accepting later sideband events.
+Deferred events use a private temporary spool capped at 16 MiB and removed when its last handle closes; the dispatcher resumes them in order before accepting later sideband events.
 Exceeding that limit or a spool I/O failure fails the worker boundary and releases the spool; retirement also releases it.
 Failed preparation resumes the current bootstrap; successful replacement confirms old-worker retirement before starting its successor.
 The accepted first cell retains its admission and is never replayed.

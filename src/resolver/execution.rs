@@ -9,24 +9,27 @@ use crate::worker_protocol::PythonRequirementManifest;
 
 #[derive(Clone)]
 pub(crate) enum Bootstrap {
+    #[cfg_attr(windows, allow(dead_code))]
     Local(Preparation),
     Ssh(Preparation),
 }
 
 #[derive(Clone)]
 pub(crate) enum RConfiguration {
+    #[cfg_attr(windows, allow(dead_code))]
     Local(Preparation),
     Ssh(Preparation),
 }
 
 #[derive(Clone)]
 pub(crate) enum PythonConfiguration {
+    #[cfg_attr(windows, allow(dead_code))]
     Local {
         preparation: Preparation,
         has_uv: bool,
     },
     Ssh(Preparation),
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     Direct(super::ManagedPythonResolverConfiguration),
 }
 
@@ -54,7 +57,7 @@ impl PythonConfiguration {
     pub(crate) fn has_uv(&self) -> bool {
         match self {
             Self::Local { has_uv, .. } => *has_uv,
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             Self::Direct(configuration) => configuration.has_uv(),
             // Discovery requires remote uv for sans-R managed sessions.
             // R-present sessions can prepare it when their first operation needs it.
@@ -64,7 +67,7 @@ impl PythonConfiguration {
     pub(crate) fn has_direct_local_uv(&self) -> bool {
         match self {
             Self::Local { has_uv, .. } => *has_uv,
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             Self::Direct(configuration) => configuration.has_uv(),
             Self::Ssh(_) => false,
         }
@@ -72,7 +75,7 @@ impl PythonConfiguration {
     pub(crate) fn set_resolved_uv(&mut self, _uv: std::ffi::OsString) {
         match self {
             Self::Local { has_uv, .. } => *has_uv = true,
-            #[cfg(not(unix))]
+            #[cfg(not(any(unix, windows)))]
             Self::Direct(configuration) => configuration.set_resolved_uv(_uv),
             Self::Ssh(_) => unreachable!("remote uv stays remote"),
         }
@@ -127,7 +130,7 @@ pub(crate) fn resolve_python_manifest(
                 on_started,
             )
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         PythonConfiguration::Direct(configuration) => {
             if selected_python.is_some() {
                 return Err(
@@ -155,7 +158,7 @@ pub(crate) fn resolve_python_version(
                 on_started,
             )
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         PythonConfiguration::Direct(configuration) => {
             super::resolve_python_version(constraints, configuration, on_started)
         }
@@ -176,7 +179,7 @@ pub(crate) fn inspect_native(
                 on_started,
             )
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         PythonConfiguration::Direct(_) => crate::python::inspect_native(executable, on_started),
     }
 }
@@ -208,7 +211,7 @@ pub(crate) fn resolve_python_duckdb_extensions(
         PythonConfiguration::Local { preparation, .. } | PythonConfiguration::Ssh(preparation) => {
             preparation
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         PythonConfiguration::Direct(_) => {
             return Err("Python-backed DuckDB preparation requires a Unix resolver".into());
         }

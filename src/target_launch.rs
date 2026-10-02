@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(dead_code))]
 //! Versioned target bootstrap and envelope around unchanged relay JSONL.
 use crate::ssh::preparation;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(unix))]
+mod unsupported;
+#[cfg(not(unix))]
+pub(crate) use unsupported::{owner, process, runtime};
 #[cfg(unix)]
 mod launch;
 #[cfg(unix)]
@@ -48,7 +53,10 @@ pub(crate) fn run(
     #[cfg(unix)]
     return launch::run(protocol, probe, compute);
     #[cfg(not(unix))]
-    Err("target execution requires macOS or Linux".into())
+    {
+        let _ = (protocol, probe, compute);
+        Err("target execution requires macOS or Linux".into())
+    }
 }
 
 #[derive(Deserialize, Serialize)]

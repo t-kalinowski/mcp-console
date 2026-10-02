@@ -94,6 +94,7 @@ pub(crate) enum Access {
 }
 
 impl Mount {
+    #[cfg(unix)]
     pub fn argument(&self) -> String {
         // Docker parses --mount as CSV, including quotes inside field values.
         let quote = |value: String| format!("\"{}\"", value.replace('"', "\"\""));

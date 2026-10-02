@@ -4,12 +4,18 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
 pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
+#[cfg(unix)]
+pub(crate) const RESOLUTION_UNAVAILABLE: &str =
+    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console";
+#[cfg(windows)]
+pub(crate) const RESOLUTION_UNAVAILABLE: &str = "dynamic environment resolution is unavailable on Windows; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -45,6 +51,7 @@ impl Selection {
         std::env::var_os("R_HOME").is_some() || crate::resolver::find_path_entry("R").is_some()
     }
 
+    #[cfg(unix)]
     pub(crate) fn python(
         configured: Option<OsString>,
         resolver: &crate::resolver::execution::PythonConfiguration,
@@ -69,6 +76,7 @@ impl Selection {
         )
     }
 
+    #[cfg(unix)]
     pub(crate) fn python_on_host(
         configured: Option<OsString>,
         resolver: &crate::resolver::ManagedPythonResolverConfiguration,
@@ -99,6 +107,7 @@ impl Selection {
         Ok((selection, managed))
     }
 
+    #[cfg(unix)]
     fn python_with(
         configured: Option<OsString>,
         has_uv: bool,
@@ -150,6 +159,7 @@ impl Selection {
         self.r_home.is_none()
     }
 
+    #[cfg(unix)]
     pub(crate) fn prepare_default_duckdb_extensions(
         &self,
         managed: Option<&ManagedPython>,
@@ -249,6 +259,7 @@ impl RInstallation {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
     use std::os::unix::ffi::OsStringExt;
 
@@ -309,6 +320,16 @@ pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Erro
 pub(crate) struct TemporaryDirectory(Option<PathBuf>);
 
 impl TemporaryDirectory {
+    #[cfg(windows)]
+    pub(crate) fn create() -> Result<Self, String> {
+        tempfile::Builder::new()
+            .prefix("mcp-console-worker-")
+            .tempdir()
+            .map(|directory| Self(Some(directory.keep())))
+            .map_err(|error| format!("cannot create worker temporary directory: {error}"))
+    }
+
+    #[cfg(unix)]
     pub(crate) fn create() -> Result<Self, String> {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
         let template = std::env::temp_dir().join("mcp-console-worker-XXXXXX");
@@ -351,4 +372,15 @@ impl Drop for TemporaryDirectory {
             eprintln!("{error}");
         }
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
+    let home = harp::command::r_home_setup()?;
+    let installation = RInstallation {
+        resources: ["share", "include", "doc"].map(|name| home.join(name).into_os_string()),
+        home,
+    };
+    installation.configure_environment();
+    Ok(installation)
 }

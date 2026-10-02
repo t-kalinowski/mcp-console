@@ -2,8 +2,6 @@
 
 use std::fs::File;
 use std::io::{self, BufRead as _, BufReader, Seek as _, SeekFrom, Write as _};
-use std::os::fd::FromRawFd as _;
-use std::os::unix::ffi::OsStrExt as _;
 
 use crate::relay_protocol::RelayEvent;
 
@@ -69,28 +67,10 @@ impl DeferredEvents {
 
 impl Spool {
     fn create() -> std::io::Result<Self> {
-        let path = std::env::temp_dir().join("mcp-console-bootstrap-XXXXXX");
-        let mut template = path.as_os_str().as_bytes().to_vec();
-        template.push(0);
-        // SAFETY: mkstemp creates a unique mode-0600 file and transfers its fd.
-        let descriptor = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
-        if descriptor < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: the successfully created descriptor is uniquely owned here.
-        let file = unsafe { File::from_raw_fd(descriptor) };
-        // Unlink immediately: retirement, failure, or controller exit releases
-        // the spool without leaving startup output in a named temporary file.
-        // SAFETY: template contains the terminated path returned by mkstemp.
-        if unsafe { libc::unlink(template.as_ptr().cast()) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: descriptor belongs to file; no child may inherit it.
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
         Ok(Self {
-            file,
+            // The OS removes this private spool when its last handle closes,
+            // including controller exit without running Rust destructors.
+            file: tempfile::tempfile()?,
             read: 0,
             written: 0,
         })

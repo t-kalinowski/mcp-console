@@ -19,7 +19,12 @@ from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import OLD_PYTHON, PROCESS_EVENTS, SYSTEM_PYTHON, requires
+from support.requirements import (
+    OLD_PYTHON,
+    OLD_PYTHON_EXECUTABLE,
+    PROCESS_EVENTS,
+    requires,
+)
 from support.requirements import R
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
@@ -164,7 +169,7 @@ def test_rejects_python_older_than_3_10(
     # can emit unrelated diagnostics even when Python itself starts correctly.
     probe = subprocess.run(
         (
-            SYSTEM_PYTHON,
+            OLD_PYTHON_EXECUTABLE,
             "-I",
             "-c",
             "import json, sys; print(json.dumps([sys.executable, sys.version_info[:2]]))",
@@ -175,7 +180,7 @@ def test_rejects_python_older_than_3_10(
     )
     interpreter, version = json.loads(probe.stdout)
     assert version == [3, 9], version
-    assert Path(interpreter).is_absolute() and Path(interpreter) != SYSTEM_PYTHON
+    assert Path(interpreter).is_absolute()
 
     environment = os.environ.copy()
     environment["RETICULATE_PYTHON"] = str(interpreter)

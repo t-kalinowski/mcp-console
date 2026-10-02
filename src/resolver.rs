@@ -4,6 +4,8 @@ pub(crate) enum ResolverControlOutcome {
     Cancelled,
 }
 
+mod environment;
+pub(crate) use environment::{ManagedPython, ManagedR};
 pub(crate) mod execution;
 pub(crate) mod preparation;
 
@@ -19,30 +21,39 @@ mod managed_duckdb_python;
 mod managed_python;
 #[cfg(unix)]
 mod managed_r;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) mod process;
+#[cfg(unix)]
 mod python_configuration;
 #[cfg(unix)]
 mod python_version;
 pub(crate) mod result_file;
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 mod unsupported;
 
 pub(crate) fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.
-    std::env::split_paths(&path)
-        .map(|directory| {
-            if directory.as_os_str().is_empty() {
-                std::path::PathBuf::from(".").join(program)
-            } else {
-                directory.join(program)
-            }
-        })
-        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
+    std::env::split_paths(&path).find_map(|directory| {
+        let candidate = if directory.as_os_str().is_empty() {
+            std::path::PathBuf::from(".").join(program)
+        } else {
+            directory.join(program)
+        };
+        #[cfg(windows)]
+        let candidate = if candidate.extension().is_none() {
+            candidate.with_extension("exe")
+        } else {
+            candidate
+        };
+        std::fs::symlink_metadata(&candidate)
+            .is_ok()
+            .then_some(candidate)
+    })
 }
 
+#[cfg(unix)]
 pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 
 #[cfg(unix)]
@@ -53,16 +64,15 @@ pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
 use managed_python::resolve_python_manifest;
 #[cfg(unix)]
 pub(crate) use managed_python::{
-    ManagedPython, resolve_python_manifest_for_remote, resolve_python_version,
-    resolve_python_version_for_remote,
+    resolve_python_manifest_for_remote, resolve_python_version, resolve_python_version_for_remote,
 };
 #[cfg(unix)]
 pub(crate) use managed_r::{
-    ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
+    ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
 };
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) use process::{ResolverControl, ResolverStopHandle};
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::{
     ManagedPython, ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, ResolverStopHandle,
     resolve_duckdb_extensions, resolve_python, resolve_python_manifest, resolve_python_version,
