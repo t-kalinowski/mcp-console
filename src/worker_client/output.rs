@@ -221,11 +221,11 @@ impl Response {
         self.preview.is_empty()
     }
 
-    pub(super) fn is_error(&self) -> bool {
+    fn is_error(&self) -> bool {
         self.is_error
     }
 
-    pub(super) fn push_notice(&mut self, message: impl Into<String>) {
+    pub(crate) fn push_notice(&mut self, message: impl Into<String>) {
         self.with_builder(|builder| builder.notice(message));
     }
 

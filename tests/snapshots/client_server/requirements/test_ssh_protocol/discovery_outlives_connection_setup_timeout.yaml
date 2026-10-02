@@ -1,8 +1,4 @@
 ---
-input:
-  method: ping
-result: {}
----
 send:
   requirements:
     action: get
@@ -18,7 +14,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -32,7 +29,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
-          "prepared": false,
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -57,6 +54,7 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
@@ -66,7 +64,7 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
-    prepared: false
+    prepared: true
     runtime_requirements:
       r:
         - DBI

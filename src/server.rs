@@ -1,300 +1,43 @@
-mod execution;
+mod arguments;
+#[cfg(windows)]
+mod input_windows;
+mod presentation;
+mod startup;
 use std::error::Error;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
+use arguments::{Requirements, SendArguments, SendControl};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     handler::server::{
         common::Extension, router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters,
     },
     model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode},
-    schemars,
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
-use serde::Deserialize;
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::oneshot;
 
 use crate::worker_client::WORKER_SHUTDOWN_GRACE;
 
-const DEFAULT_TIMEOUT_MS: u64 = 60_000;
-// Internal eval configuration; intentionally not exposed through the CLI.
-const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
-
-#[derive(Clone, Copy, Default)]
-struct Languages {
-    r: bool,
-    python: bool,
-    sql: bool,
-}
-
-impl Languages {
-    fn from_environment() -> Result<Self, String> {
-        let Some(value) = std::env::var_os(LANGUAGES_ENV) else {
-            return Ok(Self::all());
-        };
-        let value = value
-            .into_string()
-            .map_err(|_| Self::invalid_configuration())?;
-        let mut languages = Self::default();
-        for language in value.split(',') {
-            match language {
-                "r" => languages.r = true,
-                "python" => languages.python = true,
-                "sql" => languages.sql = true,
-                _ => return Err(Self::invalid_configuration()),
-            }
-        }
-        Ok(languages)
-    }
-
-    fn all() -> Self {
-        Self {
-            r: true,
-            python: true,
-            sql: true,
-        }
-    }
-
-    fn enables(self, language: crate::cell::Language) -> bool {
-        match language {
-            crate::cell::Language::R => self.r,
-            crate::cell::Language::Python => self.python,
-            crate::cell::Language::Sql => self.sql,
-        }
-    }
-
-    fn field(language: crate::cell::Language) -> &'static str {
-        match language {
-            crate::cell::Language::R => "r",
-            crate::cell::Language::Python => "python",
-            crate::cell::Language::Sql => "sql",
-        }
-    }
-
-    fn invalid_configuration() -> String {
-        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of `r`, `python`, and `sql`")
-    }
-}
+use crate::cell::{LANGUAGES_ENV, Languages};
 
 #[derive(Clone)]
 struct ConsoleServer {
-    worker: crate::worker_client::Client,
-    transcript: crate::transcript::Transcript,
+    startup: startup::Startup,
     deliveries: crate::server_transport::ResponseDeliveries,
     languages: Languages,
     tool_router: ToolRouter<Self>,
 }
 
-#[derive(Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-struct SendArguments {
-    /// One complete R cell evaluated in persistent global state. Prefer Console for R execution,
-    /// including tests and package checks. When a fresh session is needed and existing in-memory
-    /// state can be discarded, send `control: "restart"` and `r` together; the code runs in the new
-    /// worker. For background execution, use `timeout_ms: 0`, then poll with an empty `send`.
-    /// Avoid `callr` merely to obtain fresh state or nonblocking execution. Use a subprocess when
-    /// the task requires separate process isolation, preserving the current session while running
-    /// independently, or ordinary R behavior without Console's runtime hooks.
-    ///
-    /// The cell's final visible expression autoprints through R's normal console display; R also
-    /// autoprints earlier visible top-level expressions. Leave the primary result last and print
-    /// only when additional output is needed.
-    /// When dynamic resolution is available, the built-in worker resolves missing plain CRAN
-    /// package names on demand through `library()`, `require()`, `requireNamespace()`,
-    /// `loadNamespace()`, `::`, or `:::`. Use packages directly; do not probe package availability
-    /// or call `install.packages()`. Resolution makes a package available but attaches it only
-    /// through the original `library()` or `require()` call. In a bare runtime, packages must
-    /// already be installed and these operations keep their ordinary R behavior. R source is not
-    /// scanned in advance. Read Python globals through `py$name`. With managed DuckDB active, R data
-    /// frames are directly queryable by name from later SQL cells. `sql_connection()` returns the
-    /// R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
-    /// cells with `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
-    /// selected connection before disconnecting it. Default-device plots return as PNG images. Keep
-    /// all drawing operations for one plot in the same cell. Set persistent dimensions with
-    /// `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
-    /// width and height are in inches. Omit this field for polling or stdin-only calls.
-    r: Option<String>,
-    /// One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
-    /// autoprints through Python's normal display hook. Leave the primary result last and print only
-    /// when additional output is needed. When dynamic resolution is available and an import is
-    /// missing, the built-in managed worker resolves a PyPI distribution on demand, using a curated mapping for well-known
-    /// import/distribution differences and otherwise assuming the distribution matches the top-level
-    /// module. Python source is not scanned; resolution starts only when execution reaches the import.
-    /// Use `requirements.python` when the distribution differs from the inferred name, exact registry
-    /// metadata is needed, or the package should be prepared before the cell. A user-selected Python
-    /// environment or bare runtime disables both automatic resolution and managed requirements;
-    /// import packages already installed there directly. Read R globals and call R functions through
-    /// `r.name`. Select a user-owned DB-API connection for later SQL cells with
-    /// `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(None)`. Python data frames are not automatically visible to managed
-    /// DuckDB SQL; bind them to an R name before querying them there. At cell end, including after a
-    /// Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed.
-    /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
-    /// polling or stdin-only calls.
-    python: Option<String>,
-    /// One complete SQL cell evaluated through the active connection. When its provider is installed,
-    /// managed DuckDB is initialized during startup and keeps a persistent catalog. A result with columns returns a bounded
-    /// preview. With managed DuckDB, an unqualified relation name can query a data frame in R global
-    /// state, and a DuckDB table or view with the same name takes precedence. A user-selected R
-    /// connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
-    /// them through its connection or cursor protocol. The selected driver supplies its own SQL
-    /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
-    /// interface. Managed DuckDB conveniences and extension requirements apply only to the managed
-    /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-    /// databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
-    /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
-    /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
-    /// or stdin-only calls.
-    sql: Option<String>,
-    /// Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-    /// SIGINT from the active host resolver or live worker and preserves in-memory state. After
-    /// successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
-    /// earlier evaluation or attempting an optional following cell; the cell is not run if the
-    /// interrupted evaluation remains active. When `requirements` is available, restart resolves
-    /// same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
-    /// and unread-stdin state and sends same-call stdin and code only to the replacement.
-    control: Option<SendControl>,
-    /// Inspect or manage retained R packages, Python packages, and DuckDB extensions.
-    /// action=get returns a read-only snapshot, including Python constraints and separate runtime
-    /// infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
-    /// manifest is in structuredContent.requirements even when it exceeds the text preview limit.
-    /// During discovery, unknown requirements are null; this is not an installed-package inventory.
-    /// action=add is the default; action=set replaces the whole declaration without injecting defaults;
-    /// action=reset restores startup defaults. Before user code or nonempty input is admitted, an
-    /// unused warm worker can be replaced automatically. Later replacements require control="restart". Empty set means no optional requirements; bare {} is invalid.
-    /// Requirements alone perform standalone preparation. With one cell, they are preconditions of
-    /// that cell. With `control = "restart"`, they are part of the restart transaction, with or
-    /// without a cell. Only add can accompany interrupt, and only when a cell follows.
-    /// Preparation does not import, attach, or load dependencies. On a code-bearing call without
-    /// control, preparation completes before same-call nonempty stdin is queued. Standalone
-    /// preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
-    /// unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
-    /// delivery and stdin enqueue happen before requirements are validated or prepared and are not
-    /// rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
-    /// not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
-    /// explicit `ir` references. In the built-in managed Python environment, missing imports normally
-    /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
-    /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
-    /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-    /// further changes require restart. Resolution runs with server permissions and may download
-    /// packages or extensions or execute installation or build code. Use only trusted requirements.
-    requirements: Option<Requirements>,
-    /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
-    /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
-    /// Line-oriented input therefore normally needs a trailing `\n`. On a code-bearing call without
-    /// control, available requirements are prepared before nonempty stdin is queued. Standalone
-    /// preparation cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
-    /// 100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
-    /// same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
-    /// before the code is run; an already waiting interactive read may consume it before the new cell
-    /// begins. Empty text queues nothing. If output ends in `[waiting for stdin]`, send the requested
-    /// input here. Unread text can satisfy later reads and is discarded by restart.
-    stdin: Option<String>,
-    /// Omit for normal calls and polls. This limits how long the tool waits; it returns immediately
-    /// when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
-    /// background work, then poll with an empty `send`.
-    ///
-    /// Defaults to 60,000 milliseconds. The wait starts when a cell is admitted or a call attaches to
-    /// its evaluation, including pending background startup and one automatic replacement attempt. It does not cancel resolution
-    /// or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
-    /// before dispatch and may make the complete call take longer. This value does not limit standalone
-    /// preparation. Automatic R and Python import
-    /// resolution are part of the running evaluation and count toward this wait. On expiry, the call
-    /// returns available output and a state marker, such as
-    /// `[running; poll with an empty send]` or `[worker starting]`. If evaluation remains active, poll
-    /// with an empty `send` call; do not resubmit the cell.
-    #[serde(default = "default_timeout_ms")]
-    timeout_ms: u64,
-}
-
-#[derive(Clone, Copy, Deserialize, schemars::JsonSchema)]
-#[schemars(inline)]
-#[serde(rename_all = "snake_case")]
-enum SendControl {
-    Interrupt,
-    Restart,
-}
-
-#[derive(Deserialize, schemars::JsonSchema)]
-#[schemars(inline)]
-#[serde(deny_unknown_fields)]
-struct Requirements {
-    /// get inspects the committed declaration without starting a worker or consuming output.
-    /// add (default) accumulates requirements. set replaces all lists and Python constraints;
-    /// omitted fields are empty, including when only action is supplied. reset restores startup
-    /// defaults. get and reset reject payload fields. Changed set/reset with a live worker require
-    /// control="restart"; the complete candidate resolves before the old worker is retired.
-    /// add accepts up to 64 entries per language per call; set accepts the complete accumulated manifest.
-    #[serde(default)]
-    action: crate::worker_client::RequirementsAction,
-    /// Python version constraints, preserved by get and replaced as a whole by set. Add appends
-    /// constraints; changing constraints with a live worker requires control="restart".
-    #[serde(default, deserialize_with = "supplied_list")]
-    #[schemars(with = "Vec<String>")]
-    python_version: Option<Vec<String>>,
-    /// Python package publication cutoff accepted by uv, for example "2026-01-01". set clears an
-    /// omitted or null cutoff; add preserves an omitted cutoff and cannot replace an existing one.
-    #[serde(default, deserialize_with = "supplied_nullable")]
-    exclude_newer: Option<Option<String>>,
-    /// DuckDB extension names for the managed DuckDB backend, for standalone preparation,
-    /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
-    /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
-    /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
-    /// uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
-    /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
-    /// later inside the worker.
-    #[serde(default, deserialize_with = "supplied_list")]
-    #[schemars(with = "Vec<String>", inner(length(min = 1, max = 64)))]
-    duckdb: Option<Vec<String>>,
-    /// Single-line `ir` package references for standalone preparation, preparation before a
-    /// cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
-    /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
-    /// Automatic R discovery accepts only plain package names. An idle worker that implements R
-    /// preparation can add requirements without losing live state. Local package sources are
-    /// rejected because resolution runs with server permissions.
-    #[serde(default, deserialize_with = "supplied_list")]
-    #[schemars(with = "Vec<String>", inner(length(min = 1)))]
-    r: Option<Vec<String>>,
-    /// Named PEP 508 registry requirements for standalone preparation, preparation before a
-    /// cell, or a restart transaction, for example `polars>=1`, `scikit-learn`, or
-    /// `matplotlib; python_version >= '3.10'`. Use explicit requirements when automatic import
-    /// inference needs a different distribution, a version, an extra, or an environment marker, or
-    /// when the distribution should be prepared before the cell. Automatic imports infer bare
-    /// distribution names only. Paths, file URLs, editable requirements, direct references, local
-    /// archives, and local projects are rejected. Preparation does not import the package. An idle
-    /// server-managed worker may activate compatible additions without losing state. A nonempty
-    /// user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
-    /// requirements.
-    #[serde(default, deserialize_with = "supplied_list")]
-    #[schemars(with = "Vec<String>", inner(length(min = 1)))]
-    python: Option<Vec<String>>,
-}
-
-fn supplied_list<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Vec<String>>, D::Error> {
-    Vec::<String>::deserialize(deserializer).map(Some)
-}
-
-fn supplied_nullable<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Option<String>>, D::Error> {
-    Option::<String>::deserialize(deserializer).map(Some)
-}
-
-fn default_timeout_ms() -> u64 {
-    DEFAULT_TIMEOUT_MS
-}
-
 impl ConsoleServer {
     fn new(
+        input_closed: InputClosed,
         worker: Option<PathBuf>,
         relay: Option<PathBuf>,
         no_sandbox: bool,
@@ -304,189 +47,85 @@ impl ConsoleServer {
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
-        let policy = sandbox_settings.clone();
-        // Public metadata describes configured placement, not a discovery result.
-        let metadata = target.as_ref().map(|(target, _)| {
-            let mut value = serde_json::to_value(target).expect("target configuration");
-            value["provider"] =
-                if matches!(target.compute, crate::settings::Compute::DockerSandbox(_)) {
-                    "compute"
-                } else {
-                    "native"
-                }
-                .into();
-            value
-        });
-        let prepared = metadata
-            .as_ref()
-            .and_then(|target| target.pointer("/compute/kind"))
-            .and_then(serde_json::Value::as_str)
-            .filter(|kind| matches!(*kind, "docker" | "docker_sandbox"));
-        let worker = if let Some((target, roots)) = target {
-            crate::worker_client::Client::target(
-                target,
-                roots,
-                no_sandbox,
-                sandbox_settings,
-                python,
-            )?
-        } else {
-            match (worker, relay) {
-                (Some(program), relay) => {
-                    crate::worker_client::Client::new(program, relay, no_sandbox, sandbox_settings)?
-                }
-                (None, None) => {
-                    crate::worker_client::Client::builtin(no_sandbox, sandbox_settings, python)?
-                }
-                (None, Some(_)) => {
-                    return Err("a custom relay requires a custom worker".to_string());
-                }
-            }
-        };
-        let (dynamic_resolution, python_preparation) = worker.known_preparation();
-        let transcript = crate::transcript::Transcript::with_target(
-            recording_directory,
-            dynamic_resolution,
-            python_preparation,
-            metadata.clone(),
+        if worker.is_none() && relay.is_some() {
+            return Err("a custom relay requires a custom worker".into());
+        }
+        // Presentation has no dependency on the client or its discovered capabilities.
+        let tool_router = Self::configured_tool_router(
+            languages,
+            worker.is_none(),
+            &sandbox_settings,
+            no_sandbox,
+            target.as_ref().map(|(target, _)| target),
         );
-        worker.record_with(transcript.clone());
-        let security = execution::description(&policy, no_sandbox, metadata.as_ref());
-        let tool_router = Self::configured_tool_router(languages, &security, prepared);
+        let runtime = Arc::new(startup::Runtime {
+            worker: crate::worker_client::Client::pending(),
+            transcript: crate::transcript::Transcript::pending(
+                recording_directory
+                    .as_ref()
+                    .cloned()
+                    .map_err(|error| std::io::Error::new(error.kind(), error.to_string())),
+            ),
+        });
+        let prelaunch = worker.is_none();
+        let startup = startup::Startup::new(
+            input_closed,
+            runtime,
+            prelaunch,
+            move |started, diagnostics| {
+                let configuration = if let Some((target, roots)) = target {
+                    crate::worker_client::ClientConfiguration::target(
+                        target,
+                        roots,
+                        no_sandbox,
+                        sandbox_settings,
+                        python,
+                        diagnostics,
+                        started,
+                    )?
+                } else if let Some(program) = worker {
+                    crate::worker_client::ClientConfiguration::new(
+                        program,
+                        relay,
+                        no_sandbox,
+                        sandbox_settings,
+                    )
+                } else {
+                    crate::worker_client::ClientConfiguration::builtin(
+                        no_sandbox,
+                        sandbox_settings,
+                        python,
+                        diagnostics,
+                        started,
+                    )?
+                };
+                let target = configuration.target_metadata();
+                let transcript = crate::transcript::Transcript::with_target(
+                    recording_directory,
+                    configuration.dynamic_resolution(),
+                    configuration.python_preparation(),
+                    !configuration.python_only(),
+                    target,
+                );
+                Ok(startup::PreparedRuntime {
+                    configuration,
+                    transcript,
+                })
+            },
+        );
         Ok(Self {
-            worker,
-            transcript,
+            startup,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
             languages,
             tool_router,
         })
-    }
-
-    fn configured_tool_router(
-        languages: Languages,
-        security: &str,
-        prepared: Option<&str>,
-    ) -> ToolRouter<Self> {
-        let dynamic_resolution = prepared.is_none();
-        let mut router = Self::tool_router();
-        let send = router
-            .map
-            .get_mut("send")
-            .expect("send tool must be registered");
-        let description = send
-            .attr
-            .description
-            .as_mut()
-            .expect("send tool must have a description")
-            .to_mut();
-        description.push_str("\n\n");
-        description.push_str(security);
-        let schema = Arc::make_mut(&mut send.attr.input_schema);
-        let properties = schema
-            .get_mut("properties")
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("send schema must have object properties");
-        let control = properties
-            .get_mut("control")
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("send control schema must be an object");
-        control.insert(
-            "type".to_string(),
-            serde_json::Value::String("string".to_string()),
-        );
-        if let Some(values) = control
-            .get_mut("enum")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            values.retain(|value| !value.is_null());
-        }
-        // Omission carries meaning for get/reset. Do not advertise payload defaults.
-        for property in properties
-            .get_mut("requirements")
-            .and_then(|requirements| requirements.get_mut("properties"))
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("requirements schema properties")
-            .values_mut()
-        {
-            property
-                .as_object_mut()
-                .expect("requirement property schema")
-                .remove("default");
-        }
-        // Keep the normal tool prose and nested requirements unchanged; evals
-        // only need to project which direct code fields the client can call.
-        for (field, enabled) in [
-            ("r", languages.r),
-            ("python", languages.python),
-            ("sql", languages.sql),
-        ] {
-            if !enabled {
-                properties.shift_remove(field);
-            }
-        }
-        description.push_str("\n\nBuilt-in sessions prepare automatically in the background. Runtime capabilities are discovered on the execution host; the listed language fields do not guarantee that an interpreter is installed. R/Python sharing requires both runtimes and their bridge. Managed DuckDB requires its provider packages. Each operation validates the session's actual capabilities. Requirements inspection reports the known declaration and preparation status, not an installed-package inventory.");
-        let mut guidance = String::new();
-        if languages.sql {
-            guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");
-        }
-        if languages.r {
-            guidance.push_str(
-                "Use R for vectorized data and string operations, statistics, and plots. ",
-            );
-        }
-        if languages.python {
-            guidance.push_str(
-                "Use Python when its libraries or format-specific parsing simplify the task. ",
-            );
-        }
-        if [languages.r, languages.python, languages.sql]
-            .into_iter()
-            .filter(|enabled| *enabled)
-            .count()
-            > 1
-        {
-            guidance.push_str("Switch languages when useful, reusing persistent state.");
-        }
-        guidance.truncate(guidance.trim_end().len());
-        if languages.sql {
-            guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
-            if dynamic_resolution {
-                guidance
-                    .push_str("When managed preparation is available, defaults include SQLite; ");
-                guidance.push_str(r#"attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. Prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
-            } else {
-                guidance.push_str("For SQLite, use a preinstalled sqlite extension and attach the database read-only. ");
-            }
-            guidance.push_str("SQL results include bounded table previews that abbreviate long text cells; return focused queries and summaries for inspection.");
-        }
-        *description = description.replacen(
-            "State persists across calls. ",
-            &format!("State persists across calls.\n\n{guidance}\n\n"),
-            1,
-        );
-        if let Some(kind @ ("docker" | "docker_sandbox")) = prepared {
-            execution::configure_prepared(description, properties, kind);
-        }
-        if !dynamic_resolution {
-            let requirements = properties
-                .get_mut("requirements")
-                .expect("requirements schema");
-            *requirements = serde_json::json!({
-                "type": ["object", "null"],
-                "description": "Inspect the server's retained declaration with action=get. Preparation is unavailable for this target; the declaration is not an installed-package inventory.",
-                "properties": {"action": {"type": "string", "enum": ["get"]}},
-                "required": ["action"],
-                "additionalProperties": false,
-            });
-        }
-        router
     }
 }
 
 #[tool_router]
 impl ConsoleServer {
     #[tool(
-        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Reuse live state when switching: Python reads R globals through `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`.
+        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Language fields describe the configured interface, not installed runtimes. With both runtimes and their bridge available, Python reads R globals through `r.name` and R reads Python globals through `py$name`. R-owned managed DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages.
 
 Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
 
@@ -496,8 +135,10 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
     )]
     async fn send(
         &self,
+        Extension(runtime): Extension<Arc<startup::Runtime>>,
         Extension(call): Extension<crate::transcript::Call>,
         Extension(delivery): Extension<crate::server_transport::ResponseDeliveryCall>,
+        Extension(started): Extension<Instant>,
         Parameters(SendArguments {
             r,
             python,
@@ -529,16 +170,6 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
         if let Some(cell) = cell.as_ref()
             && !self.languages.enables(cell.language)
         {
-            if self.worker.python_only() && matches!(cell.language, crate::cell::Language::R) {
-                return Err("R cells are unavailable in Python sessions without R".into());
-            }
-            if !self.worker.python_available()
-                && matches!(cell.language, crate::cell::Language::Python)
-            {
-                return Err(
-                    "Python cells are unavailable: the target has no Python runtime".into(),
-                );
-            }
             return Err(format!(
                 "`{}` cells are disabled by `{LANGUAGES_ENV}`",
                 Languages::field(cell.language)
@@ -565,7 +196,35 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                             .into(),
                     );
                 }
-                let snapshot = self.worker.inspect_requirements();
+                match tokio::time::timeout(
+                    Duration::from_millis(timeout_ms).saturating_sub(started.elapsed()),
+                    runtime.worker.ready(),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        return Ok(response_to_tool_result(
+                            crate::worker_client::Response::tool_error(error),
+                            &call,
+                            &runtime.transcript,
+                            &self.deliveries,
+                            &delivery,
+                        ));
+                    }
+                    Err(_) => {
+                        let mut response = crate::worker_client::Response::default();
+                        response.push_notice("worker starting");
+                        return Ok(response_to_tool_result(
+                            response,
+                            &call,
+                            &runtime.transcript,
+                            &self.deliveries,
+                            &delivery,
+                        ));
+                    }
+                }
+                let snapshot = runtime.worker.inspect_requirements();
                 let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");
                 let text = if json.len() <= 8 * 1024 {
                     json
@@ -598,7 +257,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                 }
             },
         );
-        let response = self
+        let response = runtime
             .worker
             .send(crate::worker_client::SendRequest {
                 cell,
@@ -608,8 +267,10 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                     SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
                     SendControl::Restart => crate::worker_client::SendControl::Restart,
                 }),
-                timeout: Duration::from_millis(timeout_ms),
-                transcript: self.transcript.clone(),
+                deadline: started
+                    .checked_add(Duration::from_millis(timeout_ms))
+                    .unwrap_or(started),
+                transcript: runtime.transcript.clone(),
                 call_id: call.id(),
             })
             .await
@@ -617,7 +278,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
         Ok(response_to_tool_result(
             response,
             &call,
-            &self.transcript,
+            &runtime.transcript,
             &self.deliveries,
             &delivery,
         ))
@@ -671,6 +332,7 @@ impl ServerHandler for ConsoleServer {
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let request_id = context.id.clone();
+        context.extensions.insert(Instant::now());
         if request.name.as_ref() != "send" {
             return self
                 .tool_router
@@ -710,7 +372,10 @@ impl ServerHandler for ConsoleServer {
             }
         };
         context.extensions.insert(delivery.clone());
-        let transcript = self.transcript.clone();
+        let runtime = self.startup.runtime();
+        let waiting_for_startup = !runtime.worker.startup_finished();
+        let transcript = runtime.transcript.clone();
+        context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
         let request = Arc::new(request);
         let recording_request = Arc::clone(&request);
@@ -736,7 +401,17 @@ impl ServerHandler for ConsoleServer {
             .map
             .get("send")
             .expect("send tool must be registered");
-        let result = (send.call)(ToolCallContext::new(self, request, context)).await;
+        let cancellation = context.ct.clone();
+        let call_future = (send.call)(ToolCallContext::new(self, request, context));
+        let result = if waiting_for_startup {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => Err(ErrorData::internal_error("request cancelled; poll with an empty send for any admitted cell", None)),
+                result = call_future => result,
+            }
+        } else {
+            call_future.await
+        };
         let result = Arc::new(match result {
             Err(error) if error.code == ErrorCode::INVALID_PARAMS => Ok(response_to_tool_result(
                 crate::worker_client::Response::tool_error(error.message.into_owned()),
@@ -775,60 +450,126 @@ pub async fn run(
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
 ) -> Result<(), Box<dyn Error>> {
-    let server = ConsoleServer::new(worker, relay, no_sandbox, sandbox_settings, target, python)
-        .map_err(std::io::Error::other)?;
-    let worker = server.worker.clone();
-    let deliveries = server.deliveries.clone();
     let (input_closed, wait_for_input_close) = oneshot::channel();
-    let input = ShutdownReader::new(tokio::io::stdin(), input_closed);
+    let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
+    #[cfg(not(windows))]
+    let input = tokio::io::stdin();
+    let server = ConsoleServer::new(
+        input_closed.clone(),
+        worker,
+        relay,
+        no_sandbox,
+        sandbox_settings,
+        target,
+        python,
+    )
+    .map_err(std::io::Error::other)?;
+    let startup = server.startup.clone();
+    let deliveries = server.deliveries.clone();
+    #[cfg(windows)]
+    let input = {
+        let startup = startup.clone();
+        let closed = input_closed.clone();
+        input_windows::Input::new(move || {
+            // Physical EOF can cancel unfinished preparation even if protocol
+            // output is blocked. Once startup finishes, ShutdownReader alone
+            // reports EOF after the queued MCP input has been consumed.
+            if !startup.runtime().worker.startup_finished() {
+                closed.close();
+            }
+        })?
+    };
+    let input = ShutdownReader::new(input, input_closed);
     let transport = crate::server_transport::ServerTransport::new(
         input,
         tokio::io::stdout(),
         server.deliveries.clone(),
     );
-    worker.warmup().map_err(std::io::Error::other)?;
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
             .await
             .unwrap_or_else(|_| Instant::now());
         let deadline = shutdown_started + WORKER_SHUTDOWN_GRACE;
-        let result = worker.shutdown(deadline).await;
+        let cancellation = startup.cancel().await;
+        let result = match startup.ready().await {
+            Ok(runtime) => runtime.worker.shutdown(deadline).await,
+            Err(error) => {
+                let runtime = startup.runtime();
+                if runtime.worker.is_configured() {
+                    runtime.worker.shutdown(deadline).await?;
+                }
+                startup.finish_failed_preparation(error)
+            }
+        };
         deliveries
             .settle_before_close(Instant::now() + WORKER_SHUTDOWN_GRACE)
             .await;
+        cancellation?;
         result?;
         Ok::<(), String>(())
     };
 
-    let service = async move {
-        let service = server.serve(transport).await?;
-        service.waiting().await.map_err(Box::<dyn Error>::from)
+    tokio::pin!(shutdown);
+    const CLOSED_BEFORE_INITIALIZATION: &str = "server startup cancelled because MCP input closed";
+    let service = tokio::select! {
+        result = server.serve(transport) => match result {
+            Ok(service) => service,
+            Err(error) => {
+                shutdown.await.map_err(std::io::Error::other)?;
+                return Err(match error {
+                    rmcp::service::ServerInitializeError::ConnectionClosed(_) =>
+                        std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
+                    error => error.into(),
+                });
+            }
+        },
+        result = &mut shutdown => {
+            result.map_err(std::io::Error::other)?;
+            return Err(std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into());
+        }
     };
-    let (result, shutdown) = tokio::join!(service, shutdown);
-    shutdown.map_err(std::io::Error::other)?;
-    result?;
+    // Once owned preparation/worker retirement and response settling finish,
+    // a blocked protocol write must not keep the process alive.
+    tokio::select! {
+        result = service.waiting() => {
+            shutdown.await.map_err(std::io::Error::other)?;
+            result?;
+        },
+        result = &mut shutdown => result.map_err(std::io::Error::other)?,
+    }
     Ok(())
 }
 
-/// Reports EOF to the worker owner while otherwise behaving like its input.
-/// Dropping the reader also wakes the owner by closing the one-shot channel.
+#[derive(Clone)]
+struct InputClosed(Arc<Mutex<Option<oneshot::Sender<Instant>>>>);
+
+impl InputClosed {
+    fn close(&self) {
+        if let Some(sender) = self.0.lock().expect("input closure lock").take() {
+            let _ = sender.send(Instant::now());
+        }
+    }
+}
+
+/// Reports EOF or reader loss to the owner, sharing one notification with the
+/// non-consuming startup observer.
 struct ShutdownReader<R> {
     inner: R,
-    input_closed: Option<oneshot::Sender<Instant>>,
+    input_closed: InputClosed,
 }
 
 impl<R> ShutdownReader<R> {
-    fn new(inner: R, input_closed: oneshot::Sender<Instant>) -> Self {
+    fn new(inner: R, input_closed: InputClosed) -> Self {
         Self {
             inner,
-            input_closed: Some(input_closed),
+            input_closed,
         }
     }
+}
 
-    fn report_input_closed(&mut self) {
-        if let Some(input_closed) = self.input_closed.take() {
-            let _ = input_closed.send(Instant::now());
-        }
+impl<R> Drop for ShutdownReader<R> {
+    fn drop(&mut self) {
+        self.input_closed.close();
     }
 }
 
@@ -843,11 +584,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for ShutdownReader<R> {
         let poll = Pin::new(&mut self.inner).poll_read(context, buffer);
         match poll {
             Poll::Ready(Ok(())) if had_capacity && buffer.filled().len() == filled => {
-                self.report_input_closed();
+                self.input_closed.close();
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(error)) => {
-                self.report_input_closed();
+                self.input_closed.close();
                 Poll::Ready(Err(error))
             }
             poll => poll,

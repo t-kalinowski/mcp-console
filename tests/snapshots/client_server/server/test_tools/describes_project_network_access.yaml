@@ -1,32 +1,14 @@
 ---
 configuration: unrestricted restricted (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -53,44 +35,17 @@ description: >-
   Evaluated code has unrestricted filesystem access and cannot directly access
   the network. Dependency resolution, when available, runs outside the sandbox
   and may execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: unrestricted restricted (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -117,44 +72,17 @@ description: >-
   Evaluated code has unrestricted filesystem access and cannot directly access
   the network. Dependency resolution, when available, runs outside the sandbox
   and may execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: unrestricted enabled (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -181,44 +109,17 @@ description: >-
   Evaluated code has unrestricted filesystem access and can directly access the
   network. Dependency resolution, when available, runs outside the sandbox and
   may execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: unrestricted enabled (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -245,44 +146,17 @@ description: >-
   Evaluated code has unrestricted filesystem access and can directly access the
   network. Dependency resolution, when available, runs outside the sandbox and
   may execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: restricted restricted (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -311,44 +185,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: restricted restricted (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -377,44 +224,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: restricted enabled (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -443,44 +263,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: restricted enabled (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -509,44 +302,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: external-sandbox restricted (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -574,44 +340,17 @@ description: >-
   settings and has network access governed by the launcher's sandbox settings.
   Dependency resolution, when available, runs outside the sandbox and may
   execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: external-sandbox restricted (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -639,44 +378,17 @@ description: >-
   settings and has network access governed by the launcher's sandbox settings.
   Dependency resolution, when available, runs outside the sandbox and may
   execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: external-sandbox enabled (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -704,44 +416,17 @@ description: >-
   settings and has network access governed by the launcher's sandbox settings.
   Dependency resolution, when available, runs outside the sandbox and may
   execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: external-sandbox enabled (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -769,44 +454,17 @@ description: >-
   settings and has network access governed by the launcher's sandbox settings.
   Dependency resolution, when available, runs outside the sandbox and may
   execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: restricted
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -835,44 +493,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: enabled
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -901,44 +532,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: proxy
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -967,44 +571,17 @@ description: >-
   directory and to paths explicitly allowed by the launcher. Dependency
   resolution, when available, runs outside the sandbox and may execute
   installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: proxy with local binding
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -1033,44 +610,17 @@ description: >-
   directory and to paths explicitly allowed by the launcher. Dependency
   resolution, when available, runs outside the sandbox and may execute
   installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: proxy with network enabled
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -1099,44 +649,17 @@ description: >-
   directory and to paths explicitly allowed by the launcher. Dependency
   resolution, when available, runs outside the sandbox and may execute
   installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: native network representation
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -1165,44 +688,17 @@ description: >-
   allowed by the launcher. Dependency resolution, when available, runs outside
   the sandbox and may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: external enforcement
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -1230,44 +726,17 @@ description: >-
   settings and has network access governed by the launcher's sandbox settings.
   Dependency resolution, when available, runs outside the sandbox and may
   execute installation or build code; use only trusted dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.
 ---
 configuration: no sandbox
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls.
-
-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction. Use R
-  for vectorized data and string operations, statistics, and plots. Use Python
-  when its libraries or format-specific parsing simplify the task. Switch
-  languages when useful, reusing persistent state.
-
-
-  DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built
-  in. When managed preparation is available, defaults include SQLite; attach the
-  database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`.
-  Prepare additional extensions with
-  `requirements={"action":"add","duckdb":["fts"]}`. SQL results include bounded
-  table previews that abbreviate long text cells; return focused queries and
-  summaries for inspection.
-
-
-  Reuse live state when switching: Python reads R globals through `r.name`, R
-  reads Python globals through `py$name`, and managed DuckDB SQL can query R
-  data frames by name. R accesses its SQL connection through `sql_connection()`;
-  R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -1295,12 +764,3 @@ description: >-
   including filesystem and network access. Dependency resolution, when
   available, may execute installation or build code; use only trusted
   dependencies.
-
-
-  The session prepares automatically in the background. Runtime capabilities are
-  discovered on the execution host; the listed language fields do not guarantee
-  that an interpreter is installed. R/Python sharing requires both runtimes and
-  their bridge. Managed DuckDB requires its provider packages. Each operation
-  validates the session's actual capabilities. Requirements inspection reports
-  the known declaration and preparation status, not an installed-package
-  inventory.

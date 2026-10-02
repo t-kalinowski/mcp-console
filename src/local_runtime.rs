@@ -4,20 +4,26 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
 pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
+#[cfg(unix)]
+pub(crate) const RESOLUTION_UNAVAILABLE: &str =
+    "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console";
+#[cfg(windows)]
+pub(crate) const RESOLUTION_UNAVAILABLE: &str = "dynamic environment resolution is unavailable on Windows; install packages before starting the session";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
-    // Only complete selections cross the worker boundary. None means absent.
-    // The startup owner retains incomplete discovery and preparation separately.
+    // In managed sessions, None leaves R declarations and selection hints lazy.
+    // In prepared targets, None records genuine Python absence after discovery.
     pub(crate) python: Option<Python>,
 }
 
@@ -45,6 +51,7 @@ impl Selection {
         std::env::var_os("R_HOME").is_some() || crate::resolver::find_path_entry("R").is_some()
     }
 
+    #[cfg(unix)]
     pub(crate) fn python(
         configured: Option<OsString>,
         resolver: &crate::resolver::execution::PythonConfiguration,
@@ -69,6 +76,7 @@ impl Selection {
         )
     }
 
+    #[cfg(unix)]
     pub(crate) fn python_on_host(
         configured: Option<OsString>,
         resolver: &crate::resolver::ManagedPythonResolverConfiguration,
@@ -99,6 +107,7 @@ impl Selection {
         Ok((selection, managed))
     }
 
+    #[cfg(unix)]
     fn python_with(
         configured: Option<OsString>,
         has_uv: bool,
@@ -150,6 +159,7 @@ impl Selection {
         self.r_home.is_none()
     }
 
+    #[cfg(unix)]
     pub(crate) fn prepare_default_duckdb_extensions(
         &self,
         managed: Option<&ManagedPython>,
@@ -232,24 +242,77 @@ impl Selection {
     }
 }
 
-pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub(crate) struct RInstallation {
+    pub(crate) home: PathBuf,
+    resources: [OsString; 3],
+}
+
+impl RInstallation {
+    pub(crate) fn configure_environment(&self) {
+        unsafe { std::env::set_var("R_HOME", &self.home) };
+        for (name, value) in ["R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR"]
+            .into_iter()
+            .zip(&self.resources)
+        {
+            unsafe { std::env::set_var(name, value) };
+        }
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
+    use std::os::unix::ffi::OsStringExt;
+
     // Harp's setup reads R_HOME with env::var and mistakes non-UTF-8 values
     // for absence. Preserve its validation using the native path in that case.
-    let Some(home) = std::env::var_os("R_HOME").filter(|home| home.to_str().is_none()) else {
-        return Ok(harp::command::r_home_setup()?);
-    };
-    let home = PathBuf::from(home);
-    if !home
-        .try_exists()
-        .map_err(|error| format!("Can't check if `R_HOME` path exists: {error}"))?
+    let home = if let Some(home) = std::env::var_os("R_HOME").filter(|home| home.to_str().is_none())
     {
-        return Err(format!("The `R_HOME` path '{}' does not exist.", home.display()).into());
+        let home = PathBuf::from(home);
+        if !home
+            .try_exists()
+            .map_err(|error| format!("Can't check if `R_HOME` path exists: {error}"))?
+        {
+            return Err(format!("The `R_HOME` path '{}' does not exist.", home.display()).into());
+        }
+        home
+    } else {
+        harp::command::r_home_setup()?
+    };
+    // Read the selected launcher's resource paths without starting R. Capture
+    // them before either interpreter starts; R's install paths can be split.
+    let resources = harp::command::r_command(&home, |command| {
+        command
+            .args([
+                "CMD",
+                "/bin/sh",
+                "-c",
+                r#"printf '%s\000' "$R_SHARE_DIR" "$R_INCLUDE_DIR" "$R_DOC_DIR""#,
+            ])
+            .stdin(std::process::Stdio::null());
+    })?;
+    if !resources.status.success() {
+        return Err(format!(
+            "Can't read R resource directories: {}: {}",
+            resources.status,
+            String::from_utf8_lossy(&resources.stderr)
+        )
+        .into());
     }
-    harp::command::r_command(&home, |command| {
-        command.arg("RHOME");
-    })
-    .map_err(|error| format!("Can't run R: {error}"))?;
-    Ok(home)
+    let values = resources
+        .stdout
+        .strip_suffix(b"\0")
+        .ok_or("R launcher did not terminate its resource directories")?
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if values.len() != 3 || values.iter().any(|value| value.is_empty()) {
+        return Err("R launcher did not supply three resource directories".into());
+    }
+    let installation = RInstallation {
+        home,
+        resources: std::array::from_fn(|index| OsString::from_vec(values[index].to_vec())),
+    };
+    installation.configure_environment();
+    Ok(installation)
 }
 
 /// Direct launches have no runner-owned private TMPDIR. The relay lifetime
@@ -257,6 +320,16 @@ pub(crate) fn r_home() -> Result<PathBuf, Box<dyn std::error::Error>> {
 pub(crate) struct TemporaryDirectory(Option<PathBuf>);
 
 impl TemporaryDirectory {
+    #[cfg(windows)]
+    pub(crate) fn create() -> Result<Self, String> {
+        tempfile::Builder::new()
+            .prefix("mcp-console-worker-")
+            .tempdir()
+            .map(|directory| Self(Some(directory.keep())))
+            .map_err(|error| format!("cannot create worker temporary directory: {error}"))
+    }
+
+    #[cfg(unix)]
     pub(crate) fn create() -> Result<Self, String> {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
         let template = std::env::temp_dir().join("mcp-console-worker-XXXXXX");
@@ -299,4 +372,15 @@ impl Drop for TemporaryDirectory {
             eprintln!("{error}");
         }
     }
+}
+
+#[cfg(windows)]
+pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
+    let home = harp::command::r_home_setup()?;
+    let installation = RInstallation {
+        resources: ["share", "include", "doc"].map(|name| home.join(name).into_os_string()),
+        home,
+    };
+    installation.configure_environment();
+    Ok(installation)
 }

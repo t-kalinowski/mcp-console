@@ -11,10 +11,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, command, requires
+from support.requirements import R
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -143,7 +145,7 @@ thread log
         == "thread stderr\nthread log\n"
     )
     assert all(
-        event["worker"]["kind"] in {"ready", "initialized", "completed"}
+        event["worker"]["kind"] in {"ready", "completed"}
         for event in transcript
         if "worker" in event
     )
@@ -151,6 +153,7 @@ thread log
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(binary, execution=execution)
     # fmt: r
@@ -202,13 +205,14 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
         logger.addHandler(handler)
 
 
-        def reject_r_callback(frame, event, function):
+        def reject_runtime_callback(frame, event, function):
             if (
                 os.getpid() != worker_pid
                 and event == "c_call"
-                and getattr(function, "__module__", None) == "rpycall"
+                and getattr(function, "__module__", None)
+                in {"rpycall", "_mcp_console_services"}
             ):
-                raise AssertionError("fork child called back into R")
+                raise AssertionError("fork child called back into Console or R")
 
 
         def run_child(action):
@@ -216,7 +220,7 @@ def _python_fork_client(binary: Path, execution: Execution) -> RelayWorkerClient
             # Only this known CPython diagnostic is filtered, only around fork.
             # The automatic-resolution lifecycle test records it in full.
             previous_profile = sys.getprofile()
-            sys.setprofile(reject_r_callback)
+            sys.setprofile(reject_runtime_callback)
             try:
                 with warnings.catch_warnings():
                     warnings.filterwarnings(
@@ -283,8 +287,7 @@ parent log
     assert "".join(event.get("stderr", "") for event in transcript) == stderr
     worker = [event["worker"] for event in transcript if "worker" in event]
     assert all(
-        event["kind"]
-        in {"ready", "initialized", "completed", "console_output", "console_diagnostic"}
+        event["kind"] in {"ready", "completed", "console_output", "console_diagnostic"}
         for event in worker
     ), worker
     for kind, expected in (
@@ -298,6 +301,7 @@ parent log
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_python_output_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -324,6 +328,7 @@ def test_preserves_python_output_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_cached_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -353,6 +358,7 @@ def test_preserves_cached_python_streams_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_cached_python_logging_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -371,6 +377,7 @@ def test_preserves_cached_python_logging_from_fork_children(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_fork_stderr_after_stdout_is_closed(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -404,6 +411,7 @@ def test_preserves_fork_stderr_after_stdout_is_closed(
 
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX, command("python3"))
+@requires(R)
 def test_preserves_redirected_python_streams_from_fork_children(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -42,8 +42,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
-    client.send(r="automatic_python_r_state <- 42L")
-    assert last_result_text(client) == "[done]"
+    client.expect(r="automatic_python_r_state <- 42L")
     client.send(sql="CREATE TABLE automatic_python_state AS SELECT 42 AS answer")
 
     # fmt: python
@@ -53,8 +52,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
         automatic_python_object = {"answer": 42}
         automatic_python_pid = os.getpid()
         """)
-    client.send(python=setup)
-    assert last_result_text(client) == "[done]", repr(last_result_text(client))
+    client.expect(python=setup)
 
     # fmt: python
     python = code("""
@@ -210,8 +208,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
 
             automatic_meta_finder = AutomaticMetaFinder()
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         # Activation runs ordinary Python code. Install a finder while the
         # original import is waiting, after the new environment is active.
@@ -230,8 +227,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
 
             runpy.run_path = activate_with_finder
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -388,8 +384,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
-        client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
-        assert last_result_text(client) == "[done]"
+        client.expect(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
 
         # Exercise every driver-controlled call made by the DB-API adapter.
         # fmt: python
@@ -445,8 +440,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
 
             console_sql_connection(Connection())
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         client.send(sql="ANSWER")
         preview = last_result_text(client)
@@ -479,8 +473,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             console_sql_connection(None)
             sys.settrace(restore_hook)
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -544,8 +537,7 @@ def test_does_not_reenter_automatic_python_resolution(
 
             runpy.run_path = activate_with_nested_import
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -596,7 +588,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(python="import yaml12; yaml12.__name__")
         assert last_result_text(client) == "'yaml12'\n"
@@ -652,31 +644,6 @@ def test_reports_automatic_python_resolution_failure(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_runtime_toolchain_probe_does_not_install_a_distribution(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        environment, record = recording_uv_environment(Path(temporary))
-        with McpClient(binary, execution.serve(), environment) as client:
-            client.initialize_and_list_tools()
-            client.send(requirements={"python": ["rply"]})
-            assert last_result_text(client) == "[prepared]"
-            baseline = len(uv_tool_run_requirements(record))
-            client.send(
-                python="import rply; rply.LexerGenerator().build(); print('CPython lexer ready')"
-            )
-            assert last_result_text(client) == "CPython lexer ready\n", (
-                client.transcript[-1]
-            )
-            assert len(uv_tool_run_requirements(record)) == baseline
-            declaration = client.send(requirements={"action": "get"})[
-                "structuredContent"
-            ]
-            assert "rpython" not in declaration["requirements"]["python"], declaration
-            return client.finish()
-
-
-@executions(DIRECT, SANDBOXED)
 def test_retains_inferred_distribution_that_does_not_provide_import(
     binary: Path,
     execution: Execution,
@@ -718,7 +685,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(r=f'"{inferred}" %in% reticulate::py_require()$packages')
         assert last_result_text(client) == "[1] TRUE\n"
@@ -898,6 +865,31 @@ def test_disables_automatic_resolution_for_user_selected_python(
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_runtime_toolchain_probe_does_not_install_a_distribution(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_uv_environment(Path(temporary))
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"python": ["rply"]})
+            assert last_result_text(client) == "[prepared]"
+            baseline = len(uv_tool_run_requirements(record))
+            client.send(
+                python="import rply; rply.LexerGenerator().build(); print('CPython lexer ready')"
+            )
+            assert last_result_text(client) == "CPython lexer ready\n", (
+                client.transcript[-1]
+            )
+            assert len(uv_tool_run_requirements(record)) == baseline
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]
+            assert "rpython" not in declaration["requirements"]["python"], declaration
+            return client.finish()
 
 
 if __name__ == "__main__":

@@ -3,10 +3,9 @@ import os
 import re
 import shutil
 import subprocess
-import tomllib
 from pathlib import Path
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import Execution
@@ -14,62 +13,10 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
+from support.requirements import R
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
-
-
-def inspect_selected_python(
-    binary: Path, executable: Path, environment: dict[str, str]
-) -> dict:
-    """Obtain a complete fixture launch identity through trusted preparation."""
-    with (FIXTURES.parents[1] / "Cargo.toml").open("rb") as stream:
-        build = tomllib.load(stream)["package"]["version"]
-    with subprocess.Popen(
-        [binary, "resolve"],
-        env=environment,
-        text=True,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ) as resolver:
-        assert resolver.stdin is not None and resolver.stdout is not None
-
-        def send(message):
-            resolver.stdin.write(json.dumps(message) + "\n")
-            resolver.stdin.flush()
-
-        send(
-            {
-                "Open": {
-                    "version": 6,
-                    "build": build,
-                    "workspace": "",
-                    "selections": {"r_home": None, "python": None},
-                    "mode": "Custom",
-                }
-            }
-        )
-        assert json.loads(resolver.stdout.readline()) == {
-            "Hello": {"version": 6, "build": build}
-        }
-        discovery = json.loads(resolver.stdout.readline())["Completed"]
-        assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
-        send(
-            {
-                "Run": {
-                    "id": 1,
-                    "operation": {"InspectPython": {"executable": str(executable)}},
-                }
-            }
-        )
-        inspected = json.loads(resolver.stdout.readline())["Completed"]
-        assert inspected["confirmed"] and "Ok" in inspected["result"], inspected
-        send("Close")
-        assert json.loads(resolver.stdout.readline()) == "Closed"
-        resolver.stdin.close()
-        assert resolver.wait(timeout=10) == 0
-    return inspected["result"]["Ok"]
 
 
 def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
@@ -304,6 +251,8 @@ def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
         for line in error.splitlines()
         if f'Failed to download extension "{extension}"' in line
     )
+    # DuckDB releases differ in whether the HTTP error has an Invalid wrapper.
+    detail = detail.removeprefix("Invalid Error: ")
     return detail.partition(' at URL "')[0]
 
 
@@ -325,10 +274,12 @@ def ir_cache_directory(environment: dict[str, str]) -> str:
 
 def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
     environment = os.environ.copy()
-    cache = ir_cache_directory(environment)
-    environment["IR_CACHE_DIR"] = cache
+    if R.available:
+        cache = ir_cache_directory(environment)
+        environment["IR_CACHE_DIR"] = cache
     environment["XDG_CACHE_HOME"] = str(cache_home)
-    assert ir_cache_directory(environment) == cache
+    if R.available:
+        assert ir_cache_directory(environment) == cache
     return environment
 
 
@@ -367,6 +318,9 @@ def python_inventory_client(
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")
+    # These cases resolve synthetic Python inventories without embedding their
+    # interpreter selections. R can query version constraints before selection.
+    environment["MCP_CONSOLE_LANGUAGES"] = "r"
     arguments = directory / "uv-arguments.jsonl"
     environment["MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"] = str(arguments)
     inventories = directory / "uv-python-inventories.json"
@@ -388,6 +342,7 @@ def python_inventory_client(
         current_directory=directory,
     )
     client.initialize_and_list_tools()
+    client.transcript.clear()
     client.send(requirements={"r": ["DBI"]})
     assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")
@@ -539,10 +494,16 @@ def initialize_python_and_record_baseline(client: McpClient, record: Path) -> in
     return len(uv_tool_run_requirements(record))
 
 
-def resolve_managed_python(binary: Path, execution: Execution, directory: Path) -> Path:
+def resolve_managed_python(
+    binary: Path,
+    execution: Execution,
+    directory: Path,
+    *,
+    environment: dict[str, str] | None = None,
+) -> Path:
     workspace = directory / "managed-python"
     workspace.mkdir()
-    environment = os.environ.copy()
+    environment = os.environ.copy() if environment is None else environment.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment.pop("UV_PYTHON", None)
     with McpClient(
@@ -566,7 +527,7 @@ def resolve_managed_python(binary: Path, execution: Execution, directory: Path) 
         next(
             line for line in output.splitlines() if line.startswith("managed-python=")
         ).split("=", 1)[1]
-    ).resolve()
+    ).absolute()
     assert executable.is_file(), executable
     return executable
 
@@ -575,33 +536,11 @@ def send_and_collect_runtime_python_resolution(
     client: McpClient,
     **arguments: object,
 ) -> str:
-    call_start = len(client.transcript)
-    client.send(**arguments)
-    chunks = []
-    for attempt in range(8):
-        output = last_result_text(client)
-        if output.endswith("\n[running; poll with an empty send]"):
-            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
-            if attempt == 7:
-                raise AssertionError(
-                    "automatic Python resolution remained running after eight "
-                    f"responses: collected={''.join(chunks)!r}, last={output!r}"
-                )
-            client.send(timeout_ms=30_000)
-            continue
-
-        # Empty running polls do not replace a silent cell's completion marker.
-        if output != "[done]" or not any(chunks):
-            chunks.append(output)
-        collected = "".join(chunks)
-
-        calls = client.transcript[call_start:]
-        submitted = calls[0]
-        final_result = calls[-1]["result"]
-        content = final_result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        content[0]["text"] = collected
-        submitted["result"] = final_result
-        client.transcript[call_start:] = [submitted]
-        return collected
-    raise AssertionError("unreachable")
+    return wait_for_evaluation_output(
+        client,
+        None,
+        "automatic Python resolution",
+        expected_error=None,
+        completion_timeout_seconds=client.response_timeout,
+        **arguments,
+    )

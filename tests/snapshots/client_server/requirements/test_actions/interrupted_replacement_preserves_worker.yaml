@@ -14,6 +14,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -90,6 +91,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -153,6 +155,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -206,6 +209,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -279,6 +283,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text

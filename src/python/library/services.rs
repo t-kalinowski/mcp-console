@@ -21,13 +21,12 @@ struct Method {
 struct Services {
     api: PythonApi,
     thread: ThreadId,
-    pid: libc::pid_t,
+    pid: u32,
     unicode_utf8: unsafe extern "C" fn(*mut PyObject, *mut isize) -> *const c_char,
     inc_ref: unsafe extern "C" fn(*mut PyObject),
     set_none: unsafe extern "C" fn(*mut PyObject),
     set_string: unsafe extern "C" fn(*mut PyObject, *const c_char),
     set_interrupt: unsafe extern "C" fn(),
-    exception_matches: unsafe extern "C" fn(*mut PyObject) -> c_int,
     none: usize,
     runtime_error: usize,
     keyboard_interrupt: usize,
@@ -41,6 +40,11 @@ static METHODS_REGISTERED: AtomicBool = AtomicBool::new(false);
 static MODULE_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
+    // R startup replaces this handler even when Python initialized first.
+    #[cfg(unix)]
+    unsafe {
+        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN)
+    };
     if installed {
         let services = SERVICES
             .get()
@@ -52,7 +56,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
         services
     } else {
         // The owning Python handle is process-long; no library lock spans Python.
-        let library = libloading::os::unix::Library::this();
+        let library = loaded_library()?;
         let path = std::path::Path::new("loaded Python");
         let exception = |name| -> Result<usize, String> {
             Ok(unsafe { *load_symbol::<*const *mut PyObject>(&library, path, name)? } as usize)
@@ -60,13 +64,12 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
         let services = Services {
             api: *api,
             thread: std::thread::current().id(),
-            pid: unsafe { libc::getpid() },
+            pid: std::process::id(),
             unicode_utf8: unsafe { load_symbol(&library, path, b"PyUnicode_AsUTF8AndSize\0")? },
             inc_ref: unsafe { load_symbol(&library, path, b"Py_IncRef\0")? },
             set_none: unsafe { load_symbol(&library, path, b"PyErr_SetNone\0")? },
             set_string: unsafe { load_symbol(&library, path, b"PyErr_SetString\0")? },
             set_interrupt: unsafe { load_symbol(&library, path, b"PyErr_SetInterrupt\0")? },
-            exception_matches: unsafe { load_symbol(&library, path, b"PyErr_ExceptionMatches\0")? },
             none: unsafe { load_symbol::<*mut PyObject>(&library, path, b"_Py_NoneStruct\0")? }
                 as usize,
             runtime_error: exception(b"PyExc_RuntimeError\0")?,
@@ -79,7 +82,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
         SERVICES.get().unwrap()
     };
     if !METHODS_REGISTERED.load(Ordering::Acquire) {
-        let library = libloading::os::unix::Library::this();
+        let library = loaded_library()?;
         let path = std::path::Path::new("loaded Python");
         let add_functions: unsafe extern "C" fn(*mut PyObject, *const Method) -> c_int =
             unsafe { load_symbol(&library, path, b"PyModule_AddFunctions\0")? };
@@ -177,9 +180,7 @@ fn callback(operation: impl FnOnce(&Services) -> Result<*mut PyObject, String>) 
         .get()
         .expect("Python services initialized before callbacks");
     let result = catch_unwind(AssertUnwindSafe(|| {
-        if unsafe { libc::getpid() } != services.pid
-            || std::thread::current().id() != services.thread
-        {
+        if std::process::id() != services.pid || std::thread::current().id() != services.thread {
             return Err("console service requires the main worker thread".to_string());
         }
         operation(services)
@@ -303,18 +304,6 @@ unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject)
     })
 }
 
-// Called only with the GIL held at the environment-call boundary.
-pub(super) fn take_interrupt() -> bool {
-    let services = SERVICES.get().expect("Python services initialized");
-    unsafe {
-        if (services.exception_matches)(services.keyboard_interrupt as *mut PyObject) == 0 {
-            return false;
-        }
-        (services.api.err_clear)();
-    }
-    true
-}
-
 unsafe extern "C" fn activate_python_environment(
     _: *mut PyObject,
     _: *mut PyObject,
@@ -368,4 +357,21 @@ pub(super) fn response_text(value: *mut PyObject) -> Result<String, String> {
         .get()
         .expect("Python services initialized")
         .text(value)
+}
+
+fn loaded_library() -> Result<libloading::Library, String> {
+    #[cfg(unix)]
+    {
+        Ok(libloading::os::unix::Library::this().into())
+    }
+    #[cfg(windows)]
+    {
+        let library = super::PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python library lock poisoned")?;
+        let path = &library.as_ref().ok_or("Python library is not loaded")?.path;
+        libloading::os::windows::Library::open_already_loaded(path)
+            .map(Into::into)
+            .map_err(|error| error.to_string())
+    }
 }

@@ -3,13 +3,11 @@
 import json
 import sys
 from pathlib import Path
-from contextlib import closing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.checkpoints import FifoCheckpoint
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.docker_sandbox import calls, cli_peer, configure, workspace
 from support.requirements import POSIX, requires
 from support.suites import run_this_suite
@@ -76,14 +74,9 @@ def test_native_probe_projects_capabilities_without_controller_paths(
             assert {"r", "python", "sql"} <= tool["inputSchema"]["properties"].keys(), (
                 tool
             )
-            assert "/target-only/lib/libpython.so" not in tool["description"]
-            sql_description = tool["inputSchema"]["properties"]["sql"]["description"]
-            assert "during initialization" in sql_description, sql_description
-            assert "when R is available" in sql_description, sql_description
-            client.send(python="42")
-            assert last_result_text(client) == "provider peer\n"
-            client.request("tools/list")
-            assert client.transcript[-1]["result"]["tools"][0] == tool
+            assert "/target-only/lib/libpython.so" not in tool["description"], tool[
+                "description"
+            ]
             client.send(requirements={"action": "get"})
             retained = client.transcript[-1]["result"]["structuredContent"]
             assert retained["requirements"]["python"] == []
@@ -92,6 +85,38 @@ def test_native_probe_projects_capabilities_without_controller_paths(
         return client.transcript + [
             {"framed_native_capability": True, "target_paths_remain_metadata": True}
         ]
+
+
+@requires(POSIX)
+def test_prepared_bootstrap_withholds_and_runs_first_cell_once(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("bootstrap-input")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            # A short deadline admits the cell while the prepared worker's
+            # startup prompt blocks initialization. Polling must not replay it.
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "target startup> "]\n[waiting for stdin]',
+                "prepared worker startup prompt",
+                python="first_cell = 42",
+                timeout_ms=10,
+            )
+            client.send(timeout_ms=0)
+            assert last_result_text(client) == "\n[waiting for stdin]"
+            assert not (root / "peer/evaluations").exists()
+            wait_for_evaluation_output(
+                client, "provider peer\n", "prepared first cell", stdin="continue\n"
+            )
+            evaluations = (root / "peer/evaluations").read_text().splitlines()
+            assert [json.loads(line) for line in evaluations] == [
+                {"kind": "evaluate", "language": "python", "source": "first_cell = 42"}
+            ]
+            client.finish()
+        assert not (root / "peer/vms").exists()
+        return client.transcript[3:]
 
 
 @requires(POSIX)
@@ -105,13 +130,19 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
             client.initialize_and_list_tools()
             tool = client.transcript[-1]["result"]["tools"][0]
             properties = tool["inputSchema"]["properties"]
-            assert "r" in properties and "sql" in properties
-            assert "python" in properties
-            assert "listed language fields do not guarantee" in tool["description"]
+            assert {"r", "python", "sql"} <= properties.keys()
+            assert (
+                "Language fields describe the configured interface"
+                in tool["description"]
+            )
+            assert (
+                "When both runtimes and their bridge are available"
+                in properties["r"]["description"]
+            )
             result = client.send(python="raise AssertionError('unavailable cell ran')")
             assert result["isError"], result
             assert last_result_text(client) == (
-                "[Python cells are unavailable: the session has no Python runtime]"
+                "Python cells are unavailable: the target has no Python runtime"
             ), result
             client.finish()
         assert not (root / "peer/vms").exists()
@@ -119,10 +150,54 @@ def test_r_only_probe_projects_optional_python(binary: Path) -> list:
 
 
 @requires(POSIX)
-def test_invalid_probe_results_preserve_mcp_readiness(binary: Path) -> list:
+def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
+    tools = []
+    with workspace() as root:
+        for mode in ("native-probe", "r-only-probe"):
+            environment = cli_peer(root / mode)
+            environment.pop("MCP_CONSOLE_LANGUAGES", None)
+            configure(root, template=TEMPLATE)
+            (root / mode / "mode").write_text(mode)
+            with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
+                tools.append(client.transcript[-1]["result"]["tools"])
+                client.send(requirements={"action": "get"})
+                client.finish()
+    assert tools[0] == tools[1]
+    return [{"same_configured_tools_for_r_and_python_targets": True}]
+
+
+@requires(POSIX)
+def test_rejects_target_without_interpreter_bootstrap_protocol(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("prior-bootstrap-protocol")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            error = client.startup_error()
+            assert "expected protocol 10" in error, error
+            assert "received protocol 8" in error, error
+            client.stdin.close()
+            assert client.stdout.read(timeout=30) == ""
+            diagnostics = client.stderr.read(timeout=30)
+            assert "expected protocol 10" in diagnostics, diagnostics
+            assert client.process.wait(timeout=5) != 0
+        operations = calls(root)
+        executions = [call["args"] for call in operations if call["args"][0] == "exec"]
+        assert len(executions) == 1 and executions[0][-1] == "docker-sandbox-probe", (
+            executions
+        )
+        assert not (root / "peer/vms").exists()
+        return [
+            {"older_target_rejected": True, "probe_retired_before_worker_launch": True}
+        ]
+
+
+@requires(POSIX)
+def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 8"),
+        ("probe-version", "expected protocol 10"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),
@@ -145,55 +220,19 @@ def test_invalid_probe_results_preserve_mcp_readiness(binary: Path) -> list:
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.initialize_and_list_tools()
-                result = client.send(r="must_not_run <- TRUE")
-                assert result["isError"], result
-                diagnostics = last_result_text(client)
+                tool_error = client.startup_error()
+                assert expected in tool_error, tool_error
+                client.stdin.close()
+                assert client.stdout.read(timeout=30) == ""
+                diagnostics = client.stderr.read(timeout=30)
                 assert expected in diagnostics, diagnostics
-                client.request("ping")
-                client.finish()
+                assert "BrokenPipeError" not in diagnostics, diagnostics
+                assert client.process.wait(timeout=5) != 0
             assert not (root / "peer/vms").exists()
             operations = calls(root)
             assert sum(call["args"][0] == "create" for call in operations) == 1
             assert sum(call["args"][0] == "rm" for call in operations) == 1
             records.append({"mode": mode, "diagnostic": diagnostics})
-    return records
-
-
-@requires(POSIX)
-def test_protocol_and_eof_remain_available_during_target_setup(binary: Path) -> list:
-    records = []
-    for mode in ("create-gate", "probe-gate", "launch-gate"):
-        with workspace() as root:
-            environment = cli_peer(root / "peer")
-            configure(root, template=TEMPLATE)
-            (root / "peer/mode").write_text(mode)
-            with closing(FifoCheckpoint.create(root / "peer/reached")) as reached:
-                with McpClient(binary, ("serve",), environment, root) as client:
-                    reached.wait("automatic target warmup", timeout=30)
-                    client.initialize_and_list_tools()
-                    schema = client.transcript[-1]["result"]
-                    client.request("tools/list")
-                    assert client.transcript[-1]["result"] == schema
-                    client.send(requirements={"action": "get"})
-                    client.request("ping")
-                    client.stdin.close()
-                    client.stdout.read(timeout=15)
-                    errors = client.stderr.read(timeout=15)
-                    client.process.wait(timeout=5)
-            assert not (root / "peer/vms").exists()
-            operations = calls(root)
-            assert sum(call["args"][0] == "create" for call in operations) == (
-                2 if mode == "launch-gate" else 1
-            )
-            records.append(
-                {
-                    "phase": mode,
-                    "protocol_available": True,
-                    "owned_resources_retired": True,
-                    "unconfirmed_create": "unconfirmed" in errors,
-                }
-            )
     return records
 
 

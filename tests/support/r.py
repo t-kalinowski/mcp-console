@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -32,6 +34,43 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
+def install_r_startup(
+    directory: Path, environment: dict[str, str], source: str
+) -> Path:
+    """Install the shared interactive startup package with a case-specific script."""
+    rscript = Path(environment["R_HOME"]) / "bin/Rscript"
+    libraries = subprocess.check_output(
+        [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
+        env=environment,
+        text=True,
+    ).splitlines()
+    script = directory / "startup.R"
+    script.write_text(
+        f".libPaths(c({', '.join(json.dumps(path) for path in libraries)}, .libPaths()))\n"
+        + source
+    )
+    library = directory / "library"
+    library.mkdir()
+    subprocess.run(
+        [
+            rscript.with_name("R"),
+            "CMD",
+            "INSTALL",
+            f"--library={library}",
+            FIXTURES / "bootstrap_r",
+        ],
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    environment.update(
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolebootstrap",
+        MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT=str(script),
+    )
+    return library
+
+
 def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
     """Retain installed R files while isolating bootstrap settings and loader paths."""
     original = Path(environment["R_HOME"])
@@ -46,11 +85,14 @@ def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
         for entry in (original / name).iterdir():
             target = destination / entry.name
             if name == "bin" and entry.name == "R":
-                target.write_text(
-                    entry.read_text().replace(
-                        f'R_HOME_DIR="{original}"', f'R_HOME_DIR="{selected}"', 1
-                    )
+                source, count = re.subn(
+                    r"(?m)^R_HOME_DIR=.*$",
+                    f"R_HOME_DIR={shlex.quote(str(selected))}",
+                    entry.read_text(),
+                    count=1,
                 )
+                assert count == 1, "R launcher must declare R_HOME_DIR"
+                target.write_text(source)
                 target.chmod(entry.stat().st_mode)
             elif name == "etc" and entry.name == "Renviron":
                 shutil.copyfile(entry, target)
@@ -214,27 +256,3 @@ def startup_r_package(directory: Path, source: str) -> Iterator[dict[str, str]]:
         MCP_CONSOLE_TEST_R_STARTUP=str(hook),
     )
     yield environment
-
-
-@contextmanager
-def startup_declarations_client(
-    binary: Path,
-    execution: Execution,
-    source: str,
-    environment: dict[str, str] | None = None,
-) -> Iterator[McpClient]:
-    """Exercise pre-initialization declarations in the supported startup phase."""
-    with tempfile.TemporaryDirectory() as temporary:
-        directory = Path(temporary)
-        with startup_r_package(
-            directory, source + "\nstartup_checks_complete <- TRUE\n"
-        ) as startup:
-            if environment is not None:
-                inherited = startup["R_LIBS"]
-                startup.update(environment)
-                startup["R_LIBS"] = os.pathsep.join(
-                    filter(None, (inherited, environment.get("R_LIBS")))
-                )
-            with McpClient(binary, execution.serve(), startup, directory) as client:
-                client.initialize_and_list_tools()
-                yield client

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import select
 import shlex
 import shutil
@@ -20,6 +21,7 @@ import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from unittest.mock import patch
 
 from support.capture import read_lines
 from support.events import Events
@@ -206,9 +208,12 @@ def check_recording(*arguments: object, **keywords: object) -> object:
 """.lstrip()
 
 
-@unittest.skipUnless(POSIX.available, POSIX.reason)
-class TranscriptRunnerTests(unittest.TestCase):
+class TranscriptRunnerFixture(unittest.TestCase):
     def setUp(self) -> None:
+        # Copied runners select fixture executables; restore caller overrides
+        # after each test, including when setup or an assertion fails.
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MCP_CONSOLE_TEST_BINARY", None)
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.boundaries = self.root / "tests" / "boundaries"
@@ -332,6 +337,9 @@ class TranscriptRunnerTests(unittest.TestCase):
             "UV_OFFLINE": "1",
         }
 
+
+@unittest.skipUnless(POSIX.available, POSIX.reason)
+class TranscriptRunnerTests(TranscriptRunnerFixture):
     def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
         environment = self.prepare_script()
         debug = self.root / "target" / "debug" / "mcp-console"
@@ -344,6 +352,35 @@ class TranscriptRunnerTests(unittest.TestCase):
             + code("""
                 def test_selected(binary: Path) -> list[dict[str, str]]:
                     assert binary.read_text(encoding="utf-8") == "release"
+                    return record(binary, "selected")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["scripts/test", "client_server/server/test_tools::selected"],
+            cwd=self.root,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / "selected.marker").exists())
+
+    def test_script_uses_installed_binary_without_building(self) -> None:
+        environment = self.prepare_script()
+        installed = self.root / "installation" / "bin" / "mcp-console"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("installed", encoding="utf-8")
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(installed)
+        cargo = self.root / "commands" / "cargo"
+        cargo.write_text("#!/bin/sh\nexit 91\n", encoding="utf-8")
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary: Path) -> list[dict[str, str]]:
+                    assert binary.read_text(encoding="utf-8") == "installed"
                     return record(binary, "selected")
                 """),
             encoding="utf-8",
@@ -634,13 +671,6 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "sbx-probed").exists())
         self.assertFalse((self.root / "target").exists())
-
-    def test_runner_metadata_does_not_require_a_binary(self) -> None:
-        (self.root / "target/release/mcp-console").unlink()
-        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
-            with self.subTest(arguments=arguments):
-                result = self.run_runner(*arguments)
-                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_help_and_syntax_errors_do_not_resolve_script_dependencies(self) -> None:
         scripts = self.root / "scripts"
@@ -1320,6 +1350,18 @@ runner: different
         self.assertEqual(companion.read_text(), "retained companion")
         self.assertFalse(stale.exists())
 
+    def test_full_update_preserves_other_platform_companions(self) -> None:
+        other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        companion = self.snapshots / f"selected.{other_platform}.yaml"
+        companion.write_text("other platform output\n", encoding="utf-8")
+        stale = self.snapshots / f"selected.{sys.platform}.yaml"
+        stale.write_text("obsolete local output\n", encoding="utf-8")
+        result = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(companion.is_file(), result.stdout)
+        self.assertEqual(companion.read_text(), "other platform output\n")
+        self.assertFalse(stale.exists())
+
     def test_execution_requirements_share_one_behavior_snapshot(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
@@ -1409,6 +1451,8 @@ runner: different
                         sandbox,
                         {
                             "direct.yaml": direct,
+                            "aaa.yaml": sandbox,
+                            "aaa.direct.yaml": direct,
                             "bare.yaml": bare_sandbox,
                             "bare.direct.yaml": bare_direct,
                         },
@@ -1435,9 +1479,11 @@ runner: different
         selected = (self.snapshots / "selected.yaml").read_text()
         self.assertEqual(selected.count("!same-as"), 3, selected)
         self.assertIn("bare MCP initialization for this execution mode", selected)
+        self.assertNotIn("aaa", selected)
         mixed = (self.snapshots / "unselected.yaml").read_text()
         self.assertIn("initializes_and_lists_tools.yaml", mixed)
         self.assertIn("initializes_and_lists_tools.direct.yaml", mixed)
+        self.assertNotIn("aaa", mixed)
         self.suite.write_text(
             self.suite.read_text().replace("else direct", "else sandbox")
         )
@@ -1629,11 +1675,12 @@ runner: released
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
 
-    def test_failure_cancels_hanging_sibling_without_another_failure(self) -> None:
+    def test_failure_limit_finishes_running_sibling(self) -> None:
         selector = "client_server/server/test_tools::hangs"
         failure = "client_server/server/test_tools::failure_beside_hang"
+        queued = "client_server/server/test_tools::selected"
         with self.hanging_runner(
-            "--timeout", "60", "--jobs", "2", selector, failure
+            "--timeout", "60", "--jobs", "2", selector, failure, queued
         ) as (
             process,
             started,
@@ -1643,14 +1690,22 @@ runner: released
             self.assertTrue(ready, "hanging case did not start")
             self.assertEqual(os.read(started, 1), b"1")
             self.assertEqual(os.write(release_failure, b"1"), 1)
+            assert process.stderr is not None
+            receipt = read_lines(process.stderr, 3, "failure limit receipt")
+            self.assertIn(f"{failure}: failed", receipt)
+            with (self.root / "hang-release").open("wb", buffering=0) as release:
+                self.assertEqual(release.write(b"1"), 1)
             stdout, stderr = process.communicate(timeout=10)
+            stderr = "\n".join(receipt) + "\n" + stderr
             self.assertNotEqual(process.returncode, 0, stdout)
             self.assertIn(f"{failure}: failed", stderr)
             self.assertIn("runner: deliberate mismatch", stderr)
-            self.assertIn(f"{selector}: cancelled", stdout + stderr)
+            self.assertNotIn(f"{selector}: cancelled", stdout + stderr)
             self.assertNotIn(f"{selector}: failed", stdout + stderr)
             self.assertNotIn("timed out", stderr)
             self.assertNotIn("multiple transcript cases failed", stderr)
+            self.assertIn("1 of 3 transcript cases failed; not started: 1", stderr)
+            self.assertFalse((self.root / "selected.marker").exists())
             with self.assertRaises(ProcessLookupError):
                 os.killpg(process.pid, 0)
 
@@ -1663,7 +1718,7 @@ runner: released
         self.assertIn("KeyboardInterrupt", result.stderr)
         self.assertNotIn(f"{selector}: cancelled", result.stdout + result.stderr)
 
-    def test_cancelled_cleanup_preserves_the_original_failure(self) -> None:
+    def test_user_cancellation_preserves_the_original_failure(self) -> None:
         selector = "client_server/server/test_tools::fails_before_cleanup"
         failure = "client_server/server/test_tools::failure_beside_hang"
         with self.hanging_runner(
@@ -1673,14 +1728,19 @@ runner: released
             self.assertTrue(ready, "failed case did not enter its cleanup")
             self.assertEqual(os.read(started, 1), b"1")
             self.assertEqual(os.write(release_failure, b"1"), 1)
+            assert process.stderr is not None
+            receipt = read_lines(process.stderr, 3, "failure limit receipt")
+            self.assertIn(f"{failure}: failed", receipt)
+            process.send_signal(signal.SIGINT)
             stdout, stderr = process.communicate(timeout=10)
+            stderr = "\n".join(receipt) + "\n" + stderr
             self.assertNotEqual(process.returncode, 0, stdout)
             self.assertIn(f"{failure}: failed", stderr)
             self.assertIn("runner: deliberate mismatch", stderr)
             self.assertIn(f"{selector}: cancelled", stdout + stderr)
             self.assertIn("AssertionError: original failure before cleanup", stderr)
             self.assertIn("KeyboardInterrupt", stderr)
-            self.assertNotIn("multiple transcript cases failed", stderr)
+            self.assertIn("multiple transcript cases failed", stderr)
 
     def assert_signal_retires_case(self, number: signal.Signals) -> None:
         selector = "client_server/server/test_tools::hangs"
@@ -1907,54 +1967,7 @@ warnings: []
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_collection_selectors_and_locate(self) -> None:
-        hidden = (
-            self.boundaries / "client_server" / "server" / "_private" / "test_hidden.py"
-        )
-        hidden.parent.mkdir()
-        hidden.write_text(
-            "def test_hidden(binary):\n    return [{'runner': 'hidden'}]\n",
-            encoding="utf-8",
-        )
         suite = "client_server/server/test_tools"
-        cases = [
-            f"{suite}::initializes_and_lists_tools",
-            f"{suite}::selected",
-            f"{suite}::unselected",
-        ]
-
-        listed = self.run_runner("--full", "--list")
-        self.assertEqual(listed.returncode, 0, listed.stderr)
-        self.assertEqual(listed.stdout.splitlines(), cases)
-
-        located = self.run_runner("--locate", f"{suite}::selected")
-        self.assertEqual(located.returncode, 0, located.stderr)
-        self.assertEqual(located.stdout.splitlines()[0], f"{suite}::selected")
-        self.assertIn(
-            "source: tests/boundaries/client_server/server/test_tools.py:",
-            located.stdout,
-        )
-        self.assertIn(
-            "snapshot: tests/snapshots/client_server/server/test_tools/selected.yaml",
-            located.stdout,
-        )
-
-        located_suite = self.run_runner("--locate", suite)
-        self.assertEqual(located_suite.returncode, 0, located_suite.stderr)
-        located_lines = located_suite.stdout.splitlines()
-        self.assertEqual(len(located_lines), 3 * len(cases))
-        for index, case in enumerate(cases):
-            case_name = case.rsplit("::", 1)[1]
-            self.assertEqual(located_lines[3 * index], case)
-            self.assertRegex(
-                located_lines[3 * index + 1],
-                r"^  source: tests/boundaries/client_server/server/test_tools\.py:\d+$",
-            )
-            self.assertEqual(
-                located_lines[3 * index + 2],
-                "  snapshot: "
-                f"tests/snapshots/client_server/server/test_tools/{case_name}.yaml",
-            )
-
         selected = self.run_runner("--jobs", "1", f"{suite}::selected")
         self.assertEqual(selected.returncode, 0, selected.stderr)
         self.assertTrue((self.root / "selected.marker").is_file())
@@ -2069,6 +2082,139 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
+    def test_default_concurrency_runs_twice_the_cpu_count(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def concurrent_case(binary: Path) -> list[dict[str, str]]:
+                    root = binary.parents[2]
+                    with (root / "started").open("wb", buffering=0) as started:
+                        assert started.write(b"1") == 1
+                    with (root / "release").open("rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                    return [{"runner": "concurrent"}]
+
+
+                test_selected = concurrent_case
+                test_unselected = concurrent_case
+                test_third = concurrent_case
+                test_fourth = concurrent_case
+                """),
+            encoding="utf-8",
+        )
+        for name in ("selected", "unselected", "third", "fourth"):
+            (self.snapshots / f"{name}.yaml").write_text(
+                "---\nrunner: concurrent\n...\n", encoding="utf-8"
+            )
+        launcher = self.root / "two_cpu_host.py"
+        launcher.write_text(
+            # fmt: python
+            code("""
+                import runpy
+                import sys
+                from unittest.mock import patch
+
+                runner = sys.argv.pop(1)
+                with patch("os.cpu_count", return_value=2):
+                    runpy.run_path(runner, run_name="__main__")
+                """),
+            encoding="utf-8",
+        )
+        os.mkfifo(self.root / "started")
+        os.mkfifo(self.root / "release")
+        started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
+        release = os.open(self.root / "release", os.O_RDWR)
+        process = subprocess.Popen(
+            [sys.executable, launcher, self.boundaries / "_run.py", "--full"],
+            cwd=self.root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            acknowledgements = b""
+            while len(acknowledgements) < 4:
+                ready, _, _ = select.select([started], [], [], 10)
+                self.assertTrue(
+                    ready,
+                    f"only {len(acknowledgements)} of four cases started on a two-CPU host",
+                )
+                acknowledgements += os.read(started, 4 - len(acknowledgements))
+            self.assertEqual(os.write(release, b"1111"), 4)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        finally:
+            os.close(started)
+            os.close(release)
+            if process.poll() is None:
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+
+    def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
+        names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
+        for snapshot in self.snapshots.glob("*.yaml"):
+            snapshot.unlink()
+        programs = ["from pathlib import Path\n"]
+        for index, name in enumerate(names):
+            programs.append(
+                # fmt: python
+                code("""
+                    def test_NAME(binary: Path):
+                        (binary.parents[2] / "NAME.marker").touch()
+                        assert SUCCEEDS, "failure in NAME"
+                        return [{"runner": "NAME"}]
+                    """)
+                .replace("NAME", name)
+                .replace("SUCCEEDS", repr(index not in failures))
+            )
+            (self.snapshots / f"{name}.yaml").write_text(f"---\nrunner: {name}\n...\n")
+        self.suite.write_text("\n".join(programs))
+        selectors = [f"client_server/server/test_tools::{name}" for name in names]
+        (self.boundaries / "_profiles.py").write_text(f"SMOKE = {selectors!r}\n")
+        return names
+
+    def test_collects_all_failures_through_fifteen_percent(self) -> None:
+        names = self.write_failure_collection_suite({0, 7, 19})
+        for arguments in ((), ("--full",)):
+            with self.subTest(arguments=arguments):
+                for marker in self.root.glob("*.marker"):
+                    marker.unlink()
+                result = self.run_runner("--jobs", "1", *arguments)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(
+                    sorted(path.stem for path in self.root.glob("*.marker")),
+                    sorted(names),
+                )
+                self.assertIn("3 of 20 transcript cases failed", result.stderr)
+                for index in (0, 7, 19):
+                    self.assertIn(f"failure in {names[index]}", result.stderr)
+                self.assertNotIn("Stopping", result.stderr)
+
+    def test_stops_starting_cases_above_fifteen_percent(self) -> None:
+        names = self.write_failure_collection_suite({0, 1, 2, 3})
+        result = self.run_runner("--full", "--jobs", "1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            sorted(path.stem for path in self.root.glob("*.marker")),
+            sorted(names[:4]),
+        )
+        self.assertIn("4 of 20 transcript cases failed", result.stderr)
+        self.assertIn("more than 15%", result.stderr)
+        self.assertIn("not started: 16", result.stderr)
+
+    def test_reports_diagnostics_for_more_than_fifteen_failures(self) -> None:
+        names = self.write_failure_collection_suite(set(range(20)))
+        # Initialization fails first; the other 19 cases are already admitted
+        # together when the failure limit is crossed.
+        result = self.run_runner("--full", "--jobs", "20")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("20 of 20 transcript cases failed", result.stderr)
+        for name in names:
+            self.assertIn(f"AssertionError: failure in {name}", result.stderr)
+
     def test_parallel_failure_exits_and_reports_every_failure(self) -> None:
         self.suite.write_text(FAILING_SUITE, encoding="utf-8")
         for name in ("selected", "unselected"):
@@ -2094,12 +2240,13 @@ runner: orphan
             self.assertEqual(os.write(release_first, b"1"), 1)
             assert process.stderr is not None
             # Descriptor reads avoid buffering part of the receipt above the pipe.
-            receipt = read_lines(process.stderr, 2, "first failure receipt")
+            receipt = read_lines(process.stderr, 3, "first failure limit receipt")
             self.assertEqual(
                 receipt,
                 [
                     "client_server/server/test_tools::first_failure: failed",
                     "rerun: scripts/test client_server/server/test_tools::first_failure",
+                    "Stopping new cases: 1 of 3 transcript cases failed (more than 15%); finishing running cases.",
                 ],
             )
             observed_stderr = "\n".join(receipt) + "\n"
@@ -2141,6 +2288,74 @@ runner: orphan
         )
         with self.assertRaises(ProcessLookupError):
             os.killpg(process.pid, 0)
+
+
+class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, self.boundaries / "_run.py", *arguments],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    def test_runner_metadata_does_not_require_a_binary(self) -> None:
+        (self.root / "target/release/mcp-console").unlink()
+        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_collection_selectors_and_locate(self) -> None:
+        hidden = (
+            self.boundaries / "client_server" / "server" / "_private" / "test_hidden.py"
+        )
+        hidden.parent.mkdir()
+        hidden.write_text(
+            "def test_hidden(binary):\n    return [{'runner': 'hidden'}]\n",
+            encoding="utf-8",
+        )
+        suite = "client_server/server/test_tools"
+        cases = [
+            f"{suite}::initializes_and_lists_tools",
+            f"{suite}::selected",
+            f"{suite}::unselected",
+        ]
+        source = self.suite.relative_to(self.root)
+        snapshots = self.snapshots.relative_to(self.root)
+
+        listed = self.run_runner("--full", "--list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertEqual(listed.stdout.splitlines(), cases)
+
+        located = self.run_runner("--locate", f"{suite}::selected")
+        self.assertEqual(located.returncode, 0, located.stderr)
+        self.assertEqual(located.stdout.splitlines()[0], f"{suite}::selected")
+        self.assertIn(
+            f"source: {source}:",
+            located.stdout,
+        )
+        self.assertIn(
+            f"snapshot: {snapshots / 'selected.yaml'}",
+            located.stdout,
+        )
+
+        located_suite = self.run_runner("--locate", suite)
+        self.assertEqual(located_suite.returncode, 0, located_suite.stderr)
+        located_lines = located_suite.stdout.splitlines()
+        self.assertEqual(len(located_lines), 3 * len(cases))
+        for index, case in enumerate(cases):
+            case_name = case.rsplit("::", 1)[1]
+            self.assertEqual(located_lines[3 * index], case)
+            self.assertRegex(
+                located_lines[3 * index + 1],
+                rf"^  source: {re.escape(str(source))}:\d+$",
+            )
+            self.assertEqual(
+                located_lines[3 * index + 2],
+                f"  snapshot: {snapshots / (case_name + '.yaml')}",
+            )
 
 
 if __name__ == "__main__":

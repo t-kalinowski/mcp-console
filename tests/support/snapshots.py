@@ -227,11 +227,10 @@ def check_recording(
         reference = root / initialization_reference
         references = [
             reference,
-            reference.with_suffix(".direct.yaml"),
+            # Prefer the canonical direct handshake when variant schemas are equal.
             *sorted(
-                path
-                for path in reference.parent.glob(f"{reference.stem}.*.yaml")
-                if path != reference.with_suffix(".direct.yaml")
+                reference.parent.glob(f"{reference.stem}.*.yaml"),
+                key=lambda path: (path != reference.with_suffix(".direct.yaml"), path),
             ),
         ]
         if execution is not None:

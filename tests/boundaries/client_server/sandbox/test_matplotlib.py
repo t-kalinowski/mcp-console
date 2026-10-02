@@ -82,111 +82,109 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
             environment,
             current_directory=workspace,
         )
-        client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
-        host_discovery = temporary / "mcp-console-font-discovery"
-        assert host_discovery.is_file()
-        persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
-        assert len(persistent_caches) == 1, persistent_caches
-        persistent_cache_bytes = persistent_caches[0].read_bytes()
-        host_discovery.unlink()
+        with client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("matplotlib")
+                invisible(reticulate::py_config())
+                """)
+            client.expect(r=r)
+            host_discovery = temporary / "mcp-console-font-discovery"
+            assert host_discovery.is_file()
+            persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
+            assert len(persistent_caches) == 1, persistent_caches
+            persistent_cache_bytes = persistent_caches[0].read_bytes()
+            host_discovery.unlink()
 
-        client.send(
+            client.expect(
+                # fmt: python
+                python=code("""
+                    import os
+                    from pathlib import Path
+
+                    import matplotlib
+
+                    invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
+                    _ = invalid_cache.write_text(
+                        '{"__class__":"FontManager","_version":999}', encoding="utf-8"
+                    )
+                    """)
+            )
+            client.send(control="restart")
+            assert last_result_text(client) == (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            )
             # fmt: python
-            python=code("""
+            python = code("""
                 import os
                 from pathlib import Path
 
-                import matplotlib
-
+                marker = Path(os.environ["TMPDIR"]) / "mcp-console-font-discovery"
                 invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
-                _ = invalid_cache.write_text(
-                    '{"__class__":"FontManager","_version":999}', encoding="utf-8"
+                invalid_cache_was_seeded = invalid_cache.exists()
+
+                import matplotlib
+                import matplotlib.font_manager
+
+                config = Path(matplotlib.matplotlib_fname())
+                font_cache = next(Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json"))
+                try:
+                    with font_cache.open("a", encoding="utf-8"):
+                        pass
+                except PermissionError:
+                    font_cache_read_only = True
+                else:
+                    font_cache_read_only = False
+
+                try:
+                    with config.open("a", encoding="utf-8"):
+                        pass
+                except PermissionError:
+                    config_read_only = True
+                else:
+                    config_read_only = False
+
+                try:
+                    config.with_name("worker-payload").write_text("payload", encoding="utf-8")
+                except PermissionError:
+                    config_directory_read_only = True
+                else:
+                    config_directory_read_only = False
+
+                private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
+                private_probe.write_text("ok", encoding="utf-8")
+
+                (
+                    config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                    matplotlib.rcParams["lines.linewidth"],
+                    font_cache_read_only,
+                    config_read_only,
+                    config_directory_read_only,
+                    private_probe.read_text(encoding="utf-8") == "ok",
+                    marker.exists(),
+                    invalid_cache_was_seeded,
                 )
                 """)
-        )
-        assert last_result_text(client) == "[done]"
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
-        )
-        # fmt: python
-        python = code("""
-            import os
-            from pathlib import Path
-
-            marker = Path(os.environ["TMPDIR"]) / "mcp-console-font-discovery"
-            invalid_cache = Path(os.environ["MPLCONFIGDIR"]) / "fontlist-v999.json"
-            invalid_cache_was_seeded = invalid_cache.exists()
-
-            import matplotlib
-            import matplotlib.font_manager
-
-            config = Path(matplotlib.matplotlib_fname())
-            font_cache = next(Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json"))
-            try:
-                with font_cache.open("a", encoding="utf-8"):
-                    pass
-            except PermissionError:
-                font_cache_read_only = True
-            else:
-                font_cache_read_only = False
-
-            try:
-                with config.open("a", encoding="utf-8"):
-                    pass
-            except PermissionError:
-                config_read_only = True
-            else:
-                config_read_only = False
-
-            try:
-                config.with_name("worker-payload").write_text("payload", encoding="utf-8")
-            except PermissionError:
-                config_directory_read_only = True
-            else:
-                config_directory_read_only = False
-
-            private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
-            private_probe.write_text("ok", encoding="utf-8")
-
-            (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
-                matplotlib.rcParams["lines.linewidth"],
-                font_cache_read_only,
-                config_read_only,
-                config_directory_read_only,
-                private_probe.read_text(encoding="utf-8") == "ok",
-                marker.exists(),
-                invalid_cache_was_seeded,
+            client.expect(
+                "(True, 7.25, True, True, True, True, False, False)\n", python=python
             )
-            """)
-        client.send(python=python)
-        output = last_result_text(client)
-        assert output == "(True, 7.25, True, True, True, True, False, False)\n", repr(
-            output
-        )
-        assert not list(temporary.rglob("mcp-console-font-discovery"))
-        transcript = client.finish()
-        assert (
-            host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"
-        )
-        assert not (host_matplotlib / "worker-payload").exists()
-        assert len(persistent_caches) == 1, persistent_caches
-        assert persistent_caches[0].read_bytes() == persistent_cache_bytes
-        assert not (persistent_caches[0].parent / "fontlist-v999.json").exists()
-        assert not list(
-            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
-                "fontlist-v*.json"
+            assert not list(temporary.rglob("mcp-console-font-discovery"))
+            transcript = client.finish()
+            assert (
+                host_matplotlibrc.read_text(encoding="utf-8")
+                == "lines.linewidth: 7.25\n"
             )
-        )
-        return transcript
+            assert not (host_matplotlib / "worker-payload").exists()
+            assert len(persistent_caches) == 1, persistent_caches
+            assert persistent_caches[0].read_bytes() == persistent_cache_bytes
+            assert not (persistent_caches[0].parent / "fontlist-v999.json").exists()
+            assert not list(
+                (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
+                    "fontlist-v*.json"
+                )
+            )
+            return transcript
 
 
 @requires(SANDBOX)
@@ -210,54 +208,50 @@ def test_explicit_matplotlib_config_is_read_only(binary: Path) -> Transcript:
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
         client = McpClient(binary, SANDBOXED.serve(), environment)
-        client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
-        )
-        assert last_result_text(client) == "[prepared]"
-        # fmt: python
-        python = code("""
-            import errno
-            import os
-            import sys
-            from pathlib import Path
+        with client:
+            client.initialize_and_list_tools()
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
+            # fmt: python
+            python = code("""
+                import errno
+                import os
+                import sys
+                from pathlib import Path
 
-            import matplotlib
+                import matplotlib
 
-            config = Path(matplotlib.matplotlib_fname())
-            try:
-                with config.open("a", encoding="utf-8"):
-                    pass
-            except OSError as error:
-                assert error.errno == (errno.EROFS if sys.platform == "linux" else errno.EPERM)
-                config_read_only = True
-            else:
-                config_read_only = False
+                config = Path(matplotlib.matplotlib_fname())
+                try:
+                    with config.open("a", encoding="utf-8"):
+                        pass
+                except OSError as error:
+                    assert error.errno == (errno.EROFS if sys.platform == "linux" else errno.EPERM)
+                    config_read_only = True
+                else:
+                    config_read_only = False
 
-            private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
-            private_probe.write_text("ok", encoding="utf-8")
+                private_probe = Path(os.environ["MPLCONFIGDIR"]) / "config-write-probe"
+                private_probe.write_text("ok", encoding="utf-8")
 
-            (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
-                matplotlib.rcParams["lines.linewidth"],
-                config_read_only,
-                private_probe.read_text(encoding="utf-8") == "ok",
+                (
+                    config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                    matplotlib.rcParams["lines.linewidth"],
+                    config_read_only,
+                    private_probe.read_text(encoding="utf-8") == "ok",
+                )
+                """)
+            client.expect("(True, 8.25, True, True)\n", python=python)
+            transcript = client.finish()
+            assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
+            assert not list(explicit.glob("fontlist-v*.json"))
+            caches = list(inherited.glob("fontlist-v*.json"))
+            assert len(caches) == 1, caches
+            assert not list(
+                (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
+                    "fontlist-v*.json"
+                )
             )
-            """)
-        client.send(python=python)
-        output = last_result_text(client)
-        assert output == "(True, 8.25, True, True)\n", repr(output)
-        transcript = client.finish()
-        assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
-        assert not list(explicit.glob("fontlist-v*.json"))
-        caches = list(inherited.glob("fontlist-v*.json"))
-        assert len(caches) == 1, caches
-        assert not list(
-            (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
-                "fontlist-v*.json"
-            )
-        )
-        return transcript
+            return transcript
 
 
 if __name__ == "__main__":

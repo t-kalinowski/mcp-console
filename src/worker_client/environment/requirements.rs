@@ -14,7 +14,7 @@ pub(crate) enum RequirementsAction {
     Reset,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct Requirements {
     pub(crate) call_id: Option<u64>,
     pub(crate) action: RequirementsAction,

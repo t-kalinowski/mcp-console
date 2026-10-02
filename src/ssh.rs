@@ -14,16 +14,22 @@ pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
 pub(crate) struct Session {
     pub target: crate::settings::Target,
     roots: Vec<PathBuf>,
+    languages: crate::cell::Languages,
     pub(crate) blocked: Arc<Mutex<Option<String>>>,
     pub preparation: Option<preparation::Preparation>,
     discovery: Option<preparation::Discovery>,
 }
 
 impl Session {
-    pub fn new(target: crate::settings::Target, roots: Vec<PathBuf>) -> Self {
+    pub fn new(
+        target: crate::settings::Target,
+        roots: Vec<PathBuf>,
+        languages: crate::cell::Languages,
+    ) -> Self {
         Self {
             target,
             roots,
+            languages,
             blocked: Arc::default(),
             preparation: None,
             discovery: None,
@@ -79,6 +85,7 @@ impl Session {
     ) -> Result<Vec<u8>, String> {
         target_launch::encode(&Bootstrap {
             python: None,
+            languages: self.languages,
             version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: self.target.workspace.clone(),

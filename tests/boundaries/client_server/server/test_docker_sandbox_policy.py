@@ -145,13 +145,11 @@ def test_provider_reports_missing_paths_and_runtime_readiness(binary: Path) -> l
                 options["command"] = ["/console-executable-does-not-exist"]
             configure(root, **options)
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.initialize_and_list_tools()
-                result = client.send(r="stop('invalid target ran code')")
-                assert result["isError"], result
-                errors = last_result_text(client)
-                client.request("ping")
-                _, diagnostic = client.finish_with_standard_error()
-                errors += diagnostic
+                client.startup_error()
+                client.stdin.close()
+                assert client.stdout.read(timeout=35) == ""
+                errors = client.stderr.read(timeout=20)
+                assert client.process.wait(timeout=5) != 0
             assert errors, failure
             if failure == "missing-workspace":
                 assert options["workspace"] in errors, errors
@@ -174,7 +172,7 @@ def test_provider_reports_missing_paths_and_runtime_readiness(binary: Path) -> l
                 vm["name"] in names for vm in json.loads(listed.stdout)["sandboxes"]
             ), listed.stdout
             records += normalize_recording(
-                [{"failure": failure, "startup_error": errors}], root
+                [{"failure": failure, "stderr": errors}], root
             )
     return records
 

@@ -3,9 +3,6 @@ worker:
   kind: ready
 ---
 relay:
-  kind: initialize
----
-relay:
   kind: evaluate
   language: python
   source: |
@@ -29,9 +26,6 @@ relay:
     thread = threading.Thread(target=background)
     thread.start()
     thread.join()
----
-worker:
-  kind: initialized
 ---
 stdout: |
   thread stdout

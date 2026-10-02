@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(dead_code))]
 //! Private preparation traffic, separate from the relay stream. The owner keeps
 //! trusted startup choices; each operation completes and retires its own resolver
 //! groups before returning a result. Session manifests and activation stay local.
@@ -99,9 +100,6 @@ pub(crate) enum Operation {
         constraints: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         r: Option<ManagedR>,
-    },
-    SelectPython {
-        configured: Option<std::path::PathBuf>,
     },
     InspectPython {
         executable: std::path::PathBuf,
@@ -308,12 +306,21 @@ pub(crate) struct WorkerEnvironment {
 impl WorkerEnvironment {
     #[cfg(unix)]
     pub fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
-        let runtime = self
+        let selected = self
             .native
             .as_ref()
-            .ok_or("worker bootstrap has no complete runtime selection")?;
-        let selected = runtime.python.as_ref();
-        let home = runtime.r_home.as_deref();
+            .and_then(|runtime| runtime.python.as_ref());
+        let home = self
+            .native
+            .as_ref()
+            .and_then(|runtime| runtime.r_home.as_deref())
+            .or_else(|| {
+                self.discovery
+                    .selections
+                    .r_home
+                    .as_deref()
+                    .map(std::path::Path::new)
+            });
         if home.is_none() && selected.is_none() {
             return Err("SSH worker bootstrap has no selected runtime".into());
         }
@@ -352,7 +359,16 @@ impl WorkerEnvironment {
                 }
             }
         }
-        runtime.configure(command)?;
+        if let Some(runtime) = &self.native {
+            runtime.configure(command)?;
+        } else {
+            // Compatibility with a lazily selected R-capable launch.
+            crate::local_runtime::Selection {
+                r_home: home.map(std::path::Path::to_path_buf),
+                python: None,
+            }
+            .configure(command)?;
+        }
         command.env(
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
             if self.discovery.managed || selected.is_some_and(|selected| selected.managed) {

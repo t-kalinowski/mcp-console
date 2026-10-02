@@ -34,6 +34,7 @@ struct QuartoWriter {
     r_requirements: Vec<String>,
     python_requirements: Vec<String>,
     dynamic_resolution: bool,
+    r_available: bool,
     sources: Vec<QuartoSource>,
     environment_boundaries: bool,
     target: Option<Value>,
@@ -52,6 +53,7 @@ impl Writers {
         working_directory: &str,
         dynamic_resolution: bool,
         python_preparation: bool,
+        r_available: bool,
         target: Option<&Value>,
     ) -> Self {
         Self {
@@ -61,6 +63,7 @@ impl Writers {
                 working_directory,
                 dynamic_resolution,
                 python_preparation,
+                r_available,
                 target,
             ),
         }
@@ -80,6 +83,7 @@ impl QuartoWriter {
         working_directory: &str,
         dynamic_resolution: bool,
         python_preparation: bool,
+        r_available: bool,
         target: Option<&Value>,
     ) -> Self {
         let mut writer = Self {
@@ -88,11 +92,12 @@ impl QuartoWriter {
             r_requirements: Vec::new(),
             python_requirements: Vec::new(),
             dynamic_resolution,
+            r_available,
             sources: Vec::new(),
             environment_boundaries: false,
             target: target.cloned(),
         };
-        if dynamic_resolution {
+        if dynamic_resolution && r_available {
             writer.r_requirements.extend(
                 crate::worker_client::DEFAULT_R_REQUIREMENTS
                     .iter()
@@ -121,10 +126,12 @@ impl QuartoWriter {
             Event::EnvironmentDiscovered {
                 dynamic_resolution,
                 python_preparation,
+                r_available,
                 target,
             } => {
                 self.dynamic_resolution = *dynamic_resolution;
-                self.r_requirements = if *dynamic_resolution {
+                self.r_available = *r_available;
+                self.r_requirements = if *dynamic_resolution && *r_available {
                     crate::worker_client::DEFAULT_R_REQUIREMENTS
                         .iter()
                         .map(|s| (*s).to_string())
@@ -223,6 +230,11 @@ impl QuartoWriter {
         } else {
             "# Run `ir render transcript.qmd` in a prepared environment to execute these cells.\n"
         });
+        if !self.r_available && self.target.is_none() {
+            document.push_str(
+                "# IR rendering requires R on the render host, including for Python-only documents.\n",
+            );
+        }
         document.push_str("title: MCP Console code cells\n");
         if self.environment_boundaries {
             document.push_str("execute:\n  eval: false\n");
@@ -425,12 +437,13 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         Event::EnvironmentDiscovered {
             dynamic_resolution,
             python_preparation,
+            r_available,
             target,
         } => {
             document.push_str("## Runtime discovery\n\n");
             push_json(
                 document,
-                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "target": target }),
+                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available, "target": target }),
             )
         }
         Event::PythonEnvironmentAccepted { packages } => {

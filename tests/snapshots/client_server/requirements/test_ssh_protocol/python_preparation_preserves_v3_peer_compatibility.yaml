@@ -1,6 +1,7 @@
 ---
 send:
   requirements:
+    action: set
     python:
       - six
 result:
@@ -18,24 +19,11 @@ result:
       text: |-
         {
           "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse"
-            ],
+            "r": [],
             "python": [
-              "numpy",
-              "pandas",
               "six"
             ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
+            "duckdb": [],
             "python_version": [],
             "exclude_newer": null
           },
@@ -57,21 +45,10 @@ result:
         }
   structuredContent:
     requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - nanoarrow
-        - reticulate
-        - tidyverse
+      r: []
       python:
-        - numpy
-        - pandas
         - six
-      duckdb:
-        - icu
-        - json
-        - sqlite
+      duckdb: []
       python_version: []
       exclude_newer: ~
     prepared: true

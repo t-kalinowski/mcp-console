@@ -548,12 +548,8 @@ fn native_probe() {
                 duckdb_extension_directory: None,
             }),
         })
-        .expect("configure native Python runtime");
-        runtime
-            .initialize()
-            .expect("initialize native Python runtime");
+        .expect("initialize native Python runtime");
         let mut sql = crate::sql::Bridge::new();
-        sql.initialize().expect("initialize managed SQL connection");
         runtime
             .evaluate("import sys, runpy, subprocess, multiprocessing\nidentity = object()\nidentity_id = id(identity)\noriginal_executable = sys.executable")
             .expect("create persistent Python objects");

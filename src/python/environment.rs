@@ -60,3 +60,13 @@ pub(super) fn infrastructure(message: String) -> String {
     crate::worker::record_worker_failure(message.clone());
     message
 }
+
+pub(super) fn version() -> Result<String, String> {
+    ACTIVE.with_borrow(|state| {
+        state
+            .as_ref()
+            .and_then(|active| active["version"].as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| "Python environment omitted its initialized version".into())
+    })
+}

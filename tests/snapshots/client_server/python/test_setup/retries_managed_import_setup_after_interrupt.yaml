@@ -18,7 +18,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 129, in configure
+          File "<string>", line 142, in configure
           File "<setup checkpoint>", line 9, in configuring_thread
           File "<string>", line 50, in _console_input
         KeyboardInterrupt
@@ -51,7 +51,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -91,6 +92,7 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas

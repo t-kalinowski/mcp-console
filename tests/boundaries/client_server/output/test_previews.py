@@ -376,7 +376,7 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         with closing(
             FifoCheckpoint.attach(release.with_name("zod-spooled-output-processed"))
         ) as processed:
-            release_fixture_checkpoint(release)
+            release_fixture_checkpoint(release, client=client)
             processed.wait(
                 "old worker output observed", timeout=client.response_timeout
             )

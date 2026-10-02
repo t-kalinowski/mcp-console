@@ -3,106 +3,8 @@
 ---
 send:
   requirements:
-    action: reset
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-send:
-  requirements:
-    action: get
-result:
-  content:
-    - type: text
-      text: |-
-        {
-          "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse"
-            ],
-            "python": [
-              "numpy",
-              "pandas"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "prepared": false,
-          "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
-            "python": []
-          }
-        }
-  structuredContent:
-    requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - nanoarrow
-        - reticulate
-        - tidyverse
-      python: []
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    prepared: false
-    runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
-      python: []
-  isError: false
----
-send:
-  requirements:
     action: set
-    r:
-      - DBI
-      - arrow
-      - duckdb
-      - nanoarrow
-      - reticulate
-      - tidyverse
     python: []
-    duckdb:
-      - icu
-      - json
-      - sqlite
-    python_version: []
-    exclude_newer: ~
 result:
   content:
     - type: text
@@ -128,22 +30,6 @@ result:
 ---
 send:
   python: marker = object(); marker_id = id(marker)
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
-  r: probe_r_state <- 42L
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
-  sql: CREATE TABLE probe_state AS SELECT 42 AS answer
 result:
   content:
     - type: text
@@ -177,26 +63,6 @@ result:
     - type: text
       text: |
         True
-  isError: false
----
-send:
-  r: stopifnot(identical(probe_r_state, 42L))
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
-  sql: SELECT answer FROM probe_state
-result:
-  content:
-    - type: text
-      text: |
-        # A tibble: 1 × 1
-           answer
-          <int32>
-        1      42
   isError: false
 ---
 send:

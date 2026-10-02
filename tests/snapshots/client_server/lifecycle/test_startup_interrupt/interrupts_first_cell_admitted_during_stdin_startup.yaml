@@ -8,8 +8,8 @@ send:
 result:
   content:
     - type: text
-      text: "[worker startup interrupted]"
-  isError: true
+      text: "[worker starting]"
+  isError: false
 ---
 send:
   r: startup_cell_ran <- TRUE
@@ -40,16 +40,6 @@ result:
     - type: text
       text: "[worker startup interrupted]"
   isError: true
----
-send:
-  control: restart
-result:
-  content:
-    - type: text
-      text: |-
-        [starting new worker]
-        [worker starting]
-  isError: false
 ---
 send:
   r: exists("startup_cell_ran", inherits = FALSE)

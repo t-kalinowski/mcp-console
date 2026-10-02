@@ -1,6 +1,3 @@
 ---
 session_started:
-  dynamic_resolution: ~
----
-environment_discovered:
   dynamic_resolution: false

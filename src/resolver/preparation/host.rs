@@ -181,23 +181,6 @@ impl Context {
                 };
                 Ok(serde_json::Value::String(version))
             }
-            Operation::SelectPython { configured } => {
-                let executable = match configured {
-                    Some(configured) => {
-                        Some(crate::python::explicit_executable(configured.as_os_str())?)
-                    }
-                    None => resolver::find_path_entry("python3")
-                        .or_else(|| resolver::find_path_entry("python")),
-                };
-                let selected = executable
-                    .map(|executable| {
-                        let executable =
-                            std::path::absolute(executable).map_err(|error| error.to_string())?;
-                        crate::python::inspect_native(&executable, on_started)
-                    })
-                    .transpose()?;
-                serde_json::to_value(selected).map_err(|error| error.to_string())
-            }
             Operation::InspectPython { executable } => {
                 serde_json::to_value(crate::python::inspect_native(&executable, on_started)?)
                     .map_err(|error| error.to_string())

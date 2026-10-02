@@ -29,6 +29,7 @@ pub(super) enum Event<'a> {
     EnvironmentDiscovered {
         dynamic_resolution: bool,
         python_preparation: bool,
+        r_available: bool,
         target: Option<&'a Value>,
     },
     StartupFailed {

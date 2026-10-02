@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 import sys
 import tempfile
 from contextlib import ExitStack
@@ -8,12 +9,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text, release_worker_callback_gate
+from support.assertions import (
+    last_tool_text,
+    release_worker_callback_gate,
+    wait_for_idle_output,
+)
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.r import startup_declarations_client
 from support.records import Transcript
 from support.resolvers import (
     checkpoint_uv_environment,
@@ -27,38 +31,45 @@ from support.suites import run_this_suite
 def test_owns_managed_python_transitions(
     binary: Path, execution: Execution
 ) -> Transcript:
-    startup = code(r"""
-        namespace <- asNamespace("reticulate")
-        invisible(suppressMessages(base::trace(
-          "py_reqs_plan",
-          tracer = quote(stop("reticulate calculated the transition")),
-          print = FALSE,
-          where = namespace
-        )))
-        reticulate::py_require(c("numpy", "unused", "numpy"), action = "set")
-        reticulate::py_require("unused", action = "remove")
-        reticulate::py_require(python_version = ">=3.10, <4")
-        reticulate::py_require(exclude_newer = "2026-01-01")
-        reticulate::py_require(exclude_newer = NA_character_, action = "remove")
-        declared <- reticulate::py_require()
-        stopifnot(
-          identical(declared$packages, "numpy"),
-          identical(declared$python_version, c(">=3.10", "<4")),
-          identical(declared["exclude_newer"], list(exclude_newer = NULL)),
-          !reticulate::py_available(initialize = FALSE)
-        )
-        """)
-    with startup_declarations_client(binary, execution, startup) as client:
-        client.send(r="stopifnot(startup_checks_complete)")
-        assert last_tool_text(client) == "[done]", client.transcript[-1]
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        # Instrument the old planner, then exercise only public declarations,
+        # explicit preparation, and automatic imports through the console.
+        # fmt: r
+        r = code(r"""
+            namespace <- asNamespace("reticulate")
+            invisible(suppressMessages(base::trace(
+              "py_reqs_plan",
+              tracer = quote(stop("reticulate calculated the transition")),
+              print = FALSE,
+              where = namespace
+            )))
+            reticulate::py_require(c("numpy", "unused", "numpy"), action = "set")
+            reticulate::py_require("unused", action = "remove")
+            reticulate::py_require(python_version = ">=3.10, <4")
+            reticulate::py_require(exclude_newer = "2026-01-01")
+            reticulate::py_require(exclude_newer = NA_character_, action = "remove")
+            declared <- reticulate::py_require()
+            stopifnot(
+              identical(declared$packages, "numpy"),
+              identical(declared$python_version, c(">=3.10", "<4")),
+              identical(declared["exclude_newer"], list(exclude_newer = NULL)),
+              !reticulate::py_available(initialize = FALSE)
+            )
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(requirements={"python": ["numpy"]})
         assert last_tool_text(client) == "[prepared]"
-        client.send(r="stopifnot(reticulate::py_available(initialize = FALSE))")
+        client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(python="import yaml12; yaml12.__name__")
+        client.send(
+            r='reticulate::py_run_string("import yaml12; print(yaml12.__name__)")'
+        )
         assert last_tool_text(client) == (
             "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
-            "'yaml12'\n"
+            "yaml12\n"
         ), last_tool_text(client)
         # fmt: r
         r = code(r"""
@@ -93,9 +104,11 @@ def test_owns_managed_python_transitions(
         assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(requirements={"python": ["packaging"]})
         assert last_tool_text(client) == "[prepared]"
-        client.send(python="import packaging; packaging.__name__")
-        assert last_tool_text(client) == "'packaging'\n"
-        return client.finish()
+        client.send(
+            r='reticulate::py_run_string("import packaging; print(packaging.__name__)")'
+        )
+        assert last_tool_text(client) == "packaging\n"
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -158,20 +171,21 @@ def test_preserves_preparation_restoration_and_live_noops(
         environment, record = recording_uv_environment(
             directory, fail_requirement="py-yaml12"
         )
-        startup = code(r"""
-            reticulate::py_require(
-              "numpy",
-              python_version = ">=3.10, <4",
-              action = "set"
-            )
-            before <- reticulate::py_require()
-            stopifnot(!reticulate::py_available(initialize = FALSE))
-            """)
-        with startup_declarations_client(
-            binary, execution, startup, environment
-        ) as client:
-            client.send(r="stopifnot(startup_checks_complete)")
-            assert last_tool_text(client) == "[done]", client.transcript[-1]
+        environment["MCP_CONSOLE_LANGUAGES"] = "r"
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require(
+                  "numpy",
+                  python_version = ">=3.10, <4",
+                  action = "set"
+                )
+                before <- reticulate::py_require()
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
             failed = client.send(requirements={"python": ["py-yaml12"]})
             assert failed["isError"] is True, failed
             error = failed["content"][0]["text"]
@@ -180,13 +194,13 @@ def test_preserves_preparation_restoration_and_live_noops(
             r = code(r"""
                 stopifnot(
                   identical(reticulate::py_require(), before),
-                  reticulate::py_available(initialize = FALSE)
+                  !reticulate::py_available(initialize = FALSE)
                 )
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]", last_tool_text(client)
             Path(environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"]).unlink()
-            client.send(python="None")
+            client.send(r="invisible(reticulate::py_config())")
             assert last_tool_text(client) == "[done]", last_tool_text(client)
             resolutions = uv_tool_run_requirements(record)
             # fmt: r
@@ -256,7 +270,7 @@ def test_preserves_preparation_restoration_and_live_noops(
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]", last_tool_text(client)
-            return client.finish()
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -352,7 +366,7 @@ def test_preserves_activation_interrupt_conditions(
             before <- reticulate::py_require()
             namespace <- asNamespace("reticulate")
             invisible(suppressMessages(base::trace(
-              "clean_version",
+              "python_config_impl",
               tracer = quote(stop(structure(
                 list(message = "activation interrupted", call = NULL),
                 class = c("interrupt", "condition")
@@ -475,11 +489,15 @@ def test_idle_activation_failure_retains_worker_until_restart(
         assert Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"]).read_text() == (
             "py-yaml12\n"
         )
+        # The callback's FIFO receipt does not order its output transport.
+        # Receive the idle output before admitting the follow-up evaluation.
+        wait_for_idle_output(
+            client,
+            "idle activation rejected\n\n[idle]",
+            "idle Python activation failure output",
+        )
         client.send(python="assert id(identity) == identity_id; print('same object')")
-        assert (
-            last_tool_text(client)
-            == "idle activation rejected\n[output produced while idle]\nsame object\n"
-        ), last_tool_text(client)
+        assert last_tool_text(client) == "same object\n", last_tool_text(client)
         assert (
             client.send(requirements={"action": "get"})["structuredContent"][
                 "requirements"

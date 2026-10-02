@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -193,9 +194,9 @@ def test_prepares_with_empty_stdin_then_restarts(
         client.send(stdin="", requirements={"r": ["praise"]})
         assert last_result_text(client) == "[prepared]"
         client.send(control="restart", requirements={"r": ["praise"]})
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
-        ), client.transcript[-1]
+        assert last_result_text(client) == "[starting new worker]\n[idle]", (
+            client.transcript[-1]
+        )
 
         # fmt: r
         r = code(r"""
@@ -217,7 +218,7 @@ def test_prepares_with_empty_stdin_then_restarts(
         # Prepare a new package while replacing the live worker.
         client.send(control="restart", requirements={"r": ["zeallot"]})
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         # fmt: r
         r = code(r"""
@@ -430,7 +431,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
 
             client.send(control="restart")
             assert last_result_text(client) == (
-                "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             )
             # fmt: python
             python = code("""
@@ -520,16 +521,16 @@ def test_evaluates_with_default_managed_r(
         # fmt: r
         r = code(r"""
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
-            packages <- c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow")
-            # Loaded namespaces retain canonical cache paths; the managed
-            # library contains symlinks to those same package installations.
             stopifnot(
-              identical(
-                normalizePath(find.package(packages)),
-                normalizePath(file.path(.libPaths()[[managed_index]], packages))
-              ),
+              identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
+              identical(dirname(find.package("yyjsonr")), .libPaths()[[managed_index]]),
               vapply(
-                c("ggplot2", "dplyr", "readr", "jsonlite"),
+                c("ggplot2", "dplyr", "readr", "jsonlite", "yyjsonr"),
                 requireNamespace,
                 logical(1L),
                 quietly = TRUE
@@ -553,6 +554,7 @@ def test_evaluates_with_default_managed_r(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "yyjsonr",
             "jsonlite",
             "pillar",
             "tibble",
@@ -570,7 +572,7 @@ def test_evaluates_with_default_managed_r(
 def test_prepares_initial_r_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
+    environment, rscript = r_test_environment()
     initial_r = "praise"
     candidate_r = "zeallot"
     with tempfile.TemporaryDirectory() as temporary:
@@ -595,6 +597,27 @@ def test_prepares_initial_r_requirements(
         assert last_result_text(client) == "[prepared]"
 
         invalid_r = "not a valid requirement !!!"
+        reference = subprocess.run(
+            [
+                "ir",
+                "run",
+                "--rscript",
+                str(rscript),
+                "--with",
+                invalid_r,
+                "--isolated",
+                "--vanilla",
+                "-e",
+                "42",
+            ],
+            env=environment
+            | {"IR_NO_LOCAL_SOURCES": "1", "PKG_SUBPROCESS_TIMEOUT": "60000"},
+            cwd=workspace,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
+        assert reference.returncode == 1, reference
         client.send(
             requirements={"r": [invalid_r]},
         )
@@ -608,6 +631,23 @@ def test_prepares_initial_r_requirements(
         assert error.endswith("Execution halted\nir: dependency resolution failed"), (
             error
         )
+        assert error == (
+            f"R package resolution failed with exit status: 1: {reference.stderr.strip()}"
+        ), error
+        # Keep the complete diagnostic; `ir` releases change pkg_deps arguments.
+        pak_call = next(
+            line for line in error.splitlines() if line.startswith("3. pak::pkg_deps(")
+        )
+        assert error.count(pak_call) == 1, error
+        result["content"][0]["text"] = error.replace(
+            pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)"
+        )
+        client.transcript[-1]["transcript_normalization"] = {
+            "target": "result.content[0].text",
+            "replacements": {
+                "ir_pkg_deps_arguments": "<ir-version-dependent arguments>",
+            },
+        }
 
         invalid_python = "example @ https://example.invalid/example.whl"
         client.send(
@@ -634,7 +674,7 @@ def test_prepares_initial_r_requirements(
             42L
             """)
         client.send(r=r)
-        assert last_result_text(client) == "[1] 42\n"
+        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
 
         client.send(
             requirements={"r": [initial_r]},
@@ -671,7 +711,7 @@ def test_prepares_initial_r_requirements(
 
         client.send(control="restart")
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         client.send(r=prepared_r)
         assert last_result_text(client) == "[1] 42\n"

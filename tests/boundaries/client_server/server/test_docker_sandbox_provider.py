@@ -165,24 +165,11 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.initialize_and_list_tools()
-                result = client.send(r="stop('invalid provider ran code')")
-                assert result["isError"], result
-                errors = last_result_text(client)
-                client.request("ping")
-                if mode == "create-failed":
-                    retry = client.send(
-                        control="restart", r="stop('unsafe replacement')"
-                    )
-                    assert retry["isError"], retry
-                    assert "start a new server session" in last_result_text(client), (
-                        retry
-                    )
-                _, diagnostics = client.finish_with_standard_error()
-                if mode == "create-failed":
-                    assert "retirement is unconfirmed" in diagnostics, diagnostics
-                else:
-                    assert diagnostics == "", diagnostics
+                client.startup_error()
+                client.stdin.close()
+                assert client.stdout.read(timeout=15) == ""
+                errors = client.stderr.read(timeout=15)
+                assert client.process.wait(timeout=5) != 0
             assert expected in errors, errors
             invoked = calls(root)
             assert not any(call["args"][0] in ("exec", "rm") for call in invoked), (
@@ -192,14 +179,7 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
                 mode == "create-failed"
             )
             records += normalize_recording(
-                [
-                    {
-                        "fake_provider": mode,
-                        "startup_error": errors,
-                        "stderr": diagnostics,
-                    }
-                ],
-                root,
+                [{"fake_provider": mode, "stderr": errors}], root
             )
     return records
 
@@ -244,6 +224,31 @@ def test_argument_arrays_and_unrelated_ownership(binary: Path) -> list:
 
 
 @requires(POSIX)
+def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("diagnostics")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(r="42")
+            assert last_result_text(client) == "provider peer\n"
+            transcript, diagnostics = client.finish_with_standard_error()
+        assert diagnostics.count("fixture: version diagnostic\n") == 1, diagnostics
+        for operation in ("create", "rm"):
+            assert diagnostics.count(f"fixture: {operation} diagnostic\n") == 2, (
+                diagnostics
+            )
+            assert diagnostics.count(f"fixture: {operation} progress\n") == 2, (
+                diagnostics
+            )
+        assert "fixture: ls diagnostic\n" in diagnostics, diagnostics
+        return transcript[3:] + [
+            {"provider_diagnostics_preserved_on_controller_stderr": True}
+        ]
+
+
+@requires(POSIX)
 def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")
@@ -269,31 +274,6 @@ def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
         assert [call["args"] for call in calls(root)] == [["version"]]
         return [
             {"recorded_provider_bytes": 340000, "tool_calls": 0, "setup_retired": True}
-        ]
-
-
-@requires(POSIX)
-def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
-    with workspace() as root:
-        environment = cli_peer(root / "peer")
-        configure(root, template=TEMPLATE)
-        (root / "peer/mode").write_text("diagnostics")
-        with McpClient(binary, ("serve",), environment, root) as client:
-            client.initialize_and_list_tools()
-            client.send(r="42")
-            assert last_result_text(client) == "provider peer\n"
-            transcript, diagnostics = client.finish_with_standard_error()
-        assert diagnostics.count("fixture: version diagnostic\n") == 1, diagnostics
-        for operation in ("create", "rm"):
-            assert diagnostics.count(f"fixture: {operation} diagnostic\n") == 2, (
-                diagnostics
-            )
-            assert diagnostics.count(f"fixture: {operation} progress\n") == 2, (
-                diagnostics
-            )
-        assert "fixture: ls diagnostic\n" in diagnostics, diagnostics
-        return transcript[3:] + [
-            {"provider_diagnostics_preserved_on_controller_stderr": True}
         ]
 
 

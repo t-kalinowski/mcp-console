@@ -33,12 +33,16 @@ impl Bridge {
     }
 
     fn r_backend(&self) -> Result<std::rc::Rc<r_dbi::Backend>, String> {
+        crate::worker::ensure_r()?;
         R_BACKEND
             .with(|slot| slot.get().cloned())
             .ok_or("R SQL backend is unavailable".into())
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+        if !crate::worker::r_available() && !crate::python::ensure_initialized()? {
+            return Ok(());
+        }
         match py_dbapi::dispatch(source)? {
             py_dbapi::Provider::Handled => Ok(()),
             py_dbapi::Provider::Managed => {
@@ -51,6 +55,6 @@ impl Bridge {
     }
 }
 
-pub(crate) fn install_python_runtime() -> Result<(), String> {
+pub(crate) fn install_python_runtime() -> Result<bool, String> {
     py_dbapi::install_runtime()
 }

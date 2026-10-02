@@ -7,11 +7,18 @@ const PYTHON_INITIALIZER_SOURCE: &str = include_str!("initialize.R");
 
 /// Optional R-side selection and attachment compatibility adapter.
 ///
-/// This preserves reticulate startup declarations and initialization hooks. CPython
+/// This still preserves reticulate discovery and initialization hooks. CPython
 /// loading, lifetime, and cell evaluation remain owned by Console.
 pub(super) struct Adapter {
     bridge: crate::r_bridge::Bridge,
     completed: std::cell::Cell<bool>,
+    pub(super) managed: bool,
+}
+
+pub(super) enum Selection {
+    Selected(NativePython),
+    Unavailable,
+    Incomplete,
 }
 
 pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
@@ -22,18 +29,24 @@ pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"R_SESSION_INITIALIZED", &marker, true)
 }
 
-// Install compatibility hooks before R startup packages can enter reticulate.
-// Both ordinary startup and reentrant package hooks use Console's launch plan.
+// Install callbacks before eager startup packages can request input or enter
+// reticulate. Late R startup also protects an already running Python identity.
 // Called after R reads the system Renviron, before it loads default packages.
 // This and R's own bootstrap environment writes require no concurrent native
 // environment access. See the unresolved constraint in docs/ARCHITECTURE.md.
-pub(crate) fn defer_r_startup() -> Option<std::ffi::OsString> {
+pub(crate) fn defer_r_startup() -> Result<Option<Option<std::ffi::OsString>>, String> {
+    if super::library::initialized_selection()?.is_none() && !crate::worker::bootstrapping() {
+        return Ok(None);
+    }
     let packages = std::env::var_os("R_DEFAULT_PACKAGES");
     unsafe { std::env::set_var("R_DEFAULT_PACKAGES", "NULL") };
-    packages
+    Ok(Some(packages))
 }
 
-pub(crate) fn finish_r_startup(packages: Option<std::ffi::OsString>) -> Result<(), String> {
+pub(crate) fn finish_r_startup(deferred: Option<Option<std::ffi::OsString>>) -> Result<(), String> {
+    let Some(packages) = deferred else {
+        return Ok(());
+    };
     unsafe {
         match packages {
             Some(packages) => std::env::set_var("R_DEFAULT_PACKAGES", packages),
@@ -65,24 +78,6 @@ pub extern "C-unwind" fn mcp_console_python_retained_manifest() -> harp::Result<
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_planned_python() -> harp::Result<SEXP> {
-    let selected = super::requirements::materialized()
-        .map(|candidate| candidate.selected)
-        .or_else(|| {
-            super::SELECTION
-                .get()
-                .and_then(|selection| selection.python.as_ref())
-                .map(|python| *python.selected.clone())
-        })
-        .ok_or_else(|| harp::anyhow!("Python is unavailable in this session"))?;
-    Ok(harp::object::RObject::from(
-        serde_json::to_string(&selected).map_err(|error| harp::anyhow!("{error}"))?,
-    )
-    .sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
 pub extern "C-unwind" fn mcp_console_running_python() -> harp::Result<SEXP> {
     let selected =
         super::library::initialized_selection().map_err(|error| harp::anyhow!("{error}"))?;
@@ -106,6 +101,7 @@ pub extern "C-unwind" fn mcp_console_python_environment_selection_unchanged() ->
 
 impl Adapter {
     pub(super) fn initialize() -> Result<Self, String> {
+        let managed = std::env::var_os("MCP_CONSOLE_MANAGED_PYTHON").is_some();
         let source = format!(
             "base::local(
   {{
@@ -119,19 +115,13 @@ impl Adapter {
         Ok(Self {
             bridge: crate::r_bridge::Bridge::initialize(&source, "Python")?,
             completed: std::cell::Cell::new(false),
+            managed,
         })
-    }
-
-    pub(super) fn available(&self) -> Result<bool, String> {
-        // Absence of an optional bridge must not disable either peer runtime.
-        self.bridge
-            .call0_integer(c"available")
-            .map(|available| available != 0)
     }
 
     pub(super) fn ensure_initialized(&self) -> Result<bool, String> {
         if !self.completed.get() {
-            let Some(selected) = self.select()? else {
+            let Selection::Selected(selected) = self.select(false)? else {
                 return Ok(false);
             };
             if let Err(error) = super::initialize_selected(&selected) {
@@ -152,16 +142,25 @@ impl Adapter {
         Ok(self.completed.get())
     }
 
-    pub(super) fn select(&self) -> Result<Option<NativePython>, String> {
+    pub(super) fn select(&self, optional: bool) -> Result<Selection, String> {
         // Discovery and serialization share the existing R interrupt boundary.
-        self.bridge
-            .evaluate_completed_string("select")?
-            .filter(|selected| !selected.is_empty())
-            .map(|selected| {
-                serde_json::from_str(&selected)
-                    .map_err(|error| format!("invalid selected Python configuration: {error}"))
+        let source = if optional {
+            "select_optional"
+        } else {
+            "select"
+        };
+        let Some(selected) = self.bridge.evaluate_completed_string(source)? else {
+            return Ok(Selection::Incomplete);
+        };
+        if selected.is_empty() {
+            return Ok(Selection::Incomplete);
+        }
+        serde_json::from_str::<Option<NativePython>>(&selected)
+            .map(|selected| match selected {
+                Some(selected) => Selection::Selected(selected),
+                None => Selection::Unavailable,
             })
-            .transpose()
+            .map_err(|error| format!("invalid selected Python configuration: {error}"))
     }
 
     fn cancel_selection(&self) -> Result<(), String> {
@@ -178,8 +177,42 @@ impl Adapter {
     }
 }
 
-// Startup compatibility hooks enter the same planned native interpreter.
-// Reticulate then attaches its conversion runtime to that interpreter.
+// Called once for a fresh selection, before the adapter changes the worker
+// environment. The adapter retains these embedding fields for attachment.
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_inspect_python(python: SEXP) -> harp::Result<SEXP> {
+    let python = String::try_from(harp::object::RObject::view(python))?;
+    let executable = match std::env::var_os("RETICULATE_PYTHON")
+        .filter(|value| !value.is_empty() && value != "managed")
+    {
+        Some(explicit) => {
+            super::explicit_executable(&explicit).map_err(|error| harp::anyhow!("{error}"))?
+        }
+        None => python.into(),
+    };
+    crate::worker::check_python_selection_interrupt().map_err(|error| harp::anyhow!("{error}"))?;
+    let captured = crate::local_runtime::Selection::from_environment()
+        .map_err(|error| harp::anyhow!("{error}"))?
+        .and_then(|runtime| runtime.python);
+    let resolved = super::requirements::resolved_selection();
+    let selected = if let Some(resolved) = resolved
+        && std::path::Path::new(&resolved.embedding.python) == executable
+    {
+        resolved
+    } else if let Some(captured) = captured
+        && std::path::Path::new(&captured.selected.embedding.python) == executable
+    {
+        *captured.selected
+    } else {
+        crate::worker::inspect_python(&executable).map_err(|error| harp::anyhow!("{error}"))?
+    };
+    let result = serde_json::to_string(&selected).map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(result).sexp)
+}
+
+// Rust initializes the exact interpreter selected by reticulate. Reticulate
+// then observes the running interpreter and attaches its conversion runtime.
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_initialize_python(

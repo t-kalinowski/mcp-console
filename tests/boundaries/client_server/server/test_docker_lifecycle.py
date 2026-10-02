@@ -34,7 +34,7 @@ from support.suites import run_this_suite
 
 
 @requires(POSIX)
-def test_protocol_and_eof_during_image_setup(binary: Path) -> Transcript:
+def test_cancelled_image_setup_before_readiness(binary: Path) -> Transcript:
     with workspace() as root:
         environment = cli_peer(root / "peer")
         (root / "peer/mode").write_text("setup-gate")
@@ -45,16 +45,16 @@ def test_protocol_and_eof_during_image_setup(binary: Path) -> Transcript:
         )
         with closing(FifoCheckpoint.create(root / "peer/reached")) as reached:
             with McpClient(binary, ("serve",), environment, root) as client:
-                reached.wait("automatic image pull")
-                client.initialize_and_list_tools()
-                client.finish()
+                reached.wait("image pull admitted before MCP readiness")
+                client.stdin.close()
+                assert client.stdout.read(timeout=15) == ""
+                error = client.stderr.read(timeout=15)
+                assert "cancel" in error, error
+                assert client.process.wait(timeout=5) != 0
         calls = [call["args"] for call in peer_calls(root)]
         assert not any("create" in args for args in calls), calls
         return [
-            {
-                "protocol_available_during_setup": True,
-                "container_creation_started": False,
-            }
+            {"cancelled_before_readiness": True, "container_creation_started": False}
         ]
 
 
@@ -69,8 +69,11 @@ def test_cancelled_creation_uses_ownership_token(binary: Path) -> Transcript:
             with McpClient(binary, ("serve",), environment, root) as client:
                 reached.wait("container created before ID delivery", timeout=30)
                 identity = (root / "peer/created").read_text().strip()
-                client.initialize_and_list_tools()
-                _, error = client.finish_with_standard_error()
+                client.stdin.close()
+                assert client.stdout.read(timeout=15) == ""
+                error = client.stderr.read(timeout=15)
+                assert "cancel" in error, error
+                assert client.process.wait(timeout=5) != 0
         try:
             absent(identity)
         except AssertionError as failure:
@@ -124,8 +127,11 @@ def test_cancelled_real_build_stops_setup_container(binary: Path) -> Transcript:
                 assert result.returncode == 0 and result.stdout.strip(), result
                 identity = result.stdout.strip()
                 with removal_event(identity) as removed:
-                    client.initialize_and_list_tools()
-                    client.finish_with_standard_error()
+                    client.stdin.close()
+                    assert client.stdout.read(timeout=15) == ""
+                    error = client.stderr.read(timeout=15)
+                    assert "cancel" in error, error
+                    assert client.process.wait(timeout=5) != 0
                     removed()
                 absent(identity)
         finally:

@@ -1,10 +1,15 @@
 //! Cancellable inspection of an already selected candidate, inside the worker.
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::Duration;
 
 const SOURCE: &str = include_str!("probe.py");
@@ -30,6 +35,7 @@ impl From<String> for Error {
     }
 }
 
+#[cfg(unix)]
 pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
     // Linux's restricted network policy denies socket sends, including notices.
     let (mut notices, notify) = std::io::pipe().map_err(|error| error.to_string())?;
@@ -129,6 +135,10 @@ pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
     if !status.success() {
         return Err(format!("{status}: {}", String::from_utf8_lossy(&output)).into());
     }
+    parse_output(&output)
+}
+
+fn parse_output(output: &[u8]) -> Result<serde_json::Value, Error> {
     let marker = b"\x1eMCP_CONSOLE_ENVIRONMENT\x1e";
     let start = output
         .windows(marker.len())
@@ -141,4 +151,48 @@ pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
         .ok_or_else(|| Error::Message("candidate environment record is incomplete".into()))?;
     serde_json::from_slice(&output[start..start + length])
         .map_err(|error| Error::Message(format!("invalid candidate environment: {error}")))
+}
+
+#[cfg(windows)]
+pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
+    use crate::resolver::process::{ResolverProcess, completed_write, read_output, spawn_resolver};
+    let output = crate::worker::with_python_interrupt(|started| {
+        let resolver = ResolverProcess::new();
+        let mut command = Command::new(executable);
+        command
+            .args(["-S", "-c", SOURCE])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = spawn_resolver(&mut command).map_err(|error| error.to_string())?;
+        let stdout = read_output(child.stdout.take().unwrap());
+        let stderr = read_output(child.stderr.take().unwrap());
+        resolver.watch_exit(child.id());
+        let path = std::path::Path::new(executable);
+        if let Err(error) = started(resolver.stop_handle()) {
+            resolver.abort(&mut child, path, "Python inspection")?;
+            return Err(error);
+        }
+        let output = resolver.wait(
+            &mut child,
+            completed_write(),
+            stdout,
+            stderr,
+            path,
+            "Python inspection",
+        )?;
+        if !output.status.success() {
+            return Err(format!(
+                "{}: {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(output.stdout)
+    });
+    if crate::worker::python_interrupt_pending() {
+        return Err(Error::Interrupted);
+    }
+    parse_output(&output?)
 }

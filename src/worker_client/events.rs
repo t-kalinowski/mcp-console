@@ -1,18 +1,24 @@
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+mod deferred;
+mod operation;
+
+pub(super) use operation::{
+    EnvironmentPreparationReservation, OperationResult, WorkerOperationState,
+};
+use operation::{Route, RuntimeRCallbackAdmission};
+
+use std::sync::mpsc;
 use std::thread;
 
 use crate::relay_protocol::{RelayCommand, RelayEvent};
 
 use super::lifecycle::OldGenerationCommitDisposition;
-use super::{
-    Evaluation, OutputTape, PythonPreparationCommit, RPreparationCommit, WorkerCallbacks,
-    WorkerProcessOutcome,
-};
-
-#[derive(Clone)]
-pub(super) struct WorkerOperationState(Arc<OperationStateCell>);
+use super::{OutputTape, WorkerCallbacks, WorkerProcessOutcome};
 
 pub(super) enum WorkerEvent {
+    SuspendBootstrap {
+        admitted: mpsc::SyncSender<Result<(), String>>,
+    },
+    ResumeBootstrap,
     Relay(RelayEvent),
     TransportFailure(String),
     RetireOperation {
@@ -32,58 +38,6 @@ pub(super) struct WorkerEventDispatcher {
     thread: thread::JoinHandle<Result<Option<WorkerProcessOutcome>, String>>,
 }
 
-struct OperationState {
-    initialization: Option<bool>,
-    startup_evaluation: std::sync::Weak<Evaluation>,
-    operation: Option<Operation>,
-    failure: Option<String>,
-    relay_exit_caused_failure: bool,
-    idle_input: Option<String>,
-    runtime_r_callback: Option<RuntimeRCallbackPhase>,
-    environment_preparation_reserved: bool,
-    retiring: bool,
-}
-
-struct OperationStateCell {
-    state: Mutex<OperationState>,
-    runtime_r_reply: Condvar,
-    initialization_changed: Condvar,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RuntimeRCallbackPhase {
-    Resolving,
-    AwaitingActivation,
-}
-
-pub(super) struct EnvironmentPreparationReservation {
-    operation: WorkerOperationState,
-}
-
-struct Operation {
-    kind: OperationKind,
-    result: Option<mpsc::Sender<Result<OperationResult, String>>>,
-}
-
-enum OperationKind {
-    Cell(Arc<Evaluation>),
-    PrepareR {
-        library: String,
-        commit: RPreparationCommit,
-    },
-    PreparePython {
-        commit: PythonPreparationCommit,
-        continue_environment_preparation: bool,
-        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
-    },
-}
-
-enum Route {
-    Cell(Arc<Evaluation>),
-    Preparation,
-    Idle,
-}
-
 struct PendingPythonCandidate {
     managed: crate::resolver::ManagedPython,
     configuration: crate::python::NativePython,
@@ -100,611 +54,6 @@ impl RuntimeCandidates {
     fn clear(&mut self) {
         self.r.clear();
         self.python.clear();
-    }
-}
-
-enum RuntimeRCallbackAdmission {
-    Admitted,
-    Busy,
-}
-
-pub(super) enum OperationResult {
-    Completed,
-    RPrepared(super::PreparationOutcome),
-    PythonPrepared(super::PreparationOutcome),
-}
-
-impl WorkerOperationState {
-    pub(super) fn begin_initialization(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        state.ensure_available()?;
-        if state.initialization.is_some() {
-            return Err("worker initialization already started".into());
-        }
-        state.initialization = Some(false);
-        Ok(())
-    }
-
-    pub(super) fn wait_initialization(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        while state.initialization == Some(false) && state.failure.is_none() && !state.retiring {
-            state = self
-                .0
-                .initialization_changed
-                .wait(state)
-                .map_err(|_| "worker initialization lock poisoned")?;
-        }
-        if let Some(error) = &state.failure {
-            return Err(error.clone());
-        }
-        if state.retiring {
-            return Err("worker is retiring".into());
-        }
-        Ok(())
-    }
-
-    pub(super) fn observe_startup(
-        &self,
-        evaluation: &Arc<Evaluation>,
-        stdin: super::platform::StdinSender,
-    ) -> Result<(), String> {
-        let mut state = self.lock()?;
-        if state.initialization == Some(true) {
-            return Ok(());
-        }
-        evaluation.attach_writer(stdin)?;
-        state.startup_evaluation = Arc::downgrade(evaluation);
-        if state.idle_input.is_some() {
-            evaluation.startup_input(true)?;
-        }
-        Ok(())
-    }
-
-    fn initializing(&self) -> bool {
-        self.lock()
-            .is_ok_and(|state| state.initialization == Some(false))
-    }
-
-    fn initialized(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        if state.initialization != Some(false) {
-            return Err("unexpected worker initialization completion".into());
-        }
-        state.initialization = Some(true);
-        state.startup_evaluation = Default::default();
-        self.0.initialization_changed.notify_all();
-        Ok(())
-    }
-
-    pub(super) fn new() -> Self {
-        Self(Arc::new(OperationStateCell {
-            state: Mutex::new(OperationState {
-                initialization: None,
-                startup_evaluation: Default::default(),
-                operation: None,
-                failure: None,
-                relay_exit_caused_failure: false,
-                idle_input: None,
-                runtime_r_callback: None,
-                environment_preparation_reserved: false,
-                retiring: false,
-            }),
-            runtime_r_reply: Condvar::new(),
-            initialization_changed: Condvar::new(),
-        }))
-    }
-
-    pub(super) fn reserve_environment_preparation(
-        &self,
-    ) -> Result<EnvironmentPreparationReservation, super::EnvironmentPreparationAdmissionFailure>
-    {
-        use super::EnvironmentPreparationAdmissionFailure::{Busy, Infrastructure};
-
-        let mut state = self.lock().map_err(Infrastructure)?;
-        state.ensure_available().map_err(Infrastructure)?;
-        if state.initialization == Some(false) {
-            return Err(Busy(
-                "worker is initializing; finish startup before preparing requirements".into(),
-            ));
-        }
-        if state.runtime_r_callback.is_some() {
-            return Err(Busy(
-                "requirements were not prepared because an idle runtime R callback owns environment changes"
-                    .to_string(),
-            ));
-        }
-        if state.environment_preparation_reserved {
-            return Err(Infrastructure(
-                "worker environment preparation is already reserved".to_string(),
-            ));
-        }
-        state.environment_preparation_reserved = true;
-        Ok(EnvironmentPreparationReservation {
-            operation: self.clone(),
-        })
-    }
-
-    pub(super) fn begin_cell(
-        &self,
-        evaluation: Arc<Evaluation>,
-        capture_idle_prelude: bool,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
-        let (result, receiver) = mpsc::channel();
-        let mut state = self.lock()?;
-        loop {
-            state.ensure_available()?;
-            if state.runtime_r_callback != Some(RuntimeRCallbackPhase::Resolving) {
-                break;
-            }
-            state = self
-                .0
-                .runtime_r_reply
-                .wait(state)
-                .map_err(|_| "worker operation state lock poisoned".to_string())?;
-        }
-        if state.idle_input.take().is_some() {
-            evaluation.resume_input_request()?;
-        }
-        let mut operation = Some(Operation {
-            kind: OperationKind::Cell(evaluation.clone()),
-            result: Some(result),
-        });
-        evaluation.capture_prelude_before(capture_idle_prelude, || {
-            state.operation = operation.take();
-        })?;
-        Ok(receiver)
-    }
-
-    pub(super) fn begin_r_preparation(
-        &self,
-        library: String,
-        commit: RPreparationCommit,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
-        self.begin_preparation(OperationKind::PrepareR { library, commit })
-    }
-
-    pub(super) fn begin_python_preparation(
-        &self,
-        commit: PythonPreparationCommit,
-        continue_environment_preparation: bool,
-        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
-        self.begin_preparation(OperationKind::PreparePython {
-            commit,
-            continue_environment_preparation,
-            duckdb_extensions,
-        })
-    }
-
-    fn python_preparation_extensions(
-        &self,
-    ) -> Result<Option<std::collections::BTreeSet<String>>, String> {
-        let state = self.lock()?;
-        Ok(
-            match state.operation.as_ref().map(|operation| &operation.kind) {
-                Some(OperationKind::PreparePython {
-                    duckdb_extensions, ..
-                }) => duckdb_extensions.clone(),
-                _ => None,
-            },
-        )
-    }
-
-    fn begin_preparation(
-        &self,
-        kind: OperationKind,
-    ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
-        let (result, receiver) = mpsc::channel();
-        let mut state = self.lock()?;
-        state.ensure_available()?;
-        if !state.environment_preparation_reserved {
-            return Err("worker environment preparation was not reserved".to_string());
-        }
-        if let Some(prompt) = state.idle_input.as_ref() {
-            return Err(format!(
-                "idle R callback requested input {prompt} during requirement preparation; collect callback input with send before preparing requirements"
-            ));
-        }
-        let continue_environment_preparation = matches!(
-            kind,
-            OperationKind::PreparePython {
-                continue_environment_preparation: true,
-                ..
-            }
-        );
-        state.operation = Some(Operation {
-            kind,
-            result: Some(result),
-        });
-        if !continue_environment_preparation {
-            state.environment_preparation_reserved = false;
-        }
-        Ok(receiver)
-    }
-
-    pub(super) fn fail(&self, error: String) {
-        self.fail_with_relay_exit(error, false);
-    }
-
-    fn fail_from_relay_exit(&self, error: String) {
-        self.fail_with_relay_exit(error, true);
-    }
-
-    fn fail_with_relay_exit(&self, error: String, relay_exit: bool) {
-        let operation = {
-            let Ok(mut state) = self.0.state.lock() else {
-                return;
-            };
-            if state.failure.is_none() {
-                state.failure = Some(error.clone());
-                // A later relay exit must not turn an earlier protocol or worker
-                // failure into launcher-recovery evidence.
-                state.relay_exit_caused_failure = relay_exit;
-            }
-            self.0.initialization_changed.notify_all();
-            state.runtime_r_callback = None;
-            state.environment_preparation_reserved = false;
-            state.operation.take()
-        };
-        self.0.runtime_r_reply.notify_all();
-        if let Some(result) = operation.and_then(|operation| operation.result) {
-            let _ = result.send(Err(error));
-        }
-    }
-
-    pub(super) fn retire_operation(&self, error: String) {
-        let result = {
-            let Ok(mut state) = self.0.state.lock() else {
-                return;
-            };
-            state.retiring = true;
-            self.0.initialization_changed.notify_all();
-            state.runtime_r_callback = None;
-            state.environment_preparation_reserved = false;
-            state
-                .operation
-                .as_mut()
-                .and_then(|operation| operation.result.take())
-        };
-        self.0.runtime_r_reply.notify_all();
-        if let Some(result) = result {
-            let _ = result.send(Err(error));
-        }
-    }
-
-    pub(super) fn has_failure(&self) -> Result<bool, String> {
-        Ok(self.lock()?.failure.is_some())
-    }
-
-    pub(super) fn relay_exit_caused_failure(&self) -> Result<bool, String> {
-        Ok(self.lock()?.relay_exit_caused_failure)
-    }
-
-    pub(super) fn idle_response_snapshot(
-        &self,
-        output: &OutputTape,
-    ) -> Result<super::IdleResponseSnapshot, String> {
-        let state = self.lock()?;
-        Ok(super::IdleResponseSnapshot {
-            cut: output.cut(),
-            failure: state.failure.clone(),
-            input_requested: state.idle_input.is_some(),
-        })
-    }
-
-    fn with_route<T>(&self, publish: impl FnOnce(Route) -> Result<T, String>) -> Result<T, String> {
-        let state = self.lock()?;
-        let route = match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::Cell(evaluation)) => Route::Cell(evaluation.clone()),
-            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
-                Route::Preparation
-            }
-            None => Route::Idle,
-        };
-        publish(route)
-    }
-
-    fn begin_runtime_r_callback(
-        &self,
-        reject_busy: impl FnOnce() -> Result<(), String>,
-    ) -> Result<RuntimeRCallbackAdmission, String> {
-        let mut state = self.lock()?;
-        if let Some(error) = state.failure.as_ref() {
-            return Err(error.clone());
-        }
-        if state.retiring {
-            return Err("worker is retiring".to_string());
-        }
-        match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
-                return Err(
-                    "worker sent a runtime R callback during requirement preparation".to_string(),
-                );
-            }
-            Some(OperationKind::Cell(_)) | None => {}
-        }
-        if state.runtime_r_callback.is_some() {
-            return Err("worker sent a second runtime R callback before activation".to_string());
-        }
-        if state.environment_preparation_reserved {
-            // Queue the rejection before preparation can turn this reservation
-            // into a live operation and enqueue its command.
-            reject_busy()?;
-            return Ok(RuntimeRCallbackAdmission::Busy);
-        }
-        state.runtime_r_callback = Some(RuntimeRCallbackPhase::Resolving);
-        Ok(RuntimeRCallbackAdmission::Admitted)
-    }
-
-    fn runtime_r_reply_sent(&self, awaiting_activation: bool) -> Result<(), String> {
-        let mut state = self.lock()?;
-        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::Resolving) {
-            return Err("worker has no pending runtime R resolver reply".to_string());
-        }
-        state.runtime_r_callback =
-            awaiting_activation.then_some(RuntimeRCallbackPhase::AwaitingActivation);
-        drop(state);
-        self.0.runtime_r_reply.notify_all();
-        Ok(())
-    }
-
-    fn ensure_runtime_r_activation_phase(&self) -> Result<(), String> {
-        let state = self.lock()?;
-        match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
-                return Err(
-                    "worker sent a runtime R callback during requirement preparation".to_string(),
-                );
-            }
-            Some(OperationKind::Cell(_)) | None => {}
-        }
-        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
-            return Err(
-                "worker sent R activation without an active runtime R callback".to_string(),
-            );
-        }
-        Ok(())
-    }
-
-    fn finish_runtime_r_callback(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        if state.runtime_r_callback != Some(RuntimeRCallbackPhase::AwaitingActivation) {
-            return Err("worker has no active runtime R callback".to_string());
-        }
-        state.runtime_r_callback = None;
-        Ok(())
-    }
-
-    fn input_requested(
-        &self,
-        prompt: String,
-        rendered: String,
-        output: &OutputTape,
-    ) -> Result<(), String> {
-        let mut state = self.lock()?;
-        match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::Cell(evaluation)) => evaluation.input_requested(prompt),
-            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
-                output.push_notice_line(format!("input requested: {rendered}"));
-                Err(format!(
-                    "idle R callback requested input {rendered} during requirement preparation; collect callback input with send before preparing requirements"
-                ))
-            }
-            None => {
-                if state.idle_input.is_some() {
-                    return Err(
-                        "worker requested new input before receiving prior input".to_string()
-                    );
-                }
-                state.idle_input = Some(rendered.clone());
-                output.push_notice_line(format!("input requested: {rendered}"));
-                if let Some(evaluation) = state.startup_evaluation.upgrade() {
-                    evaluation.startup_input(true)?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn input_received(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        match state.operation.as_ref().map(|operation| &operation.kind) {
-            Some(OperationKind::Cell(evaluation)) => evaluation.input_received(),
-            Some(OperationKind::PrepareR { .. } | OperationKind::PreparePython { .. }) => {
-                Err("worker reported received input during requirement preparation".to_string())
-            }
-            None => {
-                state.idle_input.take().ok_or_else(|| {
-                    "worker reported received input without requesting it".to_string()
-                })?;
-                if let Some(evaluation) = state.startup_evaluation.upgrade() {
-                    evaluation.startup_input(false)?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn complete(
-        &self,
-        event: RelayEvent,
-        r_candidates: &mut Vec<crate::resolver::ManagedR>,
-        python_candidates: &mut Vec<PendingPythonCandidate>,
-    ) -> Result<(), String> {
-        let Operation { kind, result } = {
-            let mut state = self.lock()?;
-            if state.runtime_r_callback.is_some() {
-                return Err(
-                    "worker sent an operation result before completing runtime R activation"
-                        .to_string(),
-                );
-            }
-            state.operation.take().ok_or_else(|| {
-                "worker sent an operation result without an active operation".to_string()
-            })?
-        };
-
-        if result.is_none() && kind.matches_result(&event) {
-            r_candidates.clear();
-            python_candidates.clear();
-            return Ok(());
-        }
-
-        let continue_environment_preparation = matches!(
-            kind,
-            OperationKind::PreparePython {
-                continue_environment_preparation: true,
-                ..
-            }
-        );
-        let committed = match (kind, event) {
-            (OperationKind::Cell(evaluation), RelayEvent::Completed) => {
-                match evaluation.input_complete() {
-                    Ok(()) => {
-                        r_candidates.clear();
-                        python_candidates.clear();
-                        evaluation.complete_cell_after_grace();
-                        Ok(OperationResult::Completed)
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            (
-                OperationKind::PrepareR {
-                    library: expected,
-                    commit,
-                },
-                RelayEvent::RPrepared { library },
-            ) if library == expected => {
-                r_candidates.clear();
-                python_candidates.clear();
-                commit(Ok(())).map(OperationResult::RPrepared)
-            }
-            (
-                OperationKind::PrepareR { commit, .. },
-                RelayEvent::RPreparationFailed { message },
-            ) => {
-                r_candidates.clear();
-                python_candidates.clear();
-                commit(Err(message)).map(OperationResult::RPrepared)
-            }
-            (OperationKind::PreparePython { commit, .. }, RelayEvent::PythonPrepared) => {
-                r_candidates.clear();
-                python_candidates.clear();
-                commit(Ok(())).map(OperationResult::PythonPrepared)
-            }
-            (
-                OperationKind::PreparePython { commit, .. },
-                RelayEvent::PythonPreparationFailed { message },
-            ) => {
-                r_candidates.clear();
-                python_candidates.clear();
-                commit(Err(message)).map(OperationResult::PythonPrepared)
-            }
-            (
-                OperationKind::PreparePython { .. },
-                RelayEvent::PythonPreparationRejected { message },
-            ) => {
-                r_candidates.clear();
-                python_candidates.clear();
-                Ok(OperationResult::PythonPrepared(
-                    super::PreparationOutcome::Completed(Err(message)),
-                ))
-            }
-            (OperationKind::Cell(_), _) => {
-                Err("worker sent an unexpected evaluation result".to_string())
-            }
-            (OperationKind::PrepareR { .. }, RelayEvent::RPrepared { .. }) => {
-                Err("worker prepared an unexpected R library".to_string())
-            }
-            (OperationKind::PrepareR { .. }, _) => {
-                Err("worker sent an unexpected R preparation message".to_string())
-            }
-            (OperationKind::PreparePython { .. }, _) => {
-                Err("worker sent an unexpected Python preparation message".to_string())
-            }
-        };
-
-        if continue_environment_preparation
-            && !matches!(
-                &committed,
-                Ok(OperationResult::PythonPrepared(
-                    super::PreparationOutcome::Completed(Ok(()))
-                ))
-            )
-        {
-            self.release_environment_preparation()?;
-        }
-
-        match (result, committed) {
-            (Some(result), Ok(committed)) => result
-                .send(Ok(committed))
-                .map_err(|_| "worker operation receiver stopped".to_string()),
-            (Some(result), Err(error)) => {
-                let _ = result.send(Err(error.clone()));
-                Err(error)
-            }
-            (None, Err(error)) => Err(error),
-            (None, Ok(_)) => unreachable!("a matching cancelled operation result returned early"),
-        }
-    }
-
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, OperationState>, String> {
-        self.0
-            .state
-            .lock()
-            .map_err(|_| "worker operation state lock poisoned".to_string())
-    }
-
-    fn release_environment_preparation(&self) -> Result<(), String> {
-        let mut state = self.lock()?;
-        state.environment_preparation_reserved = false;
-        Ok(())
-    }
-}
-
-impl Drop for EnvironmentPreparationReservation {
-    fn drop(&mut self) {
-        if let Ok(mut state) = self.operation.0.state.lock() {
-            state.environment_preparation_reserved = false;
-        }
-    }
-}
-
-impl OperationKind {
-    fn matches_result(&self, event: &RelayEvent) -> bool {
-        match (self, event) {
-            (Self::Cell(_), RelayEvent::Completed)
-            | (Self::PrepareR { .. }, RelayEvent::RPreparationFailed { .. })
-            | (
-                Self::PreparePython { .. },
-                RelayEvent::PythonPrepared
-                | RelayEvent::PythonPreparationFailed { .. }
-                | RelayEvent::PythonPreparationRejected { .. },
-            ) => true,
-            (
-                Self::PrepareR {
-                    library: expected, ..
-                },
-                RelayEvent::RPrepared { library },
-            ) => library == expected,
-            _ => false,
-        }
-    }
-}
-
-impl OperationState {
-    fn ensure_available(&self) -> Result<(), String> {
-        if let Some(error) = self.failure.as_ref() {
-            return Err(error.clone());
-        }
-        if self.retiring {
-            return Err("worker is retiring".to_string());
-        }
-        if self.operation.is_some() {
-            return Err("worker already has an active operation".to_string());
-        }
-        Ok(())
     }
 }
 
@@ -772,13 +121,48 @@ fn dispatch_worker_events(
     let mut process_outcome = None;
     let mut relay_closed = false;
 
-    while let Ok(event) = events.recv() {
+    let mut deferred = deferred::DeferredEvents::default();
+    loop {
+        let event = if !operation.bootstrap_suspended()? && !deferred.is_empty() {
+            match deferred.pop() {
+                Ok(Some(event)) => WorkerEvent::Relay(event),
+                Ok(None) => unreachable!("nonempty deferred bootstrap spool"),
+                Err(error) => {
+                    deferred.clear();
+                    fail_dispatch(&operation, &mut startup, &interrupts, error);
+                    semantic_failure = true;
+                    continue;
+                }
+            }
+        } else {
+            let Ok(event) = events.recv() else { break };
+            event
+        };
         match event {
+            WorkerEvent::SuspendBootstrap { admitted } => {
+                let _ = admitted.send(operation.suspend_bootstrap());
+            }
+            WorkerEvent::ResumeBootstrap => operation.resume_bootstrap()?,
             WorkerEvent::Relay(event) => {
+                if !semantic_failure
+                    && !retiring
+                    && operation.bootstrap_suspended()?
+                    && (bootstrap_callback(&event)
+                        || (!deferred.is_empty() && sideband_semantic(&event)))
+                {
+                    // Once a callback waits, later events from the same worker
+                    // sideband must not overtake its commit. Independent streams
+                    // and relay lifetime observations remain responsive.
+                    if let Err(error) = deferred.push(&event) {
+                        deferred.clear();
+                        fail_dispatch(&operation, &mut startup, &interrupts, error);
+                        semantic_failure = true;
+                    }
+                    continue;
+                }
                 if process_outcome.is_some() {
                     fail_dispatch(
                         &operation,
-                        &callbacks,
                         &mut startup,
                         &interrupts,
                         "worker relay sent an event after worker outcome".to_string(),
@@ -843,7 +227,6 @@ fn dispatch_worker_events(
                             if !intentional_shutdown && !semantic_failure && !retiring {
                                 fail_dispatch(
                                     &operation,
-                                    &callbacks,
                                     &mut startup,
                                     &interrupts,
                                     "worker sideband read failed: worker sideband closed"
@@ -881,13 +264,7 @@ fn dispatch_worker_events(
                             if retiring {
                                 retirement_failure.get_or_insert(message);
                             } else {
-                                fail_dispatch(
-                                    &operation,
-                                    &callbacks,
-                                    &mut startup,
-                                    &interrupts,
-                                    message,
-                                );
+                                fail_dispatch(&operation, &mut startup, &interrupts, message);
                                 semantic_failure = true;
                             }
                             Ok(())
@@ -939,18 +316,19 @@ fn dispatch_worker_events(
                 };
                 if let Err(error) = result {
                     candidates.clear();
-                    fail_dispatch(&operation, &callbacks, &mut startup, &interrupts, error);
+                    fail_dispatch(&operation, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
             }
             WorkerEvent::TransportFailure(error) => {
                 if !retiring {
                     candidates.clear();
-                    fail_dispatch(&operation, &callbacks, &mut startup, &interrupts, error);
+                    fail_dispatch(&operation, &mut startup, &interrupts, error);
                     semantic_failure = true;
                 }
             }
             WorkerEvent::RetireOperation { error, reached } => {
+                deferred.clear();
                 if let Some(startup) = startup.take() {
                     let _ = startup.send(Err(error.clone()));
                 }
@@ -976,13 +354,7 @@ fn dispatch_worker_events(
                     } else {
                         "worker relay stdout closed before retirement completed"
                     };
-                    fail_relay_exit(
-                        &operation,
-                        &callbacks,
-                        &mut startup,
-                        &interrupts,
-                        error.to_string(),
-                    );
+                    fail_relay_exit(&operation, &mut startup, &interrupts, error.to_string());
                     semantic_failure = true;
                 }
                 if retiring || semantic_failure || !intentional_shutdown {
@@ -1001,7 +373,6 @@ fn dispatch_worker_events(
     if !relay_closed && !retiring {
         fail_dispatch(
             &operation,
-            &callbacks,
             &mut startup,
             &interrupts,
             "worker event queue closed".to_string(),
@@ -1011,11 +382,43 @@ fn dispatch_worker_events(
     retirement_failure.map_or(Ok(process_outcome), Err)
 }
 
+fn bootstrap_callback(event: &RelayEvent) -> bool {
+    matches!(
+        event,
+        RelayEvent::ResolveR { .. }
+            | RelayEvent::RActivated { .. }
+            | RelayEvent::RActivationFailed { .. }
+            | RelayEvent::ResolvePython { .. }
+            | RelayEvent::ResolvePythonVersion { .. }
+            | RelayEvent::PythonActivated { .. }
+            | RelayEvent::PythonActivationFailed { .. }
+            | RelayEvent::RuntimeInitialized { .. }
+    )
+}
+
+fn sideband_semantic(event: &RelayEvent) -> bool {
+    !matches!(
+        event,
+        RelayEvent::Stdout { .. }
+            | RelayEvent::StdoutBytes { .. }
+            | RelayEvent::Stderr { .. }
+            | RelayEvent::StderrBytes { .. }
+            | RelayEvent::StdoutClosed
+            | RelayEvent::StderrClosed
+            | RelayEvent::WorkerSidebandClosed
+            | RelayEvent::InterruptResult { .. }
+            | RelayEvent::ShutdownStarted
+            | RelayEvent::WorkerExited { .. }
+            | RelayEvent::WorkerSignaled { .. }
+            | RelayEvent::Fatal { .. }
+    )
+}
+
 fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
-            | RelayEvent::Initialized
+            | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::InputRequested { .. }
             | RelayEvent::InputReceived
             | RelayEvent::InputCancelled
@@ -1031,16 +434,12 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
 
 fn fail_dispatch(
     operation: &WorkerOperationState,
-    callbacks: &WorkerCallbacks,
     startup: &mut Option<mpsc::SyncSender<Result<(), String>>>,
     interrupts: &super::platform::InterruptRequests,
     error: String,
 ) {
     if let Some(startup) = startup.take() {
         let _ = startup.send(Err(error.clone()));
-    }
-    if operation.initializing() {
-        callbacks.initialization_failed(&error);
     }
     interrupts.fail(error.clone());
     operation.fail(error);
@@ -1048,16 +447,12 @@ fn fail_dispatch(
 
 fn fail_relay_exit(
     operation: &WorkerOperationState,
-    callbacks: &WorkerCallbacks,
     startup: &mut Option<mpsc::SyncSender<Result<(), String>>>,
     interrupts: &super::platform::InterruptRequests,
     error: String,
 ) {
     if let Some(startup) = startup.take() {
         let _ = startup.send(Err(error.clone()));
-    }
-    if operation.initializing() {
-        callbacks.initialization_failed(&error);
     }
     interrupts.fail(error.clone());
     operation.fail_from_relay_exit(error);
@@ -1084,29 +479,35 @@ fn handle_semantic_event(
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
     match event {
-        RelayEvent::Initialized => {
-            operation.initialized()?;
-            callbacks.initialized()
-        }
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 output.push_console_text(Output, data);
                 Ok(())
             }
         }),
         RelayEvent::ConsoleDiagnostic { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Diagnostic, data),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 output.push_console_text(Diagnostic, data);
                 Ok(())
             }
         }),
         RelayEvent::Image { data, mime_type } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.image(data, mime_type),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
+                crate::transcript::validate_image_data(&data)?;
+                let recording = callbacks
+                    .client
+                    .0
+                    .recording
+                    .lock()
+                    .expect("recording lock")
+                    .clone();
                 output.push_image_with_artifact(data, mime_type, |data, mime_type| {
-                    callbacks.persist_session_image(data, mime_type)
+                    recording.as_ref().map_or(Ok(None), |recording| {
+                        recording.persist_session_image(data, mime_type)
+                    })
                 })
             }
         }),
@@ -1181,7 +582,7 @@ fn handle_semantic_event(
         RelayEvent::ResolvePython { request } => {
             if request.import_resolution.is_some() {
                 operation.with_route(|route| match route {
-                    Route::Cell(_) => Ok(()),
+                    Route::Cell(_) | Route::Bootstrap => Ok(()),
                     Route::Preparation | Route::Idle => Err(
                         "worker requested automatic Python import resolution outside an evaluation"
                             .to_string(),
@@ -1247,6 +648,13 @@ fn handle_semantic_event(
                         "resolved PyPI distribution '{}' for Python import '{}'",
                         resolution.distribution, resolution.module
                     )),
+                    Route::Bootstrap => {
+                        output.push_notice_line(format!(
+                            "resolved PyPI distribution '{}' for Python import '{}'",
+                            resolution.distribution, resolution.module
+                        ));
+                        Ok(())
+                    }
                     Route::Preparation | Route::Idle => Err(
                         "worker activated an automatic Python import resolution outside an evaluation"
                             .to_string(),
@@ -1271,6 +679,12 @@ fn handle_semantic_event(
             callbacks.fail_python_activation()?;
             Ok(())
         }
+        RelayEvent::RuntimeInitialized { interrupted } => {
+            if interrupted {
+                callbacks.interrupt_bootstrap_cell()?;
+            }
+            operation.finish_bootstrap()
+        }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }
         | RelayEvent::RPreparationFailed { .. }
@@ -1292,83 +706,5 @@ fn handle_semantic_event(
         | RelayEvent::WorkerExited { .. }
         | RelayEvent::WorkerSignaled { .. }
         | RelayEvent::Fatal { .. } => unreachable!("non-semantic relay event reached dispatcher"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::worker_client::EvaluationWait;
-    use crate::worker_client::output::{Content, Response, SendResponse, render_response};
-    use crate::worker_protocol::ConsoleChannel::Output;
-
-    #[tokio::test]
-    async fn cell_admission_captures_an_inflight_idle_route_as_prelude() {
-        let output = OutputTape::new();
-        let operation = WorkerOperationState::new();
-        let evaluation = Arc::new(Evaluation::new(
-            crate::transcript::Transcript::new(true),
-            None,
-            output.clone(),
-            Response::default(),
-            Response::default(),
-            false,
-        ));
-        let claim = evaluation.claim().unwrap();
-        let (routed, routed_rx) = mpsc::sync_channel(0);
-        let (release, release_rx) = mpsc::sync_channel(0);
-
-        let idle_operation = operation.clone();
-        let idle_output = output.clone();
-        let idle = thread::spawn(move || {
-            idle_operation.with_route(|route| {
-                assert!(matches!(route, Route::Idle));
-                routed.send(()).unwrap();
-                release_rx.recv().unwrap();
-                idle_output.push_console_text(Output, "idle output");
-                Ok(())
-            })
-        });
-        routed_rx.recv().unwrap();
-
-        let admitting_operation = operation.clone();
-        let admitting_evaluation = evaluation.clone();
-        let (contending, contending_rx) = mpsc::sync_channel(0);
-        let admission = thread::spawn(move || {
-            assert!(matches!(
-                admitting_operation.0.state.try_lock(),
-                Err(std::sync::TryLockError::WouldBlock)
-            ));
-            contending.send(()).unwrap();
-            admitting_operation.begin_cell(admitting_evaluation, true)
-        });
-        contending_rx.recv().unwrap();
-        release.send(()).unwrap();
-        idle.join().unwrap().unwrap();
-        drop(admission.join().unwrap().unwrap());
-
-        operation
-            .with_route(|route| match route {
-                Route::Cell(evaluation) => evaluation.output(Output, "cell output".to_string()),
-                Route::Preparation | Route::Idle => panic!("cell route was not installed"),
-            })
-            .unwrap();
-        evaluation.complete_cell(Ok(()));
-        let EvaluationWait::Completed(response) = evaluation
-            .wait(claim, std::time::Duration::ZERO)
-            .await
-            .unwrap()
-        else {
-            panic!("cell did not complete")
-        };
-        let response = render_response(SendResponse::Completed(response));
-        let (content, is_error, delivery) = response.into_parts();
-        assert!(!is_error);
-        assert!(matches!(
-            content.as_slice(),
-            [Content::Text(text)]
-                if text == "idle output\n[output produced while idle]\ncell output"
-        ));
-        delivery.unwrap().delivered();
     }
 }

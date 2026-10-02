@@ -11,7 +11,7 @@ result:
   content:
     - type: text
       text: |-
-        managed Python resolution failed:
+        [managed Python resolution failed:
         resolver input:
         {
           "python": "3.12.XX (reticulate default)",
@@ -23,7 +23,7 @@ result:
           ]
         }
         uv output:
-        fixture Python resolution failed
+        fixture Python resolution failed]
   isError: true
 ---
 send:

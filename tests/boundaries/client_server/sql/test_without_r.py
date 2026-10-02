@@ -9,11 +9,14 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from contextlib import contextmanager
+from collections.abc import Iterator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint
+from support.installation import installed_console
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
@@ -35,15 +38,30 @@ def environment(path: Path) -> dict[str, str]:
     return env
 
 
-def installed_binary(binary: Path, root: Path) -> Path:
-    prefix = root / "installation"
-    (prefix / "bin").mkdir(parents=True)
-    installed = prefix / "bin/mcp-console"
-    shutil.copy2(binary, installed)
-    source_prefix = binary.parent.parent
-    for relative in ("libexec", "share/licenses/mcp-console"):
-        shutil.copytree(source_prefix / relative, prefix / relative)
-    return installed
+@contextmanager
+def sql_client(
+    binary: Path,
+    execution: Execution,
+    env: dict[str, str],
+    current_directory: Path | None = None,
+    *,
+    record_in_project: bool = True,
+) -> Iterator[McpClient]:
+    with McpClient(
+        installed_console(binary),
+        execution.serve(),
+        env,
+        current_directory,
+        record_in_project=record_in_project,
+    ) as client:
+        client.initialize_and_list_tools()
+        yield client
+
+
+def managed_environment(root: Path) -> dict[str, str]:
+    (root / "home").mkdir()
+    (root / "uv").symlink_to(shutil.which("uv"))
+    return dict(environment(root), HOME=str(root / "home"))
 
 
 @executions(DIRECT, SANDBOXED)
@@ -52,20 +70,12 @@ def test_sqlite_is_available_by_default(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        env = managed_environment(root)
         home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
         with sqlite3.connect(root / "audit.sqlite") as database:
             database.execute("CREATE TABLE events (payload TEXT)")
             database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home)),
-            current_directory=root,
-        ) as client:
-            client.initialize_and_list_tools()
-            client.send(sql="SET autoinstall_known_extensions = false")
+        with sql_client(binary, execution, env, current_directory=root) as client:
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
                 "sqlite"
@@ -75,6 +85,7 @@ def test_sqlite_is_available_by_default(
                     "v*/**/sqlite_scanner.duckdb_extension"
                 )
             )
+            client.send(sql="SET autoinstall_known_extensions = false")
             client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
             client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
             assert "42" in last_tool_text(client), last_tool_text(client)
@@ -90,22 +101,18 @@ def test_managed_python_requires_home_for_default_extensions(
         (root / "uv").symlink_to(shutil.which("uv"))
         env = dict(environment(root), UV_CACHE_DIR=str(root / "uv-cache"))
         env.pop("HOME", None)
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            env,
-            record_in_project=False,
-        ) as client:
-            client.initialize_and_list_tools()
-            result = client.send(sql="SELECT 1")
-            assert result["isError"], result
-            diagnostic = last_result_text(client)
-            assert (
-                "DuckDB extension preparation requires an absolute HOME" in diagnostic
-            )
+        with sql_client(binary, execution, env, record_in_project=False) as client:
+            failure = client.send(sql="SELECT 42 AS answer")
+            assert failure.get("isError"), failure
+            diagnostic = "DuckDB extension preparation requires an absolute HOME at server startup"
+            assert last_result_text(client) == diagnostic, failure
+            assert client.send(requirements={"action": "get"}) == failure
             client.request("ping")
-            client.finish()
-            return [{"startup_error": diagnostic}]
+            transcript, errors = client.finish_with_standard_error(
+                expected_exit_status=1
+            )
+            assert errors == diagnostic + "\n", errors
+            return transcript[3:] + [{"stderr": errors}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -125,24 +132,22 @@ def test_default_extension_failure_preserves_close_failure(
         env[LOADER_VARIABLE] = str(build_interposer(root, "preparation_close_failure"))
         # Python selection succeeds, but default extension preparation needs HOME.
         env.pop("HOME", None)
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            env,
-            record_in_project=False,
-        ) as client:
-            client.initialize_and_list_tools()
-            result = client.send(sql="SELECT 1")
-            assert result["isError"], result
-            diagnostic = last_result_text(client)
+        with sql_client(binary, execution, env, record_in_project=False) as client:
+            failure = client.send(sql="SELECT 42 AS answer")
+            assert failure.get("isError"), failure
+            diagnostic = (
+                "DuckDB extension preparation requires an absolute HOME at server startup; "
+                "resolver input closed"
+            )
+            assert last_result_text(client) == diagnostic, failure
             assert marker.exists(), ("resolver did not receive Close", diagnostic)
-            assert diagnostic.strip() == (
-                "[DuckDB extension preparation requires an absolute HOME at server startup; "
-                "resolver input closed]"
-            ), diagnostic
+            assert client.send(requirements={"action": "get"}) == failure
             client.request("ping")
-            client.finish()
-            return [{"startup_error": diagnostic}]
+            transcript, errors = client.finish_with_standard_error(
+                expected_exit_status=1
+            )
+            assert errors == diagnostic + "\n", errors
+            return transcript[3:] + [{"stderr": errors}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -152,26 +157,19 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        env = managed_environment(root)
         home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
         cache = home / ".duckdb/extensions"
         assert not cache.exists()
         shadow = root / "duckdb.py"
         shadow.write_text(
             "raise RuntimeError('workspace DuckDB shadow was imported')\n"
         )
-        env = dict(environment(root), HOME=str(home), PYTHONPATH=str(root))
-        # Poison the preparation host's Python path while keeping the selected
-        # worker's startup imports usable during automatic SQL initialization.
-        env["RETICULATE_PYTHONPATH"] = ""
+        env["PYTHONPATH"] = str(root)
         if execution == DIRECT:
             env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
             env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
-        with McpClient(
-            installed_binary(binary, root), execution.serve(), env
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, env) as client:
             result = client.send(requirements={"duckdb": ["fts"]})
             assert not result.get("isError"), result
             (extension,) = cache.glob("v*/**/fts.duckdb_extension")
@@ -240,17 +238,12 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        env = managed_environment(root)
         home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
-        env = dict(environment(root), HOME=str(home))
         if execution == DIRECT:
             env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
             env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
-        with McpClient(
-            installed_binary(binary, root), execution.serve(), env
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, env) as client:
             client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
             client.send(
                 # fmt: python
@@ -336,16 +329,10 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        env = managed_environment(root)
         home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
         cache = home / ".duckdb/extensions"
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home)),
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, env) as client:
             first = client.send(
                 requirements={
                     "action": "set",
@@ -405,15 +392,9 @@ def test_combined_preparation_precedes_first_sql_cell(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        env = managed_environment(root)
         home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home)),
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, env) as client:
             result = client.send(
                 requirements={"python": ["six"], "duckdb": ["fts"]},
                 sql="SET autoinstall_known_extensions = false; LOAD fts",
@@ -439,18 +420,10 @@ def test_extension_actions_replace_and_reset_declarations(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        env = managed_environment(root)
         home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
         cache = home / ".duckdb/extensions"
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home)),
-        ) as client:
-            client.initialize_and_list_tools()
-            client.send(requirements={"python": ["numpy"]})
-            assert last_tool_text(client) == "[prepared]"
+        with sql_client(binary, execution, env) as client:
 
             def declaration():
                 inspected = client.send(requirements={"action": "get"})
@@ -495,16 +468,11 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
+        env = managed_environment(root)
         uv_cache = root / "uv-cache"
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home), UV_CACHE_DIR=str(uv_cache)),
+        with sql_client(
+            binary, execution, dict(env, UV_CACHE_DIR=str(uv_cache))
         ) as client:
-            client.initialize_and_list_tools()
             client.send(
                 requirements={
                     "action": "set",
@@ -554,8 +522,8 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             client.send(python="assert id(identity) == identity_id; print(input())")
             assert "retained input" not in last_tool_text(client)
             assert "[waiting for stdin]" in last_tool_text(client)
-            client.send(stdin="fresh input\n")
-            assert "fresh input" in last_tool_text(client)
+            # Enqueuing stdin can return before Python consumes it.
+            client.expect("fresh input\n", stdin="fresh input\n")
             client.send(python="console_sql_connection(None)")
             client.send(sql="SELECT value FROM retained")
             assert "42" in last_tool_text(client)
@@ -631,15 +599,8 @@ def test_live_extension_additions_require_an_idle_worker(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home)),
-        ) as client:
-            client.initialize_and_list_tools()
+        env = managed_environment(root)
+        with sql_client(binary, execution, env) as client:
             client.send(requirements={"duckdb": ["json"]})
             client.send(
                 python="identity = object(); identity_id = id(identity); answer = input('answer> ')",
@@ -653,7 +614,8 @@ def test_live_extension_additions_require_an_idle_worker(
             assert "already evaluating a cell" in last_result_text(client)
             retained = client.send(requirements={"duckdb": ["json"]})
             assert not retained.get("isError"), retained
-            client.send(stdin="kept\n")
+            # Enqueuing stdin can return before Python consumes it.
+            client.expect(stdin="kept\n")
             client.send(
                 python="assert id(identity) == identity_id and answer == 'kept'; print('input retained')"
             )
@@ -672,7 +634,7 @@ def test_live_extension_additions_require_an_idle_worker(
                 python="identity = None",
             )
             assert denied.get("isError"), denied
-            client.send(stdin="continue\n")
+            client.expect("debugger continued\n", stdin="continue\n")
             assert "debugger continued" in last_result_text(client)
             client.send(
                 python="assert id(identity) == identity_id; print('still live')"
@@ -692,22 +654,16 @@ def test_interrupts_extension_preparation_before_worker_retirement(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
+        env = managed_environment(root)
         started = FifoCheckpoint.create(root / "started")
         release = FifoCheckpoint.create(root / "release")
         env = dict(
-            environment(root),
-            HOME=str(home),
+            env,
             UV_CACHE_DIR=str(root / "uv-cache"),
             MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(root),
         )
         try:
-            with McpClient(
-                installed_binary(binary, root), execution.serve(), env
-            ) as client:
-                client.initialize_and_list_tools()
+            with sql_client(binary, execution, env) as client:
                 client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
                 client.send(
                     python="import os, sysconfig; site = sysconfig.get_paths()['purelib']; identity = object(); identity_id = id(identity); pid = os.getpid(); print(site)"
@@ -779,10 +735,7 @@ def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "uv").symlink_to(shutil.which("uv"))
-        with McpClient(
-            installed_binary(binary, root), execution.serve(), environment(root)
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, environment(root)) as client:
             result = client.send(sql="SELECT 42 AS answer")
             assert not result.get("isError"), result
             assert "42" in last_tool_text(client)
@@ -865,10 +818,7 @@ def test_catalog_and_private_storage_follow_worker_lifetime(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         (root / "uv").symlink_to(shutil.which("uv"))
-        with McpClient(
-            installed_binary(binary, root), execution.serve(), environment(root)
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, environment(root)) as client:
             client.send(
                 # fmt: python
                 python=code("""
@@ -956,11 +906,7 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
         )
         uv.chmod(0o755)
         env = dict(environment(root), MCP_CONSOLE_TEST_REAL_UV=shutil.which("uv"))
-        with McpClient(
-            installed_binary(binary, root), execution.serve(), env
-        ) as client:
-            client.initialize_and_list_tools()
-            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
+        with sql_client(binary, execution, env) as client:
 
             def declaration():
                 result = client.send(requirements={"action": "get"})
@@ -968,6 +914,7 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
                 return result["structuredContent"]["requirements"]["python"]
 
             assert declaration() == ["numpy", "pandas", "duckdb"]
+            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
             client.send(python="identity = object(); identity_id = id(identity)")
             failed = client.send(
                 control="restart",
@@ -1038,13 +985,7 @@ def test_selected_environment_uses_custom_connection_without_duckdb(
         uv = bin_dir / "uv"
         uv.write_text("#!/bin/sh\nexit 87\n")
         uv.chmod(0o755)
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            environment(bin_dir),
-            workspace,
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, environment(bin_dir), workspace) as client:
             client.send(sql="SELECT 1")
             assert "DuckDB is unavailable" in last_tool_text(client)
             client.send(
@@ -1113,13 +1054,12 @@ def test_selected_environment_uses_preinstalled_duckdb(
         uv = bin_dir / "uv"
         uv.write_text("#!/bin/sh\nexit 87\n")
         uv.chmod(0o755)
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
+        with sql_client(
+            binary,
+            execution,
             dict(environment(bin_dir), HOME=str(home)),
             workspace,
         ) as client:
-            client.initialize_and_list_tools()
             client.send(sql="CREATE TABLE selected_state AS SELECT 42 AS value")
             assert "Error:" not in last_tool_text(client)
             client.send(sql="SELECT value FROM selected_state")
@@ -1146,16 +1086,8 @@ def test_records_managed_sql_cells(
         root = Path(directory)
         workspace = root / "workspace"
         workspace.mkdir()
-        home = root / "home"
-        home.mkdir()
-        (root / "uv").symlink_to(shutil.which("uv"))
-        with McpClient(
-            installed_binary(binary, root),
-            execution.serve(),
-            dict(environment(root), HOME=str(home)),
-            workspace,
-        ) as client:
-            client.initialize_and_list_tools()
+        env = managed_environment(root)
+        with sql_client(binary, execution, env, workspace) as client:
             client.send(sql="SELECT 42 AS recorded")
             added = client.send(requirements={"duckdb": ["json"]})
             assert not added.get("isError"), added
@@ -1186,6 +1118,7 @@ def test_records_managed_sql_cells(
         assert "[prepared]" in markdown
         assert "Requirements selected" not in markdown
         assert "execute:\n  eval: false" not in quarto
+        assert "\nknitr:" in quarto and "\nir:" in quarto
         assert "```sql\nSELECT 42 AS recorded\n```" in markdown
         assert "```{sql}\nSELECT 42 AS recorded\n```" in quarto
         assert (
@@ -1196,7 +1129,7 @@ def test_records_managed_sql_cells(
 """
             in quarto
         )
-        assert "  packages: []\n" in quarto
+        assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         return TranscriptWithCompanions(
             records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
         )
@@ -1210,10 +1143,7 @@ def test_language_restriction_still_disables_sql(
         root = Path(directory)
         (root / "uv").symlink_to(shutil.which("uv"))
         env = dict(environment(root), MCP_CONSOLE_LANGUAGES="python")
-        with McpClient(
-            installed_binary(binary, root), execution.serve(), env
-        ) as client:
-            client.initialize_and_list_tools()
+        with sql_client(binary, execution, env) as client:
             schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
             assert "sql" not in schema["properties"]
             client.send(python="retained = 42; retained")
@@ -1238,7 +1168,7 @@ def test_interrupt_preserves_sql_and_python_state(
         env["MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"] = str(
             build_interposer(root, "python_probe_checkpoint")
         )
-        client = McpClient(installed_binary(binary, root), execution.serve(), env)
+        client = McpClient(installed_console(binary), execution.serve(), env)
         checkpoints: list[FifoCheckpoint] = []
         release = None
         passed = False

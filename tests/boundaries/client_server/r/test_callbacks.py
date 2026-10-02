@@ -333,7 +333,7 @@ def test_restarts_while_idle_callback_runs(
     )
     client.send(control="restart")
     assert last_tool_text(client) == (
-        "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+        "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
     )
     return client.finish()
 

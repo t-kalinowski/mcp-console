@@ -2,6 +2,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+#[cfg(windows)]
+mod windows;
+
 mod cell;
 mod cli;
 mod config;
@@ -11,21 +14,24 @@ mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(unix)]
+mod jsonl;
 mod local_runtime;
 #[cfg(unix)]
 mod process_descriptors;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "process_exit/windows.rs")]
 mod process_exit;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "process_output/windows.rs")]
 mod process_output;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod python;
 mod python_requirement;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_bridge;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_environment;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_graphics;
 mod r_package_name;
 #[cfg(unix)]
@@ -36,9 +42,10 @@ mod sandbox;
 mod server;
 mod server_transport;
 mod settings;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "sideband/windows.rs")]
 mod sideband;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod sql;
 mod ssh;
 mod target_launch;
@@ -66,7 +73,7 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::Worker => match worker::run() {
+        cli::Command::Worker { bootstrap_runtimes } => match worker::run(bootstrap_runtimes) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -165,6 +172,15 @@ fn run_server(
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
     }
+    #[cfg(windows)]
+    {
+        if target.is_some() {
+            return Err("Windows currently supports local execution only".into());
+        }
+        if !no_sandbox {
+            return Err("Windows execution currently requires `serve --no-sandbox`".into());
+        }
+    }
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
     }
@@ -187,7 +203,7 @@ fn run_server(
     let result = runtime.block_on(server::run(
         worker, relay, no_sandbox, settings, target, python,
     ));
-    // `server::run` has already joined service and worker shutdown. Tokio's
+    // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.
     // The process exits immediately after this function returns.

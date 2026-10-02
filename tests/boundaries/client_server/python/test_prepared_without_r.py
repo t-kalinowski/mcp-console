@@ -7,6 +7,7 @@ import shutil
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -32,9 +33,11 @@ from support.docker_sandbox import (
     absent as sbx_absent,
 )
 from support.events import Events
+from support.execution import DIRECT, Execution, executions
 from support.normalization import code
 from support.requirements import PROCESS_EVENTS, WORKER, Requirement, requires
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 DOCKER_PYTHON = Requirement(
     "R-free Docker image",
@@ -166,20 +169,17 @@ def sql_first(binary: Path, provider: str) -> list:
         client.initialize_and_list_tools()
         tool = client.transcript[-1]["result"]["tools"][0]
         fields = tool["inputSchema"]["properties"]
-        assert "r" in fields
-        assert (
-            "do not guarantee that an interpreter is installed" in tool["description"]
-        )
+        assert {"r", "python", "sql"} <= fields.keys()
         assert fields["requirements"]["properties"]["action"]["enum"] == ["get"]
         assert "Console-owned" in tool["description"]
         assert "preinstalled" in tool["description"]
+        client.send(requirements={"action": "get"})
+        snapshot = client.transcript[-1]["result"]["structuredContent"]
+        assert snapshot["requirements"]["python"] == []
         client.send(
             sql="CREATE TABLE retained AS SELECT 42 AS answer; SELECT * FROM retained"
         )
         assert "42" in last_result_text(client), last_result_text(client)
-        client.send(requirements={"action": "get"})
-        snapshot = client.transcript[-1]["result"]["structuredContent"]
-        assert snapshot["requirements"]["python"] == []
         client.send(
             # fmt: python
             python=code("""
@@ -211,7 +211,12 @@ def sql_first(binary: Path, provider: str) -> list:
         session = next(root.glob(".agents/console/sessions/*"))
         quarto = (session / "transcript.qmd").read_text()
         assert "ir render" not in quarto, quarto
-        assert "preinstalled target environment" in quarto, quarto
+        assert "Execute these cells in the preinstalled target environment" in quarto, (
+            quarto
+        )
+        assert "execute:\n  eval: false" not in quarto, quarto
+        assert "\nknitr:" not in quarto and "\nir:" not in quarto, quarto
+        assert "Files and environments remain remote" in quarto, quarto
         result, diagnostics = client.finish_with_standard_error()
         return result[3:]
 
@@ -430,12 +435,14 @@ def probe_setup(root: Path, value: dict, mode: str) -> None:
                 return original_import(name, *args, **kwargs)
             builtins.__import__ = without_analysis
             print("arbitrary Python startup stdout must not become protocol data")
-            if {mode!r} in ("missing-library", "ephemeral-library"):
+            if {mode!r} in ("missing-library", "ephemeral-library", "unusable-library"):
                 original = sysconfig.get_config_var
                 library = Path(original("LIBDIR")) / original("LDLIBRARY")
                 if {mode!r} == "ephemeral-library":
                     import shutil
                     shutil.copyfile(library, storage / library.name)
+                elif {mode!r} == "unusable-library":
+                    (storage / library.name).write_text("not a shared library\\n")
                 def get_config_var(name):
                     return str(storage) if name == "LIBDIR" else original(name)
                 sysconfig.get_config_var = get_config_var
@@ -468,10 +475,17 @@ def inspection_boundary(binary: Path, provider: str) -> list:
         binary, provider, setup=lambda root, value: probe_setup(root, value, "noisy")
     ) as (client, root):
         client.initialize_and_list_tools()
+        discovery = client.send(requirements={"action": "get"})
+        assert not discovery.get("isError", False), discovery
+        assert (root / "probe-observed").exists(), client._diagnostics()
+        assert not (root / "worker-started").exists(), (
+            "probe started the analysis worker"
+        )
+        observed = json.loads((root / "probe-observed").read_text())
         client.send(
-            python="import json; from pathlib import Path; observed = json.loads(Path("
-            + repr(str(root / "probe-observed"))
-            + ").read_text()); print(Path(observed['storage']).exists())"
+            python="import os; from pathlib import Path; print(Path("
+            + repr(observed["storage"])
+            + ").exists())"
         )
         assert last_result_text(client) == "False\n", (
             "probe storage survived disposable resource retirement"
@@ -487,6 +501,64 @@ def inspection_boundary(binary: Path, provider: str) -> list:
                 "startup_stdout_is_not_protocol_data": True,
             }
         ]
+
+
+@contextmanager
+def unusable_library_client(binary: Path, provider: str):
+    if provider == "direct":
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            library = root / "unusable.so"
+            library.write_text("not a shared library\n")
+            selected = root / "selected-python"
+            selected.write_text(
+                f"#!{sys.executable}\n"
+                + code(f"""
+                    import sys, sysconfig
+
+                    original = sysconfig.get_config_var
+                    def get_config_var(name):
+                        if name in ("LIBDIR", "PYTHONFRAMEWORKPREFIX"):
+                            return {str(root)!r}
+                        if name == "LDLIBRARY":
+                            return "unusable.so"
+                        return original(name)
+                    sysconfig.get_config_var = get_config_var
+                    program = sys.argv.index("-c") + 1
+                    source = sys.argv[program]
+                    sys.argv = ["-c", *sys.argv[program + 1:]]
+                    exec(source)
+                    """)
+            )
+            selected.chmod(0o755)
+            environment = no_r_environment(root)
+            environment["RETICULATE_PYTHON"] = str(selected)
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                yield client
+    else:
+        with prepared(
+            binary,
+            provider,
+            setup=lambda root, value: probe_setup(root, value, "unusable-library"),
+        ) as (client, _):
+            yield client
+
+
+@executions(
+    DIRECT,
+    Execution("docker", (DOCKER_PYTHON,)),
+    Execution("sbx", (SBX_PYTHON,)),
+)
+def test_rejects_unusable_python_library(binary: Path, execution: Execution) -> list:
+    with unusable_library_client(binary, execution.name) as client:
+        error = client.startup_error()
+        assert "selected Python embedding library is unusable" in error, error
+        client.stdin.close()
+        assert client.stdout.read(timeout=40) == ""
+        errors = client.stderr.read(timeout=40)
+        assert "selected Python embedding library is unusable" in errors, errors
+        assert client.process.wait(timeout=5) != 0
+    return [{"unusable_library_rejected_before_worker_startup": True}]
 
 
 def rejected_probes(binary: Path, provider: str) -> list:
@@ -531,20 +603,17 @@ def rejected_probes(binary: Path, provider: str) -> list:
         with prepared(
             binary, provider, python=selected, workload=workload, setup=setup
         ) as (client, root):
-            client.initialize_and_list_tools()
-            result = client.send(
-                python="raise AssertionError('invalid probe launched worker')"
-            )
-            assert result["isError"], result
-            errors = last_result_text(client)
+            client.startup_error()
+            client.stdin.close()
+            assert client.stdout.read(timeout=40) == ""
+            errors = client.stderr.read(timeout=40)
             assert expected in errors, errors
+            assert client.process.wait(timeout=5) != 0
             assert not (root / "worker-started").exists()
-            client.request("ping")
-            client.finish_with_standard_error()
             records.append(
                 {
                     "mode": mode,
-                    "protocol_available_after_probe_failure": True,
+                    "rejected_before_worker_startup": True,
                     "owned_probe_retired": True,
                 }
             )
@@ -790,8 +859,11 @@ def cancelled_probe(binary: Path, provider: str) -> list:
             peer_mode="create-gate" if provider == "docker" else "probe-gate",
         ) as (client, root):
             gate.wait("owned resource created before probe completion", timeout=30)
-            client.initialize_and_list_tools()
-            client.finish_with_standard_error()
+            client.stdin.close()
+            assert client.stdout.read(timeout=20) == ""
+            errors = client.stderr.read(timeout=20)
+            assert "cancel" in errors, errors
+            assert client.process.wait(timeout=5) != 0
             assert not (root / "target-invoked").exists()
     finally:
         if gate is not None:

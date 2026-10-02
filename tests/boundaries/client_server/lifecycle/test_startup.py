@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import (
     collect_running_output,
-    last_result_text,
     last_tool_text,
     wait_for_evaluation_output,
 )
@@ -32,10 +31,9 @@ from support.processes import (
 )
 from support.normalization import code
 from support.native import LOADER_VARIABLE, build_interposer
-from support.r import r_test_environment, startup_r_package
+from support.r import r_test_environment
 from support.events import Events
 from support.records import Transcript
-from support.resolvers import checkpoint_uv_environment
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
@@ -156,255 +154,21 @@ def startup_fixture(
 
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
-def test_protocol_initialization_failure_retires_warmup(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with startup_fixture(binary, execution, phase="discovery") as fixture:
-        fixture.wait_for_resolver()
-        client = fixture.client
-        # Keep input open: failing protocol initialization must itself retire
-        # the already-owned resolver and its descendant.
-        client.stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/list"}\n')
-        client.stdin.flush()
-        assert client.process.wait(timeout=10) != 0
-        fixture.wait_for_resolver_exit()
-        error = client.stderr.read()
-        assert "initialize" in error.lower(), error
-        return [
-            {"initialization_failed": True, "warmup_retired_without_input_eof": True}
-        ]
-
-
-@executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
-def test_initial_requirements_join_automatic_preparation(
-    binary: Path, execution: Execution
-) -> Transcript:
-    records = None
-    for phase in ("discovery", "preparation"):
-        with startup_fixture(binary, execution, phase=phase) as fixture:
-            client = fixture.client
-            fixture.wait_for_resolver()
-            client.initialize_and_list_tools()
-            initial = client.start_send(
-                r="stopifnot(requireNamespace('praise')); cat('initial cell ran once\\n')",
-                requirements={"r": ["praise"]},
-                timeout_ms=0,
-            )
-            client.request("ping")
-            assert "result" not in initial
-            client.send(requirements={"action": "get"})
-            fixture.release.release()
-            client.response_timeout = 600
-            client.receive(initial)
-            initial_output = initial["result"]["content"][0]["text"]
-            result = collect_running_output(
-                client,
-                "initial requirements cell",
-                initial_cuts=(initial_output.removesuffix(RUNNING),),
-                timeouts_ms=(600_000,),
-            )
-            assert "initial cell ran once\n" in "".join(result), result
-            assert "restart required" not in "".join(result), result
-            observed = client.finish()
-            if records is None:
-                records = observed
-    assert records is not None
-    return records
-
-
-@executions(DIRECT, SANDBOXED)
-def test_stdin_before_transport_readiness_joins_startup(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with startup_fixture(binary, execution, phase="discovery") as fixture:
-        client = fixture.client
-        fixture.wait_for_resolver()
-        client.initialize_and_list_tools()
-        pending = client.start_send(stdin="early input\n")
-        # The input call must await its generation's transport while protocol
-        # requests remain available and discovery is still held at the gate.
-        client.request("ping")
-        fixture.release.release()
-        # The protocol deadline above covers the gated phase. Once released,
-        # input joins real package preparation under the normal runtime budget.
-        client.response_timeout = 600
-        client.receive(pending)
-        assert not pending["result"]["isError"], pending
-        client.send(requirements={"action": "set", "r": []})
-        assert "restart" in last_result_text(client), client.transcript[-1]
-        client.send(r='stopifnot(readline() == "early input"); 42L')
-        output = last_tool_text(client)
-        assert output.endswith("[1] 42\n"), output
-        client.finish()
-        return [{"early_stdin_retained": True, "generation_claimed": True}]
-
-
-@executions(DIRECT, SANDBOXED)
-def test_initial_requirements_replace_unused_interpreters(
-    binary: Path, execution: Execution
-) -> Transcript:
-    records = None
-    for phase in ("initializing", "initialized"):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            started = FifoCheckpoint.create(root / "started")
-            release = FifoCheckpoint.create(root / "release")
-            counter = root / "starts"
-            source = code(f"""
-                counter <- {json.dumps(str(counter))}
-                cat("start\\n", file = counter, append = TRUE)
-                if (length(readLines(counter)) == 1L) {{
-                  ready <- fifo({json.dumps(str(started.path))}, "wb", blocking = TRUE)
-                  writeBin(charToRaw("1"), ready)
-                  close(ready)
-                  gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
-                  stopifnot(identical(readBin(gate, "raw", 1L), charToRaw("1")))
-                  close(gate)
-                }}
-                """)
-            try:
-                with startup_r_package(root, source) as environment:
-                    args = (
-                        execution.serve("--writable-root", str(root))
-                        if execution == SANDBOXED
-                        else execution.serve()
-                    )
-                    with McpClient(binary, args, environment, root) as client:
-                        client.initialize_and_list_tools()
-                        started.wait("R startup without a send", timeout=60)
-                        if phase == "initialized":
-                            release.release()
-                            deadline = time.monotonic() + 60
-                            while True:
-                                client.send()
-                                if last_tool_text(client) == "\n[idle]":
-                                    break
-                                assert time.monotonic() < deadline, client.transcript[
-                                    -1
-                                ]
-                                time.sleep(0.01)
-                        # Inspection and polling must leave the generation unclaimed.
-                        client.send(requirements={"action": "get"})
-                        client.send(
-                            r="stopifnot(requireNamespace('praise', quietly = TRUE)); marker <- get0('marker', ifnotfound = 40L) + 1L",
-                            requirements={"r": ["praise"]},
-                        )
-                        assert last_tool_text(client) == "[done]", client.transcript[-1]
-                        assert counter.read_text() == "start\nstart\n", (
-                            counter.read_text()
-                        )
-                        # Stateful admission protects the replacement from silent
-                        # destructive preparation, including same-call code.
-                        client.send(
-                            r="stop('must not run')",
-                            requirements={"action": "set", "r": []},
-                        )
-                        assert "restart" in last_result_text(client), client.transcript[
-                            -1
-                        ]
-                        client.send(r="marker + 1L")
-                        assert last_tool_text(client) == "[1] 42\n", client.transcript[
-                            -1
-                        ]
-                        assert counter.read_text() == "start\nstart\n"
-                        current = client.finish()
-                        if phase == "initializing":
-                            records = current
-            finally:
-                started.close()
-                release.close()
-    assert records is not None
-    return records
-
-
-@executions(DIRECT, SANDBOXED)
-@requires(command("ir"), command("uv"))
-def test_replacement_discards_startup_activation(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        uv_environment, resolving, resolved = checkpoint_uv_environment(root, "six")
-        started = FifoCheckpoint.create(root / "startup-ready")
-        release = FifoCheckpoint.create(root / "startup-release")
-        activated = FifoCheckpoint.create(root / "startup-activated")
-        counter = root / "starts"
-        source = code(f"""
-            counter <- {json.dumps(str(counter))}
-            cat("start\\n", file = counter, append = TRUE)
-            if (length(readLines(counter)) == 1L) {{
-              ready <- fifo({json.dumps(str(started.path))}, "wb", blocking = TRUE)
-              writeBin(charToRaw("1"), ready)
-              close(ready)
-              gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
-              stopifnot(identical(readBin(gate, "raw", 1L), charToRaw("1")))
-              close(gate)
-              reticulate::py_config()
-              sent <- fifo({json.dumps(str(activated.path))}, "wb", blocking = TRUE)
-              writeBin(charToRaw("1"), sent)
-              close(sent)
-            }}
-            """)
-        try:
-            with startup_r_package(root, source) as environment:
-                environment.update(
-                    {
-                        name: value
-                        for name, value in uv_environment.items()
-                        if name == "RETICULATE_UV"
-                        or name.startswith("MCP_CONSOLE_TEST_UV_")
-                        or name == "MCP_CONSOLE_TEST_REAL_UV"
-                    }
-                )
-                args = (
-                    execution.serve("--writable-root", str(root))
-                    if execution == SANDBOXED
-                    else execution.serve()
-                )
-                with McpClient(binary, args, environment, root) as client:
-                    client.initialize_and_list_tools()
-                    started.wait("startup before Python activation", timeout=60)
-                    preparation = client.start_send(requirements={"python": ["six"]})
-                    resolving.wait(
-                        "replacement holds environment during resolution", timeout=60
-                    )
-                    release.release()
-                    activated.wait(
-                        "old generation published Python activation", timeout=60
-                    )
-                    resolved.release()
-                    client.receive(preparation)
-                    assert last_tool_text(client) == "[prepared]", client.transcript[-1]
-                    client.send(python="import six; 42")
-                    assert last_tool_text(client) == "42\n", client.transcript[-1]
-                    assert counter.read_text() == "start\nstart\n"
-                    declaration = client.send(requirements={"action": "get"})[
-                        "structuredContent"
-                    ]["requirements"]
-                    assert "six" in declaration["python"], declaration
-                    return client.finish()
-        finally:
-            for checkpoint in (started, release, activated, resolving, resolved):
-                checkpoint.close()
-
-
-@executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_preserves_initialize_buffered_during_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
     with startup_fixture(binary, execution) as fixture:
         client = fixture.client
-        client.initialize_and_list_tools()
         fixture.wait_for_resolver()
         invocations = fixture.invocations()
-        client.send()
-        assert last_tool_text(client) == "[worker starting]", client.transcript[-1]
+        client.initialize_and_list_tools()
+        client.request("ping")
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == "[worker starting]"
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
         assert fixture.invocations() == invocations, (
-            "poll or invalid input duplicated discovery"
+            "poll or invalid input duplicated startup"
         )
         assert not list(fixture.root.glob("sandbox-*"))
         return client.finish()
@@ -416,8 +180,9 @@ def test_initializes_before_uv_bootstrap_installation(
     binary: Path, execution: Execution
 ) -> Transcript:
     with startup_fixture(binary, execution, bootstrap="uv") as fixture:
-        fixture.client.initialize_and_list_tools()
         fixture.wait_for_resolver()
+        fixture.client.initialize_and_list_tools()
+        fixture.client.request("ping")
         return fixture.client.finish()
 
 
@@ -471,7 +236,8 @@ def test_first_cell_prepares_defaults_after_running_response(
               "DBI",
               "duckdb",
               "arrow",
-              "nanoarrow"
+              "nanoarrow",
+              "yyjsonr"
             )
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
@@ -500,6 +266,7 @@ def test_first_cell_prepares_defaults_after_running_response(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "yyjsonr",
             "jsonlite",
             "pillar",
             "tibble",
@@ -555,7 +322,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
-        preparation = client.start_send(requirements={"r": ["DBI"]}, timeout_ms=0)
+        preparation = client.start_send(requirements={"r": ["DBI"]})
         fixture.wait_for_resolver()
         client.request("ping")
         assert "result" not in preparation, (
@@ -582,6 +349,9 @@ def test_cancels_resolver_discovery_when_stdin_closes(
 ) -> Transcript:
     with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
+        client.initialize_and_list_tools()
+        client.send(r="42L", timeout_ms=0)
+        assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
@@ -604,6 +374,8 @@ def test_cancels_default_preparation_when_stdin_closes(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        client.send(r="42L", timeout_ms=0)
+        assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
@@ -633,7 +405,6 @@ def test_interrupts_first_use_preparation_without_running_cell(
         client.send(control="interrupt", timeout_ms=30_000)
         fixture.wait_for_resolver_exit()
         client.response_timeout = 600
-        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )
@@ -648,31 +419,16 @@ def test_restart_replaces_first_use_cell_and_stdin(
 ) -> Transcript:
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
-        contended = FifoCheckpoint.create(root / "contended")
         completion_started = FifoCheckpoint.create(root / "completion-started")
-        cancel_release = FifoCheckpoint.create(root / "cancel-release")
-        unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
-        for checkpoint in (
-            contended,
-            completion_started,
-            cancel_release,
-            unlocked,
-            release,
-            parked,
-        ):
+        for checkpoint in (completion_started, release, parked):
             resources.callback(checkpoint.close)
         armed = root / "armed"
         environment = {
-            LOADER_VARIABLE: str(
-                build_interposer(root, "evaluation_return_interposer")
-            ),
+            LOADER_VARIABLE: str(build_interposer(root, "startup_return_interposer")),
             "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
             "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(completion_started.path),
-            "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
-            "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
-            "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
             "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(release.path),
             "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(parked.path),
         }
@@ -682,7 +438,6 @@ def test_restart_replaces_first_use_cell_and_stdin(
             )
         )
         resources.callback(release.release)
-        resources.callback(cancel_release.release)
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
@@ -704,13 +459,10 @@ def test_restart_replaces_first_use_cell_and_stdin(
             stdin="replacement input",
             timeout_ms=600_000,
         )
-        completion_started.wait("resolver completion reached the server")
-        contended.wait("restart waits for the cancelling evaluation's worker lock")
-        assert not select.select([client.stdout], [], [], 0)[0], (
-            "restart replied before the old evaluation released the worker lock"
-        )
-        cancel_release.release()
-        unlocked.wait("old evaluation released the worker lock")
+        # Hold the cancelled initializer after it closes its input watcher,
+        # before its blocking task returns. The replacement must remain usable
+        # while the old startup outcome is still pending.
+        completion_started.wait("cancelled startup closed its completion socket")
         client.receive(replacement)
         assert last_tool_text(client) == code("""
             [active evaluation stopped by session restart request]
@@ -729,7 +481,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
         )
         fixture.wait_for_resolver_exit()
         release.release()
-        parked.wait("old evaluation task returned to the pool")
+        parked.wait("cancelled startup task returned to the pool")
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         return client.finish()

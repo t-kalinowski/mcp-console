@@ -1,60 +1,31 @@
 # mcp.console
 
-`mcp.console` adds MCP Console to an [ellmer](https://ellmer.tidyverse.org/) chat as a persistent workbench for R, Python, and DuckDB.
-
-MCP Console supports macOS and Linux.
-Evaluated code runs in a sandbox by default on both platforms.
-Use `console_tool(no_sandbox = TRUE)` to run with the server's filesystem and network permissions.
-
-## Install
+`mcp.console` adds MCP Console's persistent R, Python, and SQL workbench to an [ellmer](https://ellmer.tidyverse.org/) chat on macOS or Linux.
 
 ```r
 pak::pak("github::t-kalinowski/mcp-console/r")
-```
 
-## Use with ellmer
-
-```r
 library(ellmer)
 library(mcp.console)
 
 chat <- chat_openai()
 chat$register_tool(console_tool())
-
-chat$chat(
-  "Tell me something interesting about mtcars. Use the console as a workbench."
-)
+chat$chat("Tell me something interesting about mtcars. Use the console.")
 ```
 
-The console keeps its R, Python, and DuckDB state between calls.
-When using `chat$chat_async()`, set `tool_mode = "sequential"` when later calls depend on earlier ones.
+State persists between calls.
+For `chat$chat_async()`, select `tool_mode = "sequential"` when calls depend on one another.
 
-When the tool is garbage collected, it closes the server's input to request shutdown and waits up to 15 seconds before forcibly stopping the server.
-With sandboxing enabled, the sandbox manager owns cleanup of worker descendants; the R wrapper's fallback targets only the server process.
+`console_tool()` uses the first Console executable on `PATH`, otherwise the latest published release through `reticulate::uv_run_tool()`.
+Named `path=` selects an executable; named `version=` selects a published release regardless of `PATH`.
+They are mutually exclusive, and `...` must be empty.
 
-With neither `path` nor `version` supplied, `console_tool()` uses the first `mcp-console` executable on `PATH`.
-If none is found, it resolves the latest published release with `reticulate::uv_run_tool()`.
+Sandboxing is enabled by default.
+`no_sandbox = TRUE` skips inner native enforcement and its descendant-cleanup guarantee; an explicitly selected compute target retains its outer boundary.
+See [configuration and safety](../README.md).
+Garbage collection closes server input and waits up to 15 seconds before forcibly stopping the server process; that fallback is not proof of descendant cleanup.
 
-Use a specific executable directly:
-
-```r
-tool <- console_tool(path = Sys.which("mcp-console"))
-```
-
-Use a specific published release, regardless of what is on `PATH`:
-
-```r
-tool <- console_tool(version = "0.0.2")
-```
-
-`path` and `version` are mutually exclusive and must be named.
-`no_sandbox = TRUE` skips the sandbox launcher and does not guarantee cleanup of worker descendants.
-`...` is reserved for future use and must currently be empty.
-
-The tool also accepts `requirements = list(action = "get")` for read-only inspection.
-`action = "add"` is the default.
-`set` replaces all lists and Python constraints; omitted fields are empty.
-`reset` takes no payload and restores startup defaults.
-Changed replacements of a live worker require `control = "restart"`.
+The tool accepts the shared requirement actions: `get`, `add` (default), `set`, and `reset`.
 Use `character()` for explicitly empty lists.
-Inspection returns complete JSON text, including the Python version constraints and publication cutoff; copy its `requirements` object and add `action = "set"` to round-trip it.
+Inspection returns the complete declaration as JSON; changed live replacements normally need `control = "restart"`.
+See [requirements](../docs/REQUIREMENTS.md) for replacement semantics and target limits.

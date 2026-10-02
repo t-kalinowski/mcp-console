@@ -84,8 +84,16 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !super::library::services_installed()? {
         install_services(libpython)?;
     }
+    let site_initialized = super::library::initialize_site()?;
+    // Startup customizations precede evaluator defaults. Install the evaluator
+    // even after an interrupted hook so it can report the retained exception.
     super::library::install_runtime(super::RUNTIME_SOURCE)?;
-    crate::sql::install_python_runtime()?;
+    if !site_initialized {
+        return Ok(false);
+    }
+    if !crate::sql::install_python_runtime()? {
+        return Ok(false);
+    }
     if !super::library::configure_environment()? {
         return Err("Python environment setup failed; restart required".into());
     }
@@ -150,12 +158,15 @@ pub(super) fn initialize_native(
         }
         Ok(configured)
     });
-    if !matches!(result, Ok(true)) && !crate::worker::is_shutting_down() {
+    if !matches!(result, Ok(true)) {
         super::library::display_setup_exception()?;
     }
     let finished = finish_initialization();
     let configured = result?;
     finished?;
+    if !configured && managed {
+        super::requirements::interrupt_initialization();
+    }
     if configured && managed && !super::requirements::initialized() {
         let manifest = super::requirements::declaration()?;
         super::requirements::initialize(configuration, manifest)?;

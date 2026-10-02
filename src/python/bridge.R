@@ -354,19 +354,28 @@ base::local(
         )
         current <- current_requirements()
         added <- setdiff(distribution, current$packages)
-        current$packages <- c(added, current$packages)
+        initialized <- !is.null(.Call("mcp_console_running_python"))
+        current$packages <- if (initialized) {
+          c(added, current$packages)
+        } else {
+          c(current$packages, added)
+        }
         current$history <- c(current$history, list(request))
         list(
           manifest = current,
-          config = activation_config(selection)
+          config = if (initialized) activation_config(selection) else NULL
         )
       }
-      commit_import <- function(projection, environment) {
-        active <- jsonlite::fromJSON(environment)
-        projection$config$pythonpath <- active$pythonpath
-        record_activation(projection$manifest)
-        if (reticulate:::is_python_initialized()) {
-          globals$py_config <- available_config(projection$config)
+      commit_import <- function(projection, environment = NULL) {
+        if (!is.null(projection$config)) {
+          if (!is.null(environment)) {
+            active <- jsonlite::fromJSON(environment)
+            projection$config$pythonpath <- active$pythonpath
+          }
+          record_activation(projection$manifest)
+          if (reticulate:::is_python_initialized()) {
+            globals$py_config <- available_config(projection$config)
+          }
         }
         globals$python_requirements <- projection$manifest
         invisible()
@@ -458,40 +467,19 @@ base::local(
         on_python_init,
         action = "append"
       )
-      invisible()
-    }
-    available <- function() {
-      as.integer(nzchar(system.file(package = "reticulate")))
-    }
-
-    resolve_startup_declaration <- function() {
-      if (is.null(requirements_adapter)) {
-        return(invisible())
-      }
-      current <- requirements_adapter$current_requirements()
-      seed <- jsonlite::fromJSON(.Call("mcp_console_python_retained_manifest"))
-      if (
-        !identical(
-          manifest(
-            current$packages,
-            current$python_version,
-            current$exclude_newer
-          ),
-          manifest(
-            unlist(seed$packages, use.names = FALSE),
-            unlist(seed$python_version, use.names = FALSE),
-            seed$exclude_newer
-          )
-        )
-      ) {
-        requirements_adapter$resolve()
+      if (reticulate:::is_python_initialized()) {
+        # The initializer has registered the already-running identity before
+        # installing these hooks. Its original onPyInit event has already run.
+        if (!is.na(managed)) {
+          requirements_adapter$initialize_requirements()
+        }
+        on_python_init()
       }
       invisible()
     }
-
     evaluate_impl <- function() {
-      if (identical(source, "select")) {
-        return(selected_python())
+      if (source %in% c("select", "select_optional")) {
+        return(selected_python(optional = identical(source, "select_optional")))
       }
       if (identical(source, "attach")) {
         attached_python_config()

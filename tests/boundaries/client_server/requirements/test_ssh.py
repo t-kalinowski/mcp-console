@@ -7,14 +7,15 @@ import shutil
 import socket
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, last_tool_text
+from support.assertions import last_result_text, last_tool_text, wait_for_worker_ready
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
@@ -36,9 +37,7 @@ from support.suites import run_this_suite
 
 
 @requires(SSH, WORKER)
-def test_failed_background_preparation_preserves_remote_protocol(
-    binary: Path,
-) -> Transcript:
+def test_initializes_during_remote_default_preparation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
@@ -49,7 +48,13 @@ def test_failed_background_preparation_preserves_remote_protocol(
         marker = remote / "installer-called"
         ir = remote_bin / "ir"
         ir.write_text(
-            "#!/bin/sh\nprintf called >> " + shlex.quote(str(marker)) + "\nexit 93\n"
+            "#!/bin/sh\nprintf called >> "
+            + shlex.quote(str(marker))
+            + "\nprintf 1 > "
+            + shlex.quote(str(remote / "started"))
+            + "\n/bin/dd bs=1 count=1 < "
+            + shlex.quote(str(remote / "release"))
+            + " > /dev/null 2>&1\nexit 93\n"
         )
         ir.chmod(0o755)
         r_environment, _ = r_test_environment()
@@ -67,24 +72,33 @@ def test_failed_background_preparation_preserves_remote_protocol(
         configure(
             local, remote, prefix, sandbox={"environment": {"PATH": "/workload-only"}}
         )
-        with localhost(root / "sshd") as environment:
+        with (
+            closing(FifoCheckpoint.create(remote / "started")) as started,
+            closing(FifoCheckpoint.create(remote / "release")) as release,
+            localhost(root / "sshd") as environment,
+        ):
             trap = poison_controller(root / "sshd", environment)
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, local
             ) as client:
-                client.initialize_and_list_tools()
-                schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
-                assert "requirements" in schema["properties"], schema
-                client.send(r="must_not_run <- TRUE")
-                assert client.transcript[-1]["result"]["isError"]
-                assert "exit status: 93" in last_result_text(client)
-                client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
-                assert client.transcript[-1]["result"]["isError"] is True
-                client.finish()
+                try:
+                    started.wait("remote default preparation is blocked")
+                    client.initialize_and_list_tools()
+                    schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
+                    assert "requirements" in schema["properties"], schema
+                    client.request("ping")
+                    client.send(timeout_ms=0)
+                    assert last_result_text(client) == "[worker starting]"
+                    client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
+                    assert client.transcript[-1]["result"]["isError"] is True
+                    assert marker.read_text() == "called", "startup was duplicated"
+                    release.release()
+                    failure = client.send()
+                    assert failure["isError"] and "93" in str(failure), failure
+                    client.finish()
+                finally:
+                    release.release()
             assert not trap.exists(), "controller discovered an execution runtime"
-            assert marker.read_text() == "called", (
-                "warmup must prepare once without a tool trigger"
-            )
             assert not (remote / "ir-cache").exists()
             assert not (remote / "uv-cache").exists()
             assert not (root / "sshd/controller-ir").exists()
@@ -92,7 +106,8 @@ def test_failed_background_preparation_preserves_remote_protocol(
         return [
             {
                 "remote_managed_schema": True,
-                "background_preparation_failed_once": True,
+                "handshake_while_preparation_blocked": True,
+                "one_background_preparation": True,
                 "controller_runtime_unused": True,
             }
         ]
@@ -258,6 +273,19 @@ def test_bootstraps_managed_requirements_through_uv(
     ):
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
         assert "requirements" in schema["properties"], schema
+        # This path bootstraps ir and default R packages into a fresh cache.
+        # Its cold build budget is separate from later SSH/tool exchanges.
+        client.response_timeout = 600
+        try:
+            wait_for_worker_ready(client, "remote uv bootstrap")
+        finally:
+            client.response_timeout = 180
+        assert last_result_text(client) == "\n[idle]"
+        assert uv_record.exists(), "background startup did not bootstrap uv"
+        startup_arguments = [
+            json.loads(line) for line in uv_record.read_text().splitlines()
+        ]
+        assert any(args[:2] == ["tool", "run"] for args in startup_arguments)
 
         output = send_and_collect_runtime_python_resolution(
             client,

@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(dead_code))]
 //! Versioned target bootstrap and envelope around unchanged relay JSONL.
 use crate::ssh::preparation;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(unix))]
+mod unsupported;
+#[cfg(not(unix))]
+pub(crate) use unsupported::{owner, process, runtime};
 #[cfg(unix)]
 mod launch;
 #[cfg(unix)]
@@ -16,10 +21,10 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v8 carries complete inspected runtime identities and separates transport
-// readiness from the built-in worker's explicit initialization milestone.
-pub(crate) const VERSION: u32 = 8;
-pub(crate) const SSH_VERSION: u32 = 8;
+// v10 distinguishes interrupted bootstrap from other incomplete setup.
+// Host preparation is unchanged.
+pub(crate) const VERSION: u32 = 10;
+pub(crate) const SSH_VERSION: u32 = 10;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;
@@ -48,7 +53,10 @@ pub(crate) fn run(
     #[cfg(unix)]
     return launch::run(protocol, probe, compute);
     #[cfg(not(unix))]
-    Err("target execution requires macOS or Linux".into())
+    {
+        let _ = (protocol, probe, compute);
+        Err("target execution requires macOS or Linux".into())
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -56,6 +64,8 @@ pub(crate) fn run(
 pub(crate) struct Bootstrap {
     pub version: u32,
     pub build: String,
+    #[serde(default = "crate::cell::Languages::all")]
+    pub languages: crate::cell::Languages,
     pub workspace: String,
     pub policy: crate::settings::SandboxSettings,
     pub writable_roots: Vec<PathBuf>,

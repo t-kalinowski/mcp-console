@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -13,6 +14,27 @@ static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecD
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
 static CELL_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
+static BOOTSTRAPPING: AtomicBool = AtomicBool::new(false);
+static BOOTSTRAP_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn bootstrapping() -> bool {
+    BOOTSTRAPPING.load(Ordering::Relaxed)
+}
+
+pub(super) fn set_bootstrapping(active: bool) {
+    BOOTSTRAPPING.store(active, Ordering::Relaxed);
+}
+
+pub(crate) fn record_bootstrap_interrupt() {
+    if bootstrapping() {
+        BOOTSTRAP_INTERRUPTED.store(true, Ordering::Relaxed);
+    }
+}
+
+pub(super) fn bootstrap_interrupted() -> bool {
+    BOOTSTRAP_INTERRUPTED.load(Ordering::Relaxed)
+}
+
 pub(super) fn begin_cell(language: Language) {
     *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = Some(language);
 }
@@ -39,7 +61,10 @@ pub(crate) fn initialize(
 
 pub(super) enum CommandReadiness {
     Ready(ServerMessage),
+    #[cfg(unix)]
     Waiting(RawFd),
+    #[cfg(windows)]
+    Waiting,
 }
 
 // Decide whether a command can be received without waiting for activity.
@@ -51,20 +76,34 @@ pub(super) fn next_command() -> Result<CommandReadiness, String> {
     if let Some(message) = take_pending_server_message()? {
         return Ok(CommandReadiness::Ready(message));
     }
-    let (buffered, descriptor) = {
-        let reader = worker_reader()?;
-        (reader.has_buffered_data(), reader.as_raw_fd())
-    };
-    if buffered {
-        receive_server_message().map(CommandReadiness::Ready)
-    } else {
-        Ok(CommandReadiness::Waiting(descriptor))
+    #[cfg(unix)]
+    {
+        let (buffered, descriptor) = {
+            let reader = worker_reader()?;
+            (reader.has_buffered_data(), reader.as_raw_fd())
+        };
+        if buffered {
+            receive_server_message().map(CommandReadiness::Ready)
+        } else {
+            Ok(CommandReadiness::Waiting(descriptor))
+        }
     }
+    // Even buffered bytes can be an incomplete frame. The Windows idle read
+    // must retain its interrupt wakeup until the whole command is available.
+    #[cfg(windows)]
+    Ok(CommandReadiness::Waiting)
 }
 
 pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
     worker_reader()?
         .receive()
+        .map_err(|error| format!("worker sideband read failed: {error}"))
+}
+
+#[cfg(windows)]
+pub(super) fn receive_idle_command() -> Result<Option<ServerMessage>, String> {
+    worker_reader()?
+        .receive_or_wake(super::interrupt::windows_wakeup())
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
@@ -83,6 +122,7 @@ pub(crate) fn mark_shutting_down() {
     WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
 }
 
+#[cfg(unix)]
 pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
     let mut event = libc::pollfd {
         fd: libc::STDIN_FILENO,
@@ -202,7 +242,7 @@ fn resolve_python_candidate(
             mark_shutting_down();
             Err("worker is shutting down".to_string())
         }
-        ServerMessage::Initialize | ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
             "worker received an evaluation while resolving Python".to_string(),
         )),
         ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
@@ -259,8 +299,7 @@ pub(crate) fn resolve_r(
         | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
             "worker received a Python resolver response while resolving R".to_string(),
         )),
-        ServerMessage::Initialize
-        | ServerMessage::Evaluate { .. }
+        ServerMessage::Evaluate { .. }
         | ServerMessage::PreparePython { .. }
         | ServerMessage::PrepareR { .. } => Err(infrastructure_failure(
             "worker received an operation while resolving R".to_string(),
@@ -287,7 +326,7 @@ pub(crate) fn resolve_python_version(
             mark_shutting_down();
             Err("worker is shutting down".to_string())
         }
-        ServerMessage::Initialize | ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
+        ServerMessage::Evaluate { .. } => Err(infrastructure_failure(
             "worker received an evaluation while resolving a Python version".to_string(),
         )),
         ServerMessage::PreparePython { .. } => Err(infrastructure_failure(
@@ -315,8 +354,7 @@ fn receive_resolver_message() -> Result<ServerMessage, String> {
     loop {
         let message = receive_server_message()?;
         match message {
-            ServerMessage::Initialize
-            | ServerMessage::Evaluate { .. }
+            ServerMessage::Evaluate { .. }
             | ServerMessage::PreparePython { .. }
             | ServerMessage::PrepareR { .. } => queue_server_message(message)?,
             _ => return Ok(message),
@@ -386,4 +424,16 @@ fn send_image(data: String) -> Result<(), String> {
             mime_type: "image/png".to_string(),
         })
         .map_err(|error| format!("R worker failed to send a plot image: {error}"))
+}
+
+#[cfg(windows)]
+pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
+    if let Err(error) = crate::windows::available(unsafe { libc::get_osfhandle(0) } as _) {
+        if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32) {
+            mark_shutting_down();
+        } else {
+            return Err(error.to_string());
+        }
+    }
+    Ok(())
 }

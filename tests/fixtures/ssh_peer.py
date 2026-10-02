@@ -42,15 +42,8 @@ if "Open" in bootstrap:
             }
         }
     )
-    while True:
-        length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
-        command = json.loads(sys.stdin.buffer.read(length))
-        if command == "Close":
-            break
-        assert "Control" in command, command
-        preparation_frame(
-            {"Controlled": {"id": command["Control"]["id"], "result": {"Ok": False}}}
-        )
+    length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
+    assert json.loads(sys.stdin.buffer.read(length)) == "Close"
     preparation_frame("Closed")
     sys.exit(0)
 with log.open("a") as output:
@@ -63,17 +56,46 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(1, {"version": 999 if mode == "incompatible" else 8, "build": bootstrap["build"]})
+frame(
+    1,
+    {
+        "version": 999
+        if mode == "incompatible"
+        else 9
+        if mode == "prior-bootstrap-protocol"
+        else bootstrap["version"],
+        "build": bootstrap["build"],
+    },
+)
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
+if (
+    mode == "bootstrap-input-completion"
+    and not (log.parent / "invalid-bootstrap-sent").exists()
+):
+    frame(2, {"kind": "input_requested", "prompt": "startup> "})
+    with (log.parent / "finish-bootstrap").open("rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    (log.parent / "invalid-bootstrap-sent").touch()
+    frame(
+        2,
+        {
+            "kind": "runtime_initialized",
+            "interrupted": os.environ["CONSOLE_BOOTSTRAP_COMPLETE"] == "0",
+        },
+    )
+elif mode not in {"bootstrap-interrupted", "prior-bootstrap-protocol"}:
+    frame(2, {"kind": "runtime_initialized", "interrupted": False})
 for line in sys.stdin.buffer:
     command = json.loads(line)
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
-    if command["kind"] == "initialize":
-        frame(2, {"kind": "initialized"})
-    elif command["kind"] == "evaluate":
+    if command["kind"] == "evaluate":
+        if mode in {"bootstrap-interrupted", "bootstrap-input-completion"}:
+            if command["source"] == "never_run = True":
+                (log.parent / "cell-ran").touch()
+            frame(2, {"kind": "console_output", "data": "42\n"})
         if mode == "lost":
             sys.exit(255)
         if mode == "resolver":
@@ -99,6 +121,12 @@ for line in sys.stdin.buffer:
             ), response
             frame(2, {"kind": "console_output", "data": response["message"] + "\n"})
         frame(2, {"kind": "completed"})
+    elif command["kind"] == "interrupt" and mode == "bootstrap-interrupted":
+        frame(2, {"kind": "interrupt_result", "request_id": command["request_id"]})
+        with (log.parent / "interrupt-bootstrap").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+        frame(2, {"kind": "runtime_initialized", "interrupted": True})
+        frame(2, {"kind": "console_output", "data": "bootstrap interrupted\n"})
     elif command["kind"] == "shutdown":
         frame(2, {"kind": "shutdown_started"})
         frame(2, {"kind": "worker_exited", "code": 0})

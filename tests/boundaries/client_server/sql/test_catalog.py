@@ -22,6 +22,7 @@ from support.normalization import (
 from support.r import r_test_environment
 from support.records import Transcript
 from support.previews import assert_preview, cell_text, normalize_preview_paths
+from support.resolvers import normalize_duckdb_resolution_error
 from support.suites import run_this_suite
 
 
@@ -40,7 +41,6 @@ def test_uses_default_duckdb_extensions(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        client.send(sql="SET autoinstall_known_extensions = false")
         inspected = client.send(requirements={"action": "get"})
         assert inspected["structuredContent"]["requirements"]["duckdb"] == [
             "icu",
@@ -50,6 +50,7 @@ def test_uses_default_duckdb_extensions(
         with sqlite3.connect(workspace / "audit.sqlite") as database:
             database.execute("CREATE TABLE events (payload TEXT)")
             database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
+        client.send(sql="SET autoinstall_known_extensions = false")
         client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
         client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
         assert '"42"' in normalize_trailing_spaces(client), last_tool_text(client)
@@ -118,7 +119,9 @@ def test_restart_adds_r_and_duckdb_requirements(
         assert (
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
@@ -128,7 +131,7 @@ def test_restart_adds_r_and_duckdb_requirements(
             requirements={"r": ["praise"], "duckdb": ["fts"]},
         )
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
 
         client.send(
@@ -207,7 +210,9 @@ def test_prepares_and_loads_duckdb_extensions(
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
         assert "unknown core DuckDB extension" not in failure, failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(
             sql=(
@@ -247,7 +252,7 @@ def test_prepares_and_loads_duckdb_extensions(
 
         client.send(control="restart")
         assert last_tool_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
 
         client.send(sql="LOAD fts")
@@ -387,7 +392,7 @@ def test_queries_a_ragnar_store_created_in_r(
         """)
     client.send(r=r)
     marker = "ragnar store ready\n"
-    assert normalize_duckdb_progress(client) == marker, client.transcript[-1]
+    assert normalize_duckdb_progress(client) == marker
 
     sql = code(r"""
         LOAD fts;
@@ -489,7 +494,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     client.send(r=r)
     assert normalize_duckdb_progress(client) == (
         "created store under the worker tempdir\n"
-    ), client.transcript[-1]
+    )
 
     client.send(
         requirements={"duckdb": ["fts", "vss"]},
@@ -521,13 +526,12 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "beta.md" in preview and "Bananas are yellow fruit" in preview
-    assert "alpha.md" not in preview
+    assert "beta.md" in preview and "Bananas are yellow fruit" in preview, preview
+    assert "alpha.md" not in preview, preview
 
     # fmt: r
     r = code(r"""
-        # A second connection shares the existing writer's database instance;
-        # DuckDB cannot change that instance to read-only while it remains open.
+        # Match the writable instance retained by the creator connection.
         reader <- ragnar::ragnar_store_connect(
           store_path,
           read_only = FALSE
@@ -542,7 +546,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
     assert "alpha.md" in preview and "Apples are red fruit" in preview, preview
-    assert "beta.md" not in preview
+    assert "beta.md" not in preview, preview
 
     sql = code(r"""
         SELECT origin FROM chunks ORDER BY origin
@@ -1295,15 +1299,6 @@ def normalize_duckdb_extension_error(client: McpClient) -> str:
     assert (download_urls, troubleshooting_urls) == (1, 1), output
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return output
-
-
-def duckdb_native_failure(failure: str) -> str:
-    native_failure = next(
-        line.strip().removeprefix("! ")
-        for line in failure.splitlines()
-        if "Failed to download extension" in line
-    )
-    return native_failure.partition(' at URL "')[0]
 
 
 if __name__ == "__main__":

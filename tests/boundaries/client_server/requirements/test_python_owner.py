@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,6 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.r import startup_declarations_client
 from support.suites import run_this_suite
 
 
@@ -94,11 +94,15 @@ def test_prepares_without_reticulate_environment_mutators(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_materializes_startup_declarations_before_python(
+def test_materializes_lazy_declarations_without_initializing_python(
     binary: Path, execution: Execution
 ) -> Transcript:
-    # fmt: r
-    startup = code("""
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code("""
                 reticulate::py_require("humanize")
                 reticulate::py_require("humanize", action = "remove")
                 reticulate::py_require("py-yaml12")
@@ -108,15 +112,12 @@ def test_materializes_startup_declarations_before_python(
                 reticulate::py_require(exclude_newer = NA, action = "set")
                 stopifnot(!reticulate::py_available(initialize = FALSE))
                 """)
-    with startup_declarations_client(binary, execution, startup) as client:
-        client.send(
-            r="stopifnot(startup_checks_complete, reticulate::py_available(initialize = FALSE))"
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
         client.send(requirements={"python": ["packaging"]})
         assert last_result_text(client) == "[prepared]", last_result_text(client)
         client.send(r="reticulate::py_available(initialize = FALSE)")
-        assert last_result_text(client) == "[1] TRUE\n"
+        assert last_result_text(client) == "[1] FALSE\n"
         client.send(control="restart")
         client.send(
             # fmt: r
@@ -125,39 +126,40 @@ def test_materializes_startup_declarations_before_python(
                 stopifnot(
                   all(c("py-yaml12", "packaging") %in% requirements$packages),
                   !"humanize" %in% requirements$packages,
-                  identical(requirements$python_version, character()),
+                  is.null(requirements$python_version),
                   is.null(requirements$exclude_newer),
-                  reticulate::py_available(initialize = FALSE)
+                  !reticulate::py_available(initialize = FALSE)
                 )
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
-def test_initializes_with_startup_exclusion_date(
+def test_initializes_with_lazy_exclusion_date(
     binary: Path, execution: Execution
 ) -> Transcript:
-    # fmt: r
-    startup = code("""
-                reticulate::py_require(exclude_newer = "2026-09-01", action = "set")
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code("""
+                reticulate::py_require(exclude_newer = "2026-09-01")
                 stopifnot(!reticulate::py_available(initialize = FALSE))
                 """)
-    with startup_declarations_client(binary, execution, startup) as client:
-        client.send(
-            r="stopifnot(startup_checks_complete, reticulate::py_available(initialize = FALSE))"
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        client.send(python="1 + 1")
-        assert last_result_text(client) == "2\n", last_result_text(client)
+        client.send(r='reticulate::py_eval("1 + 1")')
+        assert last_result_text(client) == "[1] 2\n", last_result_text(client)
         client.send(control="restart")
         client.send(
             # fmt: r
             r=code("""
                 stopifnot(
                   identical(reticulate::py_require()$exclude_newer, "2026-09-01"),
-                  reticulate::py_available(initialize = FALSE)
+                  !reticulate::py_available(initialize = FALSE)
                 )
                 invisible(reticulate::py_config())
                 stopifnot(
@@ -167,7 +169,7 @@ def test_initializes_with_startup_exclusion_date(
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -240,12 +242,13 @@ def test_preserves_live_reticulate_requirement_rules(
 def test_refreshes_numpy_configuration_after_live_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with startup_declarations_client(
-        binary, execution, 'reticulate::py_require(character(), action = "set")'
-    ) as client:
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
         client.send(
             # fmt: r
             r=code("""
+                reticulate::py_require(character(), action = "set")
                 stopifnot(is.null(reticulate::py_config()$numpy))
                 reticulate::py_require("numpy")
                 numpy <- reticulate::import("numpy", convert = FALSE)
@@ -271,7 +274,7 @@ def test_refreshes_numpy_configuration_after_live_preparation(
                 """)
         )
         assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)

@@ -4,16 +4,16 @@
 send:
   r: |
     managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
-    packages <- c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow")
-    # Loaded namespaces retain canonical cache paths; the managed
-    # library contains symlinks to those same package installations.
     stopifnot(
-      identical(
-        normalizePath(find.package(packages)),
-        normalizePath(file.path(.libPaths()[[managed_index]], packages))
-      ),
+      identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
+      identical(dirname(find.package("yyjsonr")), .libPaths()[[managed_index]]),
       vapply(
-        c("ggplot2", "dplyr", "readr", "jsonlite"),
+        c("ggplot2", "dplyr", "readr", "jsonlite", "yyjsonr"),
         requireNamespace,
         logical(1L),
         quietly = TRUE

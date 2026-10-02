@@ -1,43 +1,49 @@
-# MCP Tool Description Guidance
+# MCP tool descriptions
 
-The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the registered tools, schemas, and descriptions returned by `tools/list`.
-The registered strings and Rust doc comments in [`src/server.rs`](../src/server.rs), with placement and enforcement prose in [`src/server/execution.rs`](../src/server/execution.rs), define that prose.
-The security paragraph reflects the effective target and selected provider.
-Review changes in the snapshot and regenerate it intentionally using the [boundary test guide](../tests/boundaries/README.md).
-Ordinary tests check the committed expectation; they do not regenerate it.
+Tool descriptions recur in agent context.
+Include information that changes tool choice, call construction, or result interpretation; keep architectural explanations in the guides.
 
-Tool descriptions occupy recurring agent context.
-Keep them concise and action-oriented, and include facts that affect whether or how an agent calls the tool or interprets its result.
+## Source and stability
 
-- Use the tool-level description for scope, language selection, persistence, sequential evaluation, polling, interoperability, and the security boundary.
-- Give concrete language-selection criteria before execution and polling instructions: DuckDB SQL for structured-file and database inspection, filtering, joins, aggregation, and nested JSON extraction; R for vectorized data and string operations, statistics, and plots; Python when its libraries or format-specific parsing simplify the task.
-  Mention direct CSV, Parquet, JSON, and JSONL access, built-in JSON support, read-only SQLite attachment, and bounded SQL previews that abbreviate long text cells.
-  Describe SQLite as a default only when it is in the startup declaration: managed built-in sessions include it, while custom workers require explicit preparation.
-  Show extension preparation calls only when preparation is available; other sessions require a preinstalled SQLite extension.
-  Keep selection guidance consistent with the available languages; encourage switching languages while reusing persistent state only when multiple languages are enabled.
-- Put field-specific rules on their properties: accepted inputs, preparation, stdin and control ordering, timeout behavior, result display, and plotting.
-  Avoid repeating those rules in the tool-level description.
-- Preserve warnings about state changes that survive errors and controls that discard state.
-  Include exact bridge names and familiar interfaces such as DuckDB, DBI, and dplyr when they tell the agent how to complete a workflow.
+[`src/server.rs`](../src/server.rs), its argument definitions, and [`src/server/execution.rs`](../src/server/execution.rs) construct the interface.
+The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records it.
+Regenerate that snapshot deliberately through the [boundary tests](../tests/boundaries/README.md), never by editing expected output.
 
-Leave tutorials and analysis-specific examples to the runtime guides.
-Omit implementation details that do not change agent behavior, such as interpreter backends, worker IPC, the internal journal, and exact output limits.
+Descriptions depend on captured configuration, not completed runtime discovery.
+For the same configuration, they stay stable as background startup finishes or fails.
+`MCP_CONSOLE_LANGUAGES` filters direct code fields; execution still checks actual runtime availability.
+Prepared Docker/SBX configuration limits requirements to inspection.
 
-For native enforcement, the `send` description reflects the captured native built-in and explicit filesystem/network selection.
-For `":workspace"`, describe fixed workspace writes, private temporary storage, and readable metadata paths protected from writes by default; state that explicit native rules can change those defaults.
-Do not describe `.agents/console` as an unconditional write denial or imply that a `read` entry only denies writes.
+Advertising an unavailable language lets an agent identify the missing prerequisite and ask for installation authorization, at the cost of a rejected call before discovery is known.
+It neither proves availability nor authorizes installation.
+Installing a runtime or rebuilding a prepared target requires a new server session; worker restart retains captured selection.
 
-For Docker Sandbox compute enforcement, describe the owned microVM, explicit shared paths, and externally managed Docker policy and host integrations.
-Do not label it unsandboxed host execution or imply native policy equivalence, protected metadata within writable shares, or a frozen inherited policy.
-Describe controller recording paths separately from VM files; shared paths can expose controller records to the worker.
+## Editorial rules
 
-The initial schema depends only on cheap configuration, including explicit language filters and known prepared-target restrictions.
-It never waits for target/runtime discovery or changes with warmup timing.
-Describe language, bridge, SQL, and managed preparation availability conditionally.
-Missing discovery does not prove absence; authoritative capability validation occurs when the operation reaches the session.
-Do not require clients to refresh an incomplete tool list.
-For prepared Docker and SBX targets, expose only requirements inspection and explain preinstalled environments.
-R-only and sans-R composition is validated after discovery without changing the initial language fields.
-Dependencies and extensions must come from the captured image/template; missing imports do not install packages.
-`requirements.action="get"` reports the retained declaration, not an inventory of preinstalled distributions.
-Describe rebuilding the image/template and starting a new server session separately from a plain worker restart that retains the interpreter and resets state.
+Put scope, useful language-selection guidance, persistence, sequential execution, polling, interoperability, and the security boundary at tool level.
+Put field-specific input and ordering rules on the fields, without repeating them above.
+Keep exact bridge/helper names when they enable a workflow.
+Preserve warnings about effects surviving errors and restart discarding state.
+
+Prefer concrete choices: SQL for structured-file/database inspection and aggregation, R for vectorized/statistical work, Python when its libraries fit the task.
+Make cross-language guidance conditional on configured languages.
+Do not turn the description into a tutorial, package inventory, backend explanation, or transcript-format specification.
+
+## Capability and security claims
+
+Distinguish supported capabilities from installed dependencies.
+An advertised SQL field does not prove that DuckDB, SQLite extensions, or an R/Python bridge is available.
+Custom workers do not inherit the built-in catalog or package defaults.
+Host preparation examples require resolver support; prepared images/templates require preinstalled dependencies.
+Requirement inspection is a declaration, not an installed-package inventory.
+
+Native prose must reflect selected filesystem and network policy.
+Workspace metadata is protected by default, not by an unchangeable denial ceiling; explicit native rules can alter those defaults.
+A `read` entry grants reads as well as narrowing writes.
+
+SBX prose must describe the microVM, explicit shares, externally managed policy, and host integrations—not native-equivalent enforcement or unsandboxed host execution.
+Writable shares can expose controller records and metadata.
+Provider policy is not frozen by Console configuration capture.
+Keep controller recording paths distinct from target files.
+
+Review the resulting handshake as an agent would: can it choose and call the tool without reading implementation details, and are its safety claims true for the configured target?

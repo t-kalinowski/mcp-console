@@ -4,6 +4,7 @@ import ast as _ast
 import base64 as _base64
 import builtins as _builtins
 import importlib as _importlib
+import importlib.metadata as _importlib_metadata
 import importlib.util as _importlib_util
 import io as _io
 import json as _json
@@ -51,8 +52,6 @@ _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS = {
     "zope",
 }
 
-_MCP_CONSOLE_DEFAULT_IMPORT_ROOTS = {"numpy", "pandas"}
-
 
 def _mcp_console_missing_module(fullname, message):
     raise ModuleNotFoundError(message, name=fullname) from None
@@ -99,7 +98,8 @@ class _McpConsoleImportFinder:
         threading,
         distributions,
         ambiguous_roots,
-        default_roots,
+        metadata,
+        private_codes,
         missing_module,
         missing_submodule,
         explicit_requirement,
@@ -113,13 +113,26 @@ class _McpConsoleImportFinder:
         self._threading = threading
         self._distributions = distributions
         self._ambiguous_roots = ambiguous_roots
-        self._default_roots = default_roots
+        self._metadata = metadata
+        self._csv_reader = importlib.import_module("csv").reader
+        self._private_codes = private_codes
+        self._id = id
+        self._import_globals = (
+            importlib.__dict__,
+            importlib_util.__dict__,
+            importlib._bootstrap.__dict__,
+            importlib._bootstrap_external.__dict__,
+        )
         self._missing_module = missing_module
         self._missing_submodule = missing_submodule
         self._explicit_requirement = explicit_requirement
         self._psutil_loader = psutil_loader
         self._psutil_callback = None
         self._fromlist_code = importlib._bootstrap._handle_fromlist.__code__
+        self._load_codes = (
+            importlib._bootstrap._load_unlocked.__code__,
+            importlib._bootstrap._exec.__code__,
+        )
         self._callback = None
         self._disabled_reason = "automatic Python package resolution is not configured"
         self._pid = None
@@ -166,10 +179,10 @@ class _McpConsoleImportFinder:
         # A real import can resolve the distribution if the caller proceeds.
         if self._is_availability_probe():
             return None
-        # The default packages probe for optional dependencies while importing.
-        # Keep those probes from changing the managed environment merely because
-        # a user imported an already-available default package.
-        if self._is_default_package_initialization():
+        # Installed distributions own their dependencies. Their import-time
+        # optional probes must observe absence rather than install a package.
+        # Local modules and calls made after initialization may still resolve.
+        if self._is_installed_package_initialization():
             return None
         # Some libraries append importers after Python initializes. Give only
         # that later suffix its ordinary chance before acting as the last finder.
@@ -300,17 +313,76 @@ class _McpConsoleImportFinder:
             + self._explicit_requirement("correct-distribution-name"),
         )
 
-    def _is_default_package_initialization(self):
+    def _is_installed_package_initialization(self):
+        # Importlib holds the spec during loading, PyInit, and reload.
+        # Deferred execution after this boundary remains eligible.
         frame = self._sys._getframe(1)
+        importing_frame = None
         while frame is not None:
-            specification = frame.f_globals.get("__spec__")
-            module = frame.f_globals.get("__name__", "")
-            root = module.partition(".")[0]
-            if root in self._default_roots and getattr(
-                specification, "_initializing", False
+            if any(frame.f_code is code for code in self._load_codes):
+                specification = frame.f_locals["spec"]
+                break
+            # The current import entrypoint may wrap importlib (as reticulate
+            # does). Frames inside that entrypoint are import machinery.
+            if frame.f_code is self._importlib._bootstrap._find_and_load.__code__:
+                importing_frame = None
+            elif (
+                importing_frame is None
+                and self._id(frame.f_code) not in self._private_codes
+                and all(frame.f_globals is not scope for scope in self._import_globals)
             ):
-                return True
+                importing_frame = frame
             frame = frame.f_back
+        else:
+            return False
+        # Cached helpers share initialization context; local callbacks own theirs.
+        # Native callbacks expose no frame and inherit the visible initializer.
+        importer = (
+            specification
+            if importing_frame is None
+            else importing_frame.f_globals.get("__spec__")
+        )
+        if importer is None or importer.origin is None or specification.origin is None:
+            return False
+        root = specification.name.partition(".")[0]
+        origins = {
+            self._os.path.realpath(specification.origin),
+            self._os.path.realpath(importer.origin),
+        }
+        module = self._sys.modules.get(root)
+        root_spec = specification if module is None else module.__spec__
+        locations = (
+            root_spec.submodule_search_locations
+            if module is None
+            else getattr(module, "__path__", None)
+        )
+        # Use actual loaded paths retained by activation or extend_path.
+        # Package paths may differ from the root spec. Do not cache metadata.
+        metadata_paths = (
+            [self._os.path.dirname(path) for path in locations]
+            if locations is not None
+            else [self._os.path.dirname(root_spec.origin)]
+        )
+        for distribution in self._metadata.distributions(path=metadata_paths):
+            # Both selected files must belong to the same distribution. Names,
+            # file-less metadata and indirect editable records cannot own them.
+            # Managed installations use wheel RECORDs. Distribution.files also
+            # stats every payload; read the record without traversing those files.
+            record = distribution.read_text("RECORD")
+            if record is None:
+                continue
+            # Canonicalize selected files across symlinked installation paths.
+            location = self._os.path.realpath(str(distribution.locate_file("")))
+            selected = {self._os.path.relpath(origin, location) for origin in origins}
+            rows = self._csv_reader(record.splitlines(keepends=True), strict=True)
+            # Resolve only matching RECORD entries, not unrelated payload paths.
+            installed = {
+                self._os.path.realpath(str(distribution.locate_file(row[0])))
+                for row in rows
+                if self._os.path.normpath(row[0]) in selected
+            }
+            if origins <= installed:
+                return True
         return False
 
     def _is_availability_probe(self):
@@ -371,7 +443,8 @@ if _mcp_console_import_finder is None:
         _threading,
         _MCP_CONSOLE_IMPORT_DISTRIBUTIONS,
         _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS,
-        _MCP_CONSOLE_DEFAULT_IMPORT_ROOTS,
+        _importlib_metadata,
+        _mcp_console_private_codes,
         _mcp_console_missing_module,
         _mcp_console_missing_submodule,
         _mcp_console_explicit_requirement,
@@ -501,6 +574,7 @@ def _mcp_console_eval_cell(
     _exec=_builtins.exec,
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
+    _SystemExit=_builtins.SystemExit,
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _sys=_sys,
@@ -518,8 +592,9 @@ def _mcp_console_eval_cell(
         else:
             statements = _compile(module, filename, "exec")
             expression = None
-
     except _BaseException as error:
+        if _isinstance(error, _SystemExit):
+            raise
         if "\0" in source and _isinstance(error, _ValueError):
             error = _SyntaxError("source code string cannot contain null bytes")
         _print_exception(error, source_error=_isinstance(error, _SyntaxError))
@@ -530,6 +605,8 @@ def _mcp_console_eval_cell(
             if expression is not None:
                 _sys.displayhook(_eval(expression, _main.__dict__))
         except _BaseException as error:
+            if _isinstance(error, _SystemExit):
+                raise
             _print_exception(error)
     try:
         for image in _collect_plots():
@@ -639,12 +716,8 @@ def _mcp_console_activate_process_environment(
 
 
 _mcp_console = _types.ModuleType("_mcp_console")
-
-# Native startup configures the import finder through CPython. Reticulate
-# supplies its converted callback without executing Python source here.
-# Keep the embedded-source lines below stable: public traceback transcripts
-# record their line numbers, including the SQL dispatch wrapper following
-# this setup boundary.
+# Native startup uses CPython; reticulate supplies its converted callback.
+# Keep the following embedded-source lines stable for public SQL tracebacks.
 
 
 def _mcp_console_without_automatic_resolution(
@@ -705,13 +778,21 @@ def _mcp_console_configure_environment(
     for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
         # Framework launchers and embedding can retain different spellings of
         # the same directory (for example /var and /private/var on macOS).
-        if _os.path.realpath(getattr(_sys, name)) != _os.path.realpath(expected[name]):
+        try:
+            matches = _os.path.samefile(getattr(_sys, name), expected[name])
+        except OSError:
+            matches = False
+        if not matches:
             raise RuntimeError(
                 f"embedded Python {name} differs from the selected environment: "
                 f"{getattr(_sys, name)!r} != {expected[name]!r}"
             )
     executable = expected["embedding"]["python"]
-    if not _os.path.samefile(_sys.executable, executable):
+    try:
+        matches = _os.path.samefile(_sys.executable, executable)
+    except OSError:
+        matches = False
+    if not matches:
         raise RuntimeError("embedded Python executable differs from host selection")
     # Match an interactive interpreter: imports follow the current workspace,
     # including a later os.chdir(), rather than the selected executable's bin.

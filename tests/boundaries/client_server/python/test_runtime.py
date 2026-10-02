@@ -1,11 +1,11 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -15,17 +15,19 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_worker_ready,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.r import r_test_environment, reference_plots, startup_r_package
-from support.native import build_interposer
-from support.requirements import NATIVE_FIXTURES, requires
+from support.r import r_test_environment, reference_plots
 from support.records import Transcript
+from support.requirements import R, requires
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
+from boundaries.client_server.python.test_setup import deferred_selection_client
 
 
 @executions(DIRECT, SANDBOXED)
@@ -201,8 +203,22 @@ def test_returns_r_plots_from_python_bridge(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    return returns_matplotlib_plots(binary, execution, with_r=True)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_returns_no_r_matplotlib_plots(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return returns_matplotlib_plots(binary, execution, with_r=False)
+
+
+def returns_matplotlib_plots(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace"
         workspace.mkdir()
@@ -210,26 +226,36 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         host_matplotlib.mkdir()
         host_matplotlibrc = host_matplotlib / "matplotlibrc"
         host_matplotlibrc.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
-        environment = matplotlib_test_environment(temporary / "host-cache")
+        environment = (
+            matplotlib_test_environment(temporary / "host-cache")
+            if with_r
+            else no_r_environment(temporary)
+        )
+        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
-        client = McpClient(
-            binary,
-            execution.serve(),
-            environment,
-            current_directory=workspace,
+        client = clients.enter_context(
+            McpClient(
+                binary,
+                execution.serve(),
+                environment,
+                current_directory=workspace,
+            )
         )
         client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        if with_r:
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("matplotlib")
+                invisible(reticulate::py_config())
+                """)
+            client.expect(r=r)
+        else:
+            wait_for_worker_ready(client, "Matplotlib declaration readiness")
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -398,7 +424,7 @@ after show
 def test_inherits_explicit_matplotlib_config(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         explicit = temporary / "explicit"
         explicit.mkdir()
@@ -416,12 +442,12 @@ def test_inherits_explicit_matplotlib_config(
         environment["MATPLOTLIBRC"] = str(explicit_rc)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
-        client = McpClient(binary, execution.serve(), environment)
-        client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
+        client = clients.enter_context(
+            McpClient(binary, execution.serve(), environment)
         )
-        assert last_result_text(client) == "[prepared]"
+        client.initialize_and_list_tools()
+        wait_for_worker_ready(client, "explicit Matplotlib declaration readiness")
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -472,7 +498,7 @@ def test_inherits_xdg_matplotlib_config(
 def inherits_matplotlib_config(
     binary: Path, execution: Execution, *, xdg: bool
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         home = temporary / "home"
         config_root = temporary / "xdg-config" if xdg else home / ".config"
@@ -531,12 +557,12 @@ def inherits_matplotlib_config(
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(matplotlibrc)
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
-        client = McpClient(binary, execution.serve(), environment)
-        client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
+        client = clients.enter_context(
+            McpClient(binary, execution.serve(), environment)
         )
-        assert last_result_text(client) == "[prepared]"
+        client.initialize_and_list_tools()
+        wait_for_worker_ready(client, "inherited Matplotlib declaration readiness")
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -658,65 +684,98 @@ def test_releases_python_threads_before_running_init_hooks(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        started = FifoCheckpoint.create(root / "thread-started")
-        release = FifoCheckpoint.create(root / "thread-release")
-        completed = FifoCheckpoint.create(root / "thread-completed")
-        # The hook creates a real Python thread. Its second checkpoint runs
-        # after startup and a cell finish, while the worker is otherwise idle.
-        python = code("""
-            import os
-            import threading
-
-            def complete_after_release():
-                with open(os.environ["THREAD_STARTED"], "wb", buffering=0) as signal:
-                    signal.write(b"1")
-                with open(os.environ["THREAD_RELEASE"], "rb", buffering=0) as gate:
-                    assert gate.read(1) == b"1"
-                with open(os.environ["THREAD_COMPLETED"], "wb", buffering=0) as signal:
-                    signal.write(b"1")
-
-            initialization_thread = threading.Thread(target=complete_after_release, daemon=True)
-            initialization_thread.start()
-            """)
-        startup = code(f"""
-            setHook("reticulate.onPyInit", function() {{
-              reticulate::py_run_string({json.dumps(python)})
-            }}, action = "append")
-            """)
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        client = McpClient(binary, execution.serve(), environment)
+        release: Path | None = None
         try:
-            with startup_r_package(root, startup) as environment:
-                environment.update(
-                    THREAD_STARTED=str(started.path),
-                    THREAD_RELEASE=str(release.path),
-                    THREAD_COMPLETED=str(completed.path),
+            client.initialize_and_list_tools()
+            # fmt: r
+            r = code(r"""
+                invisible(loadNamespace("reticulate"))
+                hook_failed <- FALSE
+                setHook(
+                  "reticulate.onPyInit",
+                  function() {
+                    if (!hook_failed) {
+                      hook_failed <<- TRUE
+                      stop("synthetic Python initialization hook failure")
+                    }
+                  },
+                  action = "prepend"
                 )
-                args = (
-                    execution.serve("--writable-root", str(root))
-                    if execution == SANDBOXED
-                    else execution.serve()
+                message <- tryCatch(
+                  {
+                    invisible(reticulate::py_config())
+                    "Python initialization unexpectedly succeeded"
+                  },
+                  error = conditionMessage
                 )
-                with McpClient(binary, args, environment, root) as client:
-                    client.initialize_and_list_tools()
-                    started.wait(
-                        "Python thread started by initialization hook", timeout=60
-                    )
-                    client.send(python="assert initialization_thread.is_alive(); 42")
-                    assert last_result_text(client) == "42\n"
-                    release.release()
-                    completed.wait("startup thread resumed while worker idle")
-                    client.send(
-                        python='initialization_thread.join(); hook_input = input("hook> "); hook_input',
-                        stdin="after hook\n",
-                    )
-                    assert last_result_text(client) == (
-                        "[input requested: \"hook> \"]\n'after hook'\n"
-                    )
-                    return client.finish()
+                cat(message, "\n", sep = "")
+                """)
+            client.send(r=r)
+            output = last_result_text(client)
+            assert output == "synthetic Python initialization hook failure\n", repr(
+                output
+            )
+
+            # fmt: python
+            python = code("""
+                import os
+                import threading
+                import time
+                from pathlib import Path
+
+                directory = Path(os.environ["TMPDIR"])
+                started = directory / "python-init-hook-thread-started"
+                release = directory / "release-python-init-hook-thread"
+                completed = directory / "python-init-hook-thread-completed"
+
+
+                def complete_after_release():
+                    started.touch()
+                    while not release.exists():
+                        time.sleep(0.01)
+                    completed.touch()
+
+
+                initialization_thread = threading.Thread(
+                    target=complete_after_release,
+                    daemon=True,
+                )
+                initialization_thread.start()
+                while not started.exists():
+                    time.sleep(0.01)
+                """)
+            client.send(python=python)
+            assert last_result_text(client) == "[done]"
+
+            started = wait_for_worker_file(
+                Path(temporary_directory),
+                "python-init-hook-thread-started",
+                client,
+            )
+            release = started.parent / "release-python-init-hook-thread"
+            release.touch()
+            wait_for_worker_file(
+                Path(temporary_directory),
+                "python-init-hook-thread-completed",
+                client,
+            )
+
+            client.send(
+                python='hook_input = input("hook> "); hook_input',
+                stdin="after hook\n",
+            )
+            assert last_result_text(client) == (
+                "[input requested: \"hook> \"]\n'after hook'\n"
+            )
+            return client.finish()
         finally:
-            for checkpoint in (started, release, completed):
-                checkpoint.close()
+            if release is not None and release.parent.exists():
+                release.touch(exist_ok=True)
+            stop_client(client)
 
 
 @executions(DIRECT, SANDBOXED)
@@ -889,6 +948,9 @@ def test_python_input_eof_retires_worker(
                 "[idle]",
                 "Python input EOF retirement",
                 expected_error=True,
+                # Confirmed retirement and replacement startup use the client
+                # lifecycle budget, separate from the input-arrival deadline.
+                completion_timeout_seconds=client.response_timeout,
             )
             client.send(python='"eof_marker" in globals()')
             assert last_result_text(client) == "False\n"
@@ -930,49 +992,54 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES)
-def test_restores_python_thread_state_after_startup_hook_failure(
+def test_restarts_after_python_bridge_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        probe = build_interposer(root, "python_exit_state")
-        startup = code(f"""
-            setHook("reticulate.onPyInit", function() {{
-              invisible(dyn.load({json.dumps(str(probe))}))
-              stop("synthetic Python initialization hook failure")
-            }}, action = "append")
+    with deferred_selection_client(binary, execution.serve()) as client:
+        # fmt: r
+        r = code(r"""
+            python_worker_marker <- TRUE
+            Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
+            invisible(suppressMessages(base::trace(
+              "py_discover_config",
+              tracer = quote(base::signalCondition(base::structure(
+                base::list(message = "synthetic interrupt", call = NULL),
+                class = c("interrupt", "condition")
+              ))),
+              print = FALSE,
+              where = asNamespace("reticulate")
+            )))
             """)
-        with startup_r_package(root, startup) as environment:
-            with McpClient(binary, execution.serve(), environment, root) as client:
-                client.initialize_and_list_tools()
-                result = client.send(
-                    python="raise AssertionError('failed startup ran cell')"
-                )
-                assert result["isError"], result
-                output = last_result_text(client)
-                retirement = (
-                    "[worker sideband read failed: worker sideband closed]\n"
-                    "[worker exited with status 1]\n"
-                    "[worker stopped: in-memory state lost]"
-                )
-                diagnostic = (
-                    "Error in fun() : synthetic Python initialization hook failure\n"
-                )
-                stderr = "Python bridge failed during R evaluation\nPython exit thread attached\n"
-                assert output.endswith(retirement), output
-                assert_exact_interleaving(
-                    output.removesuffix(retirement), diagnostic, stderr
-                )
-                result["content"][0]["text"] = diagnostic + stderr + retirement
-                (root / "startup.R").write_text("startup_recovered <- TRUE\n")
-                client.send(
-                    control="restart", python="assert bool(r.startup_recovered); 42"
-                )
-                assert last_result_text(client).endswith("42\n[done]"), (
-                    client.transcript[-1]
-                )
-                return client.finish()
+        client.send(r=r)
+        client.send(python="6 * 7")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True
+        bridge_failure = "Python bridge failed during R evaluation\n"
+        python_failure = (
+            "Error in py_discover_config(required_module, use_environment) : \n"
+            "  Python specified in RETICULATE_PYTHON "
+            "(/mcp-console-missing-python) does not exist\n"
+        )
+        worker_failure = (
+            "[worker sideband read failed: worker sideband closed]\n"
+            "[worker exited with status 1]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        output = result["content"][0]["text"]
+        assert output.endswith(worker_failure), output
+        assert_exact_interleaving(
+            output.removesuffix(worker_failure),
+            bridge_failure,
+            python_failure,
+        )
+        result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
+        client.send(r='exists("python_worker_marker", inherits = FALSE)')
+        assert last_result_text(client) == "[1] FALSE\n"
+        client.send(python="6 * 7")
+        assert last_result_text(client) == "42\n"
+        return client.finish()
 
 
 if __name__ == "__main__":

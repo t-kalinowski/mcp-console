@@ -10,24 +10,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
-from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import WORKER, requires
 from support.suites import run_this_suite
 
 
 @requires(WORKER)
-def test_worker_reports_closed_output_pipe(
+def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
     binary: Path,
 ) -> Transcript:
     # This raw launch supplies the private storage normally owned by the launcher.
     with tempfile.TemporaryDirectory() as temporary:
         worker_read, relay_write = os.pipe()
         relay_read, worker_write = os.pipe()
-        environment, _ = r_test_environment()
-        environment["TMPDIR"] = temporary
-        environment["MCP_CONSOLE_LOCAL_RUNTIME"] = json.dumps(
-            {"r": True, "python": None}
+        # Exercise the output callback without user startup or default packages.
+        environment = dict(
+            os.environ,
+            TMPDIR=temporary,
+            R_PROFILE_USER=os.devnull,
+            R_DEFAULT_PACKAGES="NULL",
         )
         environment["MCP_CONSOLE_SIDEBAND_READ_FD"] = str(worker_read)
         environment["MCP_CONSOLE_SIDEBAND_WRITE_FD"] = str(worker_write)
@@ -48,11 +49,6 @@ def test_worker_reports_closed_output_pipe(
                 assert json.loads(read_lines(output, 1, "worker ready")[0]) == {
                     "kind": "ready"
                 }
-                commands.write(json.dumps({"kind": "initialize"}) + "\n")
-                commands.flush()
-                assert json.loads(read_lines(output, 1, "runtime initialized")[0]) == {
-                    "kind": "initialized"
-                }
                 output.close()
                 commands.write(
                     json.dumps(
@@ -67,9 +63,8 @@ def test_worker_reports_closed_output_pipe(
                 commands.flush()
                 # Keep stdin and the command pipe open until failure is observed.
                 # Their EOF must not cause ordinary worker retirement first.
-                process.wait(timeout=5)
+                assert process.wait(timeout=5) == 1
                 stdout, stderr = process.communicate(timeout=5)
-                assert process.returncode == 1, (process.returncode, stdout, stderr)
                 assert stdout == "", stdout
                 assert (
                     stderr == "R console output failed: Broken pipe (os error 32)\n"

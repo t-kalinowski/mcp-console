@@ -39,8 +39,10 @@ struct EvaluationState {
     /// Restart or controlled handoff permanently retires this evaluation.
     /// Releasing its response reservation must not revive late task failures.
     retired: bool,
+    /// This accepted cell preceded an interrupted bootstrap receipt.
+    bootstrap_interrupted: bool,
     restart_handoff: Option<Response>,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
 }
@@ -125,8 +127,9 @@ impl Evaluation {
                 input_report_at: None,
                 waiting: false,
                 retired: false,
+                bootstrap_interrupted: false,
                 restart_handoff: None,
-                #[cfg(unix)]
+                #[cfg(any(unix, windows))]
                 stdin: None,
                 pending_stdin: String::new(),
             }),
@@ -170,6 +173,23 @@ impl Evaluation {
             state.phase,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
         ))
+    }
+
+    pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        state.bootstrap_interrupted = true;
+        Ok(())
+    }
+
+    pub(super) fn bootstrap_interrupted(&self) -> Result<bool, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        Ok(state.bootstrap_interrupted)
     }
 
     /// Reserves an open response until restart finishes retiring the worker.
@@ -326,7 +346,7 @@ impl Evaluation {
         if let Some(report_at) = state.input_report_at.as_mut() {
             *report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         if let Some(writer) = &state.stdin {
             writer.send(stdin)?;
             return Ok(());
@@ -335,14 +355,14 @@ impl Evaluation {
         Ok(())
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn attach_writer(&self, writer: super::platform::StdinSender) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if state.stdin.is_some() {
-            return Ok(());
+            return Err("worker stdin was already attached to this evaluation".to_string());
         }
         if !state.pending_stdin.is_empty() {
             writer.send(std::mem::take(&mut state.pending_stdin))?;
@@ -373,17 +393,6 @@ impl Evaluation {
                     .transcript
                     .persist_decoded_image(self.call_id, &bytes, mime_type))
             })
-    }
-
-    /// Startup prompts share output ownership, without becoming a user cell.
-    pub(super) fn startup_input(&self, requested: bool) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned")?;
-        state.input_report_at = requested.then(Instant::now);
-        self.changed.notify_one();
-        Ok(())
     }
 
     pub(super) fn input_requested(&self, prompt: String) -> Result<(), String> {
@@ -504,8 +513,6 @@ impl Evaluation {
         self.finish_cell_output();
         self.output.push_failure(failure);
         state.phase = EvaluationPhase::ReplacementStarting;
-        state.stdin = None;
-        state.pending_stdin.clear();
         self.changed.notify_one();
     }
 

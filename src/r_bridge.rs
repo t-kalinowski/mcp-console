@@ -12,7 +12,11 @@ pub(crate) struct Bridge {
 
 impl Bridge {
     pub(crate) fn initialize(initializer: &str, language: &'static str) -> Result<Self, String> {
+        #[cfg(unix)]
         let library = libloading::os::unix::Library::this();
+        #[cfg(windows)]
+        let library = libloading::os::windows::Library::open_already_loaded("R.dll")
+            .map_err(|e| e.to_string())?;
         let try_eval = unsafe {
             *library
                 .get::<TryEval>(b"R_tryEval\0")
@@ -131,6 +135,7 @@ impl Bridge {
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
             if interrupted {
+                crate::worker::record_bootstrap_interrupt();
                 return Ok(None);
             }
             return Err(format!(

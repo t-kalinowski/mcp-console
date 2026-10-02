@@ -1,29 +1,7 @@
 ---
-send:
-  python: raise AssertionError('invalid R selected another runtime')
-result:
-  content:
-    - type: text
-      text: >-
-        [failed to inspect ambient reticulate with
-        `<fixture>/missing-r/bin/Rscript`: No such file or directory (os error
-        2)]
-  isError: true
+invalid_R_HOME: >-
+  R_HOME must select an existing R installation:
+  <fixture>/missing-r/bin/Rscript is missing
 ---
-input:
-  method: ping
-result: {}
----
-send:
-  python: raise AssertionError('invalid R selected another runtime')
-result:
-  content:
-    - type: text
-      text: >-
-        [worker R home discovery failed with exit status: 41: broken discovered
-        R]
-  isError: true
----
-input:
-  method: ping
-result: {}
+broken_R: >-
+  worker R home discovery failed with exit status: 41: broken discovered R

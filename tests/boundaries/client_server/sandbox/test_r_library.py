@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.normalization import code
 from support.r import r_test_environment
@@ -62,7 +62,11 @@ Encoding: UTF-8
 
         with McpClient(binary, ("serve",), environment, workspace) as client:
             client.initialize_and_list_tools()
-            client.send(
+            wait_for_evaluation_output(
+                client,
+                None,
+                "sandbox R package installation",
+                completion_timeout_seconds=client.response_timeout,
                 # fmt: r
                 r=code(r"""
                     library <- .libPaths()[[1L]]
@@ -84,15 +88,18 @@ Encoding: UTF-8
                       identical(dirname(find.package("mcpconsolelocalpkg")), library),
                       identical(mcpconsolelocalpkg::answer(), 42L)
                     )
-                    """)
+                    """),
             )
             install_output = last_tool_text(client)
             client.send(control="restart")
             restart_output = last_tool_text(client)
-            restart_notices = "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            restart_notices = (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            )
             assert restart_output.endswith(restart_notices), restart_output
 
-            # Restart collects installer bytes that missed the evaluation cut.
+            # Restart collects inherited installer bytes that missed the
+            # completed evaluation cut.
             output = install_output + restart_output.removesuffix(restart_notices)
             notice = re.search(
                 r"Installing package into .(/[^\n]+).\n\(as .lib. is unspecified\)\n",
@@ -107,7 +114,8 @@ Encoding: UTF-8
                 + installer
             )
             client.transcript[-1]["result"]["content"][0]["text"] = restart_notices
-            client.send(
+            client.expect(
+                "new sandbox library ready\n",
                 # fmt: r
                 r=code(r"""
                     stopifnot(
@@ -118,10 +126,7 @@ Encoding: UTF-8
                       dir.exists(.libPaths()[[1L]])
                     )
                     cat("new sandbox library ready\n")
-                    """)
-            )
-            assert last_tool_text(client) == "new sandbox library ready\n", (
-                last_tool_text(client)
+                    """),
             )
             return client.finish()
 

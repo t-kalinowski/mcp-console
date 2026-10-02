@@ -1,14 +1,14 @@
 ---
-!same-as python-managed MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
-  control: restart
+  requirements:
+    action: set
+    python: []
 result:
   content:
     - type: text
-      text: |-
-        [starting new worker]
-        [idle]
+      text: "[prepared]"
   isError: false
 ---
 send:
@@ -32,14 +32,9 @@ result:
           "requirements": {
             "r": [],
             "python": [
-              "numpy",
-              "pandas",
-              "console-activation-fixture",
-              "duckdb"
+              "console-activation-fixture"
             ],
-            "duckdb": [
-              "sqlite"
-            ],
+            "duckdb": [],
             "python_version": [],
             "exclude_newer": null
           },
@@ -53,12 +48,8 @@ result:
     requirements:
       r: []
       python:
-        - numpy
-        - pandas
         - console-activation-fixture
-        - duckdb
-      duckdb:
-        - sqlite
+      duckdb: []
       python_version: []
       exclude_newer: ~
     prepared: true
@@ -84,7 +75,10 @@ send:
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 39, in initialize
+        KeyboardInterrupt
   isError: false
 ---
 send:
@@ -98,14 +92,9 @@ result:
           "requirements": {
             "r": [],
             "python": [
-              "numpy",
-              "pandas",
-              "console-activation-fixture",
-              "duckdb"
+              "console-activation-fixture"
             ],
-            "duckdb": [
-              "sqlite"
-            ],
+            "duckdb": [],
             "python_version": [],
             "exclude_newer": null
           },
@@ -119,12 +108,8 @@ result:
     requirements:
       r: []
       python:
-        - numpy
-        - pandas
         - console-activation-fixture
-        - duckdb
-      duckdb:
-        - sqlite
+      duckdb: []
       python_version: []
       exclude_newer: ~
     prepared: true

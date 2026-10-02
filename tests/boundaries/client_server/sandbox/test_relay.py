@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
 import sys
 import tempfile
@@ -19,9 +18,7 @@ from support.macos import (
 )
 from support.normalization import code
 from support.records import Transcript
-from support.r import r_test_environment
 from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, requires
-from support.resolvers import inspect_selected_python, resolve_managed_python
 from support.suites import run_this_suite
 
 
@@ -47,27 +44,21 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
             encoding="utf-8",
         )
         wrapper.chmod(0o755)
-        worker = (
-            Path(__file__).resolve().parents[3]
-            / "fixtures"
-            / "relay_worker"
-            / "proxy.py"
+        worker = Path(directory) / "worker-wrapper"
+        worker.write_text(
+            "#!/usr/bin/env python3\n"
+            # fmt: python
+            + code(r"""
+                import os
+
+                binary = os.environ["MCP_CONSOLE_TEST_BINARY"]
+                os.execv(binary, [binary, "worker"])
+                """),
+            encoding="utf-8",
         )
-        environment, _ = r_test_environment()
+        worker.chmod(0o755)
+        environment = os.environ.copy()
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
-        selected = resolve_managed_python(binary, SANDBOXED, Path(directory))
-        environment["MCP_CONSOLE_MITM_SELECTION"] = json.dumps(
-            {
-                "r": True,
-                "python": {
-                    "selected": inspect_selected_python(binary, selected, environment),
-                    "explicit": None,
-                    "managed": False,
-                    "duckdb_extension_directory": None,
-                },
-            }
-        )
-        environment["MCP_CONSOLE_MITM_WORKER"] = str(binary)
         client = McpClient(
             binary,
             SANDBOXED.serve("--worker", str(worker), "--relay", str(wrapper)),
@@ -89,24 +80,22 @@ def test_restart_and_shutdown_with_relay_below_sandbox_root(binary: Path) -> Tra
                         """)
                 )
                 processes, temporary_directory = last_tool_text(client).splitlines()
-                root, proxy, worker_pid, descendant = map(int, processes.split())
-                root_identity = capture_darwin_process_identity(root)
-                (relay_identity,) = darwin_child_process_identities(root_identity)
-                relay = relay_identity[0]
+                root, relay, worker_pid, descendant = map(int, processes.split())
                 assert root != relay, "relay unexpectedly replaced the sandbox root"
                 assert os.getpgid(relay) == root
-                assert darwin_child_process_identities(relay_identity) == (
-                    capture_darwin_process_identity(proxy),
+                root_identity = capture_darwin_process_identity(root)
+                wrapper_identity = root_identity
+                assert wrapper_identity[0] != relay
+                assert darwin_child_process_identities(wrapper_identity) == (
+                    capture_darwin_process_identity(relay),
                 )
-                assert darwin_child_process_identities(
-                    capture_darwin_process_identity(proxy)
-                ) == (capture_darwin_process_identity(worker_pid),)
+                identities.append(wrapper_identity)
                 identities.extend(
                     capture_darwin_process_identity(pid)
-                    for pid in (root, relay, proxy, worker_pid, descendant)
+                    for pid in (root, relay, worker_pid, descendant)
                 )
                 client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "<sandbox root> <proxy pid> <worker pid> <descendant pid>\n<sandbox temp>\n"
+                    "<sandbox root> <relay pid> <worker pid> <descendant pid>\n<sandbox temp>\n"
                 )
                 client.transcript[-1]["transcript_normalization"] = {
                     "target": "result.content[0].text",

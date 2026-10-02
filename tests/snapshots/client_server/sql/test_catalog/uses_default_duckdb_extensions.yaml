@@ -2,14 +2,6 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  sql: SET autoinstall_known_extensions = false
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   requirements:
     action: get
 result:
@@ -24,7 +16,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -63,6 +56,7 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
@@ -85,6 +79,14 @@ result:
         - tibble
         - utf8
       python: []
+  isError: false
+---
+send:
+  sql: SET autoinstall_known_extensions = false
+result:
+  content:
+    - type: text
+      text: "[done]"
   isError: false
 ---
 send:

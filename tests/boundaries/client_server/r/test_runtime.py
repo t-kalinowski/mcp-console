@@ -1,16 +1,388 @@
 #!/usr/bin/env -S uv run --script
 
+import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from boundaries.client_server.python.test_peer_runtime import (
+    DEFER_R_STARTUP,
+    defer_r_bootstrap,
+)
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+def test_uses_selected_r_resource_directories(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        selected = isolated_r_home(root, environment)
+        launcher = selected / "bin/R"
+        source = launcher.read_text()
+        resources = subprocess.check_output(
+            [
+                launcher,
+                "--vanilla",
+                "--slave",
+                "-e",
+                'cat(vapply(c("share", "include", "doc"), R.home, ""), sep="\\n")',
+            ],
+            env=environment,
+            text=True,
+        ).splitlines()
+        for (name, suffix), resource in zip(
+            (
+                ("R_SHARE_DIR", "share"),
+                ("R_INCLUDE_DIR", "include"),
+                ("R_DOC_DIR", "doc"),
+            ),
+            resources,
+            strict=True,
+        ):
+            configured = root / f"configured {suffix} λ"
+            configured.symlink_to(Path(resource).resolve())
+            (selected / suffix).unlink(missing_ok=True)
+            source, count = re.subn(
+                rf"(?m)^{name}=.*$", f'{name}="{configured}"', source
+            )
+            assert count == 1, name
+            # The selected launcher must supply its own paths, not inherited ones.
+            environment[name] = str(root / f"stale-{suffix}")
+        launcher.write_text(source)
+        environment["RETICULATE_PYTHON"] = sys.executable
+        # fmt: r
+        r = code(r"""
+            names <- c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")
+            directories <- Sys.getenv(names)
+            stopifnot(
+              identical(Sys.getenv("R_HOME"), R.home()),
+              all(dir.exists(directories)),
+              identical(
+                unname(directories),
+                vapply(
+                  c("share", "include", "doc"),
+                  R.home,
+                  "",
+                  USE.NAMES = FALSE
+                )
+              ),
+              file.exists(file.path(R.home("include"), "R.h")),
+              length(readLines(file.path(R.home("doc"), "AUTHORS"))) > 0L
+            )
+            child <- system2(
+              commandArgs()[1L],
+              c(
+                "--vanilla",
+                "--slave",
+                "-e",
+                shQuote(
+                  'cat(Sys.getenv(c("R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")), sep = "\n")'
+                )
+              ),
+              stdout = TRUE,
+              stderr = TRUE
+            )
+            stopifnot(is.null(attr(child, "status")), identical(child, unname(directories)))
+            cat("R and its children use the selected resource directories\n")
+            """)
+        reference = subprocess.check_output(
+            [launcher, "--vanilla", "--slave", "-e", r],
+            env=environment,
+            text=True,
+        )
+        expected = "R and its children use the selected resource directories\n"
+        assert reference == expected, reference
+        modules = root / "modules"
+        modules.mkdir()
+        (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
+        environment["RETICULATE_PYTHONPATH"] = str(modules)
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            defer_r_bootstrap(client)
+            wait_for_evaluation_output(
+                client,
+                "Python changed R paths before R initialization\n",
+                "Python initialization before R resource validation",
+                completion_timeout_seconds=600,
+                # fmt: python
+                python=code("""
+                    import ctypes
+                    import os
+
+                    try:
+                        initialized = bool(ctypes.c_void_p.in_dll(ctypes.CDLL(None), "R_GlobalEnv").value)
+                    except ValueError:
+                        initialized = False
+                    assert not initialized, "R initialized before Python demand"
+                    r_paths = {
+                        name: os.environ[name]
+                        for name in ("R_HOME", "R_SHARE_DIR", "R_INCLUDE_DIR", "R_DOC_DIR")
+                    }
+                    os.environ.pop("R_HOME")
+                    os.environ["R_SHARE_DIR"] = "/missing-r-share"
+                    os.environ.pop("R_INCLUDE_DIR")
+                    os.environ["R_DOC_DIR"] = "/missing-r-doc"
+                    print("Python changed R paths before R initialization")
+                    """),
+            )
+            assert last_tool_text(client) == (
+                "Python changed R paths before R initialization\n"
+            ), last_tool_text(client)
+            wait_for_evaluation_output(
+                client,
+                expected,
+                "R resource-directory validation",
+                completion_timeout_seconds=600,
+                r=r,
+            )
+            assert last_tool_text(client) == expected, last_tool_text(client)
+            wait_for_evaluation_output(
+                client,
+                "[done]",
+                "restored native R environment",
+                # fmt: python
+                python=code("""
+                    native = ctypes.CDLL(None)
+                    native.getenv.argtypes = [ctypes.c_char_p]
+                    native.getenv.restype = ctypes.c_char_p
+                    assert all(
+                        native.getenv(name.encode()) == os.fsencode(path) for name, path in r_paths.items()
+                    )
+                    """),
+            )
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_uses_selected_r_launcher_default_architecture(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, rscript = r_test_environment()
+    original_home = Path(environment["R_HOME"])
+    underlying = subprocess.check_output(
+        [rscript.parent / "R", "--vanilla", "--slave", "-e", "cat(commandArgs()[1L])"],
+        env=environment,
+        text=True,
+    ).strip()
+    with tempfile.TemporaryDirectory() as directory:
+        selected = isolated_r_home(Path(directory), environment)
+        launcher = selected / "bin/R"
+        source, substitutions = re.subn(
+            r"(?m)^: \$\{R_ARCH=.*\}$",
+            ": ${R_ARCH=/identity-test}",
+            launcher.read_text(),
+        )
+        assert substitutions == 1
+        launcher.write_text(source)
+        # Only the configured architecture has an executable in this installation.
+        (selected / "bin/exec").unlink()
+        architecture = selected / "bin/exec/identity-test"
+        architecture.mkdir(parents=True)
+        (architecture / "R").symlink_to(underlying)
+        (selected / "etc/identity-test").symlink_to(".")
+        (selected / "lib/identity-test").symlink_to(original_home / "lib")
+        environment.pop("R_ARCH", None)
+        # Prove that the selected stock launcher supplies the configured default.
+        reference = subprocess.check_output(
+            [launcher, "--vanilla", "--slave", "-e", 'cat(Sys.getenv("R_ARCH"))'],
+            env=environment,
+            text=True,
+        )
+        assert reference == "/identity-test", reference
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            wait_for_evaluation_output(
+                client,
+                "Selected R launcher supplies its default architecture\n",
+                "R launcher architecture validation",
+                completion_timeout_seconds=600,
+                # fmt: r
+                r=code(r"""
+                    executable <- commandArgs()[1L]
+                    stopifnot(
+                      file.exists(executable),
+                      identical(executable, file.path(R.home("bin"), "R")),
+                      interactive(),
+                      is.na(Sys.getenv("R_ARCH", unset = NA_character_))
+                    )
+                    child <- system2(
+                      executable,
+                      c("--vanilla", "--slave", "-e", shQuote('cat(Sys.getenv("R_ARCH"))')),
+                      stdout = TRUE,
+                      stderr = TRUE
+                    )
+                    stopifnot(
+                      is.null(attr(child, "status")),
+                      identical(child, "/identity-test")
+                    )
+                    cat("Selected R launcher supplies its default architecture\n")
+                    """),
+            )
+            assert last_tool_text(client) == (
+                "Selected R launcher supplies its default architecture\n"
+            ), last_tool_text(client)
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_shows_interactive_interpreter_identity(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        McpClient(
+            binary, execution.serve(), current_directory=Path(directory)
+        ) as client,
+    ):
+        (Path(directory) / "identity.py").write_text(
+            # fmt: python
+            code(r"""
+                import sys
+
+                print("script sys.argv:", sys.argv)
+                print("script sys.argv[0] == sys.executable:", sys.argv[0] == sys.executable)
+                """)
+        )
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code(r"""
+                sub(R.home(), "<R_HOME>", commandArgs()[1L], fixed = TRUE)
+                identical(commandArgs()[1L], file.path(R.home("bin"), "R"))
+                interactive()
+                """),
+        )
+        assert last_tool_text(client) == (
+            '[1] "<R_HOME>/bin/R"\n[1] TRUE\n[1] TRUE\n'
+        ), last_tool_text(client)
+        client.send(
+            # fmt: python
+            python=code(r"""
+                import subprocess
+                import sys
+                from pathlib import Path
+
+                print("sys.executable is a file:", Path(sys.executable).is_file())
+                print("sys.argv:", sys.argv)
+                print("sys.orig_argv == [sys.executable]:", sys.orig_argv == [sys.executable])
+                print("sys.argv[0] == sys.executable:", sys.argv[0] == sys.executable)
+                child = subprocess.run([sys.executable, "identity.py", "two words"], check=True)
+                """),
+        )
+        assert last_tool_text(client) == (
+            "sys.executable is a file: True\n"
+            "sys.argv: ['']\n"
+            "sys.orig_argv == [sys.executable]: True\n"
+            "sys.argv[0] == sys.executable: False\n"
+            "script sys.argv: ['identity.py', 'two words']\n"
+            "script sys.argv[0] == sys.executable: False\n"
+        ), last_tool_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_launches_r_children_from_interpreter_identity(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code(r"""
+                arguments <- commandArgs()
+                stopifnot(
+                  file.exists(arguments[[1L]]),
+                  identical(arguments[[1L]], file.path(R.home("bin"), "R")),
+                  interactive(),
+                  identical(arguments[-1L], c("--quiet", "--interactive", "--vanilla")),
+                  identical(commandArgs(TRUE), character())
+                )
+                environment_names <- c(
+                  "R_HOME",
+                  "R_SHARE_DIR",
+                  "R_INCLUDE_DIR",
+                  "R_DOC_DIR"
+                )
+                script <- tempfile("identity λ ", fileext = ".R")
+                result <- tempfile("identity result λ ", fileext = ".rds")
+                writeLines(
+                  c(
+                    "arguments <- commandArgs()",
+                    "saveRDS(list(arguments = arguments, user = commandArgs(TRUE),",
+                    "  interactive = interactive(),",
+                    "  environment = Sys.getenv(c('R_HOME', 'R_ARCH', 'R_SHARE_DIR',",
+                    "    'R_INCLUDE_DIR', 'R_DOC_DIR'))), commandArgs(TRUE)[[1L]])"
+                  ),
+                  script,
+                  useBytes = TRUE
+                )
+                user <- c(result, "two words", "λ", "--literal")
+                reference <- NULL
+                for (command in c(
+                  file.path(R.home("bin"), "R"),
+                  file.path(R.home("bin"), "Rscript"),
+                  arguments[[1L]]
+                )) {
+                  options <- if (basename(command) == "Rscript") {
+                    c("--vanilla", script)
+                  } else {
+                    c("--slave", "--vanilla", paste0("--file=", script), "--args")
+                  }
+                  output <- system2(
+                    command,
+                    shQuote(c(options, user)),
+                    stdout = TRUE,
+                    stderr = TRUE
+                  )
+                  stopifnot(is.null(attr(output, "status")), identical(output, character()))
+                  child <- readRDS(result)
+                  if (is.null(reference)) {
+                    reference <- child
+                  }
+                  # The selected launcher supplies the native executable and architecture.
+                  file_argument <- paste0("--file=", gsub(" ", "~+~", script, fixed = TRUE))
+                  expected <- if (basename(command) == "Rscript") {
+                    c("--no-echo", "--no-restore", "--vanilla", file_argument, "--args", user)
+                  } else {
+                    c("--slave", "--vanilla", file_argument, "--args", user)
+                  }
+                  stopifnot(
+                    file.exists(child$arguments[[1L]]),
+                    identical(child$arguments[[1L]], reference$arguments[[1L]]),
+                    identical(child$arguments[-1L], expected),
+                    identical(child$user, user),
+                    identical(child$interactive, FALSE),
+                    identical(
+                      child$environment[environment_names],
+                      Sys.getenv(environment_names)
+                    ),
+                    identical(child$environment[["R_ARCH"]], reference$environment[["R_ARCH"]])
+                  )
+                }
+                unlink(c(script, result))
+                cat(
+                  "R interpreter and children retain executable, arguments, and environment\n"
+                )
+                """),
+        )
+        assert last_tool_text(client) == (
+            "R interpreter and children retain executable, arguments, and environment\n"
+        ), last_tool_text(client)
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

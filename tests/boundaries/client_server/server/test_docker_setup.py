@@ -169,14 +169,16 @@ def test_pull_policies_and_tag_capture(binary: Path) -> Transcript:
             )
             try:
                 with McpClient(binary, ("serve",), environment, root) as client:
-                    client.initialize_and_list_tools()
                     if policy == "never" and not present:
-                        result = client.send(r="stop('missing image ran code')")
-                        assert result["isError"], result
-                        assert "No such image" in last_result_text(client)
-                        transcript, diagnostics = client.finish_with_standard_error()
-                        transcript = transcript[3:]
+                        client.startup_error()
+                        client.stdin.close()
+                        assert client.stdout.read(timeout=20) == ""
+                        diagnostics = client.stderr.read(timeout=20)
+                        assert "No such image" in diagnostics
+                        transcript = []
+                        assert client.process.wait(timeout=5) != 0
                     else:
+                        client.initialize_and_list_tools()
                         client.send(r="42")
                         assert last_result_text(client) == "[1] 42\n"
                         # Removing the mutable name cannot invalidate captured generations.
@@ -283,14 +285,12 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["filesystem"] = {"kind": "native-runner-must-validate"}
             config.write_text(json.dumps(value))
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.initialize_and_list_tools()
-                result = client.send(r="stop('invalid setup ran code')")
-                assert result["isError"], result
-                error = last_result_text(client)
-                client.request("ping")
-                _, diagnostic = client.finish_with_standard_error()
-                error += diagnostic
+                client.startup_error()
+                client.stdin.close()
+                assert client.stdout.read(timeout=30) == "", case
+                error = client.stderr.read(timeout=30)
                 assert expected in error, error
+                assert client.process.wait(timeout=5) != 0
             assert not any(
                 line.startswith("Docker command failed") and line.endswith(": ")
                 for line in error.splitlines()
@@ -303,9 +303,9 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
             assert not (root / "missing-bind").exists()
             records.append(
                 {
-                    "rejected_before_readiness": case,
+                    "rejected_before_worker_startup": case,
                     "container_absent": True,
-                    "startup_error": error.replace(str(root), "<controller>"),
+                    "stderr": error.replace(str(root), "<controller>"),
                 }
             )
     return records
@@ -346,6 +346,7 @@ dynamic environment resolution is unavailable
 dynamic environment resolution is unavailable
 """,
                 "disabled container callbacks",
+                completion_timeout_seconds=client.response_timeout,
                 r="42",
             )
             result = client.finish()[3:]

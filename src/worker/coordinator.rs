@@ -9,30 +9,38 @@ use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
 struct Coordinator {
-    initialized: bool,
     writer: crate::sideband::Writer,
     r: Integration,
     python: crate::python::Runtime,
     sql: crate::sql::Bridge,
 }
 
-pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    let result = run_session();
+pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    let result = run_session(bootstrap_runtimes);
     // Every return, including startup and readiness failures, must restore
     // Python's initial thread before extension-library process destructors.
     crate::python::prepare_process_exit()?;
     result
 }
 
-fn run_session() -> Result<(), Box<dyn Error>> {
+fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    crate::windows::configure_worker_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let selection = crate::local_runtime::Selection::from_environment()?
-        .ok_or("worker launch did not supply a complete runtime selection")?;
+    let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
+        crate::local_runtime::WorkerSelection {
+            r: true,
+            python: None,
+        },
+    );
     interrupt::normalize_signal()?;
-    let r_home = selection.r.then(crate::local_runtime::r_home).transpose()?;
+    let r_installation = selection
+        .r
+        .then(crate::local_runtime::r_installation)
+        .transpose()?;
     #[cfg(target_os = "linux")]
-    if let Some(home) = &r_home {
-        reexec_with_r_library_path(home, &reader, &writer)?;
+    if let Some(installation) = &r_installation {
+        reexec_with_r_library_path(&installation.home, &reader, &writer)?;
     }
     // The launcher owns this directory through confirmed worker retirement.
     // R's session tempdir is a child, never the owner of Python/SQL storage.
@@ -40,18 +48,17 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         std::env::var_os("TMPDIR").ok_or("worker launch did not supply temporary storage")?;
     crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
     core::initialize(reader, writer.clone())?;
-    let r = Integration::new(r_home)?;
+    let r = Integration::new(r_installation)?;
     let python = crate::python::Runtime::new(selection)?;
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;
     let mut coordinator = Coordinator {
-        initialized: false,
         writer,
         r,
         python,
         sql,
     };
-    coordinator.run()
+    coordinator.run(bootstrap_runtimes)
 }
 
 #[cfg(target_os = "linux")]
@@ -81,12 +88,70 @@ fn reexec_with_r_library_path(
 }
 
 impl Coordinator {
-    fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
         loop {
-            if !self.handle(Self::wait_for_message(&self.r)?)? {
-                return Ok(());
+            r.idle()?;
+            let message = match core::next_command()? {
+                CommandReadiness::Ready(message) => Some(message),
+                CommandReadiness::Waiting => core::receive_idle_command()?,
+            };
+            // The relay signals interrupts before forwarding the next command,
+            // but their watcher may still be publishing native/Python state.
+            interrupt::finish_windows_publication().map_err(|error| error.to_string())?;
+            r.idle()?;
+            if let Some(message) = take_worker_failure() {
+                return Err(message);
+            }
+            if let Some(message) = message {
+                return Ok(message);
             }
         }
+    }
+
+    fn run(&mut self, bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+        if bootstrap_runtimes {
+            self.initialize_runtimes()?;
+        }
+        while !core::is_shutting_down() {
+            if !self.handle(Self::wait_for_message(&self.r)?)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn initialize_runtimes(&mut self) -> Result<(), Box<dyn Error>> {
+        // Ready connects callbacks before hooks run. Bootstrap uses the same
+        // serialized interpreter thread and never enters a user evaluation.
+        let languages = crate::cell::Languages::from_environment()?;
+        core::set_bootstrapping(true);
+        let complete = if languages.enables(Language::Python) {
+            crate::python::ensure_initialized().map_err(io::Error::other)?
+        } else {
+            true
+        };
+        if complete && languages.enables(Language::R) && super::r_available() {
+            super::ensure_r().map_err(io::Error::other)?;
+        }
+        if complete && languages.enables(Language::Sql) && !core::bootstrap_interrupted() {
+            self.sql.initialize().map_err(io::Error::other)?;
+        }
+        self.r.finish_graphics().map_err(io::Error::other)?;
+        // Acknowledge late signals before publishing the bootstrap receipt.
+        let interrupted =
+            interrupt::acknowledge_python_interrupt() || core::bootstrap_interrupted();
+        core::set_bootstrapping(false);
+        finish_console_stdin_operation()?;
+        if core::is_shutting_down() {
+            return Ok(());
+        }
+        if let Some(message) = take_worker_failure() {
+            return Err(io::Error::other(message).into());
+        }
+        self.writer
+            .send(&WorkerMessage::RuntimeInitialized { interrupted })?;
+        Ok(())
     }
 
     fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {
@@ -104,39 +169,7 @@ impl Coordinator {
         }
 
         match message {
-            ServerMessage::Initialize => {
-                if self.initialized {
-                    return Err(io::Error::other("runtime initialization already completed").into());
-                }
-                // Startup owns graphics and managed input without a user cell.
-                // R opens this scope before loading its default packages.
-                let result = (|| {
-                    if crate::worker::r_available() {
-                        super::r_integration::ensure_initialized()?;
-                    }
-                    self.python.initialize()?;
-                    if crate::worker::r_available() && crate::python::bridge_available()? {
-                        super::r_integration::ensure_bridge()?;
-                    }
-                    self.sql.initialize()?;
-                    Ok::<(), String>(())
-                })();
-                self.r.finish_graphics()?;
-                finish_console_stdin_operation()?;
-                if core::is_shutting_down() {
-                    return Ok(false);
-                }
-                result.map_err(io::Error::other)?;
-                if let Some(message) = take_worker_failure() {
-                    return Err(io::Error::other(message).into());
-                }
-                self.initialized = true;
-                self.writer.send(&WorkerMessage::Initialized)?;
-            }
             ServerMessage::Evaluate { language, source } => {
-                if !self.initialized {
-                    return Err(io::Error::other("runtime initialization has not completed").into());
-                }
                 self.r.check_interrupts();
                 let result = evaluate_cell(
                     Cell { language, source },
@@ -212,6 +245,7 @@ impl Coordinator {
         Ok(true)
     }
 
+    #[cfg(unix)]
     fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
         loop {
             let sideband_fd = match core::next_command()? {
@@ -256,6 +290,8 @@ fn evaluate_cell(
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {
+        // Runtime startup belongs to this cell too. A late R startup begins
+        // graphics when it installs its runtime, before loading packages.
         core::begin_cell(cell.language);
         // Python can enter R and create plots too. SQL retains its exclusion.
         let graphics = !matches!(cell.language, Language::Sql);
@@ -283,6 +319,6 @@ fn evaluate_cell(
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/fixtures/native_worker.rs"]
 mod tests;

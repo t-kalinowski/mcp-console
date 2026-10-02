@@ -22,6 +22,48 @@ from support.requirements import PROCESS_EVENTS
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class RCacheTests(unittest.TestCase):
+    def test_restored_libraries_retain_only_complete_package_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary)
+            packages = cache / "renv"
+            packages.mkdir()
+            package = packages / "jsonlite"
+            package.mkdir()
+            libraries = cache / "ir/libraries"
+            complete = libraries / "complete"
+            incomplete = libraries / "incomplete"
+            for library in (complete, incomplete):
+                library.mkdir(parents=True)
+                (library / "jsonlite").symlink_to(package, target_is_directory=True)
+            (incomplete / "duckdb").symlink_to(packages / "missing")
+            markers = cache / "ir/resolutions"
+            markers.mkdir()
+            (markers / "candidate").write_text(str(incomplete))
+
+            result = subprocess.run(
+                [sys.executable, ROOT / "scripts/prune-r-cache", cache],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("incomplete", result.stdout)
+            self.assertTrue((complete / "jsonlite").is_dir())
+            self.assertFalse(incomplete.exists())
+            self.assertTrue(package.is_dir())
+            self.assertTrue((markers / "candidate").is_file())
+
+    def test_empty_cache_needs_no_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                [sys.executable, ROOT / "scripts/prune-r-cache", temporary],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

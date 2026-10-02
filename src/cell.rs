@@ -12,3 +12,77 @@ pub(crate) struct Cell {
     pub(crate) language: Language,
     pub(crate) source: String,
 }
+
+// Internal eval configuration; intentionally not exposed through the CLI.
+pub(crate) const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
+
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Languages {
+    pub(crate) r: bool,
+    pub(crate) python: bool,
+    pub(crate) sql: bool,
+}
+
+impl Languages {
+    pub(crate) fn from_environment() -> Result<Self, String> {
+        let Some(value) = std::env::var_os(LANGUAGES_ENV) else {
+            return Ok(Self::all());
+        };
+        let value = value
+            .into_string()
+            .map_err(|_| Self::invalid_configuration())?;
+        let mut languages = Self::default();
+        for language in value.split(',') {
+            match language {
+                "r" => languages.r = true,
+                "python" => languages.python = true,
+                "sql" if !cfg!(windows) => languages.sql = true,
+                _ => return Err(Self::invalid_configuration()),
+            }
+        }
+        Ok(languages)
+    }
+
+    pub(crate) fn all() -> Self {
+        Self {
+            r: true,
+            python: true,
+            sql: !cfg!(windows),
+        }
+    }
+
+    pub(crate) fn configure(self, command: &mut std::process::Command) {
+        let fields = [Language::R, Language::Python, Language::Sql]
+            .into_iter()
+            .filter(|language| self.enables(*language))
+            .map(Self::field)
+            .collect::<Vec<_>>();
+        command.env(LANGUAGES_ENV, fields.join(","));
+    }
+
+    pub(crate) fn enables(self, language: crate::cell::Language) -> bool {
+        match language {
+            crate::cell::Language::R => self.r,
+            crate::cell::Language::Python => self.python,
+            crate::cell::Language::Sql => self.sql,
+        }
+    }
+
+    pub(crate) fn field(language: crate::cell::Language) -> &'static str {
+        match language {
+            crate::cell::Language::R => "r",
+            crate::cell::Language::Python => "python",
+            crate::cell::Language::Sql => "sql",
+        }
+    }
+
+    fn invalid_configuration() -> String {
+        let available = if cfg!(windows) {
+            "`r` and `python`"
+        } else {
+            "`r`, `python`, and `sql`"
+        };
+        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of {available}")
+    }
+}

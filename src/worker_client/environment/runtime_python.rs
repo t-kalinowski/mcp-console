@@ -53,7 +53,7 @@ impl Client {
                     .to_string(),
             );
         }
-        if (initialized || self.python_only()) && import_resolution.is_none() {
+        if (initialized || self.0.python_only) && import_resolution.is_none() {
             if self.requirement_change_state(&generation)?
                 == RequirementChangeState::RestartRequired
             {
@@ -207,9 +207,9 @@ impl Client {
         let mut environment = environment
             .lock()
             .map_err(|_| "worker environment lock poisoned".to_string())?;
-        // Preparation can replace the accepted declaration while this callback
-        // waits for the environment. Its launch manifest belongs to the retired
-        // generation, so never validate it against the replacement's manifest.
+        // A requirements replacement commits its environment before the old
+        // worker retires. Its delayed startup activation belongs to the old
+        // generation and must not be checked against the replacement manifest.
         let disposition = self.old_generation_commit_disposition(&generation)?;
         if disposition == OldGenerationCommitDisposition::DiscardForReplacement {
             return Ok(disposition);
@@ -230,6 +230,29 @@ impl Client {
             managed,
             configuration,
             duckdb_extensions,
+        )
+    }
+
+    pub(super) fn commit_runtime_python(
+        &self,
+        generation: WorkerGeneration,
+        managed: crate::resolver::ManagedPython,
+        configuration: crate::python::NativePython,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        let environment = self
+            .0
+            .environment
+            .as_ref()
+            .ok_or_else(|| "managed Python requirements are unavailable".to_string())?;
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        self.commit_locked_runtime_python(
+            &generation,
+            &mut environment,
+            managed,
+            Some(configuration),
+            None,
         )
     }
 

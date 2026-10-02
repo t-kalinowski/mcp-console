@@ -32,10 +32,12 @@ from support.resolvers import (
     write_python_executable,
     write_uv_python_inventories,
 )
+from support.requirements import R, requires
 from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_uses_current_r_library_for_managed_python_resolution(
     binary: Path,
     execution: Execution,
@@ -125,7 +127,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
             requirements={"r": ["praise"], "python": ["six"]},
         )
         assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         )
         assert Path(current_r_library()).is_dir()
         assert_resolver_ignored_r_library()
@@ -133,6 +135,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_validates_registry_only_python_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -154,6 +157,7 @@ def test_validates_registry_only_python_requirements(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
+        client.send(requirements={"action": "get"})
         uv_record.write_text("", encoding="utf-8")
 
         project = temporary / "project"
@@ -206,7 +210,10 @@ def test_validates_registry_only_python_requirements(
             control="restart",
             requirements={"python": [restarted]},
         )
-        assert last_result_text(client) == "[starting new worker]\n[worker starting]"
+        # Standalone preparation already retired the unused default worker.
+        assert last_result_text(client) == "[starting new worker]\n[idle]", (
+            client.transcript[-1]
+        )
 
         # fmt: r
         r = code(rf"""
@@ -403,6 +410,7 @@ exit 97
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_recovers_from_python_version_resolution_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -445,6 +453,7 @@ def test_recovers_from_python_version_resolution_failure(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_resolves_python_version_inventory_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -478,6 +487,7 @@ def test_resolves_python_version_inventory_semantics(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_resolves_python_version_constraint_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -525,6 +535,7 @@ def test_resolves_python_version_constraint_semantics(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_falls_back_after_filtering_unsupported_python_versions(
     binary: Path,
     execution: Execution,
@@ -571,6 +582,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_respects_system_python_preference_with_custom_install_directory(
     binary: Path,
     execution: Execution,
@@ -624,6 +636,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_uses_reticulate_managed_uv_for_python_resolution(
     binary: Path,
     execution: Execution,
@@ -713,7 +726,10 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
+        client.send(
+            requirements={"r": ["DBI"]},
+            timeout_ms=int(client.response_timeout * 1_000),
+        )
         assert last_result_text(client) == "[prepared]"
         uv_record.write_text("", encoding="utf-8")
         resolver_record.write_text("", encoding="utf-8")
@@ -753,6 +769,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_retains_managed_python_when_uv_caching_is_disabled(
     binary: Path,
     execution: Execution,
@@ -790,6 +807,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_removes_disabled_uv_python_source_aliases(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -820,6 +838,7 @@ def test_removes_disabled_uv_python_source_aliases(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_interrupts_python_cache_warmup_without_committing(
     binary: Path,
     execution: Execution,
@@ -928,7 +947,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         assert interrupt_result.get("isError") is not True, interrupt_result
 
         client.send()
-        assert last_result_text(client) == "\n[idle]"
+        assert last_result_text(client) == "\n[idle]", client.transcript[-1]
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
@@ -936,6 +955,7 @@ def test_interrupts_python_cache_warmup_without_committing(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_stops_before_cache_warmup_after_python_resolver_interrupt(
     binary: Path,
     execution: Execution,
@@ -1047,7 +1067,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
         )
 
         client.send()
-        assert last_result_text(client) == "\n[idle]"
+        assert last_result_text(client) == "\n[idle]", client.transcript[-1]
         block_tool_run.unlink()
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"

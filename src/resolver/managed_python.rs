@@ -4,6 +4,8 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
+use super::ManagedPython;
+
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
     resolver_command,
@@ -16,13 +18,6 @@ with open(sys.argv[-1], "w", encoding="utf-8") as stream:
     stream.write(sys.executable)
 "#;
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ManagedPython {
-    python: PathBuf,
-    requirements: crate::worker_protocol::PythonRequirementManifest,
-}
-
 #[derive(Serialize)]
 struct ResolverInput<'a> {
     python: &'a str,
@@ -31,33 +26,6 @@ struct ResolverInput<'a> {
     python_version: Vec<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exclude_newer: Option<&'a str>,
-}
-
-impl ManagedPython {
-    pub(crate) fn configure_worker(&self, command: &mut Command) {
-        command.env("RETICULATE_PYTHON", "managed");
-        command.env(
-            "MCP_CONSOLE_MANAGED_PYTHON",
-            serde_json::to_string(&self.requirements)
-                .expect("managed Python requirements should serialize as JSON"),
-        );
-    }
-
-    pub(crate) fn python(&self) -> &Path {
-        &self.python
-    }
-
-    pub(crate) fn requirements(&self) -> &crate::worker_protocol::PythonRequirementManifest {
-        &self.requirements
-    }
-
-    pub(crate) fn with_retained_requirements(
-        mut self,
-        requirements: crate::worker_protocol::PythonRequirementManifest,
-    ) -> Self {
-        self.requirements = requirements;
-        self
-    }
 }
 
 #[cfg(test)]

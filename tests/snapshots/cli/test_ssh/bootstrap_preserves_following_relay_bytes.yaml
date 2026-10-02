@@ -1,7 +1,8 @@
 ---
 kind: ready
 ---
-kind: initialized
+kind: runtime_initialized
+interrupted: false
 ---
 kind: console_output
 data: |

@@ -59,9 +59,7 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
             )
             try:
                 with McpClient(binary, ("serve",), environment, local) as client:
-                    checkpoint.wait(
-                        "remote R probe is gated before protocol initialization"
-                    )
+                    checkpoint.wait("remote R probe is gated before MCP readiness")
                     pid = state.read_text().strip()
                     # The test owns sshd; its remote worker is not a descendant
                     # of the local MCP client or the shared SSH connection.
@@ -107,11 +105,7 @@ def test_unavailable_remote_command(binary: Path) -> Transcript:
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
-                client.initialize_and_list_tools()
-                client.send(r="42")
-                assert client.transcript[-1]["result"]["isError"]
-                result = last_result_text(client)
-                client.request("ping")
+                client.startup_error()
                 client.stdin.close()
                 client.stdout.read(timeout=12)
                 errors = client.stderr.read(timeout=12)
@@ -119,7 +113,7 @@ def test_unavailable_remote_command(binary: Path) -> Transcript:
                 assert "/console-test-unavailable" in errors, errors
                 # Shell diagnostic spelling varies with the remote account's
                 # configured shell. The original diagnostic must reach stderr.
-                assert "SSH preparation retirement is unconfirmed" in result, result
+                assert "SSH preparation retirement is unconfirmed" in errors, errors
                 return [{"mcp_ready": True, "remote_shell_diagnostic_retained": True}]
 
 

@@ -41,7 +41,10 @@ impl OutputTape {
         &self,
         transcript: crate::transcript::Transcript,
     ) {
-        self.lock().session_recording = Some(transcript);
+        let mut state = self.lock();
+        if state.session_output.is_none() && state.session_recording.is_none() {
+            state.session_recording = Some(transcript);
+        }
     }
 
     pub(in crate::worker_client) fn finish_session_output(&self) {

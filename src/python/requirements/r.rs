@@ -100,7 +100,7 @@ pub(super) struct Projection {
 pub(super) fn project_packages(
     selected: &crate::python::NativePython,
     packages: &[String],
-    inspected: &serde_json::Value,
+    inspected: Option<&serde_json::Value>,
 ) -> Result<Option<Projection>, String> {
     let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
         return Ok(None);
@@ -121,9 +121,11 @@ pub(super) fn project_packages(
 }
 
 impl Projection {
-    pub(super) fn commit(self, environment: &serde_json::Value) -> Result<(), String> {
-        let environment = harp::exec::r_sandbox(|| Value(RObject::from(environment.to_string())))
-            .map_err(|error| error.to_string())?;
+    pub(super) fn commit(self, environment: Option<&serde_json::Value>) -> Result<(), String> {
+        let environment = harp::exec::r_sandbox(|| {
+            environment.map_or_else(Value::null, |value| Value(RObject::from(value.to_string())))
+        })
+        .map_err(|error| error.to_string())?;
         Adapter(self.adapter.sexp)
             .call("commit_import", &[&self.value, &environment])
             .map(|_| ())
@@ -298,7 +300,11 @@ fn get_char_encoding() -> harp::Result<GetCharEncoding> {
     if let Some(function) = GET_CHAR_ENCODING.get() {
         return Ok(*function);
     }
+    #[cfg(unix)]
     let library = libloading::os::unix::Library::this();
+    #[cfg(windows)]
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")
+        .map_err(|error| harp::anyhow!("failed to load R.dll: {error}"))?;
     let function = unsafe {
         *library
             .get::<GetCharEncoding>(b"Rf_getCharCE\0")

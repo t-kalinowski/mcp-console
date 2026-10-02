@@ -5,54 +5,17 @@ import os
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from contextlib import closing
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient
-from support.checkpoints import FifoCheckpoint
-from support.processes import process_exists, stop_process_id
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, R, SANDBOX, requires
 from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
 from support.suites import run_this_suite
-
-
-@requires(SANDBOX, NATIVE_FIXTURES, R)
-def test_protocol_and_eof_during_configured_native_launch(binary: Path) -> list:
-    with TemporaryDirectory() as directory:
-        root = Path(directory)
-        config = root / ".agents/console/config.yaml"
-        config.parent.mkdir(parents=True)
-        config.write_text("extends: ':workspace'\n")
-        environment = {
-            **os.environ,
-            LOADER_VARIABLE: str(build_interposer(root, "runner_configuration")),
-            "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(root / "payloads"),
-            "MCP_CONSOLE_TEST_RUNNER_STARTED": str(root / "started"),
-            "MCP_CONSOLE_TEST_RUNNER_RELEASE": str(root / "release"),
-            "MCP_CONSOLE_TEST_RUNNER_PID": str(root / "pid"),
-        }
-        with (
-            closing(FifoCheckpoint.create(root / "started")) as started,
-            closing(FifoCheckpoint.create(root / "release")),
-            McpClient(
-                binary, ("serve",), environment, root, response_timeout=3
-            ) as client,
-        ):
-            started.wait("configured native launch before runner exec")
-            pid = int((root / "pid").read_text())
-            try:
-                client.initialize_and_list_tools()
-                client.request("ping")
-                records = client.finish()
-                assert not process_exists(pid), "native launch survived MCP EOF"
-                return records[3:]
-            finally:
-                stop_process_id(pid)
 
 
 def _snapshot_survives_replacement(
@@ -134,6 +97,9 @@ def _snapshot_survives_replacement(
             binary, ("serve", "--writable-root", "CLI cache"), environment, host
         ) as client:
             client.initialize_and_list_tools()
+            # Configured startup probes the native sandbox without starting a worker.
+            preflights = capture.read_text().splitlines() if capture.exists() else []
+            assert len(preflights) == int(configured), preflights
             # Even the first worker uses the snapshot taken before MCP readiness.
             config.write_text("sandbox: {network: enabled}\n", encoding="utf-8")
             client.send(python=exercise)
@@ -155,7 +121,7 @@ def _snapshot_survives_replacement(
             )
             assert (
                 last_tool_text(client)
-                == "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+                == "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             ), last_tool_text(client)
             client.send(python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
@@ -164,7 +130,7 @@ def _snapshot_survives_replacement(
             transcript = client.finish()
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(payloads) == 4, len(payloads)
+        assert len(payloads) == 4 + len(preflights), len(payloads)
         assert all(payload == payloads[0] for payload in payloads), payloads
         payload = payloads[0]
         assert payload["network"] == "restricted"
@@ -188,7 +154,8 @@ def _snapshot_survives_replacement(
                 "settings.yaml": [
                     {
                         "initially_configured": configured,
-                        "identical_worker_launches": len(payloads),
+                        "validation_launches": len(preflights),
+                        "identical_worker_launches": len(payloads) - len(preflights),
                         "writable_roots": expected_roots,
                         "network": payload["network"],
                         "proxy": payload.get("proxy"),

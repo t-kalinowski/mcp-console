@@ -3,11 +3,11 @@ send:
   python: |
     import os
     from pathlib import Path
+
     hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
     hooks.mkdir(exist_ok=True)
-    _ = (hooks / "sitecustomize.py").write_text(
-        "import builtins\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\n"
-    )
+    _ = (hooks / "sitecustomize.py").write_text('import builtins\nimport sys\nfrom pathlib import Path\n\nif sys.argv[0] == "" and "_mcp_console_services" in sys.modules:\n    if not getattr(builtins, "peer_bootstrap_interrupted", False) and Path(__file__).with_suffix(".defer").exists():\n        Path(__file__).with_suffix(".defer").unlink()\n        builtins.peer_bootstrap_interrupted = True\n        input("defer R startup> ")\n    builtins.peer_startups = getattr(builtins, "peer_startups", 0) + 1\n')
+    (hooks / "sitecustomize.defer").touch()
 result:
   content:
     - type: text
@@ -22,7 +22,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [worker starting]
+        [idle]
   isError: false
 ---
 send:
@@ -41,7 +41,7 @@ send:
         except ValueError:
             return False
 
-    assert r_initialized(), "R did not initialize before Python"
+    assert not r_initialized(), "R initialized before Python demand"
     assert builtins.peer_startups == 1
     persistent = object()
     connection = sqlite3.connect(":memory:")
@@ -51,7 +51,7 @@ send:
     np.set_printoptions(linewidth=73)
     before = (id(persistent), id(connection), sys.executable, sys.prefix,
               os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])
-    print("Both peer runtimes initialized")
+    print("Python live; R absent")
     original_streams = (sys.stdout, sys.stderr)
     redirected_stdout = io.StringIO()
     redirected_stderr = io.StringIO()
@@ -60,7 +60,7 @@ result:
   content:
     - type: text
       text: |
-        Both peer runtimes initialized
+        Python live; R absent
   isError: false
 ---
 send:
@@ -129,11 +129,11 @@ send:
   python: |
     import os
     from pathlib import Path
+
     hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
     hooks.mkdir(exist_ok=True)
-    _ = (hooks / "sitecustomize.py").write_text(
-        "import builtins\nbuiltins.peer_startups = getattr(builtins, 'peer_startups', 0) + 1\n"
-    )
+    _ = (hooks / "sitecustomize.py").write_text('import builtins\nimport sys\nfrom pathlib import Path\n\nif sys.argv[0] == "" and "_mcp_console_services" in sys.modules:\n    if not getattr(builtins, "peer_bootstrap_interrupted", False) and Path(__file__).with_suffix(".defer").exists():\n        Path(__file__).with_suffix(".defer").unlink()\n        builtins.peer_bootstrap_interrupted = True\n        input("defer R startup> ")\n    builtins.peer_startups = getattr(builtins, "peer_startups", 0) + 1\n')
+    (hooks / "sitecustomize.defer").touch()
 result:
   content:
     - type: text
@@ -148,7 +148,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [worker starting]
+        [idle]
   isError: false
 ---
 send:
@@ -167,7 +167,7 @@ send:
         except ValueError:
             return False
 
-    assert r_initialized(), "R did not initialize before Python"
+    assert not r_initialized(), "R initialized before Python demand"
     assert builtins.peer_startups == 1
     persistent = object()
     connection = sqlite3.connect(":memory:")
@@ -177,7 +177,7 @@ send:
     np.set_printoptions(linewidth=73)
     before = (id(persistent), id(connection), sys.executable, sys.prefix,
               os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])
-    print("Both peer runtimes initialized")
+    print("Python live; R absent")
     original_streams = (sys.stdout, sys.stderr)
     redirected_stdout = io.StringIO()
     redirected_stderr = io.StringIO()
@@ -186,7 +186,7 @@ result:
   content:
     - type: text
       text: |
-        Both peer runtimes initialized
+        Python live; R absent
   isError: false
 ---
 send:

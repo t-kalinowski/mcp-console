@@ -15,16 +15,6 @@ This document is an append-only chronological record of MCP Console events.
 }
 ```
 
-## Runtime discovery
-
-```json
-{
-  "dynamic_resolution": true,
-  "python_preparation": false,
-  "target": null
-}
-```
-
 ## Call 1: R
 
 ```r

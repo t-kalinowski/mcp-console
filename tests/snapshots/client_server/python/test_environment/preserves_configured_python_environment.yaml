@@ -2,13 +2,24 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        Error: explicit Python executable is not on PATH
+
+        [idle]
+  isError: false
+---
+send:
   r: |
     external_python_worker <- Sys.getpid()
     external_python_state <- 42L
     stopifnot(
       identical(
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
-        Sys.getenv("EXPECTED_PYTHON_SELECTION")
+        "configured-by-user"
       )
     )
     "configured-by-user"
@@ -91,7 +102,7 @@ send:
       !exists("external_python_combined_side_effect", inherits = FALSE),
       identical(
         Sys.getenv("RETICULATE_PYTHON", unset = NA_character_),
-        Sys.getenv("EXPECTED_PYTHON_SELECTION")
+        "configured-by-user"
       )
     )
     42L

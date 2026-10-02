@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from contextlib import closing
@@ -19,13 +20,192 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
-from support.r import r_test_environment
+from support.r import install_r_startup, r_test_environment
 from support.requirements import SANDBOX, WORKER, requires
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(SSH, WORKER)
+def test_controller_languages_override_remote_ambient_selection(
+    binary: Path, execution: Execution
+) -> list:
+    check_ssh_optional_python_absence(binary, execution)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        local, remote = root / "controller", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        remote_environment, _ = r_test_environment()
+        modules = remote / "modules"
+        modules.mkdir()
+        hook = remote / "python-hook"
+        (modules / "sitecustomize.py").write_text(
+            # fmt: python
+            code(f"""
+                import sys
+                from pathlib import Path
+
+                if "_mcp_console_services" in sys.modules:
+                    Path({str(hook)!r}).touch()
+                """),
+        )
+        prefix = remote / "launch"
+        prefix.write_text(
+            "#!/bin/sh\nexec "
+            + shlex.join(
+                [
+                    "/usr/bin/env",
+                    "-i",
+                    "PATH=/usr/bin:/bin",
+                    "MCP_CONSOLE_LANGUAGES=invalid-remote-selection",
+                    "HOME=" + str(remote),
+                    "R_HOME=" + remote_environment["R_HOME"],
+                    str(binary),
+                ]
+            )
+            + ' "$@"\n'
+        )
+        prefix.chmod(0o755)
+        configure(
+            local,
+            remote,
+            [str(prefix)],
+            python=sys.executable,
+            sandbox={
+                "environment": {
+                    "R_HOME": remote_environment["R_HOME"],
+                    "RETICULATE_PYTHONPATH": str(modules),
+                    "R_LIBS": "/unavailable",
+                    "R_LIBS_USER": "/unavailable",
+                    "R_LIBS_SITE": "/unavailable",
+                }
+            },
+        )
+        with localhost(root / "sshd") as environment:
+            environment["MCP_CONSOLE_LANGUAGES"] = "r"
+            with McpClient(binary, execution.serve(), environment, local) as client:
+                client.initialize_and_list_tools()
+                properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                    "properties"
+                ]
+                assert (
+                    "r" in properties
+                    and "python" not in properties
+                    and "sql" not in properties
+                )
+                for arguments in ({}, {"control": "restart"}):
+                    client.send(
+                        r='stopifnot(Sys.getenv("MCP_CONSOLE_LANGUAGES") == "r"); 42L',
+                        **arguments,
+                    )
+                    expected = (
+                        "[worker stopped: in-memory state lost]\n[starting new worker]\n[1] 42\n[done]"
+                        if arguments
+                        else "[1] 42\n"
+                    )
+                    assert last_result_text(client) == expected, last_result_text(
+                        client
+                    )
+                    assert not hook.exists(), "disabled Python startup hook ran"
+                client.finish()
+        return [
+            {"controller_r_only_selection_survives_remote_ambient_and_restart": True}
+        ]
+
+
+def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> None:
+    # Exercise real absent-interpreter discovery through MCP, alongside the
+    # existing configured-language case, without changing its snapshot.
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        local, remote = root / "controller", root / "remote"
+        local.mkdir()
+        remote.mkdir()
+        environment, _ = r_test_environment()
+        library = install_r_startup(
+            root,
+            environment,
+            # fmt: r
+            code("""
+                stopifnot(requireNamespace("reticulate", quietly = TRUE))
+                startup_value <- 41L
+                readline("R before Python discovery> ")
+                """),
+        )
+        commands, home = remote / "commands", remote / "home"
+        commands.mkdir()
+        home.mkdir()
+        (commands / "sh").symlink_to(shutil.which("sh"))
+        if sys.platform == "linux" and execution == SANDBOXED:
+            (commands / "bwrap").symlink_to(shutil.which("bwrap"))
+        workload = {
+            "R_HOME": environment["R_HOME"],
+            "PATH": str(commands),
+            "HOME": str(home),
+            "R_LIBS": str(library),
+            "R_LIBS_USER": str(library),
+            "R_LIBS_SITE": str(library),
+            "R_DEFAULT_PACKAGES": environment["R_DEFAULT_PACKAGES"],
+            "MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT": environment[
+                "MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT"
+            ],
+            "RETICULATE_USE_MANAGED_VENV": "false",
+        }
+        prefix = remote / "launch"
+        prefix.write_text(
+            "#!/bin/sh\nexec "
+            + shlex.join(
+                [
+                    "/usr/bin/env",
+                    "-i",
+                    *[f"{key}={value}" for key, value in workload.items()],
+                    str(binary),
+                ]
+            )
+            + ' "$@"\n'
+        )
+        prefix.chmod(0o755)
+        configure(local, remote, [str(prefix)], sandbox={"environment": workload})
+        with localhost(root / "sshd") as controller:
+            controller["MCP_CONSOLE_LANGUAGES"] = "r,python"
+            with McpClient(binary, execution.serve(), controller, local) as client:
+                client.initialize_and_list_tools()
+                properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                    "properties"
+                ]
+                assert {"r", "python"} <= properties.keys(), properties
+                wait_for_evaluation_output(
+                    client,
+                    '[input requested: "R before Python discovery> "]\n[waiting for stdin]',
+                    "R startup before unresolved Python selection",
+                    r="startup_value + 1L",
+                    timeout_ms=0,
+                )
+                wait_for_evaluation_output(
+                    client,
+                    "[1] 42\n",
+                    "R cell after Python absence",
+                    stdin="continue\n",
+                )
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(!reticulate::py_available(initialize = FALSE))
+                        missing <- tryCatch(reticulate::py_config(), error = conditionMessage)
+                        stopifnot(
+                          is.character(missing),
+                          grepl("Installation of Python not found", missing, fixed = TRUE)
+                        )
+                        startup_value + 1L
+                        """),
+                )
+                assert last_result_text(client) == "[1] 42\n", last_result_text(client)
+                client.finish()
 
 
 def _preinstalled_remote_runtime(
@@ -113,7 +293,7 @@ def _preinstalled_remote_runtime(
                 send = client.transcript[-1]["result"]["tools"][0]
                 assert send["inputSchema"]["properties"]["requirements"]["properties"][
                     "action"
-                ]["enum"] == ["get"], send
+                ]["enum"] == ["get", "add", "set", "reset"], send
                 assert "console-test" in send["description"], send
                 client.send(
                     # fmt: r
@@ -315,6 +495,7 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
                 "auth": "unconfirmed",
                 "stdout": "unexpected stdout",
                 "incompatible": "incompatible SSH bootstrap",
+                "prior-bootstrap-protocol": "expected protocol 10",
                 "lost": "unconfirmed",
                 "resolver": "dynamic environment resolution is unavailable",
             }[mode]
@@ -347,6 +528,12 @@ def test_unexpected_stdout(binary: Path) -> Transcript:
 
 def test_incompatible_remote_build(binary: Path) -> Transcript:
     return _peer(binary, "incompatible")
+
+
+def test_rejects_remote_without_interpreter_bootstrap_protocol(
+    binary: Path,
+) -> Transcript:
+    return _peer(binary, "prior-bootstrap-protocol")
 
 
 def test_authentication_failure(binary: Path) -> Transcript:

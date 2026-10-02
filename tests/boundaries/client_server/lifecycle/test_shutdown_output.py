@@ -2,15 +2,19 @@
 
 import os
 import sys
+import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
+from support.allocations import AllocationProfile
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 from boundaries.client_server._harness import ZodFixtureControl
@@ -89,30 +93,55 @@ def test_eof_preserves_output_after_cell_completion(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES)
 def test_eof_preserves_first_send_response(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    try:
-        client.initialize_and_list_tools()
-        waiting = client.start_send(r="1", python="1")
-        client.stdin.close()
-        assert client.process.wait(timeout=3) == 0, client.stderr.read()
-        client.receive(waiting)
-        assert waiting["result"] == {
-            "content": [
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        with (
+            closing(FifoCheckpoint.create(root / "result-reached")) as reached,
+            closing(FifoCheckpoint.create(root / "result-release")) as release,
+            closing(AllocationProfile(root)) as profile,
+            McpClient(
+                binary,
+                execution.serve("--worker", str(zod)),
                 {
-                    "type": "text",
-                    "text": "only one of `r`, `python`, or `sql` may be supplied",
-                }
-            ],
-            "isError": True,
-        }, waiting
-        assert client.stdout.read() == ""
-        assert client.stderr.read() == ""
-        return client.transcript
-    finally:
-        stop_client(client)
+                    **os.environ,
+                    **profile.environment,
+                    "MCP_CONSOLE_TEST_RESULT_REACHED": str(reached.path),
+                    "MCP_CONSOLE_TEST_RESULT_RELEASE": str(release.path),
+                },
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            profile.pause_results(True)
+            try:
+                waiting = client.start_send(r="1", python="1")
+                # Hold the accepted result before it enters the response queue.
+                # Writing stdin alone does not establish acceptance before EOF.
+                reached.wait("first send owns response delivery", timeout=30)
+                client.stdin.close()
+            finally:
+                profile.pause_results(False)
+                release.release()
+            assert client.process.wait(timeout=client.shutdown_timeout) == 0, (
+                client.stderr.read()
+            )
+            client.receive(waiting)
+            assert waiting["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "only one of `r`, `python`, or `sql` may be supplied",
+                    }
+                ],
+                "isError": True,
+            }, waiting
+            assert client.stdout.read() == ""
+            assert client.stderr.read() == ""
+            return client.transcript
 
 
 if __name__ == "__main__":

@@ -1,4 +1,13 @@
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
 send:
   requirements:
     r:

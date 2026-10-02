@@ -1,16 +1,5 @@
 ---
 send:
-  sql: SET autoinstall_known_extensions = false
-result:
-  content:
-    - type: text
-      text: |
-        Success
-        -------
-        [0 rows]
-  isError: false
----
-send:
   requirements:
     action: get
 result:
@@ -52,6 +41,17 @@ result:
     runtime_requirements:
       r: []
       python: []
+  isError: false
+---
+send:
+  sql: SET autoinstall_known_extensions = false
+result:
+  content:
+    - type: text
+      text: |
+        Success
+        -------
+        [0 rows]
   isError: false
 ---
 send:

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from support.records import Transcript
 from support.r import r_test_environment
 from support.requirements import SANDBOX, WORKER, requires
-from support.ssh import CONFIG, bootstrap, r_worker_environment, read_frame
+from support.ssh import CONFIG, bootstrap, read_frame
 from support.suites import run_this_suite
 
 
@@ -83,7 +83,6 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
         payload = bootstrap(
             binary,
             root,
-            environment=r_worker_environment(environment["R_HOME"]),
             policy={
                 "environment": {
                     "R_HOME": environment["R_HOME"],
@@ -104,20 +103,19 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
         )
         assert process.stdin is not None and process.stdout is not None
         try:
-            # One OS write includes bootstrap and the built-in startup/evaluation
-            # commands. The framing boundary must preserve every following byte.
-            coalesced = (
-                payload
-                + b'{"kind":"initialize"}\n'
-                + json.dumps(evaluate).encode()
-                + b"\n"
+            # One OS write includes bootstrap plus the first relay command.
+            assert (
+                os.write(
+                    process.stdin.fileno(),
+                    payload + json.dumps(evaluate).encode() + b"\n",
+                )
+                == len(payload) + len(json.dumps(evaluate).encode()) + 1
             )
-            assert os.write(process.stdin.fileno(), coalesced) == len(coalesced)
             data = bytearray()
             while b'"completed"' not in data:
                 tag, body = read_frame(process.stdout)
                 if tag == 1:
-                    assert json.loads(body)["version"] == 8
+                    assert json.loads(body)["version"] == 10
                 else:
                     assert tag == 2, (tag, body)
                     data.extend(body)
@@ -155,21 +153,6 @@ def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
             (root, {"version": 3}, "incompatible SSH bootstrap"),
             (root, {"version": 999}, "incompatible SSH bootstrap"),
             (root, {"build": "incompatible-build"}, "incompatible SSH bootstrap"),
-            (root, {}, "SSH worker launch requires a complete runtime environment"),
-            (
-                root,
-                {
-                    "environment": {
-                        "discovery": {
-                            "managed": False,
-                            "selections": {"r_home": "/unused-r", "python": None},
-                        },
-                        "r": None,
-                        "python": None,
-                    }
-                },
-                "worker bootstrap has no complete runtime selection",
-            ),
             (
                 root,
                 {

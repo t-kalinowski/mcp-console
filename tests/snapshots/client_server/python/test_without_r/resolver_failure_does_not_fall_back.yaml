@@ -1,14 +1,4 @@
 ---
-send:
-  python: raise AssertionError('fallback interpreter ran')
-result:
-  content:
-    - type: text
-      text: >-
-        [managed Python version resolution failed with exit status: 47: fixture
-        uv resolution failed]
-  isError: true
----
-input:
-  method: ping
-result: {}
+error: >-
+  managed Python version resolution failed with exit status: 47: fixture
+  uv resolution failed

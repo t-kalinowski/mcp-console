@@ -10,26 +10,15 @@ result:
         [worker sideband read failed: worker sideband closed]
         [worker exited with status 47]
         [worker stopped: in-memory state lost]
-  isError: true
----
-send:
-  python: raise AssertionError('failure was not retained')
-result:
-  content:
-    - type: text
-      text: >-
-        [runtime initialization failed: worker sideband read failed: worker
-        sideband closed; restart required]
-  isError: true
----
-send:
-  control: restart
-  python: print('replacement initialized')
-result:
-  content:
-    - type: text
-      text: |-
         [starting new worker]
-        replacement initialized
-        [done]
+        [idle]
+  isError: true
+---
+send:
+  python: print('replacement initializes on demand')
+result:
+  content:
+    - type: text
+      text: |
+        replacement initializes on demand
   isError: false

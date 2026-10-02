@@ -59,8 +59,8 @@ result:
       text: |
         Traceback (most recent call last):
           File "<string>", line 128, in _activate
-          File "<string>", line 670, in _mcp_console_raise_setup_error
-          File "<string>", line 683, in _mcp_console_activate_environment
+          File "<string>", line 743, in _mcp_console_raise_setup_error
+          File "<string>", line 756, in _mcp_console_activate_environment
           File "<frozen runpy>", line 287, in run_path
           File "<frozen runpy>", line 98, in _run_module_code
           File "<frozen runpy>", line 88, in _run_code
@@ -151,7 +151,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [worker starting]
+        [idle]
   isError: false
 ---
 send:

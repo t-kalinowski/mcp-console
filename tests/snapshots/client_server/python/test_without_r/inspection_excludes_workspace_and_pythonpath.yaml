@@ -2,9 +2,41 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  python: >-
-    import ctypes, sitecustomize; assert sitecustomize.worker_module_value
-    == 42; ctypes.worker_module_value
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  python: 41 + 1
 result:
   content:
     - type: text

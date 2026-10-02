@@ -1,8 +1,13 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
-  r: stopifnot(startup_checks_complete)
+  r: |
+    reticulate::py_require(
+      "numpy",
+      python_version = ">=3.10, <4",
+      action = "set"
+    )
+    before <- reticulate::py_require()
+    stopifnot(!reticulate::py_available(initialize = FALSE))
 result:
   content:
     - type: text
@@ -20,7 +25,7 @@ result:
         managed Python resolution failed:
         resolver input:
         {
-          "python": "/Users/tomasz/.cache/uv/archive-v0/8aeCk06DzmRHb66F/bin/python",
+          "python": "<4, >=3.10",
           "packages": [
             "numpy",
             "py-yaml12"
@@ -38,7 +43,7 @@ send:
   r: |
     stopifnot(
       identical(reticulate::py_require(), before),
-      reticulate::py_available(initialize = FALSE)
+      !reticulate::py_available(initialize = FALSE)
     )
 result:
   content:
@@ -47,7 +52,7 @@ result:
   isError: false
 ---
 send:
-  python: None
+  r: invisible(reticulate::py_config())
 result:
   content:
     - type: text

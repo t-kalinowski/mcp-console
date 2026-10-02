@@ -16,7 +16,7 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
-def test_probes_ambient_reticulate_before_background_bootstrap(
+def test_probes_ambient_reticulate_before_first_use_bootstrap(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -54,6 +54,11 @@ def test_probes_ambient_reticulate_before_background_bootstrap(
             client.initialize_and_list_tools()
             tools = client.transcript[-1]["result"]["tools"]
             assert "requirements" in tools[0]["inputSchema"]["properties"], tools
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
+            eager_calls = ["namespace:--probe", "namespace:", "uv_binary"]
+            assert record.read_text(encoding="utf-8").splitlines() == eager_calls
+
             result = client.send(r='stop("cell must not run")')
             assert result.get("isError") is True, result
             content = result["content"]
@@ -61,9 +66,17 @@ def test_probes_ambient_reticulate_before_background_bootstrap(
             output = content[0]["text"]
             assert "fixture ambient reticulate bootstrap failed" in output, output
             assert "cell must not run" not in output, output
-            calls = record.read_text(encoding="utf-8").splitlines()
-            assert calls[0] == "namespace:--probe", calls
-            assert calls.count("uv_binary") == 1, calls
+            assert record.read_text(encoding="utf-8").splitlines() == eager_calls
+
+            retry = client.send(r='stop("retry cell must not run")')
+            assert retry.get("isError") is True, retry
+            assert "fixture ambient reticulate bootstrap failed" in str(retry), retry
+            assert "retry cell must not run" not in str(retry), retry
+            assert record.read_text(encoding="utf-8").splitlines() == [
+                *eager_calls,
+                "namespace:",
+                "uv_binary",
+            ]
 
             listed_again = client.request("tools/list")
             assert listed_again["result"]["tools"] == tools, listed_again

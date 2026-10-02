@@ -29,6 +29,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, SimpleQueue
+from traceback import TracebackException
 
 directory = Path(__file__).resolve().parent
 root = directory.parents[1]
@@ -79,8 +80,8 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=max(2, os.cpu_count() or 2),
-    help="number of transcript cases to run concurrently (default: at least 2)",
+    default=2 * max(2, os.cpu_count() or 2),
+    help="number of transcript cases to run concurrently (default: twice the CPU count, at least 4)",
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
@@ -123,7 +124,11 @@ from support.snapshots import (
     snapshot_path,
 )
 
-binary = root / "target" / "release" / "mcp-console"
+binary = Path(
+    os.environ.get(
+        "MCP_CONSOLE_TEST_BINARY", root / "target" / "release" / "mcp-console"
+    )
+).absolute()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path
@@ -134,7 +139,6 @@ SLOW_TEST_SECONDS = 60.0
 FREQUENT_STATUS_SECONDS = 120.0
 FREQUENT_STATUS_UNTIL_SECONDS = 600.0
 LATER_STATUS_SECONDS = 300.0
-FAILURE_SETTLE_SECONDS = 2.0
 
 
 RecordedTranscript = Transcript | TranscriptWithCompanions
@@ -347,7 +351,6 @@ class ProgressReporter:
         index: int,
         *,
         succeeded: bool,
-        count_progress: bool = True,
     ) -> None:
         running = self.running.pop(index)
         elapsed = time.monotonic() - running.started_at
@@ -356,7 +359,7 @@ class ProgressReporter:
                 self._line(
                     f"{running.selector}: finished in {format_duration(elapsed)}"
                 )
-            if count_progress and not self.update:
+            if not self.update:
                 self._dot()
         elif running.reported or elapsed >= SLOW_TEST_SECONDS:
             self._line(
@@ -452,8 +455,13 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
         owner = snapshot.parent / snapshot.name.split(".", 1)[0]
+        other_platform = bool(
+            ({"darwin", "linux"} - {sys.platform}) & set(snapshot.name.split(".")[1:])
+        )
         stale = snapshot in orphans or (
-            owner in checked_cases and snapshot not in checked_snapshots
+            owner in checked_cases
+            and snapshot not in checked_snapshots
+            and not other_platform
         )
 
         if stale:
@@ -473,6 +481,7 @@ def run_cases(
     update: bool,
     checked_snapshots: set[Path],
     reporter: ProgressReporter,
+    initialize_first: bool,
 ) -> None:
     if not selected:
         return
@@ -482,7 +491,9 @@ def run_cases(
     futures: dict[int, Future[set[Path]]] = {}
     active: dict[int, CaseProcess] = {}
     errors: list[BaseException] = []
-    abort_deadline: float | None = None
+    failed_selectors: list[str] = []
+    next_index = 0
+    stopped = False
     interrupted = False
     # SimpleQueue.put is reentrant: SIGINT can wake the loop without
     # interrupting submission or completion bookkeeping.
@@ -499,16 +510,12 @@ def run_cases(
             return KeyboardInterrupt()
         return RuntimeError(f"transcript runner received {number.name}")
 
-    def fail(error: BaseException) -> None:
-        nonlocal abort_deadline
-        errors.append(error)
-        if len(errors) == 1:
-            abort_deadline = time.monotonic() + FAILURE_SETTLE_SECONDS
-            for future in futures.values():
-                future.cancel()
-
-    try:
-        for index, (_, case_name, suite_path) in enumerate(selected):
+    def submit_ready() -> None:
+        nonlocal next_index
+        capacity = 1 if initialize_first else jobs
+        while not stopped and next_index < len(selected) and len(futures) < capacity:
+            index = next_index
+            _, case_name, suite_path = selected[index]
             future = executor.submit(
                 run_case_subprocess,
                 suite_path,
@@ -522,30 +529,28 @@ def run_cases(
             future.add_done_callback(
                 lambda _future, index=index: events.put((index, None, None))
             )
+            next_index += 1
 
-        pending = set(futures)
-        while pending:
+    try:
+        submit_ready()
+        while futures:
             try:
-                now = time.monotonic()
-                if abort_deadline is not None and now >= abort_deadline:
-                    interrupted = True
-                    abort_deadline = None
-                    for case in active.values():
-                        case.interrupt()
-
                 reporter.report_due()
                 deadlines = [
                     running.started_at + running.next_status_at
                     for running in reporter.running.values()
                 ]
-                if abort_deadline is not None:
-                    deadlines.append(abort_deadline)
                 wait_seconds = (
                     max(0.0, min(deadlines) - time.monotonic()) if deadlines else None
                 )
                 index, started_at, case = events.get(timeout=wait_seconds)
                 if index < 0:
-                    fail(interruption(index))
+                    errors.append(interruption(index))
+                    stopped = interrupted = True
+                    for future in futures.values():
+                        future.cancel()
+                    for active_case in active.values():
+                        active_case.interrupt()
                     continue
                 suite_name, case_name, _ = selected[index]
                 if started_at is not None:
@@ -556,9 +561,8 @@ def run_cases(
                         case.interrupt()
                     continue
 
-                future = futures[index]
+                future = futures.pop(index)
                 if future.cancelled():
-                    pending.remove(index)
                     continue
                 if not reporter.is_running(index):
                     # Process launch can fail before the start event is sent.
@@ -571,12 +575,24 @@ def run_cases(
                     reporter.cancel(index, str(cancelled))
                 except BaseException as error:
                     reporter.finish(index, succeeded=False)
-                    fail(error)
+                    errors.append(error)
+                    failed_selectors.append(f"{suite_name}::{case_name}")
+                    if not stopped and len(failed_selectors) * 100 > len(selected) * 15:
+                        stopped = True
+                        reporter.close()
+                        print(
+                            f"Stopping new cases: {len(failed_selectors)} of "
+                            f"{len(selected)} transcript cases failed (more than 15%); "
+                            "finishing running cases.",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                 else:
                     checked_snapshots.update(checked)
-                    reporter.finish(index, succeeded=True, count_progress=not errors)
-                pending.remove(index)
+                    reporter.finish(index, succeeded=True)
                 active.pop(index, None)
+                initialize_first = False
+                submit_ready()
             except Empty:
                 continue
     finally:
@@ -594,6 +610,15 @@ def run_cases(
         assert index < 0, index
         errors.append(interruption(index))
 
+    if failed_selectors:
+        reporter.close()
+        print(
+            f"{len(failed_selectors)} of {len(selected)} transcript cases failed; "
+            f"not started: {len(selected) - next_index}",
+            file=sys.stderr,
+        )
+        for selector in failed_selectors:
+            print(f"  {selector}", file=sys.stderr)
     if len(errors) > 1:
         raise BaseExceptionGroup("multiple transcript cases failed", errors) from None
     if errors:
@@ -665,13 +690,14 @@ def main() -> None:
             sys.executable,
             [sys.executable, str(root / "checkout_workflow.py"), "test", *arguments],
         )
-    assert binary.is_file(), f"{binary.relative_to(root)} is missing; run scripts/test"
+    assert binary.is_file(), f"{binary} is missing; run scripts/test"
     checked_snapshots: set[Path] = set()
-    initialization: list[tuple[str, str, Path]] = []
+    initialize_first = False
     for index, (suite_name, case_name, _) in enumerate(selected):
         if (suite_name, case_name) != (initialization_suite, initialization_case):
             continue
-        initialization.append(selected.pop(index))
+        selected.insert(0, selected.pop(index))
+        initialize_first = True
         break
 
     reporter = ProgressReporter(
@@ -682,20 +708,13 @@ def main() -> None:
     )
     try:
         run_cases(
-            initialization,
-            jobs=1,
-            timeout=options.timeout,
-            update=options.update,
-            checked_snapshots=checked_snapshots,
-            reporter=reporter,
-        )
-        run_cases(
             selected,
             jobs=options.jobs,
             timeout=options.timeout,
             update=options.update,
             checked_snapshots=checked_snapshots,
             reporter=reporter,
+            initialize_first=initialize_first,
         )
         if full_update:
             prune_stale_snapshots(checked_snapshots, orphans)
@@ -704,4 +723,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseExceptionGroup as error:
+        TracebackException.from_exception(
+            error, max_group_width=len(error.exceptions)
+        ).print()
+        raise SystemExit(1) from None

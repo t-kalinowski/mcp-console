@@ -28,7 +28,7 @@ result:
         Backtrace:
         1. global ir_resolve_main()
         2. global ir_resolve_refs(refs_in)
-        3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)
+        3. pak::pkg_deps(<ir-version-dependent arguments>)
         4. pak:::remote(function(...) { …
         5. err$throw(res$error)
         ---
@@ -50,6 +50,10 @@ result:
         Execution halted
         ir: dependency resolution failed
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  replacements:
+    ir_pkg_deps_arguments: <ir-version-dependent arguments>
 ---
 send:
   requirements:
@@ -139,7 +143,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [worker starting]
+        [idle]
   isError: false
 ---
 send:

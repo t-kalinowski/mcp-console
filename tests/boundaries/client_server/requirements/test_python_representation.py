@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
 from pathlib import Path
 
@@ -9,7 +10,6 @@ from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.r import startup_declarations_client
 from support.records import Transcript
 from support.suites import run_this_suite
 
@@ -18,7 +18,11 @@ from support.suites import run_this_suite
 def test_round_trips_python_requirement_attributes_and_copies(
     binary: Path, execution: Execution
 ) -> Transcript:
-    startup = code(r"""
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    client = McpClient(binary, execution.serve(), environment)
+    client.initialize_and_list_tools()
+    # fmt: r
+    r = code(r"""
         initial <- reticulate::py_require()
         latin1 <- rawToChar(as.raw(0xe9))
         Encoding(latin1) <- "latin1"
@@ -54,7 +58,11 @@ def test_round_trips_python_requirement_attributes_and_copies(
         attr(cutoff, "detail")[[1L]] <- "changed cutoff attribute"
         invisible(gc())
         stopifnot(identical(reticulate::py_require(), expected))
-
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: r
+    r = code(r"""
         detached <- reticulate::py_require()
         detached$packages[1L] <- "changed result"
         attr(detached$packages, "detail")$nested[[1L]] <- "changed result attribute"
@@ -75,12 +83,9 @@ def test_round_trips_python_requirement_attributes_and_copies(
           !reticulate::py_available(initialize = FALSE)
         )
         """)
-    with startup_declarations_client(binary, execution, startup) as client:
-        client.send(
-            r="stopifnot(startup_checks_complete, reticulate::py_available(initialize = FALSE))"
-        )
-        assert last_tool_text(client) == "[done]", client.transcript[-1]
-        return [{"startup_r": startup}, *client.finish()[3:]]
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    return client.finish()[3:]
 
 
 if __name__ == "__main__":

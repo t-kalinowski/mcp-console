@@ -163,7 +163,7 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
             client.send(control="restart")
             assert (
                 last_result_text(client)
-                == "[worker stopped: in-memory state lost]\n[starting new worker]\n[worker starting]"
+                == "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             ), last_result_text(client)
             absent(**identity)
             client.send(

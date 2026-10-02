@@ -1,18 +1,6 @@
 ---
 send:
   requirements:
-    python:
-      - numpy
-      - pandas
-      - duckdb
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-send:
-  requirements:
     action: get
 result:
   content:
@@ -192,7 +180,7 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
-        [worker starting]
+        [idle]
   isError: false
 ---
 send:

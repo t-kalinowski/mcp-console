@@ -39,6 +39,7 @@ struct Requirements {
     // Console, not a second independently mutable requirement manifest.
     pending_activation: Option<Manifest>,
     activation: Option<PendingActivation>,
+    retry_initialization: bool,
 }
 
 struct PendingActivation {
@@ -228,44 +229,60 @@ fn prepare_packages(packages: Vec<String>) -> Result<super::PreparationOutcome, 
     let mut requirements = declaration()?;
     requirements.packages.extend(packages.iter().cloned());
     let requirements = requirements.normalized();
+    let live = super::library::initialized_selection()?.is_some();
     let candidate = match crate::worker::resolve_python(PythonResolveRequest {
         requirements: requirements.clone(),
         retained_requirements: requirements,
-        initialized: true,
+        initialized: live,
         import_resolution: None,
     }) {
         Ok(candidate) => candidate,
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
-    if let Err(error) = validate_selected(&candidate.selected) {
+    if live && let Err(error) = validate_selected(&candidate.selected) {
         return Ok(super::PreparationOutcome::Rejected {
             message: error.to_string(),
         });
     }
-    let inspected = match super::probe::inspect(&candidate.selected.embedding.python) {
-        Ok(value) => value,
-        Err(error) => {
-            return Ok(super::PreparationOutcome::Rejected {
-                message: error.to_string(),
-            });
+    let inspected = if live {
+        match super::probe::inspect(&candidate.selected.embedding.python) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                return Ok(super::PreparationOutcome::Rejected {
+                    message: error.to_string(),
+                });
+            }
         }
+    } else {
+        None
     };
-    let projection = match r::project_packages(&candidate.selected, &packages, &inspected) {
+    let projection = match r::project_packages(&candidate.selected, &packages, inspected.as_ref()) {
         Ok(projection) => projection,
         Err(message) => return Ok(super::PreparationOutcome::Rejected { message }),
     };
-    resolved(candidate.clone());
-    match activate(&candidate, inspected, projection)? {
-        ActivationOutcome::Prepared => Ok(super::PreparationOutcome::Prepared),
-        ActivationOutcome::Interrupted => Ok(super::PreparationOutcome::Rejected {
-            message: "KeyboardInterrupt".into(),
-        }),
-        ActivationOutcome::Rejected(message) => Ok(super::PreparationOutcome::Rejected { message }),
-        ActivationOutcome::Failed(message) => {
-            super::library::display_activation_exception()?;
-            Ok(super::PreparationOutcome::Failed { message })
-        }
+    if let Some(inspected) = inspected {
+        resolved(candidate.clone());
+        return match activate(&candidate, inspected, projection)? {
+            ActivationOutcome::Prepared => Ok(super::PreparationOutcome::Prepared),
+            ActivationOutcome::Interrupted => Ok(super::PreparationOutcome::Rejected {
+                message: "KeyboardInterrupt".into(),
+            }),
+            ActivationOutcome::Rejected(message) => {
+                Ok(super::PreparationOutcome::Rejected { message })
+            }
+            ActivationOutcome::Failed(message) => {
+                super::library::display_activation_exception()?;
+                Ok(super::PreparationOutcome::Failed { message })
+            }
+        };
     }
+    if let Some(projection) = projection
+        && let Err(message) = projection.commit(None)
+    {
+        return Ok(super::PreparationOutcome::Rejected { message });
+    }
+    resolved(candidate);
+    Ok(super::PreparationOutcome::Prepared)
 }
 
 pub(super) fn retained_manifest() -> Option<PythonRequirementManifest> {
@@ -289,11 +306,41 @@ pub(super) fn initialized() -> bool {
     STATE.with(|slot| slot.borrow().live.is_some())
 }
 
+pub(super) fn interrupt_initialization() {
+    STATE.with_borrow_mut(|state| {
+        if state.live.is_none() {
+            // CPython already uses this selection. Keep it for the retry,
+            // including candidates accepted by a prior lazy preparation.
+            state.retry_initialization = true;
+        }
+    });
+}
+
 pub(crate) fn initialize(
     selected: &NativePython,
     requirements: PythonRequirementManifest,
 ) -> Result<(), String> {
     let requirements = requirements.normalized();
+    if STATE.with_borrow(|state| state.retry_initialization)
+        && INITIAL_MANIFEST.get().and_then(Option::as_ref) != Some(&requirements)
+    {
+        // The server discards unpublished candidates when a cell ends. Renew
+        // the declaration for the running Python before reporting activation.
+        let mut request = requirements.clone();
+        request.python_version.push(super::environment::version()?);
+        let candidate = crate::worker::resolve_python(PythonResolveRequest {
+            requirements: request,
+            retained_requirements: requirements.clone(),
+            initialized: false,
+            import_resolution: None,
+        })?;
+        if candidate.selected != *selected {
+            return Err(
+                "Python startup renewal changed the selected environment; restart required".into(),
+            );
+        }
+        resolved(candidate);
+    }
     STATE.with(|slot| {
         let mut state = slot.borrow_mut();
         if state.live.is_some() {
@@ -303,9 +350,10 @@ pub(crate) fn initialize(
             selected: selected.clone(),
             requirements: requirements.clone(),
         });
+        state.retry_initialization = false;
         Ok(())
     })?;
-    // Built-in initialization runs after transport readiness is committed.
+    // Runtime initialization is demand-driven, always after worker readiness.
     crate::worker::publish_python_activation(requirements)
 }
 
@@ -415,7 +463,7 @@ pub(super) fn publish_activation(activation: super::environment::Activation) -> 
     resolved(pending.candidate);
     if let Some(projection) = pending.projection {
         projection
-            .commit(&activation.environment)
+            .commit(Some(&activation.environment))
             .map_err(super::environment::infrastructure)?;
     } else {
         accept(activation.manifest.clone()).map_err(super::environment::infrastructure)?;
@@ -478,7 +526,7 @@ pub(crate) fn resolve_import(resolution: PythonImportResolution) -> Result<Strin
     let projection = match r::project_packages(
         &candidate.selected,
         std::slice::from_ref(&resolution.distribution),
-        &inspected,
+        Some(&inspected),
     ) {
         Ok(projection) => projection,
         Err(error) => return Ok(failed(error)),

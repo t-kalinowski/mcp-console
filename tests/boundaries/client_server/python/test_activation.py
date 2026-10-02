@@ -16,6 +16,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.processes import host_process_id, process_exists
+from support.r import r_test_environment
 from support.suites import run_this_suite
 
 
@@ -110,7 +111,7 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
         """)
     uv.write_text(f"#!{sys.executable}\n" + source)
     uv.chmod(0o755)
-    environment = os.environ.copy()
+    environment, _ = r_test_environment()
     environment.pop("RETICULATE_PYTHON", None)
     environment["RETICULATE_UV"] = str(uv)
     environment["RETICULATE_CHECK_REQUIRED_PACKAGES"] = "true"
@@ -119,14 +120,9 @@ def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[st
 
 def initialize_managed_client(client: McpClient) -> None:
     client.initialize_and_list_tools()
-    # Match the declaration to these fixture environments before admitting user
-    # state. Initial requirements can replace speculative warm capacity.
-    client.send(requirements={"action": "reset"})
-    declaration = client.send(requirements={"action": "get"})["structuredContent"][
-        "requirements"
-    ]
-    declaration["python"] = []
-    client.send(requirements={"action": "set", **declaration})
+    # These environments omit the NumPy/pandas seed. Replace the unused
+    # prewarmed worker through the public API before arranging runtime state.
+    client.send(requirements={"action": "set", "python": []})
     assert last_result_text(client) == "[prepared]", last_result_text(client)
 
 
@@ -628,8 +624,6 @@ def cancelled_candidate_probe(
                 )
                 client.send(python="marker = object(); marker_id = id(marker)")
                 assert last_result_text(client) == "[done]", last_result_text(client)
-                client.send(r="probe_r_state <- 42L")
-                client.send(sql="CREATE TABLE probe_state AS SELECT 42 AS answer")
                 if r_transition:
                     client.send(r="before <- reticulate::py_require()")
                     preparation = client.start_send(
@@ -676,16 +670,6 @@ def cancelled_candidate_probe(
                     else "id(marker) == marker_id"
                 )
                 assert last_result_text(client) == "True\n", last_result_text(client)
-                if control != "restart":
-                    client.send(r="stopifnot(identical(probe_r_state, 42L))")
-                    assert last_result_text(client) == "[done]", last_result_text(
-                        client
-                    )
-                    client.send(sql="SELECT answer FROM probe_state")
-                    assert last_result_text(client).splitlines()[-1].split() == [
-                        "1",
-                        "42",
-                    ]
                 (candidate_site / "console-probe.pth").unlink()
                 if r_transition:
                     client.send(
@@ -731,80 +715,90 @@ def test_preserves_r_interrupt_during_candidate_probe(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_initial_requirements_retire_an_unused_startup_probe(
+def test_retains_previous_candidate_after_lazy_projection_failure(
     binary: Path, execution: Execution
 ) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment = managed_environments(root)
-        ready = FifoCheckpoint.create(root / "ready")
-        release = FifoCheckpoint.create(root / "release")
-        try:
-            site = next((root / "initial/lib").glob("python*/site-packages"))
-            (site / "startup-probe.pth").write_text("import startup_probe\n")
-            (site / "startup_probe.py").write_text(
-                # fmt: python
-                code(f"""
-                    import os
-                    import sys
-                    from pathlib import Path
-
-                    if sys.flags.no_site:
-                        Path({str(root / "probe-pid")!r}).write_text(str(os.getpid()))
-                        with open({str(ready.path)!r}, "wb", buffering=0) as ready:
-                            ready.write(b"1")
-                        with open({str(release.path)!r}, "rb", buffering=0) as release:
-                            assert release.read(1) == b"1"
+        # R-only bootstrap leaves Python selection lazy for R interoperability.
+        environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            initialize_managed_client(client)
+            client.send(requirements={"python": ["console-initial-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            client.send(
+                # fmt: r
+                r=code("""
+                    before <- reticulate::py_require()
+                    worker_pid <- Sys.getpid()
+                    stopifnot(!reticulate::py_available(initialize = FALSE))
+                    lockBinding("python_requirements", reticulate:::.globals)
                     """)
             )
-            arguments = ("--writable-root", str(root)) if execution == SANDBOXED else ()
-            with McpClient(
-                binary, execution.serve(*arguments), environment, root
-            ) as client:
-                client.initialize_and_list_tools()
-                ready.wait("unused startup probe")
-                child_pid = host_process_id(
-                    int((root / "probe-pid").read_text()), client.process.pid
-                )
-                client.send(requirements={"python": ["console-activation-fixture"]})
-                assert last_result_text(client) == "[prepared]", last_result_text(
-                    client
-                )
-                assert not process_exists(child_pid), child_pid
-                client.send(python="import console_unloaded; console_unloaded.origin")
-                assert last_result_text(client) == "'candidate'\n", last_result_text(
-                    client
-                )
-                return client.finish()
-        finally:
-            ready.close()
-            release.close()
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            result = client.send(
+                requirements={"python": ["console-activation-fixture"]}
+            )
+            assert result["isError"] is True, result
+            assert "cannot change value of locked binding" in last_result_text(
+                client
+            ), result
+            client.send(
+                # fmt: r
+                r=code("""
+                    unlockBinding("python_requirements", reticulate:::.globals)
+                    stopifnot(
+                      !reticulate::py_available(initialize = FALSE),
+                      identical(reticulate::py_require(), before),
+                      identical(Sys.getpid(), worker_pid)
+                    )
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(
+                r='reticulate::py_run_string("import console_unloaded; print(console_unloaded.origin)")'
+            )
+            assert last_result_text(client) == "initial\n", last_result_text(client)
+            client.send(
+                # fmt: r
+                r=code("""
+                    stopifnot(
+                      identical(reticulate::py_require(), before),
+                      identical(Sys.getpid(), worker_pid)
+                    )
+                    """)
+            )
+            assert last_result_text(client) == "[done]", last_result_text(client)
+            client.send(requirements={"python": ["console-activation-fixture"]})
+            assert last_result_text(client) == "[prepared]", last_result_text(client)
+            return client.finish()[3:]
 
 
-def interrupted_startup_probe(
-    binary: Path, execution: Execution, *, without_r: bool
+@executions(DIRECT, SANDBOXED)
+def test_retries_interrupted_startup_with_prepared_candidate_without_r(
+    binary: Path, execution: Execution
 ) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment = managed_environments(root)
-        if without_r:
-            for name in ("initial", "candidate"):
-                subprocess.run(
-                    [
-                        "uv",
-                        "pip",
-                        "install",
-                        "--python",
-                        str(root / name / "bin/python"),
-                        "duckdb",
-                    ],
-                    check=True,
-                    capture_output=True,
-                )
-            retain_system_bwrap(root, environment["PATH"])
-            environment["PATH"] = str(root)
-            for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
-                environment.pop(name, None)
+        for name in ("initial", "candidate"):
+            subprocess.run(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    str(root / name / "bin/python"),
+                    "duckdb",
+                ],
+                check=True,
+                capture_output=True,
+            )
+        retain_system_bwrap(root, environment["PATH"])
+        environment["PATH"] = str(root)
+        for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
+            environment.pop(name, None)
         arguments = ("--writable-root", str(root)) if execution == SANDBOXED else ()
         ready = FifoCheckpoint.create(root / "ready")
         release = FifoCheckpoint.create(root / "release")
@@ -813,6 +807,13 @@ def interrupted_startup_probe(
                 binary, execution.serve(*arguments), environment, root
             ) as client:
                 initialize_managed_client(client)
+                client.send(requirements={"python": ["console-activation-fixture"]})
+                assert last_result_text(client) == "[prepared]", last_result_text(
+                    client
+                )
+                retained = client.send(requirements={"action": "get"})[
+                    "structuredContent"
+                ]
                 site = next((root / "candidate/lib").glob("python*/site-packages"))
                 hook = site / "startup-probe.pth"
                 hook.write_text("import startup_probe\n")
@@ -833,20 +834,14 @@ def interrupted_startup_probe(
                             Path({str(root / "worker-pid")!r}).write_text(str(os.getpid()))
                         """)
                 )
-                # This accepted declaration replaces unused warm capacity. Its
-                # first initialization probe starts without any code request.
-                client.send(requirements={"python": ["console-activation-fixture"]})
-                assert last_result_text(client) == "[prepared]", last_result_text(
-                    client
+                evaluation = client.start_send(
+                    python="print('initialized')", timeout_ms=0
                 )
                 ready.wait("prepared environment startup probe")
-                retained = client.send(requirements={"action": "get"})[
-                    "structuredContent"
-                ]
                 child_pid = host_process_id(
                     int((root / "probe-pid").read_text()), client.process.pid
                 )
-                client.send(python="startup_cell_ran = True", timeout_ms=0)
+                client.receive(evaluation)
                 assert (
                     last_result_text(client) == "\n[running; poll with an empty send]"
                 )
@@ -857,15 +852,6 @@ def interrupted_startup_probe(
                     client.send(requirements={"action": "get"})["structuredContent"]
                     == retained
                 )
-                failed = client.send(
-                    python="raise AssertionError('startup must stay failed')"
-                )
-                assert failed["isError"], failed
-                assert last_result_text(client).startswith(
-                    "[runtime initialization failed:"
-                ), failed
-                assert last_result_text(client).endswith("; restart required]"), failed
-                client.send(control="restart")
                 client.send(
                     # fmt: python
                     python=code("""
@@ -873,25 +859,20 @@ def interrupted_startup_probe(
                         import console_unloaded
                         from pathlib import Path
 
-                        assert os.getpid() != int(Path("worker-pid").read_text())
-                        assert "startup_cell_ran" not in globals()
+                        assert os.getpid() == int(Path("worker-pid").read_text())
                         print(console_unloaded.origin)
                         """)
                 )
                 assert last_result_text(client) == "candidate\n", last_result_text(
                     client
                 )
-                if not without_r:
-                    client.send(
-                        r="stopifnot(reticulate::py_available(initialize = FALSE))"
-                    )
-                    assert last_result_text(client) == "[done]", last_result_text(
-                        client
-                    )
-                client.send(sql="SELECT 42 AS answer")
-                assert last_result_text(client).splitlines()[-1].split() == (
-                    ["42"] if without_r else ["1", "42"]
-                ), last_result_text(client)
+                client.send(control="restart")
+                client.send(
+                    python="import console_unloaded; print(console_unloaded.origin)"
+                )
+                assert last_result_text(client) == "candidate\n", last_result_text(
+                    client
+                )
                 return client.finish()
         finally:
             ready.close()
@@ -899,17 +880,91 @@ def interrupted_startup_probe(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_restarts_interrupted_startup_with_prepared_candidate_without_r(
+def test_retries_interrupted_startup_probe_with_live_r_and_sql(
     binary: Path, execution: Execution
 ) -> list:
-    return interrupted_startup_probe(binary, execution, without_r=True)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
+        environment["TMPDIR"] = str(root)
+        checkpoints = []
+        try:
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                initialize_managed_client(client)
+                client.send(
+                    # fmt: r
+                    r=code(r"""
+                        startup_worker_pid <- Sys.getpid()
+                        startup_r_state <- 42L
+                        stopifnot(!reticulate::py_available(initialize = FALSE))
+                        cat(tempfile("ready-"), tempfile("release-"), tempfile("pid-"), sep = "\n")
+                        """)
+                )
+                paths = last_result_text(client).splitlines()
+                assert len(paths) == 3, paths
+                ready, release = [
+                    FifoCheckpoint.create(Path(path)) for path in paths[:2]
+                ]
+                checkpoints.extend((ready, release))
+                pid_path = Path(paths[2])
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "<probe ready>\n<probe release>\n<probe pid>"
+                )
+                client.send(sql="CREATE TABLE startup_state AS SELECT 42 AS answer")
+                site = next((root / "initial/lib").glob("python*/site-packages"))
+                hook = site / "startup-probe.pth"
+                hook.write_text("import startup_probe\n")
+                (site / "startup_probe.py").write_text(
+                    # fmt: python
+                    code(f"""
+                        import os
+                        import sys
+                        from pathlib import Path
 
-
-@executions(DIRECT, SANDBOXED)
-def test_restarts_interrupted_startup_with_prepared_candidate_and_r(
-    binary: Path, execution: Execution
-) -> list:
-    return interrupted_startup_probe(binary, execution, without_r=False)
+                        if sys.flags.no_site:
+                            Path({str(pid_path)!r}).write_text(str(os.getpid()))
+                            with open({str(ready.path)!r}, "wb", buffering=0) as ready:
+                                ready.write(b"1")
+                            with open({str(release.path)!r}, "rb", buffering=0) as release:
+                                assert release.read(1) == b"1"
+                        """)
+                )
+                evaluation = client.start_send(
+                    r="invisible(reticulate::py_config())", timeout_ms=0
+                )
+                ready.wait("initial environment probe")
+                child_pid = host_process_id(
+                    int(pid_path.read_text()), client.process.pid
+                )
+                client.receive(evaluation)
+                assert (
+                    last_result_text(client) == "\n[running; poll with an empty send]"
+                )
+                client.send(control="interrupt", timeout_ms=30_000)
+                assert not process_exists(child_pid), (child_pid, client.transcript[-1])
+                hook.unlink()
+                assert last_result_text(client) == "\n", repr(last_result_text(client))
+                client.send(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(
+                          identical(Sys.getpid(), startup_worker_pid),
+                          identical(startup_r_state, 42L)
+                        )
+                        """)
+                )
+                assert last_result_text(client) == "[done]", last_result_text(client)
+                client.send(sql="SELECT answer FROM startup_state")
+                assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
+                client.send(r="reticulate::py_run_string(\"print('initialized')\")")
+                assert last_result_text(client) == "initialized\n", last_result_text(
+                    client
+                )
+                return client.finish()[3:]
+        finally:
+            for checkpoint in checkpoints:
+                checkpoint.close()
 
 
 if __name__ == "__main__":

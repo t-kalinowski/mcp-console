@@ -1,5 +1,5 @@
 //! Load YAML nodes with Saphyr, then convert the JSON-compatible subset.
-//! Scalar and tag resolution belong to the loader.
+//! Scalar resolution belongs to the loader; custom tags are annotations.
 
 use saphyr::{LoadableYamlNode, MarkedYaml, Scalar, YamlData};
 use serde_json::Value;
@@ -10,10 +10,11 @@ pub(super) fn load(source: &str) -> Result<Value, String> {
     let [document] = documents.as_slice() else {
         return Err("expected one mapping document".into());
     };
-    if !matches!(document.data, YamlData::Mapping(_)) {
+    let value = to_json(document)?;
+    if !value.is_object() {
         return Err("expected one mapping document".into());
     }
-    to_json(document)
+    Ok(value)
 }
 
 pub(super) fn quoted(source: &str) -> Result<Value, String> {
@@ -57,7 +58,7 @@ fn to_json(node: &MarkedYaml<'_>) -> Result<Value, String> {
             })
             .collect::<Result<serde_json::Map<_, _>, _>>()
             .map(Value::Object),
-        YamlData::Tagged(..) => Err(error("custom tags are unsupported")),
+        YamlData::Tagged(_, value) => to_json(value),
         _ => Err(error("invalid or unresolved YAML value")),
     }
 }

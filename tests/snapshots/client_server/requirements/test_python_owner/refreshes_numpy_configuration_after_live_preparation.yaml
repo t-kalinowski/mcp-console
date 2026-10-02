@@ -1,8 +1,7 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
   r: |
+    reticulate::py_require(character(), action = "set")
     stopifnot(is.null(reticulate::py_config()$numpy))
     reticulate::py_require("numpy")
     numpy <- reticulate::import("numpy", convert = FALSE)

@@ -8,7 +8,7 @@ pub(super) enum Provider {
     Handled,
 }
 
-pub(super) fn install_runtime() -> Result<(), String> {
+pub(super) fn install_runtime() -> Result<bool, String> {
     crate::python::install_sql_runtime(PYTHON_RUNTIME_SOURCE)
 }
 

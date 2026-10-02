@@ -1,16 +1,13 @@
 # Authoring a boundary case
 
-Start with `scripts/test --locate SELECTOR`, read the existing case and its contract, and add a public regression before changing implementation.
-Use the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) to keep iteration focused.
+Locate a related case with `scripts/test --locate SELECTOR`, read its contract, and add a public regression before changing behavior.
+Follow the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder).
 
 ## Embedded programs
 
-Choose the string representation for readability: short fixtures may use newline escapes, a list of lines joined with `"\n"`, or separate writes.
-For longer programs, use a multiline literal with `support.normalization.code()` to dedent it.
-Keep `code(` and the opening string delimiter on the same line.
-Place its formatting directive immediately above that line, including for nested calls.
-Start the payload on the line after the opening quotes.
-Indent the payload and closing delimiter four spaces beyond the line containing `code(`, preserving the program's own indentation:
+Use short strings for short fixtures and dedented multiline literals for longer programs.
+Put `# fmt: python` or `# fmt: r` immediately above `code(` and its opening delimiter, including in nested calls.
+Indent the payload and closing delimiter four spaces beyond that line:
 
 ```python
 client.send(
@@ -22,33 +19,27 @@ client.send(
 )
 ```
 
-Prefer a raw literal when backslashes belong to the submitted program.
-A non-raw `"\n"` inside a Python string literal becomes an actual newline before the worker receives it.
-Use `# fmt: r` for R programs.
-Do not label a custom worker's command language as Python or R merely because it travels in that tool field.
-
-Run `scripts/format` after editing.
-It attempts Ruff, Yamark, rustfmt, and Air, and reports each result.
-Its default remains best effort; `scripts/format --strict` exits nonzero if any formatter fails or is missing, after attempting every formatter.
-Review both its summary and the resulting diff.
+Use raw literals when backslashes belong to the submitted program.
+Preserve its indentation and trailing newlines.
+Do not label a custom worker's command language as R/Python merely because it travels in that field.
+Run `scripts/format` and inspect every formatter's result and the diff; `--strict` fails after attempting all formatters when any is missing or fails.
 
 ## Execution modes
 
-Use `@executions(DIRECT, SANDBOXED)` and `execution.serve(...)` for ordinary cases that share a transcript across modes.
-The fixture supplies `--no-sandbox` for direct execution; do not add it yourself.
-A case that needs a writable sandbox root uses `SANDBOXED.serve("--writable-root", str(root))` and the appropriate sandbox capability.
-Do not combine a direct fixture with sandbox-only arguments.
-See [requirements and execution modes](README.md#requirements-and-execution-modes) for complete examples.
+For portable cases, use `@executions(DIRECT, SANDBOXED)` and `execution.serve()`; the fixture chooses sandboxing.
+Put sandbox-only arguments in explicit sandbox fixtures, for example `SANDBOXED.serve("--writable-root", str(root))`, with the appropriate capability.
+See [modes and requirements](README.md#requirements-and-execution-modes).
 
 ## Lifecycle receipts and checkpoints
 
-Choose the observable receipt that establishes the state the assertion needs, then release the fixture's checkpoint.
-`FifoCheckpoint` in `tests/support/checkpoints.py` supplies blocking arrival and release gates.
-`read_lines` in `tests/support/capture.py` waits for a complete stream receipt without mixing descriptor readiness with buffered text reads.
-`Events` in `tests/support/events.py` observes supported process transitions.
-Reuse these helpers and keep cleanup in `finally` blocks.
-
-For a worker program held at a FIFO, establish public evaluation admission before allowing it to proceed:
+Establish the observable state an assertion needs before releasing a fixture.
+Use `FifoCheckpoint` (`support.checkpoints`), `read_lines` (`support.capture`), and `Events` (`support.events`) for blocking gates, complete stream receipts, and process transitions.
+Keep cleanup in context managers or `finally` blocks.
+Use `wait_for_path()` for known marker paths and worker-file discovery only for worker-owned directories whose names are initially unknown.
+`FifoCheckpoint.release()` buffers an early token; `release_fixture_checkpoint()` instead waits for a real reader with a bounded rendezvous.
+Pass the client when its exit should end that wait.
+Marker waits subscribe to native filesystem/process events on macOS and Linux; Windows uses cancellable bounded path polling.
+Pass an owned `Events` instance to `wait_for_path()` when the fixture needs explicit cancellation; `Events.cancel()` wakes the wait without a marker or client.
 
 ```python
 client.send(python=program, timeout_ms=0)
@@ -57,8 +48,19 @@ started.wait("worker reached the release gate")
 release.release()
 ```
 
-A fixture marker alone does not prove the server admitted evaluation.
-Likewise, process startup does not prove a cell log has closed.
-When testing output written during shutdown, tie the fixture's release to completion of the relevant cell and verify its recorded `cell_output` event before asserting which file owns the later output.
-Keep complete output assertions; sleeps, broader matching, or a longer timeout do not establish that ordering.
-The Python [lifecycle cases](client_server/python/test_lifecycle.py) show admission before interrupt/restart, and the [retention cases](client_server/output/test_spools.py) show a completion checkpoint followed by retained-file and journal assertions.
+A fixture marker alone does not prove public evaluation admission.
+Writing a request to stdin does not prove its handler has started.
+When cancelling a send during gated discovery, observe its exclusive polling claim before submitting a competing cell or cancellation.
+Before closing input to check response delivery, gate an accepted result; EOF can cancel a call that has not been accepted yet.
+Process startup does not prove a cell log has closed.
+For shutdown output, establish cell completion and its recorded `cell_output` event before asserting which file owns later bytes.
+Sleeps, broader matching, and longer timeouts do not establish ordering.
+
+`wait_for_evaluation_output()` submits once, accumulates every text delta, and bounds transport receives with its completion budget.
+Give cold preparation an explicit longer budget.
+The default `send` observation deadline can return while setup is still running; establish completion before dependent requests.
+Use the client's preparation budget for resolver collection and initial requirements inspection.
+Retain raw exchanges when delivery or polling is the contract being tested.
+
+See the [Python lifecycle cases](client_server/python/test_lifecycle.py) and [retention cases](client_server/output/test_spools.py).
+Preserve complete output assertions and use the [snapshot rules](README.md#snapshots) for normalization.

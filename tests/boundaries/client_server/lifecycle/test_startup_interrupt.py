@@ -116,11 +116,6 @@ def test_interrupts_first_cell_before_resolver_registration(
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
-        failed = client.send(r="stop('interrupted startup must remain failed')")
-        assert (
-            failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
-        )
-        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )
@@ -155,11 +150,6 @@ def test_interrupts_first_cell_between_resolver_phases(
         release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
-        failed = client.send(r="stop('interrupted startup must remain failed')")
-        assert (
-            failed["isError"] and "startup interrupted" in failed["content"][0]["text"]
-        )
-        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )
@@ -179,7 +169,8 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         release,
         root,
     ):
-        stdin = client.start_send(stdin="old input\n", timeout_ms=0)
+        client.send(stdin="old input\n", timeout_ms=0)
+        assert last_tool_text(client) == "[worker starting]"
         started.wait("stdin startup has not spawned its first resolver")
         assert not (root / "resolver.jsonl").exists()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
@@ -189,10 +180,7 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
-        client.receive(stdin)
-        assert stdin["result"]["isError"] is True, stdin
         client.send(timeout_ms=600_000)
-        client.send(control="restart")
         client.send(
             r='exists("startup_cell_ran", inherits = FALSE)', timeout_ms=600_000
         )

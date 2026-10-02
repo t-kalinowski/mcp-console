@@ -1,5 +1,4 @@
 import os
-import json
 import sys
 import tempfile
 import time
@@ -12,8 +11,6 @@ from support.assertions import tool_text as _tool_text
 from support.capture import read_jsonl, read_jsonl_path
 from support.client import McpClient
 from support.execution import Execution
-from support.r import r_test_environment
-from support.resolvers import inspect_selected_python
 from support.records import ToolResult, Transcript
 
 CAPTURE_NAME = "mcp-console-worker-wire.jsonl"
@@ -35,19 +32,7 @@ class RelayWorkerClient:
     ) -> None:
         self._temporary = tempfile.TemporaryDirectory()
         root = Path(self._temporary.name)
-        environment, _ = r_test_environment()
-        inspected = inspect_selected_python(binary, Path(sys.executable), environment)
-        environment["MCP_CONSOLE_MITM_SELECTION"] = json.dumps(
-            {
-                "r": True,
-                "python": {
-                    "selected": inspected,
-                    "explicit": None,
-                    "managed": False,
-                    "duckdb_extension_directory": None,
-                },
-            }
-        )
+        environment = os.environ.copy()
         environment["TMPDIR"] = str(root)
         environment["MCP_CONSOLE_MITM_WORKER"] = str(binary)
         if capture_stdin_close:
