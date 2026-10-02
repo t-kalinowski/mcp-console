@@ -22,8 +22,6 @@ env:
   # flags or native dependency setup. Cargo and Maturin do not read this value.
   CI_BUILD_CACHE_VERSION: "3"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
-  UV_VERSION: 0.12.4
-  QUARTO_VERSION: 1.10.18
 
 jobs:
   windows:
@@ -51,7 +49,7 @@ jobs:
           components: clippy, rustfmt
       - uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version: latest
           enable-cache: false
       - name: Select weekly cache identity
         id: epoch
@@ -203,7 +201,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version: latest
           cache-local-path: ${{ runner.temp }}/mcp-console-cache
           cache-suffix: runtime-v2-${{ steps.cache-epoch.outputs.value }}
           prune-cache: false
@@ -212,8 +210,8 @@ jobs:
       - name: Install tools
         id: tools
         run: |
-          uv tool install r-lib-ir
-          uv tool install yamark
+          uv tool install r-lib-ir@latest
+          uv tool install yamark@latest
           uv tool dir --bin >> "$GITHUB_PATH"
           printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
 
@@ -401,8 +399,7 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-          uvx --from 'maturin==1.15.0' \
-            maturin build \
+          uvx maturin@latest build \
             --release \
             --locked \
             --compatibility pypi \
@@ -510,19 +507,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         working-directory: ${{ runner.temp }}
         run: |
+          tag=$(gh release view --repo quarto-dev/quarto-cli --json tagName --jq .tagName)
+          version=${tag#v}
           case "$RUNNER_OS" in
             macOS) platform=macos ;;
             Linux) platform=linux-amd64 ;;
             *) exit 1 ;;
           esac
-          archive="quarto-$QUARTO_VERSION-$platform.tar.gz"
-          checksums="quarto-$QUARTO_VERSION-checksums.txt"
-          gh release download "v$QUARTO_VERSION" --repo quarto-dev/quarto-cli \
+          archive="quarto-$version-$platform.tar.gz"
+          checksums="quarto-$version-checksums.txt"
+          gh release download "$tag" --repo quarto-dev/quarto-cli \
             --pattern "$archive" --pattern "$checksums"
           grep "  $archive$" "$checksums" | shasum -a 256 --check --strict
           mkdir quarto
           tar -xzf "$archive" --strip-components=1 -C quarto
-          test "$(quarto/bin/quarto --version)" = "$QUARTO_VERSION"
+          test "$(quarto/bin/quarto --version)" = "$version"
           printf '%s\n' "$RUNNER_TEMP/quarto/bin" >> "$GITHUB_PATH"
           rm "$archive" "$checksums"
 
