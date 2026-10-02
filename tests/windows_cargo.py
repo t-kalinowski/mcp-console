@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -16,6 +17,124 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
 class WindowsCargo(unittest.TestCase):
+    def test_staging_accepts_long_source_paths(self):
+        with tempfile.TemporaryDirectory(prefix="console staging ") as temporary:
+            root = Path(temporary)
+            checkout = root / ("source-" + "a" * 45)
+            checkout.mkdir()
+            files = {
+                ".gitignore": "codex-rs/target/\n",
+                "LICENSE": "fixture license\n",
+                "NOTICE": "fixture notice\n",
+                "codex-rs/Cargo.toml": """[workspace]
+members = ["mcp-console-sandbox", "windows-sandbox"]
+resolver = "3"
+""",
+                "codex-rs/mcp-console-sandbox/Cargo.toml": """[package]
+name = "codex-mcp-console-sandbox"
+version = "0.0.0"
+edition = "2024"
+[[bin]]
+name = "mcp-console-sandbox"
+path = "main.rs"
+""",
+                "codex-rs/windows-sandbox/Cargo.toml": """[package]
+name = "codex-windows-sandbox"
+version = "0.0.0"
+edition = "2024"
+[[bin]]
+name = "mcp-console-sandbox-setup"
+path = "main.rs"
+[[bin]]
+name = "mcp-console-sandbox-runner"
+path = "main.rs"
+""",
+                "codex-rs/mcp-console-sandbox/main.rs": "fn main() {}\n",
+                "codex-rs/windows-sandbox/main.rs": "fn main() {}\n",
+            }
+            channel = subprocess.check_output(
+                ["rustup", "show", "active-toolchain"], text=True
+            ).split()[0]
+            files["codex-rs/rust-toolchain.toml"] = (
+                f"[toolchain]\nchannel = {json.dumps(channel)}\n"
+            )
+            for relative, contents in files.items():
+                path = checkout / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(contents)
+            snapshot = (
+                checkout
+                / "codex-rs/snapshots"
+                / ("long-snapshot-" + "a" * 140 + ".snap")
+            )
+            self.assertGreater(len(str(snapshot)), 260)
+            snapshot.parent.mkdir()
+            snapshot.write_text("tracked fixture\n")
+            subprocess.run(
+                ["cargo", "generate-lockfile", "--offline"],
+                cwd=checkout / "codex-rs",
+                check=True,
+                capture_output=True,
+                timeout=60,
+            )
+            git = ["git", "-C", str(checkout), "-c", "core.longpaths=true"]
+            for arguments in (
+                ["init"],
+                ["add", "."],
+                [
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "fixture",
+                ],
+                ["config", "core.longpaths", "false"],
+            ):
+                subprocess.run([*git, *arguments], check=True, capture_output=True)
+            revision = subprocess.check_output(
+                [*git, "rev-parse", "HEAD"], text=True
+            ).strip()
+            (root / "scripts").mkdir()
+            for source in ("scripts/stage-sandbox-runner", "windows_checkout.py"):
+                shutil.copyfile(ROOT / source, root / source)
+            (root / "sandbox-runner.json").write_text(
+                json.dumps(
+                    {
+                        "repository": "fixture/runner",
+                        "release": "fixture",
+                        "commit": revision,
+                        "protocol_version": 2,
+                    }
+                )
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(root / "scripts/stage-sandbox-runner"),
+                    str(checkout),
+                ],
+                cwd=root,
+                env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            manifest = json.loads(
+                (root / "target/sandbox-runner-build.json").read_text()
+            )
+            self.assertEqual(manifest["source_revision"], revision)
+            for name in (
+                "mcp-console-sandbox.exe",
+                "mcp-console-sandbox-setup.exe",
+                "mcp-console-sandbox-runner.exe",
+            ):
+                self.assertTrue((root / "wheel-data/data/libexec" / name).is_file())
+
     def test_rebuild_preserves_running_companion(self):
         with tempfile.TemporaryDirectory(prefix="console cargo ") as temporary:
             root = Path(temporary)

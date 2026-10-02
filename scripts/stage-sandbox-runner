@@ -38,8 +38,14 @@ def fail(message: str) -> None:
 
 
 def git_output(checkout: Path, *arguments: str) -> str:
+    # Pinned cache prefixes plus Codex source paths can exceed Windows MAX_PATH.
+    options = ["-c", "core.longpaths=true"] if sys.platform == "win32" else []
     result = subprocess.run(
-        ["git", *arguments], cwd=checkout, capture_output=True, text=True, check=False
+        ["git", *options, *arguments],
+        cwd=checkout,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode != 0:
         fail(result.stderr.strip() or result.stdout.strip())
