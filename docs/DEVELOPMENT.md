@@ -63,7 +63,7 @@ Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the ch
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
 The default concurrency is twice the logical CPU count, with a minimum of four cases.
 
-CI uses twelve transcript workers on both hosted platforms.
+CI uses six transcript workers on both hosted platforms.
 To compare concurrency on the same revision, dispatch the CI workflow with `transcript_jobs` set to `6` and `12`.
 These runs have separate cancellation groups and retain the full integration and packaging gate.
 Compare successful runs on the same runner image with similar cache hits; repeat the pair before drawing performance conclusions.
