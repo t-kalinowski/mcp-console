@@ -139,15 +139,10 @@ impl Selection {
         let selected = inspect(&executable, on_started)?;
         // Default and requested extensions share the host cache across generations.
         let duckdb_extension_directory = managed.as_ref().and_then(|_| {
-            std::env::var_os("HOME")
-                .filter(|home| !home.is_empty())
-                .or_else(|| {
-                    #[cfg(windows)]
-                    return std::env::var_os("USERPROFILE");
-                    #[cfg(not(windows))]
-                    None
-                })
-                .map(PathBuf::from)
+            let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+            #[cfg(windows)]
+            let home = home.or_else(|| std::env::var_os("USERPROFILE"));
+            home.map(PathBuf::from)
                 .filter(|home| home.is_absolute())
                 .map(|home| home.join(".duckdb/extensions"))
         });

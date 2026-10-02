@@ -193,7 +193,7 @@ impl ConsoleServer {
         }
         #[cfg(windows)]
         if builtin {
-            configure_windows(description);
+            configure_windows(description, properties);
         }
         if prepared.is_some() {
             let requirements = properties
@@ -215,13 +215,31 @@ use crate::settings::{Compute, SandboxSettings, Target};
 use serde_json::{Map, Value};
 
 #[cfg(windows)]
-fn configure_windows(description: &mut String) {
+fn configure_windows(description: &mut String, properties: &mut Map<String, Value>) {
     let (_, remaining) = description
         .split_once("\n\nSend one complete")
         .expect("send description");
     *description = format!(
         "Persistent R and Python workbench for local unsandboxed execution on Windows. State persists across calls. Each runtime initializes on demand and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
     ).replace("`r`, `python`, or `sql`", "`r` or `python`");
+    // Retain shared runtime and preparation guidance, but omit SQL-only helpers.
+    for (field, start, end) in [
+        (
+            "r",
+            " With R-owned managed DuckDB active,",
+            " Default-device plots",
+        ),
+        ("python", " Select a user-owned DB-API", " At cell end,"),
+    ] {
+        if let Some(property) = properties.get_mut(field) {
+            let text = property["description"]
+                .as_str()
+                .expect("language description");
+            let (before, remaining) = text.split_once(start).expect("SQL guidance");
+            let (_, after) = remaining.split_once(end).expect("plot guidance");
+            property["description"] = format!("{before}{end}{after}").into();
+        }
+    }
 }
 
 fn configure_custom(description: &mut String, properties: &mut Map<String, Value>) {

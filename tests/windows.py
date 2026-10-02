@@ -32,7 +32,7 @@ BINARY = Path(
 
 
 class Session:
-    def __init__(self, environment=None, *, relay=None, python=None):
+    def __init__(self, environment=None, *, relay=None, python=None, bare_r=False):
         self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
         (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
@@ -44,6 +44,14 @@ class Session:
         environment = dict(
             environment, MCP_CONSOLE_HOME=str(Path(self.directory.name) / "home")
         )
+        if bare_r:
+            # Hiding ir/uv on PATH is insufficient when ambient reticulate can
+            # bootstrap uv. Isolate package libraries for preinstalled-R cases.
+            library = Path(self.directory.name) / "r-library"
+            library.mkdir()
+            for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
+                environment[name] = str(library)
+            environment.pop("RETICULATE_UV", None)
         if relay is not None:
             command.extend(["--worker", str(BINARY), "--relay", str(relay)])
         self.process = subprocess.Popen(
@@ -206,6 +214,8 @@ class WindowsPackaging(unittest.TestCase):
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
     def test_empty_python_selection_uses_available_runtimes(self):
+        uv = shutil.which("uv")
+        self.assertIsNotNone(uv, "Windows resolver acceptance requires uv")
         r_home = (
             os.environ.get("R_HOME")
             or subprocess.check_output(["R", "RHOME"], text=True).strip()
@@ -224,7 +234,15 @@ class WindowsConsole(unittest.TestCase):
                     )
                     + system_path,
                 )
-                session = Session(environment)
+                if with_python:
+                    # The managed pair needs a resolver even with a restricted
+                    # PATH; do not depend on reticulate's ambient uv cache.
+                    environment.update(
+                        RETICULATE_UV=uv,
+                        UV_PYTHON_PREFERENCE="only-system",
+                        UV_PYTHON_DOWNLOADS="never",
+                    )
+                session = Session(environment, bare_r=not with_python)
                 try:
                     session.initialize()
                     self.assertIn("42", json.dumps(session.send(r="42L")))
@@ -273,7 +291,7 @@ class WindowsConsole(unittest.TestCase):
             PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
         )
         environment.pop("RETICULATE_PYTHON", None)
-        session = Session(environment)
+        session = Session(environment, bare_r=True)
         self.addCleanup(session.close)
         session.initialize()
         self.assertIn("42", json.dumps(session.send(r="answer <- 42L; answer")))
@@ -431,7 +449,16 @@ class WindowsConsole(unittest.TestCase):
         self.addCleanup(session.close)
         session.initialize()
         schema = session.request("tools/list", {})
-        self.assertNotIn("sql", schema["tools"][0]["inputSchema"]["properties"])
+        tool = schema["tools"][0]
+        properties = tool["inputSchema"]["properties"]
+        self.assertNotIn("sql", properties)
+        self.assertIn("ir and uv", tool["description"])
+        for language in ("r", "python"):
+            with self.subTest(language=language):
+                description = properties[language]["description"].lower()
+                self.assertNotIn("sql", description)
+                self.assertNotIn("duckdb", description)
+                self.assertIn("resolution", description)
         self.assertEqual(
             schema["tools"][0]["inputSchema"]["properties"]["requirements"][
                 "properties"
