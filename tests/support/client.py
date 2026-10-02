@@ -127,6 +127,19 @@ class McpClient:
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
 
+    def expect(self, expected: str = "[done]", **arguments: Any) -> ToolResult:
+        """Collect exact successful text after one submission."""
+        from support.assertions import wait_for_evaluation_output
+
+        wait_for_evaluation_output(
+            self,
+            expected,
+            "expected send output",
+            completion_timeout_seconds=self.response_timeout,
+            **arguments,
+        )
+        return self.transcript[-1]["result"]
+
     def __enter__(self) -> Self:
         return self
 

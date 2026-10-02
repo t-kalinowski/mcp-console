@@ -322,7 +322,7 @@ def test_r_duckdb_replacement_failure_and_reset(
             startup = inspect(client)
             assert startup["prepared"] is True
             assert ir_run_records(record), "background startup did not prepare defaults"
-            client.send(
+            client.expect(
                 r="marker <- 42L; pid <- Sys.getpid()", requirements={"action": "set"}
             )
             empty = inspect(client)
@@ -363,23 +363,22 @@ def test_r_duckdb_replacement_failure_and_reset(
                 "comparison": "exact equality after exit-status prefix; outer whitespace trimmed",
             }
             assert inspect(client) == empty
-            client.send(r="stopifnot(marker == 42L, pid == Sys.getpid())")
-            assert last_tool_text(client) == "[done]"
-            client.send(
+            client.expect(r="stopifnot(marker == 42L, pid == Sys.getpid())")
+            client.expect(
+                "[worker stopped: in-memory state lost]\n"
+                "[starting new worker]\n"
+                "Loading required namespace: praise\n[done]",
                 control="restart",
                 requirements={"action": "set", "r": ["praise"], "duckdb": ["fts"]},
                 r='stopifnot(requireNamespace("praise"), !exists("marker"))',
-            )
-            assert not client.transcript[-1]["result"].get("isError"), (
-                client.transcript[-1]
             )
             selected = inspect(client)
             assert selected["requirements"] == dict(
                 empty["requirements"], r=["praise"], duckdb=["fts"]
             )
-            client.send(sql="LOAD fts; SELECT 42 AS answer")
-            assert not client.transcript[-1]["result"].get("isError"), (
-                client.transcript[-1]
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n",
+                sql="LOAD fts; SELECT 42 AS answer",
             )
             client.send(
                 control="restart", requirements={"action": "set", "python": ["six"]}
@@ -387,9 +386,13 @@ def test_r_duckdb_replacement_failure_and_reset(
             assert inspect(client)["requirements"] == dict(
                 empty["requirements"], python=["six"]
             )
-            client.send(python="import yaml12; yaml12.__name__")
+            client.expect(
+                "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+                "'yaml12'\n",
+                python="import yaml12; yaml12.__name__",
+            )
             assert "py-yaml12" in inspect(client)["requirements"]["python"]
-            client.send(r='stopifnot(requireNamespace("mcpcleared", quietly = TRUE))')
+            client.expect(r='stopifnot(requireNamespace("mcpcleared", quietly = TRUE))')
             assert "mcpcleared" in inspect(client)["requirements"]["r"]
             client.send(control="restart", requirements={"action": "reset"})
             assert inspect(client)["requirements"] == startup["requirements"]
