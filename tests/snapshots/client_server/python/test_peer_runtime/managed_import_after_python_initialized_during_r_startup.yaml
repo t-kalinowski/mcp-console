@@ -38,6 +38,10 @@ send:
     import json
     import subprocess
 
+    assert os.path.samefile(sys.executable, os.environ["MCP_CONSOLE_TEST_PYTHON"])
+    assert os.path.realpath(sys.prefix) == os.path.realpath(
+        os.environ["MCP_CONSOLE_TEST_PYTHON_PREFIX"]
+    )
     assert id(early_object) == early_identity
     assert sys.executable == early_executable
     assert (

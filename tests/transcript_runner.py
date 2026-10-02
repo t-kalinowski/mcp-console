@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import select
 import shlex
 import shutil
@@ -20,6 +21,7 @@ import unittest
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from unittest.mock import patch
 
 from support.capture import read_lines
 from support.events import Events
@@ -206,9 +208,12 @@ def check_recording(*arguments: object, **keywords: object) -> object:
 """.lstrip()
 
 
-@unittest.skipUnless(POSIX.available, POSIX.reason)
-class TranscriptRunnerTests(unittest.TestCase):
+class TranscriptRunnerFixture(unittest.TestCase):
     def setUp(self) -> None:
+        # Copied runners select fixture executables; restore caller overrides
+        # after each test, including when setup or an assertion fails.
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("MCP_CONSOLE_TEST_BINARY", None)
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.boundaries = self.root / "tests" / "boundaries"
@@ -332,6 +337,9 @@ class TranscriptRunnerTests(unittest.TestCase):
             "UV_OFFLINE": "1",
         }
 
+
+@unittest.skipUnless(POSIX.available, POSIX.reason)
+class TranscriptRunnerTests(TranscriptRunnerFixture):
     def test_script_builds_and_uses_release_with_a_stale_debug_binary(self) -> None:
         environment = self.prepare_script()
         debug = self.root / "target" / "debug" / "mcp-console"
@@ -663,13 +671,6 @@ class TranscriptRunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / "sbx-probed").exists())
         self.assertFalse((self.root / "target").exists())
-
-    def test_runner_metadata_does_not_require_a_binary(self) -> None:
-        (self.root / "target/release/mcp-console").unlink()
-        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
-            with self.subTest(arguments=arguments):
-                result = self.run_runner(*arguments)
-                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_help_and_syntax_errors_do_not_resolve_script_dependencies(self) -> None:
         scripts = self.root / "scripts"
@@ -1952,54 +1953,7 @@ warnings: []
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_collection_selectors_and_locate(self) -> None:
-        hidden = (
-            self.boundaries / "client_server" / "server" / "_private" / "test_hidden.py"
-        )
-        hidden.parent.mkdir()
-        hidden.write_text(
-            "def test_hidden(binary):\n    return [{'runner': 'hidden'}]\n",
-            encoding="utf-8",
-        )
         suite = "client_server/server/test_tools"
-        cases = [
-            f"{suite}::initializes_and_lists_tools",
-            f"{suite}::selected",
-            f"{suite}::unselected",
-        ]
-
-        listed = self.run_runner("--full", "--list")
-        self.assertEqual(listed.returncode, 0, listed.stderr)
-        self.assertEqual(listed.stdout.splitlines(), cases)
-
-        located = self.run_runner("--locate", f"{suite}::selected")
-        self.assertEqual(located.returncode, 0, located.stderr)
-        self.assertEqual(located.stdout.splitlines()[0], f"{suite}::selected")
-        self.assertIn(
-            "source: tests/boundaries/client_server/server/test_tools.py:",
-            located.stdout,
-        )
-        self.assertIn(
-            "snapshot: tests/snapshots/client_server/server/test_tools/selected.yaml",
-            located.stdout,
-        )
-
-        located_suite = self.run_runner("--locate", suite)
-        self.assertEqual(located_suite.returncode, 0, located_suite.stderr)
-        located_lines = located_suite.stdout.splitlines()
-        self.assertEqual(len(located_lines), 3 * len(cases))
-        for index, case in enumerate(cases):
-            case_name = case.rsplit("::", 1)[1]
-            self.assertEqual(located_lines[3 * index], case)
-            self.assertRegex(
-                located_lines[3 * index + 1],
-                r"^  source: tests/boundaries/client_server/server/test_tools\.py:\d+$",
-            )
-            self.assertEqual(
-                located_lines[3 * index + 2],
-                "  snapshot: "
-                f"tests/snapshots/client_server/server/test_tools/{case_name}.yaml",
-            )
-
         selected = self.run_runner("--jobs", "1", f"{suite}::selected")
         self.assertEqual(selected.returncode, 0, selected.stderr)
         self.assertTrue((self.root / "selected.marker").is_file())
@@ -2257,6 +2211,74 @@ runner: orphan
         )
         with self.assertRaises(ProcessLookupError):
             os.killpg(process.pid, 0)
+
+
+class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, self.boundaries / "_run.py", *arguments],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    def test_runner_metadata_does_not_require_a_binary(self) -> None:
+        (self.root / "target/release/mcp-console").unlink()
+        for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_collection_selectors_and_locate(self) -> None:
+        hidden = (
+            self.boundaries / "client_server" / "server" / "_private" / "test_hidden.py"
+        )
+        hidden.parent.mkdir()
+        hidden.write_text(
+            "def test_hidden(binary):\n    return [{'runner': 'hidden'}]\n",
+            encoding="utf-8",
+        )
+        suite = "client_server/server/test_tools"
+        cases = [
+            f"{suite}::initializes_and_lists_tools",
+            f"{suite}::selected",
+            f"{suite}::unselected",
+        ]
+        source = self.suite.relative_to(self.root)
+        snapshots = self.snapshots.relative_to(self.root)
+
+        listed = self.run_runner("--full", "--list")
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertEqual(listed.stdout.splitlines(), cases)
+
+        located = self.run_runner("--locate", f"{suite}::selected")
+        self.assertEqual(located.returncode, 0, located.stderr)
+        self.assertEqual(located.stdout.splitlines()[0], f"{suite}::selected")
+        self.assertIn(
+            f"source: {source}:",
+            located.stdout,
+        )
+        self.assertIn(
+            f"snapshot: {snapshots / 'selected.yaml'}",
+            located.stdout,
+        )
+
+        located_suite = self.run_runner("--locate", suite)
+        self.assertEqual(located_suite.returncode, 0, located_suite.stderr)
+        located_lines = located_suite.stdout.splitlines()
+        self.assertEqual(len(located_lines), 3 * len(cases))
+        for index, case in enumerate(cases):
+            case_name = case.rsplit("::", 1)[1]
+            self.assertEqual(located_lines[3 * index], case)
+            self.assertRegex(
+                located_lines[3 * index + 1],
+                rf"^  source: {re.escape(str(source))}:\d+$",
+            )
+            self.assertEqual(
+                located_lines[3 * index + 2],
+                f"  snapshot: {snapshots / (case_name + '.yaml')}",
+            )
 
 
 if __name__ == "__main__":

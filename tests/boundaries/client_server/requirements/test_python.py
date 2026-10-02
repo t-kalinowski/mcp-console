@@ -42,10 +42,8 @@ def test_declares_imports_and_uses_python_packages(
     environment.pop("RETICULATE_PYTHON", None)
     with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
-        client.send(r='reticulate::py_require("py-yaml12")')
-        assert last_tool_text(client) == "[done]"
-        client.send(r='yaml12 <- reticulate::import("yaml12")')
-        assert last_tool_text(client) == "[done]"
+        client.expect(r='reticulate::py_require("py-yaml12")')
+        client.expect(r='yaml12 <- reticulate::import("yaml12")')
         client.send(r='yaml12$parse_yaml("answer: 42")$answer')
         assert last_tool_text(client) == "[1] 42\n"
         client.send(
@@ -57,10 +55,8 @@ def test_declares_imports_and_uses_python_packages(
                 """),
         )
         assert last_tool_text(client) == "42\n"
-        client.send(r='reticulate::py_require("more-itertools")')
-        assert last_tool_text(client) == "[done]"
-        client.send(r='more_itertools <- reticulate::import("more_itertools")')
-        assert last_tool_text(client) == "[done]"
+        client.expect(r='reticulate::py_require("more-itertools")')
+        client.expect(r='more_itertools <- reticulate::import("more_itertools")')
         client.send(r="unlist(more_itertools$take(3L, list(0L, 1L, 2L, 3L, 4L)))")
         assert last_tool_text(client) == "[1] 0 1 2\n"
         client.send(
@@ -83,10 +79,12 @@ def test_prepares_initial_python_requirements(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
-    client.send(
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
+    tools = client.transcript[-1]["result"]
+    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
+    # The preparation receipt, rather than requirements inspection, owns this
+    # schema-stability check. Validate the complete result before compacting it.
+    assert client.request("tools/list")["result"] == tools
+    client.transcript.pop()
     invalid = "not a valid requirement !!!"
 
     client.send(
@@ -120,8 +118,7 @@ def test_prepares_initial_python_requirements(
           length(printed_requirements) > 0L
         )
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     # fmt: python
     python = code("""
         import yaml12
@@ -130,10 +127,7 @@ def test_prepares_initial_python_requirements(
         """)
     client.send(python=python)
     assert last_tool_text(client) == "'yaml12'\n"
-    client.send(
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
+    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
     return client.finish()
 
 
@@ -184,8 +178,7 @@ def test_preserves_python_requirement_values(
         invisible(gc())
         stopifnot(identical(reticulate::py_require(), expected))
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     # fmt: r
     r = code(r"""
         error <- tryCatch(
@@ -231,8 +224,7 @@ def test_preserves_python_requirement_values(
           !reticulate::py_available(initialize = FALSE)
         )
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     return client.finish()
 
 
@@ -248,10 +240,8 @@ def test_materializes_lazy_python_requirements_without_initializing(
         reticulate::py_require("py-yaml12")
         stopifnot(!reticulate::py_available(initialize = FALSE))
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
-    client.send(requirements={"python": ["py-yaml12"]})
-    assert last_tool_text(client) == "[prepared]"
+    client.expect(r=r)
+    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
     # fmt: r
     r = code(r"""
         stopifnot(
@@ -260,8 +250,7 @@ def test_materializes_lazy_python_requirements_without_initializing(
           "py-yaml12" %in% reticulate::py_require()$packages
         )
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
@@ -273,8 +262,7 @@ def test_materializes_lazy_python_requirements_without_initializing(
           "py-yaml12" %in% reticulate::py_require()$packages
         )
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     # fmt: python
     python = code("""
         import yaml12
@@ -358,8 +346,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         exit_events = Events()
         try:
             client.initialize_and_list_tools()
-            client.send(requirements={"r": ["DBI"]})
-            assert last_tool_text(client) == "[prepared]"
+            client.expect("[prepared]", requirements={"r": ["DBI"]})
             preparation = client.start_send(
                 requirements={"python": ["py-yaml12"]},
             )
@@ -406,16 +393,12 @@ def test_prepares_explicit_numpy_requirement(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
-    client.send(
-        requirements={"python": ["numpy"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
+    client.expect("[prepared]", requirements={"python": ["numpy"]})
     # fmt: r
     r = code(r"""
         stopifnot(Sys.getenv("RETICULATE_PYTHON") == "managed")
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     return client.finish()
 
 
@@ -437,19 +420,13 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
-        )
-        assert last_tool_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         caches = list(cache_directory.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         caches[0].unlink()
         caches[0].mkdir()
 
-        client.send(
-            requirements={"python": ["py-yaml12"]},
-        )
-        assert last_tool_text(client) == "[prepared]", client.transcript[-1]
+        client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
         assert caches[0].is_dir()
         assert not [
             path for path in cache_directory.glob("fontlist-v*.json") if path.is_file()
@@ -468,12 +445,8 @@ def test_restart_loses_state_and_retains_python_requirements(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
-    client.send(
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-    client.send(python="restart_marker = 42")
-    assert last_tool_text(client) == "[done]"
+    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
+    client.expect(python="restart_marker = 42")
 
     client.send(control="restart")
     assert last_tool_text(client) == (
@@ -728,16 +701,15 @@ def test_failed_live_python_requirements_do_not_run_cell(
             client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
             # Ordinary tool preparation must remain independent of the public
             # reticulate declaration function, even after R is initialized.
-            client.send(
+            client.expect(
                 r=code(r"""
                 reticulate_namespace <- asNamespace("reticulate")
                 unlockBinding("py_require", reticulate_namespace)
                 assign("py_require", function(...) stop("tool entered reticulate declaration"),
                        envir = reticulate_namespace)
                 lockBinding("py_require", reticulate_namespace)
-                """)
+                """),
             )
-            assert last_tool_text(client) == "[done]"
             result = client.send(
                 python="failed_live_python_cell = True",
                 requirements={"python": ["py-yaml12"]},
@@ -793,10 +765,7 @@ def test_prepares_after_idle_python_resolution(
     client.send(r=r)
     release_worker_callback_gate(client, "idle Python callback")
 
-    client.send(
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
+    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
     client.send(r="reticulate::py_require()$packages")
     assert "idle Python ready\n" in last_tool_text(client)
     assert '"py-yaml12"' in last_tool_text(client)
@@ -811,8 +780,7 @@ def test_retains_idle_python_activation_during_continuous_collection(
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
-    client.send(r="invisible(reticulate::py_config())")
-    assert last_tool_text(client) == "[done]"
+    client.expect(r="invisible(reticulate::py_config())")
 
     # fmt: r
     r = code(r"""
@@ -867,8 +835,7 @@ def test_does_not_retain_stale_python_materialization(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
-    client.send(r="invisible(reticulate::py_config())")
-    assert last_tool_text(client) == "[done]"
+    client.expect(r="invisible(reticulate::py_config())")
 
     # Resolve an unchanged candidate while explicit preparation has resolved
     # its real addition. Only the exact activated manifest may be retained.
@@ -887,8 +854,7 @@ def test_does_not_retain_stale_python_materialization(
           invisible(.Call("mcp_console_resolve_python", request))
         }
         """)
-    client.send(r=r)
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r)
     # fmt: python
     python = code("""
         import _mcp_console_environment as environment
@@ -904,13 +870,9 @@ def test_does_not_retain_stale_python_materialization(
 
         environment._check_compatible = check_after_materialization
         """)
-    client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    client.expect(python=python)
 
-    client.send(
-        requirements={"python": ["py-yaml12"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
+    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
     client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
@@ -926,8 +888,7 @@ def test_failed_restart_requirements_preserve_worker(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
-    client.send(python="restart_marker = 42")
-    assert last_tool_text(client) == "[done]"
+    client.expect(python="restart_marker = 42")
     invalid = "not a valid requirement !!!"
 
     client.send(
@@ -986,11 +947,9 @@ def test_layers_python_requirements_declared_by_r_packages(
             initial_libpython <- reticulate::py_config()$libpython
             initial_worker <- Sys.getpid()
             """)
-        client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        client.expect(r=r)
 
-        client.send(r="library(mcpconsolepyrequire)")
-        assert last_tool_text(client) == "[done]"
+        client.expect(r="library(mcpconsolepyrequire)")
 
         # fmt: r
         r = code(r"""
@@ -1024,10 +983,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         client.send(python=python)
         assert last_tool_text(client) == "(False, 'yaml12')\n"
 
-        client.send(
-            requirements={"python": ["py-yaml12"]},
-        )
-        assert last_tool_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
         return client.finish()
 
 
@@ -1066,8 +1022,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
               isTRUE(request$env_is_package)
             )
             """)
-        client.send(r=r)
-        assert last_tool_text(client) == "[done]"
+        client.expect(r=r)
 
         # A lazy declaration is worker-owned until Python initializes or an
         # explicit preparation materializes it.

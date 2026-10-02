@@ -2,6 +2,15 @@
 !same-as custom MCP initialization for this execution mode
 ---
 send:
+  r: echo ready
+result:
+  content:
+    - type: text
+      text: |
+        zod: ready
+  isError: false
+---
+send:
   r: report runtime R resolution failure
 result:
   content:

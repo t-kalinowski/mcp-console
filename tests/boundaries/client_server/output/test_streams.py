@@ -152,7 +152,7 @@ def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcrip
                     "server did not capture the complete stdout payload"
                 )
         assert recorded.read_bytes() == expected.encode()
-        release_fixture_checkpoint(release)
+        release_fixture_checkpoint(release, client=client)
         client.receive(request)
         assert_preview(last_tool_text(client), expected)
         normalize_preview_paths(client)
