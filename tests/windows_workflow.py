@@ -443,6 +443,73 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("cargo", json.loads(result.stdout)["required_missing"])
 
+    def test_preflight_optional_r_version_errors_do_not_fail(self):
+        for name in ("git", "uv", "cargo", "rustup"):
+            self.stub(name, f"print('{name} fixture')")
+        for name in ("R", "Rscript"):
+            self.stub(
+                name,
+                f"import sys\nprint('broken {name}', file=sys.stderr)\nsys.exit(9)\n",
+            )
+        for r_home in (None, str(self.root / "missing-R")):
+            with self.subTest(r_home=r_home):
+                environment = self.environment | {"PATH": str(self.commands)}
+                environment.pop("R_HOME", None)
+                if r_home:
+                    environment["R_HOME"] = r_home
+                result = self.run_command(
+                    "preflight", "--json", environment=environment
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads(result.stdout)
+                self.assertEqual(report["required_missing"], [])
+                for name in ("R", "Rscript"):
+                    tool = report["tools"][name]
+                    self.assertFalse(tool["required"])
+                    self.assertIsNone(tool["version"])
+                    self.assertTrue(tool["error"])
+                    self.assertEqual(
+                        tool["error"], report["probe_errors"][f"{name}_version"]
+                    )
+
+    def test_preflight_optional_r_home_error_keeps_required_probes_fatal(self):
+        for name in ("git", "uv", "cargo", "rustup", "Rscript"):
+            self.stub(name, f"print('{name} fixture')")
+        self.stub(
+            "R",
+            dedent("""
+                import sys
+                if sys.argv[1:] == ["--version"]:
+                    print("R fixture")
+                else:
+                    print("broken R home", file=sys.stderr)
+                    sys.exit(9)
+                """),
+        )
+        environment = self.environment | {"PATH": str(self.commands)}
+        environment.pop("R_HOME", None)
+        result = self.run_command("preflight", "--json", environment=environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertIsNone(report["runtime"]["r_home"])
+        self.assertIn("broken R home", report["probe_errors"]["r_home"])
+        self.stub(
+            "uv",
+            dedent("""
+                import sys
+                if sys.argv[1:] == ["--version"]:
+                    print("uv fixture")
+                else:
+                    print("broken cache", file=sys.stderr)
+                    sys.exit(9)
+                """),
+        )
+        result = self.run_command("preflight", "--json", environment=environment)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["required_missing"], [])
+        self.assertIn("broken cache", report["probe_errors"]["uv_cache"])
+
     def test_check_rejects_invalid_flags_without_creating_build_state(self):
         result = self.run_command("check", "--bogus")
         self.assertEqual(result.returncode, 2, result.stderr)

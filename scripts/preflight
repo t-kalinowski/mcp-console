@@ -32,25 +32,29 @@ def main() -> None:
     tools = {}
     missing = []
     errors: dict[str, str] = {}
+    required_errors: set[str] = set()
 
-    def query(label: str, *command: str) -> str | None:
+    def query(label: str, *command: str, required: bool = True) -> str | None:
         try:
             return probe(*command)
         except subprocess.CalledProcessError as error:
             errors[label] = (error.stdout + error.stderr).strip()
         except (OSError, subprocess.TimeoutExpired) as error:
             errors[label] = str(error)
+        if required:
+            required_errors.add(label)
         return None
 
     for name in ("git", "uv", "cargo", "rustup", "R", "Rscript"):
         path = r_executable(name) if name in {"R", "Rscript"} else shutil.which(name)
         label = f"{name}_version"
-        version = query(label, path, "--version") if path else None
+        required = not WINDOWS or name not in {"R", "Rscript"}
+        version = query(label, path, "--version", required=required) if path else None
         tools[name] = {
             "path": path,
             "version": version.splitlines()[0] if version else None,
             "error": errors.get(label),
-            "required": not WINDOWS or name not in {"R", "Rscript"},
+            "required": required,
         }
         if tools[name]["version"] is None and tools[name]["required"]:
             missing.append(name)
@@ -134,7 +138,12 @@ def main() -> None:
             or (shutil.which("python") if WINDOWS else "managed at worker startup"),
             "r_home": os.environ.get("R_HOME")
             or (
-                query("r_home", tools["R"]["path"], "RHOME")
+                query(
+                    "r_home",
+                    tools["R"]["path"],
+                    "RHOME",
+                    required=tools["R"]["required"],
+                )
                 if tools["R"]["version"]
                 else None
             ),
@@ -199,7 +208,7 @@ def main() -> None:
             print(f"Cache {name}: {path}")
         for label, error in errors.items():
             print(f"Probe error ({label}): {error}")
-    raise SystemExit(bool(missing or errors))
+    raise SystemExit(bool(missing or required_errors))
 
 
 if __name__ == "__main__":

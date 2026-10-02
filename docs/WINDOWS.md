@@ -85,6 +85,7 @@ scripts/review-diff.cmd origin/main
 
 `preflight` is read-only and reports unsupported companion/provider capabilities as skips.
 R is optional in its inventory so Python-only setups can be inspected; the complete acceptance suite needs both runtimes.
+Failed optional R probes remain visible in the inventory without failing preflight; required tool and probe failures still fail it.
 `test` builds `target/debug/mcp-console.exe` unless `MCP_CONSOLE_TEST_BINARY` selects an installed executable; no selectors runs all native cases.
 `check` validates embedded sources, architecture, Rust formatting, Clippy, Rust tests, and native acceptance.
 `--full` adds supported tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
