@@ -5,12 +5,19 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      transcript_jobs:
+        description: Concurrent transcript cases (6 is the comparison baseline)
+        type: choice
+        options: ["12", "6"]
+        default: "12"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.transcript_jobs || '12' }}
   cancel-in-progress: true
 
 env:
@@ -400,10 +407,47 @@ jobs:
           prewarm_r --with praise --with zeallot
 
       - name: Run transcripts
+        id: transcripts
         env:
           GITHUB_PAT: ${{ github.token }}
+          TRANSCRIPT_JOBS: ${{ inputs.transcript_jobs || '12' }}
+          MCP_CONSOLE_TEST_TIMINGS: ${{ runner.temp }}/transcript-metrics/case-timings.jsonl
         # Use the prepared executable; scripts/test also invokes Cargo.
-        run: uv run --script tests/boundaries/_run.py --full --jobs 6
+        run: |
+          mkdir -p "$RUNNER_TEMP/transcript-metrics"
+          {
+            printf 'Revision: %s\n' "$(git rev-parse HEAD)"
+            printf 'Transcript workers: %s\n' "$TRANSCRIPT_JOBS"
+            printf 'Runner: %s / %s / %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageVersion"
+            python3 -c 'import os; print(f"Logical CPUs: {os.cpu_count()}")'
+          } > "$RUNNER_TEMP/transcript-metrics/environment.txt"
+          case "$RUNNER_OS" in
+            macOS) time_args=(-l) ;;
+            Linux) time_args=(-v) ;;
+            *) exit 1 ;;
+          esac
+          /usr/bin/time "${time_args[@]}" \
+            -o "$RUNNER_TEMP/transcript-metrics/resource-usage.txt" \
+            uv run --script tests/boundaries/_run.py --full --jobs "$TRANSCRIPT_JOBS"
+
+      - name: Summarize transcript measurements
+        if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
+        run: |
+          {
+            printf '### Transcript measurements\n\n```text\n'
+            cat "$RUNNER_TEMP/transcript-metrics/environment.txt"
+            cat "$RUNNER_TEMP/transcript-metrics/resource-usage.txt"
+            printf '\n```\n\n'
+            printf 'Maximum RSS is a per-process high-water mark, not the combined peak of concurrent workers. Units: bytes on macOS, KiB on Linux.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload transcript measurements
+        if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: transcript-metrics-${{ matrix.os }}-${{ inputs.transcript_jobs || '12' }}-workers
+          path: ${{ runner.temp }}/transcript-metrics
+          retention-days: 14
 
       - name: Check uv source installations
         env:

@@ -63,6 +63,15 @@ Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the ch
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
 The default concurrency is twice the logical CPU count, with a minimum of four cases.
 
+CI uses twelve transcript workers on both hosted platforms.
+To compare concurrency on the same revision, dispatch the CI workflow with `transcript_jobs` set to `6` and `12`.
+These runs have separate cancellation groups and retain the full integration and packaging gate.
+Compare successful runs on the same runner image with similar cache hits; repeat the pair before drawing performance conclusions.
+The job summary and `transcript-metrics-*` artifacts record the tested revision, worker count, runner image, CPU count, native `time` resource report, and per-execution timings.
+Case timings overlap and must not be summed as elapsed time.
+The resource report's maximum RSS is a per-process high-water mark, not the combined peak of concurrent workers; its units are bytes on macOS and KiB on Linux.
+Use it as a diagnostic, not proof that aggregate memory use fits the runner.
+
 ## Find the public test
 
 Start at the outermost boundary that observes the change.
