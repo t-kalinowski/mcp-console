@@ -12,8 +12,8 @@ Console's minimum Rust version is in `Cargo.toml`; the pinned companion's `codex
 Wheel builds need Maturin 1.15+.
 R/libR/packages are not build or Python-only execution prerequisites.
 
-Experimental Windows source builds use the MSVC toolchain and Windows SDK, skip companion staging, and support local unsandboxed R/Python only; see [Windows setup and validation](docs/WINDOWS.md).
-Windows packaging holds a blocking native checkout lock through wheel creation and rejects staged Unix companion files.
+Experimental Windows source builds use the MSVC toolchain, Windows SDK, and CMake and stage all three native sandbox executables; see [Windows setup and validation](docs/WINDOWS.md).
+Windows packaging holds a blocking native checkout lock through wheel creation and replaces any staged Unix companion files with the pinned Windows bundle.
 The Unix staging and checkout-wrapper instructions below apply to macOS and Linux.
 
 On macOS, install Xcode Command Line Tools.
@@ -29,7 +29,7 @@ scripts/with-checkout uv tool install --reinstall .
 ```
 
 For direct Cargo/Maturin builds, run `scripts/stage-sandbox-runner` first.
-Staging supports explicit macOS/Linux ARM64/x86-64 targets with `--target`; automatic uv installation uses the native target.
+Staging supports explicit macOS/Linux ARM64/x86-64 and Windows x64 MSVC targets with `--target`; automatic uv installation uses the native target.
 `cargo install` is insufficient because it copies only the main executable.
 
 The automatic companion checkout and build cache live under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/<repository>/<commit>/source`.
@@ -48,6 +48,8 @@ bin/mcp-console
 libexec/mcp-console-sandbox
 share/licenses/mcp-console/{LICENSE,NOTICE}
 ```
+
+Windows uses `.exe` suffixes and additionally bundles `mcp-console-sandbox-setup.exe` and `mcp-console-sandbox-runner.exe` under `libexec`; all helpers are verified before launch or setup. Windows binaries are not processed by Unix strip tools.
 
 Linux also bundles `libexec/bwrap` and Bubblewrap license, notice, and source metadata.
 Staging strips distributed binaries, records SHA-256 digests, and rejects inherited `CODEX_BWRAP_SOURCE_DIR` / `CODEX_SKIP_BWRAP_BUILD`, even empty.

@@ -15,7 +15,7 @@ fn main() {
 
     if matches!(
         std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
-        Ok("macos" | "linux")
+        Ok("macos" | "linux" | "windows")
     ) {
         bind_private_runner();
     }
@@ -56,10 +56,24 @@ fn bind_private_runner() {
     assert_eq!(build["target"].as_str(), Some(target.as_str()));
     let mut artifacts = String::new();
     let mut bundle = vec![
-        ("mcp-console-sandbox", "libexec/mcp-console-sandbox"),
         ("LICENSE", "share/licenses/mcp-console/LICENSE"),
         ("NOTICE", "share/licenses/mcp-console/NOTICE"),
     ];
+    if target.contains("windows") {
+        bundle.extend([
+            ("mcp-console-sandbox.exe", "libexec/mcp-console-sandbox.exe"),
+            (
+                "mcp-console-sandbox-setup.exe",
+                "libexec/mcp-console-sandbox-setup.exe",
+            ),
+            (
+                "mcp-console-sandbox-runner.exe",
+                "libexec/mcp-console-sandbox-runner.exe",
+            ),
+        ]);
+    } else {
+        bundle.push(("mcp-console-sandbox", "libexec/mcp-console-sandbox"));
+    }
     if target.contains("linux") {
         bundle.extend([
             ("bwrap", "libexec/bwrap"),

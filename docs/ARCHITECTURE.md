@@ -1,6 +1,6 @@
 # Architecture
 
-The shared runtime coordinator supports lazy, independent R and Python startup on [Windows](WINDOWS.md) for local unsandboxed sessions with preinstalled packages.
+The shared runtime coordinator supports lazy, independent R and Python startup on [Windows](WINDOWS.md) for local sessions with preinstalled packages.
 Windows uses native pipe/event/process primitives, and Python inspection runs in a kill-on-close Job entered before executing code; cancellation and normal completion require confirmed empty Jobs.
 These Jobs own inspection processes, not evaluated user code.
 Windows managed dependency resolution, SQL, and remote controllers are deferred.
@@ -28,7 +28,7 @@ relay ───── worker                                  sandboxed workload
             └─ R, Python, SQL
 ```
 
-The frontend verifies the installed companion and execs it with immutable launch configuration.
+The frontend verifies the installed companion and passes immutable launch configuration. Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
 Native enforcement, private storage, and descendant supervision belong to that runner, not to Console's relay.
 
 [SSH](SSH.md) places the launcher, relay, worker, and preparation owner on the remote host.

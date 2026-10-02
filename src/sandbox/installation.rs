@@ -1,6 +1,7 @@
 use sha2::{Digest as _, Sha256};
 use std::fs::File;
 use std::io::{self, Read as _};
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::path::PathBuf;
 
@@ -21,14 +22,18 @@ pub(super) fn private_runner() -> Result<PathBuf, String> {
                 continue;
             }
             // A replaced FIFO must not block before its file type is checked.
-            let mut file = File::options()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(prefix.join(relative))?;
+            let mut options = File::options();
+            options.read(true);
+            #[cfg(unix)]
+            options.custom_flags(libc::O_NONBLOCK);
+            let mut file = options.open(prefix.join(relative))?;
             let metadata = file.metadata()?;
-            if !metadata.is_file()
-                || (relative.starts_with("libexec/") && metadata.permissions().mode() & 0o111 == 0)
-            {
+            #[cfg(unix)]
+            let executable =
+                !relative.starts_with("libexec/") || metadata.permissions().mode() & 0o111 != 0;
+            #[cfg(windows)]
+            let executable = true;
+            if !metadata.is_file() || !executable {
                 return Err(io::Error::other(
                     "private artifact is not a readable file or executable",
                 ));
@@ -51,7 +56,11 @@ pub(super) fn private_runner() -> Result<PathBuf, String> {
                 ));
             }
         }
-        Ok(prefix.join("libexec/mcp-console-sandbox"))
+        Ok(prefix.join(if cfg!(windows) {
+            "libexec/mcp-console-sandbox.exe"
+        } else {
+            "libexec/mcp-console-sandbox"
+        }))
     };
     verify().map_err(|error| format!("failed to verify the private sandbox runner: {error}"))
 }

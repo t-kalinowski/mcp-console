@@ -16,10 +16,10 @@ caller / MCP server
       └─ relay → worker, or a standalone command
 ```
 
-Exec preserves the frontend PID and caller.
+On Unix, exec preserves the frontend PID and caller. Windows uses a waiting frontend; the runner observes both its frontend and the session owner with process handles.
 Console passes one immutable JSON policy through `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND...`; the runner consumes and removes that variable.
 Arguments, cwd, environment, and fd 0/1/2 remain ordinary launch inputs.
-There is no policy file, waiting adapter, stdin handoff, or application control process.
+There is no policy file or stdin handoff. The native runner owns enforcement and process cleanup.
 
 Without a selected profile, Console requests host reads, restricted networking without a proxy, private writable storage exported as `TMPDIR`, and its trusted macOS policy extension.
 The runner creates/owns `sandbox-XXXXXX/data`.
@@ -74,8 +74,13 @@ A final forced launcher kill cannot establish successful cleanup.
 Cleanup failures are nonzero errors with diagnostics; unproven retirement retains private storage.
 SSH requires remote cleanup acknowledgment, not just SSH exit; undetected network partitions have no lease deadline.
 Provider removal has its own receipts.
-Windows sandboxing and other operating systems are unsupported.
-Windows x64 supports experimental [local unsandboxed R and Python](WINDOWS.md).
+**Windows x64:** The elevated native backend uses Console-specific sandbox accounts,
+filesystem ACLs, network rules, and a non-breakaway Job. Account provisioning is an
+explicit interactive setup operation. Restricted-token execution is opt-in and
+requires enabled networking and host reads. Both modes confirm Job retirement before
+returning, and private storage is removed only after confirmation. Forced frontend
+exit is not a cleanup receipt. See [Windows setup, validation, and limits](WINDOWS.md).
+Other operating systems are unsupported.
 
 Unrestricted, external, and explicit Landlock modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).
 Local/SSH `--no-sandbox` removes native enforcement and descendant cleanup; normal relay shutdown still reaps the direct worker.

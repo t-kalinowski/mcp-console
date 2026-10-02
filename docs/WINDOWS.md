@@ -1,12 +1,12 @@
 # Windows local execution
 
-Native Windows x64 support is experimental and limited to local `mcp-console serve --no-sandbox` with preinstalled R and Python packages.
+Native Windows x64 support is experimental and supports local sandboxed or `--no-sandbox` sessions with preinstalled R and Python packages.
 R and Python are peer runtimes: each initializes lazily on first use, in either order, and either can run without the other installed.
 Persistent state, interactive input, plots, cooperative interruption, restart, and session recording are supported.
 Reticulate provides interoperability when both runtimes and the bridge are available; ordinary Python execution does not initialize R or require reticulate.
 
 SQL, managed dependency resolution, and the `resolve` subcommand are deferred on Windows.
-The native sandbox companion, standalone `sandbox` command, and Windows SSH/Docker/Docker Sandbox controllers are also unsupported.
+Windows SSH/Docker/Docker Sandbox controllers remain unsupported.
 The release workflow does not publish Windows wheels; Windows source checkouts can build and install a local wheel.
 
 ## Build and run
@@ -14,7 +14,7 @@ The release workflow does not publish Windows wheels; Windows source checkouts c
 Install Rust's MSVC toolchain, Visual Studio's C++ build tools and Windows SDK, Python 3.11 or newer, and uv.
 For R execution, install current x64 R and set `R_HOME` to its installation directory (or place R on `PATH`).
 R is not required to build or run Python-only sessions.
-Windows builds skip sandbox-companion staging and require a checkout without staged Unix companion files in `wheel-data/data/libexec` or `wheel-data/data/share`.
+Windows builds stage the pinned native sandbox executable and both Windows helpers. Install CMake for the companion build. Cargo-only builds first need `python scripts/stage-sandbox-runner`.
 
 From PowerShell in the repository root:
 
@@ -22,7 +22,8 @@ From PowerShell in the repository root:
 $env:R_HOME = 'C:/Program Files/R/R-4.6.1'
 $env:RETICULATE_PYTHON = 'C:/path/to/python.exe'
 uv tool install --reinstall .
-mcp-console serve --no-sandbox
+mcp-console sandbox-setup
+mcp-console serve
 ```
 
 Replace the paths with the installed runtime locations; omit `R_HOME` for a machine without R.
@@ -33,15 +34,54 @@ Install R packages into the selected R library before startup; install `reticula
 Python selection is inspected at startup, while interpreter initialization remains lazy.
 
 The server waits for an MCP client on standard input; it does not open an interactive terminal.
-Configure clients with command `mcp-console` and arguments `["serve", "--no-sandbox"]`.
+Configure clients with command `mcp-console` and arguments `["serve"]`; use `["serve", "--no-sandbox"]` to explicitly run with host permissions.
 There is no automatic fallback from sandboxed execution.
 Keep embedded R sources checked out with LF line endings as specified by `.gitattributes`.
 R startup selects the first nonempty `R_USER` or `HOME`, then the Windows user profile directory.
 Recording follows the shared [recording directory discovery](RECORDING.md), including `MCP_CONSOLE_HOME` and an existing project `.agents/console` directory.
 
+## Native sandbox
+
+`mcp-console sandbox-setup` explicitly provisions the Console sandbox accounts and
+network rules through Windows UAC. Run it interactively, then use
+`mcp-console sandbox-setup --status` to check readiness. Ordinary sandbox launches
+fail with setup guidance if provisioning is missing; they do not silently retry
+unsandboxed or choose a weaker backend. Setup uses Console accounts, separate from
+Codex accounts. Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
+
+The default elevated backend enforces restricted networking and filesystem writes.
+`:workspace`, `:read-only`, and `--writable-root` use native policy composition.
+Private storage is exported through `TMPDIR`, `TEMP`, and `TMP`.
+Standalone execution uses the same bundle: `mcp-console sandbox -- python script.py`.
+
+For explicitly network-enabled workloads, the restricted-token backend avoids
+account provisioning:
+
+```yaml
+sandbox:
+  windows_sandbox_level: restricted-token
+  network: enabled
+```
+
+It restricts writes but requires host reads; read-deny policies are rejected.
+`windows_state_dir` optionally selects an absolute persistent state directory; use the matching `sandbox-setup --state-dir PATH` when provisioning.
+Use one stable directory per Windows user: accounts and firewall policy are machine
+resources, and capability ACL entries persist on filesystem objects.
+Managed proxy configuration, custom cleanup timeouts, and Unix-only backend options
+are unsupported and fail before target launch.
+
+The native runner owns a non-breakaway Job for each workload. It terminates remaining
+descendants and confirms zero active processes before reporting exit. Only that
+receipt permits a replacement generation and private-storage removal. Cleanup failure
+retains storage and blocks replacement. The Windows frontend waits for the runner;
+forced frontend termination does not confirm cleanup. Process handles monitor both
+the frontend and session owner. Runner/helper death can terminate Jobs, but does not
+guarantee storage deletion.
+
 ## Lifecycle and platform differences
 
 The Windows relay uses private named pipes with overlapped I/O, inherited events for interrupts and managed stdin wakeups, and process handles for exit observation.
+Pipe permissions use the current logon SID so restricted tokens can open both endpoints; remote clients are rejected and both endpoints are connected before the worker starts.
 The public MCP messages, server-relay JSONL, and worker sideband message shapes remain shared across platforms.
 R and Python interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
 The worker updates interpreter pending state and invokes the C runtime's current SIGINT handler without requiring a console window.
@@ -62,12 +102,13 @@ The built-in worker uses the C runtime's inherited stdin descriptor because R su
 
 ## Validation
 
-Native acceptance covers Python-first and R-first startup, each runtime without the other, a Unicode virtualenv path, both bridge directions, input, interrupts including Python sleep, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
+Native sandbox acceptance covers policy enforcement, stdio/exit propagation, private storage, and descendant retirement before restart. Native runtime acceptance covers Python-first and R-first startup, each runtime without the other, a Unicode virtualenv path, both bridge directions, input, interrupts including Python sleep, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
 `tests/windows.py` includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
-Run native commands exclusively in a checkout; the Unix checkout workflow and transcript/sandbox suites are not Windows validation targets.
+Run native commands exclusively in a checkout; the Unix checkout workflow and transcript suites are not Windows validation targets. `python scripts/stage-sandbox-runner` and Windows packaging share native checkout/source locks.
 Windows source and wheel packaging serialize through a blocking native lock in `.dev-workflow/checkout.lock`.
 
 ```powershell
+python scripts/stage-sandbox-runner
 cargo fmt --all --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features

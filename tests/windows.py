@@ -18,6 +18,7 @@ from textwrap import dedent
 import unittest
 
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
+from windows_sandbox import WindowsSandbox  # noqa: F401 -- include sandbox acceptance
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,11 +28,30 @@ BINARY = Path(
 
 
 class Session:
-    def __init__(self, environment=None, *, relay=None, python=None):
-        self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
+    def __init__(
+        self, environment=None, *, relay=None, python=None, sandbox=False, overrides=()
+    ):
+        if sandbox:
+            from windows_sandbox import workspace
+
+            class Directory:
+                def __init__(self):
+                    self.context = workspace()
+                    self.name = str(self.context.__enter__())
+
+                def cleanup(self):
+                    self.context.__exit__(None, None, None)
+
+            self.directory = Directory()
+        else:
+            self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
         (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
-        command = [str(BINARY), "serve", "--no-sandbox"]
+        command = [str(BINARY), "serve"]
+        if not sandbox:
+            command.append("--no-sandbox")
+        for override in overrides:
+            command.extend(["-c", override])
         if python is not None:
             command.extend(["-c", f"python={json.dumps(str(python))}"])
         if environment is None:
@@ -118,7 +138,11 @@ class WindowsPackaging(unittest.TestCase):
                     tempfile.TemporaryDirectory(prefix="console packaging ")
                 )
             )
-            for source in ("build_backend.py", "tests/fixtures/windows_build.py"):
+            for source in (
+                "build_backend.py",
+                "windows_checkout.py",
+                "tests/fixtures/windows_build.py",
+            ):
                 (root / Path(source).name).write_bytes((ROOT / source).read_bytes())
 
             def start(hook):
@@ -502,13 +526,6 @@ class WindowsConsole(unittest.TestCase):
         self.addCleanup(session.close)
         session.initialize()
         return session
-
-    def test_requires_explicit_unsandboxed_mode(self):
-        result = subprocess.run(
-            [str(BINARY), "serve"], input=b"", capture_output=True, timeout=10
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(b"--no-sandbox", result.stderr)
 
     def test_r_persistence_and_restart(self):
         session = self.session()
