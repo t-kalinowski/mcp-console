@@ -32,4 +32,4 @@ result:
   isError: true
 ---
 stderr: |
-  SSH preparation owner stopped
+  truncated SSH frame length: failed to fill whole buffer

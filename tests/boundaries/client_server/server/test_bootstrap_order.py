@@ -263,10 +263,8 @@ def check_bootstrap_completion_requires_input_termination(
                         == '[input requested: "startup> "]\n[waiting for stdin]'
                     )
                 else:
-                    wait_for_evaluation_output(
-                        client,
+                    client.expect(
                         '[input requested: "startup> "]\n[waiting for stdin]',
-                        "idle startup input reaches the controller",
                     )
                 finish.release()
                 wait_for_evaluation_output(

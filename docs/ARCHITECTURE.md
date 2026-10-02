@@ -68,6 +68,7 @@ There is no cell queue.
 A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
 Connection closure cancels startup through the existing preparation/provider owners and waits for their cleanup contract.
 The preparation close barrier joins its owner thread after protocol closure and child reaping, so the server cannot exit with resolver cleanup still in flight.
+If the owner failed, closing retains its protocol error instead of replacing it with a generic stopped-owner error.
 It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
 Retirement cancels an in-flight Python bootstrap inspection without reporting that cancellation as a Python setup error.
 
