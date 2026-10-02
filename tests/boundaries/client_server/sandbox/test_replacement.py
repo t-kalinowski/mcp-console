@@ -133,7 +133,7 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
                 wait_for_descendant(descendant_group, client.process)
                 # Keep the event channel open before exit removes the directory.
                 control.connect(client)
-                release_partial_sideband(marker)
+                release_partial_sideband(marker, client=client)
                 control.wait_for(0, "partial_sideband_written")
 
                 client.receive(failed)
@@ -207,7 +207,9 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
             )
             assert os.getpgid(relay_pid) == relay_group
             assert relay_pid != worker_pid, "worker unexpectedly identified the relay"
-            release_fixture_checkpoint(started.parent / "zod-release-relay-exit")
+            release_fixture_checkpoint(
+                started.parent / "zod-release-relay-exit", client=client
+            )
             client.send()
 
             result = client.transcript[-1]["result"]

@@ -280,8 +280,8 @@ def _initializes_and_lists_tools(
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
-            # Preserve the handshake-only snapshot, then verify the same tools
-            # after background preparation has completed.
+            # Inspection does not wait for preparation; it must leave the
+            # configured schema unchanged. Keep the handshake-only snapshot.
             transcript = list(client.transcript)
             prepared = client.send(requirements={"action": "get"})
             assert not prepared.get("isError", False), prepared

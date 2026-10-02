@@ -336,6 +336,8 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Complete lazy custom-worker startup before timing resolver arrival.
+            client.expect("zod: ready\n", r="echo ready")
             evaluation = client.start_send(
                 r="report runtime R resolution failure",
             )

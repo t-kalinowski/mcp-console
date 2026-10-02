@@ -1,82 +1,12 @@
 ---
 send:
   requirements:
-    action: get
+    action: reset
+  timeout_ms: 180000
 result:
   content:
     - type: text
-      text: |-
-        {
-          "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse",
-              "yyjsonr"
-            ],
-            "python": [
-              "numpy",
-              "pandas"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
-            "python": []
-          }
-        }
-  structuredContent:
-    requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - nanoarrow
-        - reticulate
-        - tidyverse
-        - yyjsonr
-      python:
-        - numpy
-        - pandas
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    prepared: true
-    runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
-      python: []
+      text: "[prepared]"
   isError: false
 ---
 send:
