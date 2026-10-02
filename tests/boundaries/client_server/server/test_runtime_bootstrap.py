@@ -742,17 +742,11 @@ def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = Fal
             code(f"""
                 import os
                 import sys
-                import builtins
-                import uuid
                 from pathlib import Path
 
                 if "_mcp_console_services" in sys.modules:
-                    # Namespace-local PIDs can repeat in replacement workers.
-                    # Retain an identity across retries in this interpreter.
-                    if not hasattr(builtins, "bootstrap_worker_identity"):
-                        builtins.bootstrap_worker_identity = uuid.uuid4().hex
                     with Path({str(identities)!r}).open("a") as stream:
-                        stream.write(builtins.bootstrap_worker_identity + "\\n")
+                        stream.write(str(os.getpid()) + "\\n")
                     if {inspect!r}:
                         Path({str(armed)!r}).touch()
                 blocked = (
@@ -785,6 +779,8 @@ def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = Fal
         ) as client:
             try:
                 reached.wait("first generation bootstrap", timeout=600)
+                # Map the live worker's namespace PID to a host process identity
+                # before replacement, so reused namespace PIDs cannot compare equal.
                 worker = capture_process_identity(
                     host_process_id(int(identities.read_text()), client.process.pid)
                 )
@@ -802,6 +798,7 @@ def test_restart_during_bootstrap_inspection_is_quiet(
         release,
         reached,
         identities,
+        worker,
     ):
         client.initialize_and_list_tools()
         pending = client.start_send(control="restart", python="42")
@@ -811,6 +808,7 @@ def test_restart_during_bootstrap_inspection_is_quiet(
         assert last_result_text(client) == (
             "[worker stopped: in-memory state lost]\n[starting new worker]\n42\n[done]"
         ), pending
+        assert not live_processes([worker]), "previous bootstrap worker survived"
         return client.finish()[3:]
 
 
