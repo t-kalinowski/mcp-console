@@ -204,6 +204,17 @@ class WindowsConsole(unittest.TestCase):
                         if expected % 2:
                             result = session.send(**control)
                             if order != "python":
+                                # Empty polls do not dispatch worker commands.
+                                # R must acknowledge while idle, even if the
+                                # interrupt call's grace ended before it ran.
+                                deadline = time.monotonic() + 5
+                                while (
+                                    result["content"]
+                                    == [{"type": "text", "text": "\n[idle]"}]
+                                    and time.monotonic() < deadline
+                                ):
+                                    time.sleep(0.01)
+                                    result = session.send()
                                 self.assertEqual(
                                     result["content"],
                                     [{"type": "text", "text": "\n\n[idle]"}],
@@ -215,15 +226,19 @@ class WindowsConsole(unittest.TestCase):
                         )
                         output = "".join(item["text"] for item in result["content"])
                         self.assertFalse(result["isError"], result)
-                        idle = (
-                            "\n[output produced while idle]\n"
-                            if control and order != "python"
-                            else ""
-                        )
-                        self.assertEqual(
-                            output,
-                            idle + f"{expected}\n" + ("[done]" if control else ""),
-                        )
+                        wanted = f"{expected}\n" + ("[done]" if control else "")
+                        if control and order != "python":
+                            # R's acknowledgment may reach the server before
+                            # or after it admits the same-call following cell.
+                            self.assertIn(
+                                output,
+                                (
+                                    "\n" + wanted,
+                                    "\n[output produced while idle]\n" + wanted,
+                                ),
+                            )
+                        else:
+                            self.assertEqual(output, wanted)
                     if order != "python":
                         result = session.send(control="interrupt", r="42L")
                         self.assertIn("[1] 42", json.dumps(result))
