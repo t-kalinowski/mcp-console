@@ -9,13 +9,15 @@ from __future__ import annotations
 import ast
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from checkout_workflow import r_executable
+
 SOURCE_ROOT = ROOT / "src"
 EXPECTED_SOURCES = {
     "src/python/bridge.R",
@@ -99,6 +101,7 @@ def validate_r(path: str, source_path: Path, rscript: str) -> list[str]:
         capture_output=True,
         text=True,
         check=False,
+        env=os.environ | {"LC_ALL": "C"},
     )
     if result.returncode == 0:
         return []
@@ -111,11 +114,7 @@ def main() -> int:
     discovered = set(sources)
     included = included_sources()
     errors = []
-    rscript = (
-        str(Path(os.environ["R_HOME"]) / "bin/Rscript")
-        if "R_HOME" in os.environ
-        else shutil.which("Rscript")
-    )
+    rscript = r_executable("Rscript")
     if rscript is None:
         print("R source syntax checks skipped: Rscript is unavailable", file=sys.stderr)
 

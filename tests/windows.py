@@ -121,7 +121,12 @@ class WindowsPackaging(unittest.TestCase):
                     tempfile.TemporaryDirectory(prefix="console packaging ")
                 )
             )
-            for source in ("build_backend.py", "tests/fixtures/windows_build.py"):
+            for source in (
+                "build_backend.py",
+                "checkout_workflow.py",
+                "checkout_windows.py",
+                "tests/fixtures/windows_build.py",
+            ):
                 (root / Path(source).name).write_bytes((ROOT / source).read_bytes())
 
             def start(hook):

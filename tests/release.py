@@ -1417,6 +1417,9 @@ class RuntimeSourceValidationTests(unittest.TestCase):
             (root / "scripts").mkdir()
             script = root / "scripts/validate_runtime_sources.py"
             shutil.copyfile(ROOT / "scripts/validate_runtime_sources.py", script)
+            shutil.copyfile(
+                ROOT / "checkout_workflow.py", root / "checkout_workflow.py"
+            )
             r_home = root / "selected-R"
             (r_home / "bin").mkdir(parents=True)
             write_executable(

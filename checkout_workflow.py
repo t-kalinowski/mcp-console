@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,7 +21,12 @@ from typing import BinaryIO
 LOCKS_ENV = "MCP_CONSOLE_CHECKOUT_LOCKS"
 RUN_ENV = "MCP_CONSOLE_VALIDATION_RUN"
 GROUP_ENV = "MCP_CONSOLE_VALIDATION_GROUP"
-CANCELLATION_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+WINDOWS = sys.platform == "win32"
+CANCELLATION_SIGNALS = (
+    (signal.SIGINT, signal.SIGTERM, signal.SIGBREAK)
+    if WINDOWS
+    else (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+)
 FAILURE = re.compile(
     r"^((?:client_server|server_relay|relay_worker|cli)/\S+::\S+): failed(?: in .*)?$"
 )
@@ -40,14 +45,18 @@ def exclusive(paths: list[Path], label: str, *, wait: bool = False) -> Iterator[
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as lock:
             try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_file(lock, wait=False)
             except BlockingIOError:
-                lock.seek(0)
+                # Windows byte-range locks also exclude diagnostic reads. Keep
+                # the owner record after the locked byte, including for nested
+                # packaging hooks using the same inherited ownership token.
+                lock.seek(1 if WINDOWS else 0)
                 # flock decides admission. Its separately published diagnostic
                 # can be empty or stale while ownership changes hands.
                 owner = lock.read()
                 if (
                     str(path) in tokens
+                    and owner
                     and json.loads(owner)["token"] == tokens[str(path)]
                 ):
                     yield
@@ -55,9 +64,9 @@ def exclusive(paths: list[Path], label: str, *, wait: bool = False) -> Iterator[
                 if not wait:
                     continue
                 print(f"waiting for {label}", file=sys.stderr, flush=True)
-                fcntl.flock(lock, fcntl.LOCK_EX)
+                lock_file(lock, wait=True)
             token = uuid.uuid4().hex
-            lock.seek(0)
+            lock.seek(1 if WINDOWS else 0)
             lock.truncate()
             json.dump({"pid": os.getpid(), "command": sys.argv, "token": token}, lock)
             lock.flush()
@@ -74,10 +83,62 @@ def exclusive(paths: list[Path], label: str, *, wait: bool = False) -> Iterator[
 
 
 @contextmanager
-def checkout_owner(root: Path) -> Iterator[None]:
+def checkout_owner(root: Path, *, wait: bool = False) -> Iterator[None]:
     # Installation tests rename target, so ownership must live outside it.
-    with exclusive([root.resolve() / ".dev-workflow/checkout.lock"], "checkout"):
+    with exclusive(
+        [root.resolve() / ".dev-workflow/checkout.lock"], "checkout", wait=wait
+    ):
         yield
+
+
+def lock_file(lock, *, wait: bool) -> None:
+    if WINDOWS:
+        from checkout_windows import lock_file as native_lock
+
+        native_lock(lock.fileno(), wait=wait)
+    else:
+        import fcntl
+
+        fcntl.flock(lock, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+
+
+@contextmanager
+def cancellation_blocked() -> Iterator[None]:
+    if WINDOWS:
+        previous = {
+            number: signal.signal(number, signal.SIG_IGN)
+            for number in CANCELLATION_SIGNALS
+        }
+        try:
+            yield
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+    else:
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, CANCELLATION_SIGNALS)
+        try:
+            yield
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def r_executable(name: str) -> str | None:
+    if home := os.environ.get("R_HOME"):
+        executable = name + (".exe" if WINDOWS else "")
+        candidates = [
+            Path(home) / "bin" / executable,
+            Path(home) / "bin/x64" / executable,
+        ]
+        return str(next((path for path in candidates if path.is_file()), candidates[0]))
+    return shutil.which(name)
+
+
+def wait_process(process: subprocess.Popen) -> int:
+    if WINDOWS:
+        from checkout_windows import wait_process as native_wait
+
+        return native_wait(process)
+    return process.wait()
 
 
 def cache_directory() -> Path:
@@ -143,6 +204,20 @@ def command_process(
     environment: dict[str, str] | None = None,
 ) -> Iterator[subprocess.Popen]:
     """Own command lifetime without intercepting its standard streams."""
+    if WINDOWS:
+        from checkout_windows import command_process as native_command
+
+        command = [shutil.which(command[0]) or command[0], *command[1:]]
+        with ExitStack() as stack:
+            process = stack.enter_context(
+                native_command(command, log=log, environment=environment)
+            )
+            try:
+                yield process
+            finally:
+                with cancellation_blocked():
+                    stack.close()
+        return
     owns_group = os.environ.get(GROUP_ENV) != str(os.getpgrp())
     launch = (
         [sys.executable, str(Path(__file__).resolve()), "phase", *command]
@@ -161,11 +236,8 @@ def command_process(
         finally:
             # Cleanup is one critical section, including after normal exit.
             # Deliver pending cancellation only after retirement has finished.
-            previous = signal.pthread_sigmask(signal.SIG_BLOCK, CANCELLATION_SIGNALS)
-            try:
+            with cancellation_blocked():
                 stop_phase(process, owns_group=owns_group)
-            finally:
-                signal.pthread_sigmask(signal.SIG_SETMASK, previous)
 
 
 class Run:
@@ -217,7 +289,17 @@ class Run:
         self.record["elapsed_seconds"] = time.monotonic() - self.started
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(self.record, indent=2) + "\n")
-        temporary.replace(self.path)
+        for attempt in range(8):
+            try:
+                temporary.replace(self.path)
+                break
+            except PermissionError as error:
+                if not WINDOWS or error.winerror not in {5, 32} or attempt == 7:
+                    raise
+                # Windows readers may briefly exclude deletion. There is no
+                # notification when such a handle closes; bound the retries
+                # and keep the preceding complete record until replacement.
+                time.sleep(0.01 * 2**attempt)
 
     def phase(self, name: str, command: list[str]) -> int:
         log_path = self.directory / f"{len(self.record['phases']) + 1:02}-{name}.log"
@@ -240,7 +322,7 @@ class Run:
                 log_path.open("wb") as log,
                 command_process(command, log=log, environment=environment) as process,
             ):
-                status = process.wait()
+                status = wait_process(process)
         finally:
             if process is not None:
                 status = process.returncode
@@ -304,22 +386,29 @@ def main() -> None:
         os.environ[GROUP_ENV] = str(os.getpgrp())
         os.execvp(options.arguments[0], options.arguments)
     tooling = [
-        ("release-tests", ["tests/release.py"]),
-        ("staging-tests", ["python3", "tests/staging.py"]),
-        ("runner-tests", ["tests/transcript_runner.py"]),
-        ("workflow-tests", ["python3", "tests/workflow.py"]),
-        ("format-tests", ["python3", "tests/format.py"]),
-        ("development-tests", ["python3", "tests/development.py"]),
-        ("client-tests", ["tests/mcp_client.py"]),
+        ("release-tests", [sys.executable, "tests/release.py"]),
+        ("staging-tests", [sys.executable, "tests/staging.py"]),
+        ("runner-tests", ["uv", "run", "--script", "tests/transcript_runner.py"]),
+        ("workflow-tests", [sys.executable, "tests/workflow.py"]),
+        ("format-tests", [sys.executable, "tests/format.py"]),
+        ("development-tests", [sys.executable, "tests/development.py"]),
+        ("client-tests", ["uv", "run", "--script", "tests/mcp_client.py"]),
     ]
+    if WINDOWS:
+        tooling = [
+            ("workflow-tests", [sys.executable, "tests/windows_workflow.py"]),
+            ("format-tests", [sys.executable, "tests/format.py"]),
+            ("development-tests", [sys.executable, "tests/development.py"]),
+        ]
     core = [
-        ("runtime-sources", ["scripts/validate_runtime_sources.py"]),
+        ("runtime-sources", [sys.executable, "scripts/validate_runtime_sources.py"]),
         *(tooling if full else []),
         (
             "architecture",
             [
+                sys.executable,
                 "tests/architecture.py",
-                *([] if full else ["SandboxProcessBoundaryTests"]),
+                *([] if full or WINDOWS else ["SandboxProcessBoundaryTests"]),
             ],
         ),
         ("rust-format", ["cargo", "fmt", "--all", "--check"]),
@@ -339,10 +428,34 @@ def main() -> None:
     ]
     plans = {
         "check": [
-            ("stage", ["scripts/stage-sandbox-runner"]),
-            ("core", ["scripts/check-core", *(["--full"] if full else [])]),
-            ("transcripts", ["scripts/test", *(["--full"] if full else [])]),
-            *([("installation", ["python3", "tests/install.py"])] if full else []),
+            *(
+                []
+                if WINDOWS
+                else [("stage", [sys.executable, "scripts/stage-sandbox-runner"])]
+            ),
+            (
+                "core",
+                [sys.executable, "scripts/check-core", *(["--full"] if full else [])],
+            ),
+            (
+                "native-tests" if WINDOWS else "transcripts",
+                [sys.executable, "scripts/test", *(["--full"] if full else [])],
+            ),
+            *(
+                [
+                    (
+                        "installation",
+                        [
+                            sys.executable,
+                            "tests/windows_install.py"
+                            if WINDOWS
+                            else "tests/install.py",
+                        ],
+                    )
+                ]
+                if full
+                else []
+            ),
         ],
         "check-core": core,
         "test": [
@@ -350,12 +463,32 @@ def main() -> None:
                 []
                 if os.environ.get("MCP_CONSOLE_TEST_BINARY")
                 else [
-                    ("build", ["cargo", "build", "--release", "--target-dir", "target"])
+                    (
+                        "build",
+                        [
+                            "cargo",
+                            "build",
+                            *([] if WINDOWS else ["--release"]),
+                            "--target-dir",
+                            "target",
+                        ],
+                    )
                 ]
             ),
             (
-                "transcripts",
+                "native-tests" if WINDOWS else "transcripts",
                 [
+                    sys.executable,
+                    "tests/windows.py",
+                    "-v",
+                    *[
+                        argument
+                        for argument in options.arguments
+                        if argument not in {"--full", "--quick"}
+                    ],
+                ]
+                if WINDOWS
+                else [
                     "uv",
                     "run",
                     "--script",
@@ -386,7 +519,7 @@ def main() -> None:
                 stack.callback(signal.signal, number, previous)
             if run is None:
                 with command_process(options.arguments) as process:
-                    status = process.wait()
+                    status = wait_process(process)
                 raise SystemExit(128 - status if status < 0 else status)
             run.capture_checkout()
             for name, command in plans[options.mode]:
@@ -407,7 +540,11 @@ def main() -> None:
                 # Work and retirement have ended. Freeze their status through
                 # publication and process exit; a late signal cannot contradict
                 # the completed record. Deliberately do not unblock before exit.
-                signal.pthread_sigmask(signal.SIG_BLOCK, CANCELLATION_SIGNALS)
+                if WINDOWS:
+                    for number in CANCELLATION_SIGNALS:
+                        signal.signal(number, signal.SIG_IGN)
+                else:
+                    signal.pthread_sigmask(signal.SIG_BLOCK, CANCELLATION_SIGNALS)
                 run.record["exit_status"] = status
                 run.save()
                 print(f"Validation record: {run.path}", file=sys.stderr, flush=True)

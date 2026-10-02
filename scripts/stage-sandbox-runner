@@ -114,7 +114,11 @@ def main() -> None:
 def runner_checkout(args: argparse.Namespace, pin: dict) -> Path:
     return (
         args.checkout
-        or cache_directory() / "mcp-console/sandbox" / pin["repository"] / pin["commit"] / "source"
+        or cache_directory()
+        / "mcp-console/sandbox"
+        / pin["repository"]
+        / pin["commit"]
+        / "source"
     ).resolve()
 
 

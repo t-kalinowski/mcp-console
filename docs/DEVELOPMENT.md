@@ -5,9 +5,11 @@ Read [AGENTS.md](../AGENTS.md) for change and publishing rules, [architecture](A
 
 ## Setup
 
-These workflow scripts target macOS and Linux.
-For Windows local unsandboxed R/Python, use the [native setup and validation commands](WINDOWS.md); run them exclusively in the checkout.
-Windows packaging skips companion staging and serializes with a blocking native lock outside `target`.
+The workflow commands support macOS, Linux, and native Windows.
+On Windows, use their `.cmd` launchers from PowerShell or Command Prompt, such as `scripts/preflight.cmd` and `scripts/check.cmd`.
+Alternatively, invoke any development entry point explicitly with Python, such as `python scripts/check`; this also uses the selected interpreter for nested commands.
+Windows selects [native acceptance and installation checks](WINDOWS.md#validation) for local unsandboxed R/Python; run them exclusively in the checkout.
+Windows packaging skips companion staging and shares the checkout lock with the development commands.
 
 `scripts/preflight` inventories tools, runtimes, companion staging, and caches; `--json` produces structured output.
 It does not install or build.
@@ -130,15 +132,21 @@ Regenerate only intentional snapshot changes, then rerun without `--update`.
 Review the diff, embedded-program indentation, and `git diff --check` after formatting.
 A shared fixture change may need snapshots from other platforms; a local skip does not validate them.
 
-The default `scripts/check` stages the companion, validates extracted runtime sources and architecture, checks Rust formatting and Clippy, runs debug Rust tests, builds the release executable, and runs the explicit smoke transcript profile.
+On macOS/Linux, the default `scripts/check` stages the companion, validates extracted runtime sources and architecture, checks Rust formatting and Clippy, runs debug Rust tests, builds the release executable, and runs the explicit smoke transcript profile.
+On Windows, it skips companion staging, performs the same source and Rust checks, builds the debug executable, and runs the native acceptance suite.
 `--quick` is an alias for this default, not a narrower check.
 
-The full gate adds repository-tooling self-tests, all capability-applicable transcripts, and source/wheel installation checks.
-Installation checks run last because they temporarily replace the application `target` directory.
+The full gate adds platform-applicable repository-tooling self-tests, all capability-applicable acceptance cases, and source/wheel installation checks.
+Windows runs native workflow, formatting, and development-report regressions; Unix transcript/provider and release-staging self-tests remain Unix coverage.
+Installation checks run last because Unix checks temporarily replace the application `target` directory.
+Windows builds a wheel and exercises wheel and source installs in a temporary virtualenv without installing into the caller's Python environment.
 CI runs the full profiles and is the comprehensive merge gate.
 Run the owning focused tests when changing tooling; the default gate does not cover all tooling regressions.
 
-`scripts/test` without selectors runs the smoke profile in [`_profiles.py`](../tests/boundaries/_profiles.py); `--full` runs all applicable cases.
+On macOS/Linux, `scripts/test` without selectors runs the smoke profile in [`_profiles.py`](../tests/boundaries/_profiles.py); `--full` runs all applicable cases.
+On Windows, the default, `--quick`, and `--full` run the native suite; selectors use `CLASS[.CASE]`, for example `WindowsConsole.test_python_without_r`.
+Both platforms support `--list` and `--locate` without building or acquiring checkout ownership.
+Windows native cases use unittest assertions rather than transcript snapshots; `--update`, `--jobs`, and transcript timeout flags are not Windows options.
 Explicit selectors keep their scope with either profile.
 Only an unscoped full run audits orphan snapshots, and only a successful full update removes them.
 Focused updates preserve unselected snapshots.
@@ -179,10 +187,16 @@ Separate worktrees may run concurrently.
 The pinned companion's source and Cargo cache are shared under `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/sandbox/` and serialized by `<source-checkout>.stage.lock` through preparation, build, and copying.
 An explicit `MCP_CONSOLE_SANDBOX_SOURCE` uses the same ownership rules; an explicitly set `XDG_CACHE_HOME` must be absolute.
 
-The wrapper sends `SIGTERM` on cancellation, then escalates after five seconds and retires its process group before releasing ownership.
+On macOS/Linux, the wrapper sends `SIGTERM` on cancellation, then escalates after five seconds and retires its process group before releasing ownership.
 Deliberately detached children remain their caller's responsibility.
 These guarantees require the owner to survive: after a crash or `SIGKILL`, establish that surviving mutators have stopped before starting another.
 Lock diagnostics can be stale.
+
+Windows commands hold the same native byte-range lock as packaging; independent workflows fail with a busy-owner diagnostic, while independent packaging hooks wait.
+Nested synchronous commands and packaging hooks inherit the existing owner token, including when `target` is renamed.
+Each Windows phase enters a kill-on-close Job before launching its command.
+Normal completion and console cancellation retire the Job's descendants and confirm an empty Job before releasing checkout ownership.
+Console cancellation wakes the process wait through a socket notification; Windows cleanup terminates the Job immediately.
 
 ## Resume from a small checkpoint
 
@@ -196,6 +210,7 @@ Reconstruct stale or missing facts before relying on them; do not overwrite an e
 
 Validation records live in `.dev-workflow/runs/<run>/result.json`, with phase logs and per-execution `case-timings.jsonl`.
 Records describe the revision and worktree at admission.
+Atomic record replacement briefly retries Windows access/sharing conflicts with readers; persistent publication errors still fail the command.
 Missing metadata stays unknown; an unfinished record is not proof that a process is running.
 Return to its original execution handle or establish cleanup with its owner before rerunning.
 A focused pass, old revision, or dirty tree is not evidence of a full pass on the current clean revision.

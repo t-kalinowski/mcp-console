@@ -322,7 +322,7 @@ class WorkflowTests(unittest.TestCase):
                     else common
                 )
                 self.assertEqual([p["name"] for p in record["phases"]], expected)
-                architecture = "[architecture] tests/architecture.py"
+                architecture = f"[architecture] {sys.executable} tests/architecture.py"
                 if arguments != ("--full",):
                     architecture += " SandboxProcessBoundaryTests"
                 self.assertIn(architecture + "\n", result.stderr)
@@ -748,15 +748,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(process.poll())
         self.finish_check(process)
 
-    def test_nested_launch_error_records_failure_after_successful_phase(self) -> None:
+    def test_missing_nested_script_records_failure_after_successful_phase(self) -> None:
         shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")
         self.write_script("scripts/validate_runtime_sources.py", 'print("checked")')
         result = self.run_command("scripts/check")
         self.assertNotEqual(result.returncode, 0)
         record = next(r for r in self.records() if r["command"] == ["check-core"])
         self.assertEqual(record["phases"][0]["exit_status"], 0)
-        self.assertEqual(record["phases"][1]["exit_status"], 1)
-        self.assertEqual(record["exit_status"], 1)
+        # Python now launches repository scripts explicitly on every platform;
+        # a missing script is Python's exit status 2, not a shebang exec error.
+        self.assertEqual(record["phases"][1]["exit_status"], 2)
+        self.assertEqual(record["exit_status"], 2)
 
     def test_wrapped_command_preserves_stdout_and_stderr(self) -> None:
         self.write_script(
