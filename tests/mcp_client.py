@@ -26,7 +26,7 @@ from threading import Event
 from typing import Any
 from unittest.mock import patch
 
-from support.assertions import wait_for_evaluation_output
+from support.assertions import wait_for_evaluation_output, wait_for_idle_output
 from support.checkpoints import (
     FifoCheckpoint,
     release_fixture_checkpoint,
@@ -435,6 +435,25 @@ class ScriptedClient:
 
 
 class EvaluationCollectorTests(unittest.TestCase):
+    def test_idle_output_waits_for_startup_input(self) -> None:
+        expected = '[input requested: "startup> "]\n[waiting for stdin]'
+        client = ScriptedClient(
+            [
+                {"content": [{"type": "text", "text": output}], "isError": False}
+                for output in ("\n[idle]", "\n[idle]", expected)
+            ]
+        )
+        wait_for_idle_output(
+            client,
+            expected,
+            "startup input",
+            completion_timeout_seconds=client.response_timeout,
+        )
+        self.assertEqual(client.calls, [{}, {}, {}])
+        self.assertEqual(len(client.transcript), 1)
+        self.assertEqual(client.transcript[0]["result"]["content"][0]["text"], expected)
+        self.assertEqual(client.response_timeout, 600)
+
     def test_observes_running_and_stdin_without_waiting_for_completion(self) -> None:
         running = "\n[running; poll with an empty send]"
         for state in ("arrived\n" + running, "prompt\n[waiting for stdin]"):

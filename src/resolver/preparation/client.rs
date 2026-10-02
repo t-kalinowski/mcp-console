@@ -22,14 +22,14 @@ pub(crate) struct Preparation(Arc<Connection>);
 struct Connection {
     events: mpsc::Sender<Event>,
     sequence: AtomicU64,
-    closed: AtomicBool,
+    owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
     blocked: Arc<Mutex<Option<String>>>,
     local: bool,
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.events.send(Event::Close(None));
+        let _ = self.events.send(Event::Close);
     }
 }
 
@@ -105,7 +105,7 @@ enum Event {
     Received(Result<Output, String>),
     WriteFailed(String),
     Exited,
-    Close(Option<mpsc::Sender<Result<(), String>>>),
+    Close,
 }
 
 struct Pending {
@@ -268,30 +268,37 @@ impl Preparation {
             })?;
         let state = Arc::new(State::default());
         let (reply, response) = mpsc::channel();
-        let connection = Self(Arc::new(Connection {
-            events: events.clone(),
-            sequence: AtomicU64::new(1),
-            closed: AtomicBool::new(false),
-            blocked: blocked.clone(),
-            local,
-        }));
         let pending = Pending {
             id: 0,
             state: state.clone(),
             reply,
             chunks: None,
         };
-        thread::spawn(move || {
-            let _ = run(received, &outgoing, pending, open, &blocked, local);
+        let owner_blocked = blocked.clone();
+        let owner = thread::spawn(move || {
+            let result = run(received, &outgoing, pending, open, &owner_blocked, local);
             drop(outgoing);
             drop(abort);
-            let _ = writer.join();
-            let _ = reader.join();
-            if !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+            // Do not extend failed protocol retirement with a second exit wait.
+            // Kill before joining I/O and reaping.
+            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
                 let _ = child.kill();
             }
-            let _ = child.wait();
+            let _ = writer.join();
+            let _ = reader.join();
+            let reaped = child
+                .wait()
+                .map(|_| ())
+                .map_err(|error| format!("cannot reap {}: {error}", label(local)));
+            result.and(reaped)
         });
+        let connection = Self(Arc::new(Connection {
+            events: events.clone(),
+            sequence: AtomicU64::new(1),
+            owner: Mutex::new(Some(owner)),
+            blocked,
+            local,
+        }));
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
@@ -320,7 +327,7 @@ impl Preparation {
             Ok(discovery) => Ok((connection, discovery)),
             Err(error) => {
                 // Startup has no Client to own shutdown after discovery fails.
-                // Finish the close handshake before the MCP process can exit.
+                // Join preparation cleanup before the MCP process can exit.
                 let _ = connection.close();
                 Err(error)
             }
@@ -375,17 +382,16 @@ impl Preparation {
     }
 
     pub(crate) fn close(&self) -> Result<(), String> {
-        if self.0.closed.swap(true, Ordering::SeqCst) {
+        // Hold the lock through the join so every close caller waits for the
+        // owner to reap its child, even after Closed and EOF arrive.
+        let mut owner = self.0.owner.lock().map_err(|_| "preparation owner lock")?;
+        let Some(owner) = owner.take() else {
             return Ok(());
-        }
-        let (reply, response) = mpsc::channel();
-        self.0
-            .events
-            .send(Event::Close(Some(reply)))
-            .map_err(|_| format!("{} owner stopped", label(self.0.local)))?;
-        response
-            .recv()
-            .map_err(|_| format!("{} shutdown lost its acknowledgment", label(self.0.local)))?
+        };
+        let _ = self.0.events.send(Event::Close);
+        owner
+            .join()
+            .map_err(|_| format!("{} owner panicked", label(self.0.local)))?
     }
 }
 
@@ -401,7 +407,6 @@ fn run(
     let mut active = Some(initial);
     let mut controls: VecDeque<(u64, ResolverControlOutcome, Option<ControlReply>)> =
         VecDeque::new();
-    let mut closing = Vec::new();
     let mut close_requested = false;
     let mut hello = false;
     let mut setup_deadline = (!local).then(|| Instant::now() + super::SETUP_TIMEOUT);
@@ -547,10 +552,7 @@ fn run(
                         retirement_deadline = None;
                     }
                 }
-                Event::Close(reply) => {
-                    if let Some(reply) = reply {
-                        closing.push(reply);
-                    }
+                Event::Close => {
                     if !close_requested {
                         outgoing
                             .send(Input::Close)
@@ -592,9 +594,6 @@ fn run(
         if let Some(reply) = reply {
             let _ = reply.send(Err(format!("{owner} control lost its acknowledgment")));
         }
-    }
-    for reply in closing {
-        let _ = reply.send(result.clone());
     }
     result
 }

@@ -114,20 +114,27 @@ def python_bootstrap(
             root,
         ) as client:
             try:
-                reached.wait("embedded Python starts before initialize or send")
+                reached.wait(
+                    "embedded Python starts before initialize or send",
+                    timeout=client.response_timeout,
+                )
                 yield client, release
             finally:
                 release.release()
 
 
 def bootstrap_output(
-    client: McpClient, expected: str, *, terminal: str = "\n[idle]"
+    client: McpClient,
+    expected: str,
+    *,
+    terminal: str = "\n[idle]",
+    **send_arguments: int,
 ) -> None:
     start = len(client.transcript)
     collected = ""
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + client.response_timeout
     while True:
-        result = client.send(timeout_ms=0)
+        result = client.send(**send_arguments)
         assert not result["isError"], result
         output = last_result_text(client)
         assert output.endswith(terminal), repr(output)
@@ -282,6 +289,7 @@ def test_incomplete_bootstrap_preserves_waiting_cell(
             client,
             lambda text: text.endswith("[1] 1\n"),
             "ordinary bootstrap failure preserves admitted R cell",
+            completion_timeout_seconds=client.response_timeout,
         )
         assert "BaseException: ordinary bootstrap failure" in output, output
         client.send(r="counter <- counter + 1L; counter")
@@ -293,9 +301,7 @@ def test_incomplete_bootstrap_preserves_waiting_cell(
 def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
     client.initialize_and_list_tools()
     client.request("ping")
-    wait_for_evaluation_output(
-        client, "Python startup\n\n[idle]", "startup output before first cell"
-    )
+    bootstrap_output(client, "Python startup\n")
     client.send(
         python="import builtins; counter = 1; builtins.bootstrap_input", timeout_ms=0
     )
@@ -308,8 +314,7 @@ def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
     wait_for_evaluation_output(
         client, '[input requested: "startup> "]\n[waiting for stdin]', "startup input"
     )
-    client.send(stdin="retained\n")
-    assert last_result_text(client) == "'retained'\n", last_result_text(client)
+    client.expect("'retained'\n", stdin="retained\n")
     client.send(python="counter, builtins.bootstrap_runs")
     assert last_result_text(client) == "(1, 1)\n", last_result_text(client)
     client.send(python="raise RuntimeError('first user filenames')")
@@ -323,7 +328,7 @@ def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
 def test_short_startup_transcript(binary: Path, execution: Execution) -> list:
     with python_bootstrap(binary, execution, sans_r=True) as (client, release):
         client.initialize_and_list_tools()
-        wait_for_evaluation_output(client, "Python startup\n\n[idle]", "startup output")
+        bootstrap_output(client, "Python startup\n")
         client.send(
             python="import builtins; builtins.bootstrap_input",
             stdin="hello\n",
@@ -431,7 +436,10 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
             root,
         ) as client:
             try:
-                reached.wait("R startup package before initialize or send")
+                reached.wait(
+                    "R startup package before initialize or send",
+                    timeout=client.response_timeout,
+                )
                 client.initialize_and_list_tools()
                 schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
                 assert "r" in schema["properties"]
@@ -548,17 +556,21 @@ def test_r_bootstrap_resolves_python_version_and_import(
             root,
         ) as client:
             try:
-                reached.wait("R hook before initialize or send")
+                reached.wait(
+                    "R hook before initialize or send",
+                    timeout=client.response_timeout,
+                )
                 client.initialize_and_list_tools()
                 release.release()
                 resolving.wait("bootstrap automatic import reaches host resolver")
                 client.request("ping")
-                bootstrap_output(client, "Python version resolved\n")
+                bootstrap_output(client, "Python version resolved\n", timeout_ms=0)
                 resolved.release()
                 complete.wait("bootstrap import finished", timeout=600)
                 bootstrap_output(
                     client,
                     "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\nPython import resolved\n",
+                    timeout_ms=0,
                 )
                 manifest = client.send(requirements={"action": "get"})[
                     "structuredContent"
@@ -603,7 +615,7 @@ def test_cancelled_response_preserves_bootstrap_and_first_cell(
             )
         )
         client.initialize_and_list_tools()
-        wait_for_evaluation_output(client, "Python startup\n\n[idle]", "startup output")
+        bootstrap_output(client, "Python startup\n")
         profile.pause_results(True)
         try:
             pending = client.start_send(python="counter = 1; counter", timeout_ms=0)
@@ -675,7 +687,9 @@ def check_interrupted_bootstrap_before_evaluator_readiness(
                 assert last_result_text(client) == RUNNING
                 client.send(control="interrupt", timeout_ms=0)
                 checkpoints["interrupt-bootstrap"].release()
-                bootstrap_output(client, "bootstrap interrupted\n", terminal=RUNNING)
+                bootstrap_output(
+                    client, "bootstrap interrupted\n", terminal=RUNNING, timeout_ms=0
+                )
                 checkpoints["release"].release()
                 checkpoints["parked"].wait("startup outcome returned to blocking pool")
                 wait_for_evaluation_output(
@@ -708,7 +722,7 @@ def check_interrupted_bootstrap_before_evaluator_readiness(
 
 
 @contextmanager
-def managed_bootstrap(binary: Path, execution: Execution):
+def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = False):
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
         root = Path(temporary).resolve()
         commands = root / "commands"
@@ -722,16 +736,32 @@ def managed_bootstrap(binary: Path, execution: Execution):
             closing(FifoCheckpoint.create(root / "release"))
         )
         identities = root / "workers"
+        armed = root / "inspect-bootstrap"
         (root / "sitecustomize.py").write_text(
             # fmt: python
             code(f"""
                 import os
                 import sys
+                import builtins
+                import uuid
                 from pathlib import Path
 
                 if "_mcp_console_services" in sys.modules:
+                    # Namespace-local PIDs can repeat in replacement workers.
+                    # Retain an identity across retries in this interpreter.
+                    if not hasattr(builtins, "bootstrap_worker_identity"):
+                        builtins.bootstrap_worker_identity = uuid.uuid4().hex
                     with Path({str(identities)!r}).open("a") as stream:
-                        stream.write(str(os.getpid()) + "\\n")
+                        stream.write(builtins.bootstrap_worker_identity + "\\n")
+                    if {inspect!r}:
+                        Path({str(armed)!r}).touch()
+                blocked = (
+                    Path({str(armed)!r}).exists() and sys.argv[0] == "-c"
+                    if {inspect!r} else "_mcp_console_services" in sys.modules
+                )
+                if blocked:
+                    if {inspect!r}:
+                        Path({str(armed)!r}).unlink()
                     with Path({str(reached.path)!r}).open("wb", buffering=0) as stream:
                         assert stream.write(b"1") == 1
                     with Path({str(release.path)!r}).open("rb", buffering=0) as stream:
@@ -761,6 +791,27 @@ def managed_bootstrap(binary: Path, execution: Execution):
                 yield client, release, reached, identities, worker
             finally:
                 release.release()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_restart_during_bootstrap_inspection_is_quiet(
+    binary: Path, execution: Execution
+) -> list:
+    with managed_bootstrap(binary, execution, inspect=True) as (
+        client,
+        release,
+        reached,
+        identities,
+    ):
+        client.initialize_and_list_tools()
+        pending = client.start_send(control="restart", python="42")
+        reached.wait("replacement bootstrap inspection", timeout=600)
+        release.release()
+        client.receive(pending)
+        assert last_result_text(client) == (
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n42\n[done]"
+        ), pending
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
