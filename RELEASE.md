@@ -76,6 +76,7 @@ Keep the environment-config and framed bootstrap-descriptor smoke checks.
 ### CI caches and Linux rehearsal
 
 CI caches are bounded by OS, architecture, toolchain/dependency inputs, and UTC ISO week.
+The finished release cache includes the installed Maturin version used to build the wheel.
 Cargo freshness still applies when a finished artifact is not an exact hit.
 Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when workflow build flags or native dependencies change outside hashed inputs.
 Do not treat Cargo reuse as detection of all external compiler/SDK changes.
