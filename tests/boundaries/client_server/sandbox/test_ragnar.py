@@ -29,15 +29,18 @@ def test_creates_ragnar_store_after_workspace_write_denial_on_linux(
     binary: Path,
 ) -> Transcript:
     return creates_ragnar_store_after_workspace_write_denial(
-        binary, "Read-only file system"
+        binary, "Read-only file system", languages="r,sql"
     )
 
 
 def creates_ragnar_store_after_workspace_write_denial(
-    binary: Path, denial: str
+    binary: Path, denial: str, *, languages: str | None = None
 ) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
+    if languages is not None:
+        # Match Rscript without loading optional Python document converters.
+        environment["MCP_CONSOLE_LANGUAGES"] = languages
     # fmt: r
     r = code(r"""
         ragnar::ragnar_store_create(
