@@ -112,7 +112,9 @@ impl Coordinator {
             super::ensure_r().map_err(io::Error::other)?;
         }
         self.r.finish_graphics().map_err(io::Error::other)?;
-        let interrupted = core::bootstrap_interrupted() || interrupt::pending();
+        // Acknowledge late signals before publishing the bootstrap receipt.
+        let interrupted =
+            interrupt::acknowledge_python_interrupt() || core::bootstrap_interrupted();
         core::set_bootstrapping(false);
         finish_console_stdin_operation()?;
         if core::is_shutting_down() {
