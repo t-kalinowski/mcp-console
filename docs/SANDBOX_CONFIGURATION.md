@@ -136,7 +136,7 @@ The runner consumes the chosen variable once and strips it and reserved transpor
 `--config-env` rejects `-c`, writable roots, and conflicting private handoffs.
 Stdin always belongs to the target.
 
-The pinned [runner protocol](https://github.com/t-kalinowski/codex/blob/6a18b21c2e75a10229a842424403d71cbd1e60ef/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is the canonical complete schema.
+The pinned [runner protocol](https://github.com/t-kalinowski/cobox/blob/6a18b21c2e75a10229a842424403d71cbd1e60ef/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is the canonical complete schema.
 Key differences from Console's application policy: `version: 2` is required; filesystem/network are required without a profile; environment inheritance defaults true; lifecycle storage and caller observation are opt-in.
 On Unix, `parent_pid` must identify the actual caller; supervised cleanup defaults to 1000 ms, with explicit values from 1 to 60000 ms. Windows observes the runner's direct parent plus an optional session owner and uses a fixed five-second Job retirement deadline.
 
