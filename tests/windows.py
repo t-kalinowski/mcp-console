@@ -182,8 +182,15 @@ class WindowsPackaging(unittest.TestCase):
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
     def test_r_without_python(self):
+        # Capture R before removing the interpreter launchers from PATH.
+        r_home = (
+            os.environ.get("R_HOME")
+            or subprocess.check_output(["R", "RHOME"], text=True).strip()
+        )
         environment = dict(
-            os.environ, PATH=str(Path(os.environ["SystemRoot"]) / "System32")
+            os.environ,
+            R_HOME=r_home,
+            PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
         )
         environment.pop("RETICULATE_PYTHON", None)
         session = Session(environment)
