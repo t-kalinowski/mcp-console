@@ -11,7 +11,7 @@ This page covers `sandbox.provider: native`, the default for local, SSH, and ord
 
 ```text
 caller / MCP server
-└─ mcp-console sandbox → exec verified native runner
+└─ mcp-console sandbox → verified native runner
    └─ native enforcement and target
       └─ relay → worker, or a standalone command
 ```
@@ -21,7 +21,7 @@ Console passes one immutable JSON policy through `--config-env MCP_CONSOLE_SANDB
 Arguments, cwd, environment, and fd 0/1/2 remain ordinary launch inputs.
 There is no policy file or stdin handoff. The native runner owns enforcement and process cleanup.
 
-Without a selected profile, Console requests host reads, restricted networking without a proxy, private writable storage exported as `TMPDIR`, and its trusted macOS policy extension.
+Without a selected profile, Console requests host reads, restricted networking without a proxy, and private writable storage exported as `TMPDIR` (also `TEMP` and `TMP` on Windows). macOS adds its trusted policy extension.
 The runner creates/owns `sandbox-XXXXXX/data`.
 Additional writable paths are persistent user data and are never deleted on retirement.
 Console preserves `MCP_CONSOLE_SANDBOX=1` and removes `DYLD_INSERT_LIBRARIES` / `LD_PRELOAD` from the trusted frontend handoff.
@@ -36,7 +36,7 @@ Docker materializes native policy in its owned container.
 Controller paths and proxy addresses must not be substituted for execution-host paths/addresses.
 
 The server owns one ordinary launcher child per generation.
-It requests relay shutdown, then runner retirement through SIGTERM when necessary, and reaps the child before joining old I/O and allowing replacement.
+It requests relay shutdown and reaps the child before joining old I/O and allowing replacement. Unix can request runner retirement through SIGTERM; Windows keeps its waiting frontend alive until the native runner reports confirmed Job cleanup.
 Cancellation before ready uses the same retirement path, not an early SIGKILL that bypasses cleanup.
 Logical generation retirement and successful native cleanup are distinct facts.
 

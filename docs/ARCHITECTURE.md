@@ -21,7 +21,7 @@ MCP client
 server ───── resolve ───── dependency resolvers       trusted host
   │
   ▼
-sandbox frontend → private native runner            same PID
+sandbox frontend → private native runner            same PID on Unix
   │
   ▼
 relay ───── worker                                  sandboxed workload
