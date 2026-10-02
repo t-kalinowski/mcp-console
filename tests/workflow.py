@@ -310,6 +310,8 @@ class WorkflowTests(unittest.TestCase):
             "scripts/cargo",
         ):
             self.write_script(script, 'print("checked")')
+        # Exercise a shebang alias whose spelling differs from this interpreter.
+        (self.root / "scripts/python3").symlink_to(sys.executable)
         self.environment["PATH"] = (
             f"{self.root / 'scripts'}{os.pathsep}{os.environ['PATH']}"
         )
@@ -328,7 +330,13 @@ class WorkflowTests(unittest.TestCase):
                     else common
                 )
                 self.assertEqual([p["name"] for p in record["phases"]], expected)
-                architecture = f"[architecture] {sys.executable} tests/architecture.py"
+                interpreter = next(
+                    phase["command"][0]
+                    for phase in record["phases"]
+                    if phase["name"] == "architecture"
+                )
+                self.assertTrue(Path(interpreter).samefile(sys.executable))
+                architecture = f"[architecture] {interpreter} tests/architecture.py"
                 if arguments != ("--full",):
                     architecture += " SandboxProcessBoundaryTests"
                 self.assertIn(architecture + "\n", result.stderr)
