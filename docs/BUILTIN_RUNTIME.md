@@ -204,7 +204,23 @@ Empty results with columns retain headers; no-column results have no preview or 
 
 R's managed default device returns PNG pages and finalizes open pages at cell end, including after language errors.
 A later cell cannot add layers to an already finalized plot.
-Defaults are 800 by 600 pixels at 96 DPI; set positive, finite persistent `console.plot.width`, `console.plot.height` (inches), and `console.plot.dpi` options to change them.
+Defaults are 800 by 600 pixels at 96 DPI.
+Set positive, finite persistent `console.plot.width`, `console.plot.height` (**inches**), and `console.plot.dpi` options to change them.
+For example, a 1600 by 1050 pixel image at 100 DPI uses:
+
+```r
+options(
+  console.plot.width = 16,
+  console.plot.height = 10.5,
+  console.plot.dpi = 100
+)
+```
+
+Before opening the managed device, Console multiplies each dimension by DPI and rounds up for the size check.
+It rejects requests above **16,384 pixels per side** or **16,777,216 pixels total**, including numeric overflow.
+The total limit allows a 64 MiB RGBA buffer; rendering can use additional memory.
+The error reports the supplied inches and DPI, derived pixel dimensions, and limits.
+Reduce the options and plot again; the session remains usable.
 Explicit user devices are not closed or captured by Console.
 R plots invoked through Python follow these same rules.
 
