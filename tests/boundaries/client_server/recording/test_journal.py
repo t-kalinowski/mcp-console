@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 from support.client import McpClient, stop_client
@@ -20,6 +20,7 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
+from support.ssh import configure, peer_environment
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
@@ -883,6 +884,54 @@ def test_flushes_calls_and_keeps_unpolled_images(
             }
         )
         return transcript
+
+
+def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        configure(root, root, [str(binary)])
+        reached = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            with McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "discovery-failure"),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery awaiting failure release")
+                client.expect(
+                    "[worker starting]",
+                    requirements={"action": "get"},
+                    timeout_ms=0,
+                )
+                client.send(r="stop('failed discovery ran the cell')", timeout_ms=0)
+                release.release()
+                response = client.send()
+                assert response["isError"], response
+                assert "synthetic discovery failure" in last_result_text(client)
+                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+                assert stderr == "synthetic discovery failure\n", stderr
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            calls = [event for event in events if event["event"] == "tool_call"]
+            results = [event for event in events if event["event"] == "tool_result"]
+            assert len(calls) == len(results) == 3, events
+            assert [event["call_id"] for event in calls] == [1, 2, 3], calls
+            assert [event["call_id"] for event in results] == [1, 2, 3], results
+            assert results[-1]["result"]["isError"], results[-1]
+            assert "synthetic discovery failure" in str(results[-1]), results[-1]
+            assert sum(event["event"] == "startup_failed" for event in events) == 1
+            assert events[0]["dynamic_resolution"] is None, events[0]
+            assert events[0]["python_preparation"] is None, events[0]
+            return [{"early_calls_recorded": 3, "startup_failure_recorded": True}]
+        finally:
+            reached.close()
+            release.close()
 
 
 @executions(DIRECT, SANDBOXED)

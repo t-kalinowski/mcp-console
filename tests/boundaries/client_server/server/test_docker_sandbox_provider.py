@@ -259,7 +259,14 @@ def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
                 client.initialize_and_list_tools()
                 reached.wait("provider output drained without a send", timeout=15)
                 client.request("ping")
-                client.finish()
+                # Setup cancellation has no compute retirement receipt. Retain
+                # its failure while requiring the CLI to exit before shutdown.
+                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+                assert stderr == (
+                    "Docker Sandbox setup cancelled; install standalone sbx v0.42.1 "
+                    "or newer and complete Docker login and policy setup before "
+                    "starting Console; see docs/DOCKER_SANDBOX.md\n"
+                ), stderr
         (session,) = (root / ".agents/console/sessions").iterdir()
         assert (
             session / "outputs/session.log"
@@ -273,7 +280,13 @@ def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
         )
         assert [call["args"] for call in calls(root)] == [["version"]]
         return [
-            {"recorded_provider_bytes": 340000, "tool_calls": 0, "setup_retired": True}
+            {
+                "recorded_provider_bytes": 340000,
+                "tool_calls": 0,
+                "setup_cancelled": True,
+                "exit_status": 1,
+                "standard_error": stderr,
+            }
         ]
 
 

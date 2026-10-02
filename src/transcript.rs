@@ -136,49 +136,8 @@ impl Transcript {
                     Utc::now(),
                 )?;
             }
-            let pending = state
-                .pending_calls
-                .take()
-                .expect("recording metadata is supplied once");
-            if pending.is_empty() {
-                return Ok(());
-            }
-            let next_call_id = state.next_pending_call_id;
-            let active = state.materialize()?;
-            active.next_call_id = next_call_id;
-            for record in pending {
-                match record {
-                    PendingCall::Begin {
-                        id,
-                        request_id,
-                        request,
-                        at,
-                    } => active.append(
-                        Event::ToolCall {
-                            call_id: id,
-                            request_id: &request_id,
-                            request: &request,
-                        },
-                        at,
-                    )?,
-                    PendingCall::Finish { call, response } => active.finish(
-                        call.id.expect("pending call id"),
-                        call.take_result_images()?,
-                        &response,
-                    )?,
-                }
-            }
-            Ok(())
+            state.replay_pending()
         });
-    }
-
-    pub(crate) fn abandon_pending(&self) {
-        let (mut state, _) = self.lock();
-        if state.pending_calls.is_some() {
-            // Startup already reports this failure. No recording metadata will
-            // arrive, so release early records and disable subsequent recording.
-            state.disable("runtime startup failed before recording metadata".into());
-        }
     }
 
     pub(crate) fn requirements_selected(
@@ -201,8 +160,12 @@ impl Transcript {
 
     pub(crate) fn startup_failed(&self, message: &str) {
         self.update(|state| {
+            // Discovery may never supply metadata, but the failure still owns
+            // a journal and the responses of calls admitted before it failed.
+            state.materialize()?;
+            state.replay_pending()?;
             state
-                .materialize()?
+                .active()?
                 .append(Event::StartupFailed { message }, Utc::now())
         });
     }
@@ -395,6 +358,41 @@ pub(crate) fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
 }
 
 impl TranscriptState {
+    fn replay_pending(&mut self) -> Result<(), String> {
+        let Some(pending) = self.pending_calls.take() else {
+            return Ok(());
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let next_call_id = self.next_pending_call_id;
+        let active = self.materialize()?;
+        active.next_call_id = next_call_id;
+        for record in pending {
+            match record {
+                PendingCall::Begin {
+                    id,
+                    request_id,
+                    request,
+                    at,
+                } => active.append(
+                    Event::ToolCall {
+                        call_id: id,
+                        request_id: &request_id,
+                        request: &request,
+                    },
+                    at,
+                )?,
+                PendingCall::Finish { call, response } => active.finish(
+                    call.id.expect("pending call id"),
+                    call.take_result_images()?,
+                    &response,
+                )?,
+            }
+        }
+        Ok(())
+    }
+
     fn materialize(&mut self) -> Result<&mut ActiveTranscript, String> {
         if self.active.is_none() {
             let working_directory = self.working_directory.clone()?;

@@ -5,14 +5,17 @@ use std::os::fd::AsRawFd;
 use std::process::ChildStdout;
 use std::sync::Arc;
 
-/// Session-owned diagnostic bytes. An empty publication closes this producer.
-pub(crate) type Diagnostics = Arc<dyn Fn(&[u8]) + Send + Sync>;
+/// Create one decoder for each process's diagnostic stream. An empty
+/// publication closes only that producer, including its incomplete UTF-8.
+pub(crate) type DiagnosticProducer = Box<dyn FnMut(&[u8]) + Send>;
+pub(crate) type Diagnostics = Arc<dyn Fn() -> DiagnosticProducer + Send + Sync>;
 
 pub(crate) fn forward<T: Read + AsRawFd>(
     source: T,
     exited: PipeReader,
     output: Diagnostics,
 ) -> io::Result<()> {
+    let mut output = output();
     let mut source = RelayOutput::new(source, exited);
     let result = (|| {
         let mut buffer = [0; 8192];

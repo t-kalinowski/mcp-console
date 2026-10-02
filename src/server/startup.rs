@@ -82,7 +82,6 @@ impl Startup {
             if let Err(error) = &result {
                 recording.startup_failed(error);
                 worker.finish_recording();
-                recording.abandon_pending();
             }
             worker.finish_startup(result);
         });

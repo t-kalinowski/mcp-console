@@ -3,6 +3,7 @@
   session: default
   working_directory: <workspace>
   dynamic_resolution: true
+  python_preparation: false
   schema_version: 1
   run_id: <run ID>
   sequence: 1

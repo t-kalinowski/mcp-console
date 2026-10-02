@@ -13,6 +13,7 @@ pub(super) struct OutputTapeState {
     current: ResponseBuilder,
     sealed: VecDeque<(u64, Response)>,
     next_cut: u64,
+    cell_active: bool,
     cell_output: Option<crate::transcript::CellOutput>,
     session_output: Option<crate::transcript::CellOutput>,
     session_recording: Option<crate::transcript::Transcript>,
@@ -71,13 +72,34 @@ impl OutputTape {
     }
 
     pub(in crate::worker_client) fn diagnostics(&self) -> crate::process_output::Diagnostics {
-        let output = self.direct_stderr();
-        Arc::new(move |bytes| {
-            if bytes.is_empty() {
-                output.close();
-            } else {
-                output.push(bytes);
-            }
+        let output = self.clone();
+        Arc::new(move || {
+            let output = output.clone();
+            let mut pending = Vec::new();
+            Box::new(move |bytes| {
+                let mut state = output.lock();
+                if bytes.is_empty() {
+                    state.text(Stream::Stderr, &String::from_utf8_lossy(&pending));
+                    pending.clear();
+                    if state.stream == Some(Stream::Stderr) {
+                        state.flush_terminal();
+                    }
+                    return;
+                }
+                let notice = state.spool(bytes);
+                state.flush_decoders();
+                let bytes = if pending.is_empty() {
+                    bytes
+                } else {
+                    pending.extend_from_slice(bytes);
+                    &pending
+                };
+                let complete = complete_utf8_prefix(bytes);
+                let remainder = bytes[complete..].to_vec();
+                state.text(Stream::Stderr, &String::from_utf8_lossy(&bytes[..complete]));
+                pending = remainder;
+                state.recording_notice(notice);
+            })
         })
     }
 
@@ -193,7 +215,7 @@ impl OutputTape {
     ) -> Response {
         let mut state = self.lock();
         assert!(
-            state.cell_output.is_none(),
+            !state.cell_active,
             "only one cell output file can be active"
         );
         // Always seal the preceding source, even if this caller does not own it.
@@ -203,6 +225,7 @@ impl OutputTape {
         } else {
             Response::default()
         };
+        state.cell_active = true;
         state.cell_output = cell_output;
         boundary();
         response
@@ -212,6 +235,7 @@ impl OutputTape {
         let mut state = self.lock();
         let cut = state.seal(true);
         let notice = state.cell_output.take().and_then(|output| output.finish());
+        state.cell_active = false;
         if notice.is_some() {
             state.recording_notice(notice);
             return state.seal(false);
@@ -281,7 +305,7 @@ impl DirectOutput {
 impl OutputTapeState {
     fn spool(&mut self, bytes: &[u8]) -> Option<String> {
         self.raw_bytes = self.raw_bytes.saturating_add(bytes.len() as u64);
-        if self.cell_output.is_none()
+        if !self.cell_active
             && let Some(transcript) = self.session_recording.take()
         {
             match transcript.create_session_output() {
@@ -289,10 +313,18 @@ impl OutputTapeState {
                 Err(error) => return Some(error),
             }
         }
-        self.cell_output
-            .as_mut()
-            .or(self.session_output.as_mut())
+        self.current_output()
             .and_then(|output| output.append(bytes).1)
+    }
+
+    fn current_output(&mut self) -> Option<&mut crate::transcript::CellOutput> {
+        // A failed cell log remains owned by that cell; it cannot borrow the
+        // session file or trigger a second recording failure while evaluating.
+        if self.cell_active {
+            self.cell_output.as_mut()
+        } else {
+            self.session_output.as_mut()
+        }
     }
 
     fn text(&mut self, stream: Stream, text: &str) {
@@ -346,21 +378,18 @@ impl OutputTapeState {
             self.flush_decoders();
         }
         self.flush_terminal();
-        let notice = self
-            .cell_output
-            .as_mut()
-            .or(self.session_output.as_mut())
-            .and_then(|output| output.flush());
+        let notice = self.current_output().and_then(|output| output.flush());
         self.recording_notice(notice);
-        let source = match self.cell_output.as_ref().or(self.session_output.as_ref()) {
+        let raw_bytes = self.raw_bytes;
+        let source = match self.current_output() {
             Some(output) => Source {
                 file: Some(output.record()),
-                raw_bytes: self.raw_bytes,
+                raw_bytes,
                 retained_bytes: output.retained_bytes(),
                 discarded_bytes: output.discarded_bytes(),
             },
             None => Source {
-                raw_bytes: self.raw_bytes,
+                raw_bytes,
                 ..Source::default()
             },
         };

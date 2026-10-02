@@ -4,6 +4,7 @@ import json
 import os
 import struct
 import sys
+import threading
 from pathlib import Path
 
 
@@ -27,6 +28,39 @@ if "Open" in bootstrap:
         sys.stdout.buffer.flush()
 
     preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
+    if mode == "diagnostic-overlap":
+        sys.stderr.buffer.write(b"producer prefix \xce")
+        sys.stderr.buffer.flush()
+        with (log.parent / "discovery-release").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+
+        def finish_diagnostic():
+            with (log.parent / "diagnostic-release").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            sys.stderr.buffer.write(b"\xb1 diagnostic complete\n")
+            sys.stderr.buffer.flush()
+
+        diagnostic = threading.Thread(target=finish_diagnostic)
+        diagnostic.start()
+    if mode == "discovery-failure":
+        with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
+            assert signal.write(b"1") == 1
+        with (log.parent / "discovery-release").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+        preparation_frame(
+            {
+                "Completed": {
+                    "id": 0,
+                    "result": {"Err": "synthetic discovery failure"},
+                    "control": None,
+                    "confirmed": True,
+                }
+            }
+        )
+        length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
+        assert json.loads(sys.stdin.buffer.read(length)) == "Close"
+        preparation_frame("Closed")
+        sys.exit(0)
     preparation_frame(
         {
             "Completed": {
@@ -45,6 +79,8 @@ if "Open" in bootstrap:
     length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
     assert json.loads(sys.stdin.buffer.read(length)) == "Close"
     preparation_frame("Closed")
+    if mode == "diagnostic-overlap":
+        diagnostic.join()
     sys.exit(0)
 with log.open("a") as output:
     output.write("launched\n")
@@ -92,6 +128,10 @@ for line in sys.stdin.buffer:
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
     if command["kind"] == "evaluate":
+        if mode == "diagnostic-overlap":
+            with (log.parent / "evaluation-started").open("wb", buffering=0) as signal:
+                assert signal.write(b"1") == 1
+            continue
         if mode in {"bootstrap-interrupted", "bootstrap-input-completion"}:
             if command["source"] == "never_run = True":
                 (log.parent / "cell-ran").touch()

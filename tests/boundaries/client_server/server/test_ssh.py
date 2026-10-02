@@ -516,6 +516,53 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
             return client.transcript[3:] + [{"standard_error": stderr}]
 
 
+def test_diagnostic_producers_keep_separate_utf8_decoders(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        configure(root, root, [str(binary)])
+        with (
+            closing(FifoCheckpoint.create(root / "discovery-release")) as discovery,
+            closing(FifoCheckpoint.create(root / "diagnostic-release")) as diagnostic,
+            closing(FifoCheckpoint.create(root / "evaluation-started")) as evaluating,
+            McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "diagnostic-overlap"),
+                root,
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            wait_for_evaluation_output(
+                client,
+                "producer prefix \n[running; poll with an empty send]",
+                "partial diagnostic scalar ingested during discovery",
+                r="hold_first_cell",
+                timeout_ms=0,
+            )
+            discovery.release()
+            evaluating.wait("first worker accepted the cell")
+            client.send(control="restart", r="hold_replacement_cell", timeout_ms=0)
+            evaluating.wait("old launcher retired before replacement evaluation")
+            diagnostic.release()
+            wait_for_evaluation_output(
+                client,
+                "α diagnostic complete\n\n[running; poll with an empty send]",
+                "preparation scalar survived another diagnostic producer's exit",
+                timeout_ms=0,
+            )
+            client.finish()
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            # The first bytes precede evaluation; the remainder arrives while
+            # the replacement cell owns output. Both raw files retain bytes.
+            paths = [
+                session / "outputs/session.log",
+                *sorted((session / "outputs").glob("call-*.log")),
+            ]
+            raw = b"".join(path.read_bytes() for path in paths)
+            assert raw == "producer prefix α diagnostic complete\n".encode(), raw
+            return [{"diagnostic_utf8_survives_overlapping_producer_exit": True}]
+
+
 def test_unexpected_stdout(binary: Path) -> Transcript:
     return _peer(binary, "stdout")
 

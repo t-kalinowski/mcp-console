@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1351,6 +1352,53 @@ def early_python_reference_plots(
         dpi=96,
         pages=2,
     )
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_attaches_to_reticulate_initialized_by_r_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    _, library = installed_early_python_library()
+    environment, _ = r_test_environment()
+    environment.update(
+        MCP_CONSOLE_LANGUAGES="r",
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsoleearlypython",
+        RETICULATE_PYTHON=sys.executable,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        worker = root / "worker"
+        worker.write_text(
+            "#!/bin/sh\nexec " + shlex.join([str(binary), "worker"]) + "\n"
+        )
+        worker.chmod(0o755)
+        with McpClient(
+            binary, execution.serve("--worker", str(worker)), environment, root
+        ) as client:
+            client.initialize_and_list_tools()
+            # Custom workers retain lazy startup. The first R cell lets its startup
+            # package initialize reticulate before Console installs its adapter.
+            client.expect(
+                "attached to startup Python\n",
+                # fmt: r
+                r=code("""
+                    reticulate::py_run_string(
+                      "assert id(early_object) == early_identity; assert sys.executable == early_executable; assert (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix) == early_prefixes"
+                    )
+                    stopifnot(identical(reticulate::py_eval("{'answer': 42}"), list(answer = 42L)))
+                    cat("attached to startup Python\\n")
+                    """),
+            )
+            client.expect(
+                "same interpreter retained\n",
+                r="stopifnot(reticulate::py_eval('id(early_object) == early_identity')); cat('same interpreter retained\\n')",
+            )
+            client.finish()
+            return [
+                {"startup_interpreter_attached": True, "conversion_available": True}
+            ]
 
 
 @cache
