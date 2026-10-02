@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, tool_text
+from support.assertions import last_result_text, tool_text, wait_for_worker_ready
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -75,15 +75,14 @@ def preserves_matplotlib_cache_across_activation_and_restart(
                 reticulate::py_require("matplotlib")
                 invisible(reticulate::py_config())
                 """)
-            client.send(r=r)
-            assert last_result_text(client) == "[done]"
+            client.expect(r=r)
         else:
-            client.send(requirements={"python": ["matplotlib"]})
-            assert last_result_text(client) == "[prepared]"
+            wait_for_worker_ready(client, "Matplotlib cache declaration readiness")
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
         assert len(persistent_caches) == 1, persistent_caches
         persistent_cache_bytes = persistent_caches[0].read_bytes()
-        client.send(
+        client.expect(
             # fmt: python
             python=code("""
                 import os
@@ -97,7 +96,6 @@ def preserves_matplotlib_cache_across_activation_and_restart(
                 )
                 """)
         )
-        assert last_result_text(client) == "[done]"
         # Replacing the private link must not make a later runtime resolution
         # overwrite user-owned worker state or discard the worker.
         # fmt: python
@@ -112,21 +110,20 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_cache.write_bytes(private_cache_bytes)
             cache_link_replaced = True
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         if with_r:
             # fmt: r
             r = code(r"""
                 reticulate::py_require("py-yaml12")
                 """)
-            client.send(r=r)
-            assert last_result_text(client) == "[done]"
+            client.expect(r=r)
         else:
-            client.send(requirements={"python": ["py-yaml12"]})
-            assert last_result_text(client) == "[prepared]"
-        client.send(python="(cache_link_replaced, __import__('yaml12').__name__)")
-        assert last_result_text(client) == "(True, 'yaml12')\n"
+            client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
+        client.expect(
+            "(True, 'yaml12')\n",
+            python="(cache_link_replaced, __import__('yaml12').__name__)",
+        )
 
         client.send(control="restart")
         assert last_result_text(client) == (
@@ -150,9 +147,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
                 private_probe.read_text(encoding="utf-8") == "ok",
             )
             """)
-        client.send(python=python)
-        output = last_result_text(client)
-        assert output == "(True, 7.25, True)\n", repr(output)
+        client.expect("(True, 7.25, True)\n", python=python)
         transcript = client.finish()
         assert (
             host_matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 7.25\n"

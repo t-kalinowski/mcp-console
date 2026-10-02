@@ -15,6 +15,7 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_worker_ready,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -252,6 +253,7 @@ def returns_matplotlib_plots(
                 """)
             client.expect(r=r)
         else:
+            wait_for_worker_ready(client, "Matplotlib declaration readiness")
             client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
@@ -443,6 +445,7 @@ def test_inherits_explicit_matplotlib_config(
             McpClient(binary, execution.serve(), environment)
         )
         client.initialize_and_list_tools()
+        wait_for_worker_ready(client, "explicit Matplotlib declaration readiness")
         client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
@@ -557,6 +560,7 @@ def inherits_matplotlib_config(
             McpClient(binary, execution.serve(), environment)
         )
         client.initialize_and_list_tools()
+        wait_for_worker_ready(client, "inherited Matplotlib declaration readiness")
         client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
