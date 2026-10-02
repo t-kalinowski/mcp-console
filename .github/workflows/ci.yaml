@@ -210,8 +210,8 @@ jobs:
       - name: Install tools
         id: tools
         run: |
-          uv tool install r-lib-ir@latest
-          uv tool install yamark@latest
+          uv tool install r-lib-ir
+          uv tool install yamark
           uv tool dir --bin >> "$GITHUB_PATH"
           printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
 
@@ -399,7 +399,7 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-          uvx maturin@latest build \
+          uvx maturin build \
             --release \
             --locked \
             --compatibility pypi \
