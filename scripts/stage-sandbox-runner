@@ -159,8 +159,9 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
     head = git_output(checkout, "rev-parse", "HEAD")
     if head != pin["commit"]:
         fail(f"source checkout is at {head}, expected {pin['commit']}")
-    if git_output(checkout, "status", "--porcelain", "--untracked-files=all"):
-        fail("source checkout is not clean")
+    status = git_output(checkout, "status", "--porcelain", "--untracked-files=all")
+    if status:
+        fail(f"source checkout is not clean:\n{status}")
 
     with (workspace / "rust-toolchain.toml").open("rb") as stream:
         channel = tomllib.load(stream)["toolchain"]["channel"]
