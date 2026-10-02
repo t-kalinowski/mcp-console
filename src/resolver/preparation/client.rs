@@ -251,11 +251,13 @@ impl Preparation {
             let result = run(received, &outgoing, pending, open, &owner_blocked, local);
             drop(outgoing);
             drop(abort);
-            let _ = writer.join();
-            let _ = reader.join();
-            if !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+            // Do not extend failed protocol retirement with a second exit wait.
+            // Kill before joining I/O and reaping.
+            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
                 let _ = child.kill();
             }
+            let _ = writer.join();
+            let _ = reader.join();
             let reaped = child
                 .wait()
                 .map(|_| ())

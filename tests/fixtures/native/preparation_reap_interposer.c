@@ -33,6 +33,15 @@ static ssize_t observe_write(int fd, const void *bytes, size_t count) {
         int length = snprintf(pid, sizeof(pid), "%ld", (long)getpid());
         if (marker < 0 || native_write(marker, pid, (size_t)length) != length) _exit(121);
         close(marker);
+        const char *blocked = getenv("MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE");
+        if (blocked != NULL) {
+            int checkpoint = open(blocked, O_WRONLY);
+            if (checkpoint < 0 || native_write(checkpoint, "1", 1) != 1) _exit(123);
+            close(checkpoint);
+            // The close request arrived, but this peer never acknowledges it
+            // or exits. Only its controller can finish retirement.
+            for (;;) pause();
+        }
     }
     return native_write(fd, bytes, count);
 }

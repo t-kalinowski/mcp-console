@@ -71,6 +71,61 @@ def test_connection_closure_joins_preparation_owner(binary: Path) -> Transcript:
             return [{"preparation_owner_joined_before_server_exit": True}]
 
 
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
+    binary: Path,
+) -> Transcript:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        ExitStack() as resources,
+    ):
+        root = Path(temporary).resolve()
+        blocked = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "blocked-close"))
+        )
+        python, _ = isolated_python(root)
+        environment = selected_python(root, python)
+        environment.pop("R_HOME", None)
+        environment.update(
+            {
+                "PATH": str(root),
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "preparation_reap_interposer")
+                ),
+                "MCP_CONSOLE_TEST_REAP_PID": str(root / "resolver-pid"),
+                "MCP_CONSOLE_TEST_REAP_DONE": str(root / "reaped"),
+                "MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE": str(blocked.path),
+            }
+        )
+        identity = None
+        with McpClient(binary, DIRECT.serve(), environment, root) as client:
+            try:
+                client.initialize_and_list_tools()
+                client.expect("42\n", python="42")
+                client.stdin.close()
+                blocked.wait("preparation received Close and remains alive")
+                identity = capture_process_identity(
+                    int((root / "resolver-pid").read_text())
+                )
+                _, errors = client.finish_with_standard_error(expected_exit_status=1)
+                assert (
+                    errors == "local resolver setup or retirement deadline exceeded\n"
+                )
+                assert (root / "reaped").exists(), "preparation was not reaped"
+                assert not live_processes([identity]), (
+                    "preparation survived server exit"
+                )
+                return [
+                    {
+                        "stalled_preparation_reaped_before_server_exit": True,
+                        "stderr": errors,
+                    }
+                ]
+            finally:
+                if identity is not None:
+                    kill_processes([identity])
+
+
 @executions(DIRECT, SANDBOXED)
 def test_invalid_early_cell_does_not_poison_default_startup(
     binary: Path, execution: Execution
