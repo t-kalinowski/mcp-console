@@ -12,6 +12,10 @@ Console's minimum Rust version is in `Cargo.toml`; the pinned companion's `codex
 Wheel builds need Maturin 1.15+.
 R/libR/packages are not build or Python-only execution prerequisites.
 
+Experimental Windows source builds use the MSVC toolchain and Windows SDK, skip companion staging, and support local unsandboxed R/Python only; see [Windows setup and validation](docs/WINDOWS.md).
+Windows packaging holds a blocking native checkout lock through wheel creation and rejects staged Unix companion files.
+The Unix staging and checkout-wrapper instructions below apply to macOS and Linux.
+
 On macOS, install Xcode Command Line Tools.
 Ubuntu builds need a C toolchain, `pkg-config`, libcap development files, libcurl development files for R resolver bootstrap, and binutils (`readelf`/`strip`).
 Packages may need additional system libraries.

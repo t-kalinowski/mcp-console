@@ -1,7 +1,8 @@
 # Server-relay protocol
 
 This private interface connects the server to one generation's relay.
-[`src/relay_protocol.rs`](../src/relay_protocol.rs) defines its frames; [`src/worker_relay.rs`](../src/worker_relay.rs) and [`src/worker_client/unix.rs`](../src/worker_client/unix.rs) implement the endpoints.
+[`src/relay_protocol.rs`](../src/relay_protocol.rs) defines its frames; [`src/worker_relay.rs`](../src/worker_relay.rs) and [`src/worker_client/process.rs`](../src/worker_client/process.rs) implement the endpoints.
+Windows uses the same JSONL frames with named pipes, process handles, and cooperative interrupt events; see [Windows execution](WINDOWS.md).
 It has no independent negotiation; incompatible wire changes require a target-envelope version change.
 
 ## Process boundary

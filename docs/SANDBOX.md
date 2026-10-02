@@ -74,7 +74,8 @@ A final forced launcher kill cannot establish successful cleanup.
 Cleanup failures are nonzero errors with diagnostics; unproven retirement retains private storage.
 SSH requires remote cleanup acknowledgment, not just SSH exit; undetected network partitions have no lease deadline.
 Provider removal has its own receipts.
-Windows and other operating systems are unsupported.
+Windows sandboxing and other operating systems are unsupported.
+Windows x64 supports experimental [local unsandboxed R and Python](WINDOWS.md).
 
 Unrestricted, external, and explicit Landlock modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).
 Local/SSH `--no-sandbox` removes native enforcement and descendant cleanup; normal relay shutdown still reaps the direct worker.

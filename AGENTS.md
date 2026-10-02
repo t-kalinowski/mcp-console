@@ -38,6 +38,11 @@ Use `scripts/check` as the ordinary final gate; `--full` is for explicitly reque
 Report commands actually run and any unavailable coverage.
 CI is the comprehensive merge gate.
 
+Windows x64 supports experimental local `serve --no-sandbox` with preinstalled R and Python.
+SQL, managed dependency resolution, sandboxing, and Windows SSH/Docker/SBX controllers are deferred.
+Follow [Windows validation](docs/WINDOWS.md#validation); the Unix checkout wrappers do not run on Windows.
+Run native build and validation commands exclusively in the checkout; Windows packaging holds a blocking native checkout lock outside `target`.
+
 Use temporary workspaces and `MCP_CONSOLE_HOME` for tests, preserving `HOME` and the caller's tool environment.
 Declare platform/capability requirements in test support rather than reconstructing provider defaults.
 See the [boundary test guide](tests/boundaries/README.md) for fixtures and snapshots.
@@ -55,7 +60,7 @@ Group related command arguments and diagnostic fields.
 ## Local work and publishing
 
 For resumed work, verify `.dev-workflow/task.md`, when present, against Git status; it is a checkpoint, not authority.
-Use `scripts/with-checkout` for direct Cargo/Maturin commands.
+On macOS/Linux, use `scripts/with-checkout` for direct Cargo/Maturin commands.
 Do not bypass checkout ownership locks or reuse a busy worktree.
 See [development](docs/DEVELOPMENT.md) for the validation ladder and [release](RELEASE.md) for companion staging and packaging.
 

@@ -7,7 +7,7 @@ There is no sideband version negotiation; incompatible changes must also update 
 
 ## Launch and transport
 
-The relay starts one executable with piped fd 0, 1, and 2 and two anonymous sideband pipes:
+On macOS/Linux, the relay starts one executable with piped fd 0, 1, and 2 and two anonymous sideband pipes:
 
 ```text
 MCP_CONSOLE_SIDEBAND_READ_FD   worker reads relay messages
@@ -16,6 +16,11 @@ MCP_CONSOLE_SIDEBAND_WRITE_FD  worker writes semantic events
 
 The worker owns those endpoints.
 Before user code or descendants run, remove both environment variables, set close-on-exec on both descriptors, and close them in fork-only children without disturbing the parent's endpoints.
+
+On Windows, the standard streams remain piped and sideband uses overlapped named-pipe handles in `MCP_CONSOLE_SIDEBAND_READ_HANDLE` and `MCP_CONSOLE_SIDEBAND_WRITE_HANDLE` (decimal handle values).
+Adopt these handles, clear inheritance, and remove their environment variables before user code runs.
+`MCP_CONSOLE_INTERRUPT_HANDLE` and `MCP_CONSOLE_INPUT_READY_HANDLE` carry inherited event handles for cooperative interruption and managed stdin readiness; adopt them with the same inheritance/environment discipline.
+The framing and messages below are unchanged; see [Windows execution](WINDOWS.md) for current runtime limits.
 A descendant retaining sideband endpoints violates the closure contract.
 Descendants may retain stdout/stderr, subject to bounded retirement drainage.
 

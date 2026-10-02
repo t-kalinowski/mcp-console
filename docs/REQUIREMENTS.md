@@ -1,5 +1,8 @@
 # Requirements and environments
 
+Managed dependency resolution and the `resolve` subcommand are not yet supported on [Windows](WINDOWS.md).
+Windows local sessions use preinstalled R/Python packages and reject preparation requests with an unavailable error.
+
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
 [Send ordering](SEND_OPERATIONS.md) defines when preparation, control, input, and code run.

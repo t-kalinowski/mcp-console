@@ -1,7 +1,9 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/select.h>
+#endif
 
 typedef struct _InputHandler InputHandler;
 typedef void (*repl_init_fn)(void);
@@ -143,6 +145,7 @@ static void run_ready_handlers(void *data) {
     handlers->run_handlers(handlers->input_handlers, ready);
 }
 
+#ifndef _WIN32
 static void wait_for_activity(void *data) {
     struct event_wait *wait = data;
     wait->sideband_handler = wait->add_input_handler(
@@ -151,6 +154,8 @@ static void wait_for_activity(void *data) {
     fd_set *ready = wait->check_activity(wait->wait_usec, 1);
     wait->sideband_ready = ready != NULL && FD_ISSET(wait->sideband_fd, ready);
 }
+
+#endif
 
 void mcp_r_run_ready_handlers(
     top_level_exec_fn top_level_exec,
@@ -167,6 +172,7 @@ void mcp_r_run_ready_handlers(
     (void) top_level_exec(run_ready_handlers, &handlers);
 }
 
+#ifndef _WIN32
 int mcp_r_wait_for_activity(
     top_level_exec_fn top_level_exec,
     add_input_handler_fn add_input_handler,
@@ -197,6 +203,8 @@ int mcp_r_wait_for_activity(
     /* R_ToplevelExec contains interrupt and handler-error unwinds. */
     return completed ? wait.sideband_ready : 0;
 }
+
+#endif
 
 int mcp_r_repl_run_cell(before_do_one_fn before_do_one) {
     struct repl_cell cell = { .before_do_one = before_do_one, .last_status = 1 };

@@ -300,7 +300,11 @@ fn get_char_encoding() -> harp::Result<GetCharEncoding> {
     if let Some(function) = GET_CHAR_ENCODING.get() {
         return Ok(*function);
     }
+    #[cfg(unix)]
     let library = libloading::os::unix::Library::this();
+    #[cfg(windows)]
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")
+        .map_err(|error| harp::anyhow!("failed to load R.dll: {error}"))?;
     let function = unsafe {
         *library
             .get::<GetCharEncoding>(b"Rf_getCharCE\0")

@@ -11,7 +11,8 @@ Responses keep large outputs out of the model context while retaining logs and a
 ## Status
 
 **Development preview:** interfaces may change.
-macOS and Linux are supported; Windows is not.
+macOS and Linux are supported.
+Windows x64 has experimental [local unsandboxed R and Python support](docs/WINDOWS.md).
 Local and [SSH](docs/SSH.md) sessions can prepare dependencies.
 [Docker](docs/DOCKER.md) images and [Docker Sandbox](docs/DOCKER_SANDBOX.md) templates use preinstalled runtimes and packages.
 

@@ -1,5 +1,10 @@
 # Architecture
 
+The shared runtime coordinator supports lazy, independent R and Python startup on [Windows](WINDOWS.md) for local unsandboxed sessions with preinstalled packages.
+Windows uses native pipe/event/process primitives, and Python inspection runs in a kill-on-close Job entered before executing code; cancellation and normal completion require confirmed empty Jobs.
+These Jobs own inspection processes, not evaluated user code.
+Windows managed dependency resolution, SQL, and remote controllers are deferred.
+
 Console separates session management from code execution.
 The server owns what survives a worker; the worker owns live language state.
 A relay connects them, and a native runner or compute provider enforces the execution boundary.

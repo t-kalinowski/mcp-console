@@ -2,6 +2,13 @@ use sha2::{Digest as _, Sha256};
 use std::path::PathBuf;
 
 fn main() {
+    if std::env::var_os("CARGO_CFG_WINDOWS").is_some() {
+        println!("cargo:rerun-if-changed=src/windows/console.manifest");
+        println!("cargo:rerun-if-changed=src/windows/console.rc");
+        embed_resource::compile_for_everything("src/windows/console.rc", embed_resource::NONE)
+            .manifest_required()
+            .expect("failed to embed Windows UTF-8 manifest");
+    }
     println!("cargo:rerun-if-changed=src/r_graphics.c");
     println!("cargo:rerun-if-changed=src/r_repl.c");
     println!("cargo:rerun-if-changed=src/worker/interrupt.c");
@@ -12,11 +19,16 @@ fn main() {
     ) {
         bind_private_runner();
     }
-    if std::env::var_os("CARGO_CFG_UNIX").is_some() {
-        cc::Build::new()
+    if std::env::var_os("CARGO_CFG_UNIX").is_some()
+        || std::env::var_os("CARGO_CFG_WINDOWS").is_some()
+    {
+        let mut native = cc::Build::new();
+        if std::env::var_os("CARGO_CFG_UNIX").is_some() {
+            native.file("src/worker/interrupt.c");
+        }
+        native
             .file("src/r_graphics.c")
             .file("src/r_repl.c")
-            .file("src/worker/interrupt.c")
             .compile("mcp_console_r_repl");
     }
 }

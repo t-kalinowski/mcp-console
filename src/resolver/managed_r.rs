@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::ManagedR;
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
     resolver_command,
@@ -112,18 +113,6 @@ pub(crate) struct ManagedRResolverConfiguration {
     rscript: PathBuf,
 }
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ManagedR {
-    library: PathBuf,
-    // Serde's Unix OsString representation preserves native path bytes in JSON.
-    r_libs: OsString,
-    // Executable selection never travels in a preparation request.
-    #[serde(skip)]
-    rscript: PathBuf,
-    requirements: Vec<String>,
-}
-
 impl ManagedRResolverConfiguration {
     pub(crate) fn resolve_uv(
         &self,
@@ -157,40 +146,6 @@ impl ManagedRResolverConfiguration {
         finish_uv_resolution(output, false)?.ok_or_else(|| {
             "managed R environment does not provide reticulate `uv` resolution".to_string()
         })
-    }
-}
-
-impl ManagedR {
-    pub(crate) fn on_host(mut self, rscript: &Path) -> Self {
-        self.rscript = rscript.to_path_buf();
-        self
-    }
-    pub(crate) fn configure_worker(&self, command: &mut Command) -> Result<(), String> {
-        if !self.library.is_dir() {
-            return Err(format!(
-                "resolved R library `{}` no longer exists",
-                self.library.display()
-            ));
-        }
-        command.env("R_LIBS", &self.r_libs);
-        Ok(())
-    }
-
-    pub(crate) fn with_retained_requirements(mut self, requirements: Vec<String>) -> Self {
-        self.requirements = requirements;
-        self
-    }
-
-    pub(crate) fn requirements(&self) -> &[String] {
-        &self.requirements
-    }
-
-    pub(crate) fn library(&self) -> &Path {
-        &self.library
-    }
-
-    pub(crate) fn rscript(&self) -> &Path {
-        &self.rscript
     }
 }
 

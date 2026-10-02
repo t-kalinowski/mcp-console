@@ -1,8 +1,16 @@
-use std::io::{self, Write};
+#[cfg(windows)]
+pub(super) use crate::windows::resolver::Child;
+use std::io;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
 use std::mem::MaybeUninit;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, ExitStatus};
+#[cfg(unix)]
+use std::process::{Child, ChildStdin};
+use std::process::{Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -241,6 +249,7 @@ pub(crate) fn read_output(
     receiver
 }
 
+#[cfg(unix)]
 pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io::Result<()>> {
     let (sender, receiver) = mpsc::channel();
     let _ = thread::spawn(move || {
@@ -249,6 +258,7 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
     receiver
 }
 
+#[cfg(unix)]
 pub(crate) fn resolver_command(program: &Path) -> Command {
     let mut command = Command::new(program);
     command.process_group(0);
@@ -273,6 +283,7 @@ pub(crate) fn resolver_command(program: &Path) -> Command {
     command
 }
 
+#[cfg(unix)]
 fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
     let _ = thread::spawn(move || {
         let result = loop {
@@ -400,6 +411,7 @@ fn wait_for_resolver(
     })
 }
 
+#[cfg(unix)]
 fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     let pid = child.id();
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
@@ -417,6 +429,7 @@ fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     Err(error)
 }
 
+#[cfg(unix)]
 fn resolver_has_exited(pid: u32) -> io::Result<bool> {
     let mut status = MaybeUninit::<libc::siginfo_t>::zeroed();
     // SAFETY: `status` points to zeroed writable storage. WNOWAIT observes the
@@ -436,6 +449,7 @@ fn resolver_has_exited(pid: u32) -> io::Result<bool> {
     Ok(unsafe { status.assume_init().si_pid() } == pid as libc::pid_t)
 }
 
+#[cfg(unix)]
 fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
@@ -472,4 +486,52 @@ fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitSt
             program.display()
         )
     })
+}
+
+#[cfg(windows)]
+pub(crate) fn resolver_command(program: &Path) -> Command {
+    use std::os::windows::process::CommandExt;
+    let mut command = Command::new(program);
+    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    command
+}
+#[cfg(windows)]
+fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
+    use std::os::windows::io::AsRawHandle;
+    let handle = crate::windows::process_handle(pid);
+    thread::spawn(move || {
+        let result = handle
+            .and_then(|handle| crate::windows::wait(handle.as_raw_handle(), None).map(|_| ()));
+        let _ = events.send(ResolverEvent::Exited(result));
+    });
+}
+#[cfg(windows)]
+fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
+    if child.try_wait()?.is_some() {
+        return Ok(ResolverInterrupt::AlreadyExited);
+    }
+    child.terminate()?;
+    Ok(ResolverInterrupt::Signaled)
+}
+#[cfg(windows)]
+pub(super) fn stop_resolver(
+    child: &mut Child,
+    program: &Path,
+    kind: &str,
+) -> Result<ExitStatus, String> {
+    child.retire().map_err(|error| {
+        format!(
+            "failed to retire {kind} resolver `{}`: {error}",
+            program.display()
+        )
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
+    command.spawn()
+}
+#[cfg(windows)]
+pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
+    crate::windows::resolver::spawn(command)
 }
