@@ -89,6 +89,8 @@ jobs:
             any::jsonlite
       - name: Check native Windows code
         run: |
+          python scripts/stage-sandbox-runner
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python scripts/validate_runtime_sources.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/architecture.py

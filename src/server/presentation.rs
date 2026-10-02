@@ -220,7 +220,7 @@ fn configure_windows(description: &mut String, properties: &mut Map<String, Valu
         .split_once("\n\nSend one complete")
         .expect("send description");
     *description = format!(
-        "Persistent R and Python workbench for local unsandboxed execution on Windows. State persists across calls. Each runtime initializes on demand and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
+        "Persistent R and Python workbench for local execution on Windows. State persists across calls. Each runtime initializes on demand and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
     ).replace("`r`, `python`, or `sql`", "`r` or `python`");
     // Retain shared runtime and preparation guidance, but omit SQL-only helpers.
     for (field, start, end) in [

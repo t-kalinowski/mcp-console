@@ -6,8 +6,8 @@ Read [AGENTS.md](../AGENTS.md) for change and publishing rules, [architecture](A
 ## Setup
 
 These workflow scripts target macOS and Linux.
-For Windows local unsandboxed R/Python, use the [native setup and validation commands](WINDOWS.md); run them exclusively in the checkout.
-Windows packaging skips companion staging and serializes with a blocking native lock outside `target`.
+For Windows local R/Python, use the [native setup and validation commands](WINDOWS.md); run them exclusively in the checkout.
+Windows staging and packaging serialize with blocking native checkout/source locks outside `target`.
 
 `scripts/preflight` inventories tools, runtimes, companion staging, and caches; `--json` produces structured output.
 It does not install or build.
