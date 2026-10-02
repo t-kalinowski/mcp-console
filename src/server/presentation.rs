@@ -121,7 +121,7 @@ impl ConsoleServer {
                 .unwrap_or_default()
                 .replace(
                     "SIGINT from the active host resolver or live worker",
-                    "a cooperative interrupt from the live worker",
+                    "termination of the active host resolver or a cooperative interrupt from the live worker",
                 )
                 .into();
         }

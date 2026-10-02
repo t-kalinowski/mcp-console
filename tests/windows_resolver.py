@@ -55,8 +55,8 @@ class Resolver:
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
         self.process.stdin.flush()
 
-    def receive(self):
-        message = self.messages.get(timeout=30)
+    def receive(self, timeout=30):
+        message = self.messages.get(timeout=timeout)
         if message is None:
             raise AssertionError(self.process.stderr.read().decode(errors="replace"))
         return message
@@ -68,9 +68,9 @@ class Resolver:
         assert "Ok" in discovery["result"], discovery
         return discovery["result"]["Ok"]
 
-    def run(self, id, operation):
+    def run(self, id, operation, timeout=30):
         self.send({"Run": {"id": id, "operation": operation}})
-        completed = self.receive()["Completed"]
+        completed = self.receive(timeout)["Completed"]
         assert completed["id"] == id, completed
         assert completed["confirmed"], completed
         return completed
@@ -266,6 +266,76 @@ class WindowsResolver(unittest.TestCase):
         self.assertTrue(completed["confirmed"], completed)
         self.assertIn("Ok", completed["result"])
         self.assert_retired(pids)
+
+
+@unittest.skipUnless(os.name == "nt", "native Windows materialization")
+class WindowsResolverMaterialization(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(
+            prefix="console materialization 日本語 "
+        )
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        uv = shutil.which("uv")
+        self.assertIsNotNone(uv, "Windows resolver acceptance requires uv")
+        shutil.copyfile(uv, self.root / "uv.exe")
+        self.environment = dict(
+            os.environ,
+            PATH=os.pathsep.join(
+                [
+                    str(self.root),
+                    str(Path(sys.executable).parent),
+                    str(Path(os.environ["SystemRoot"]) / "System32"),
+                ]
+            ),
+            MCP_CONSOLE_HOME=str(self.root / "home"),
+            LC_ALL="C",
+        )
+        self.environment.pop("RETICULATE_PYTHON", None)
+        self.environment.pop("RETICULATE_UV", None)
+
+    def resolver(self, mode):
+        resolver = Resolver(self.root, self.environment, mode)
+        self.addCleanup(resolver.close)
+        resolver.ready()
+        return resolver
+
+    def test_uv_materializes_retained_python_environment(self):
+        resolver = self.resolver("PythonOnly")
+        prepared = resolver.run(
+            1,
+            {
+                "Python": {
+                    "requirements": {"packages": ["six==1.17.0"]},
+                    "r": None,
+                    "selected_python": sys.executable,
+                }
+            },
+        )
+        candidate = prepared["result"]["Ok"]["python"]
+        self.assertNotEqual(Path(candidate), Path(sys.executable))
+        output = subprocess.check_output(
+            [candidate, "-I", "-c", "import six; print(six.__version__)"], text=True
+        )
+        self.assertEqual(output.strip(), "1.17.0")
+
+    def test_uv_bootstraps_ir_and_materializes_r_library(self):
+        r_home = os.environ.get("R_HOME")
+        if not r_home:
+            r_home = subprocess.check_output(["R", "RHOME"], text=True).strip()
+        self.environment["R_HOME"] = r_home
+        resolver = self.resolver("R")
+        self.assertEqual(
+            resolver.run(1, "Bootstrap", timeout=180)["result"], {"Ok": None}
+        )
+        prepared = resolver.run(2, {"R": {"requirements": ["jsonlite"]}}, timeout=180)
+        result = prepared["result"]["Ok"]
+        self.assertTrue(
+            (Path(result["library"]) / "jsonlite/DESCRIPTION").is_file(), result
+        )
+        self.assertEqual(result["requirements"], ["jsonlite"])
+        # The real ir child executes the embedded multiline program with Rscript.
+        self.assertTrue(prepared["confirmed"])
 
 
 if __name__ == "__main__":

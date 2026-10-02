@@ -19,7 +19,10 @@ from textwrap import dedent
 import unittest
 
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
-from windows_resolver import WindowsResolver  # noqa: F401 -- include resolver acceptance
+from windows_resolver import (  # noqa: F401 -- include resolver acceptance
+    WindowsResolver,
+    WindowsResolverMaterialization,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -482,11 +485,37 @@ class WindowsConsole(unittest.TestCase):
             inspection["structuredContent"]["requirements"]["python"],
             ["six", "sniffio"],
         )
+        failed = session.send(
+            control="restart",
+            requirements={"action": "set", "python": ["six==0"]},
+        )
+        self.assertTrue(failed.get("isError"), failed)
+        inspection = session.send(requirements={"action": "get"})
+        self.assertEqual(
+            inspection["structuredContent"]["requirements"]["python"],
+            ["six", "sniffio"],
+        )
         self.assertIn("42", json.dumps(completed(python="print(saved)")))
         result = completed(
             control="restart", python="import six, sniffio; print('saved' in globals())"
         )
         self.assertIn("False", json.dumps(result))
+
+    def test_managed_r_requirements_preserve_live_state(self):
+        session = self.session()
+        self.assertIn("42", json.dumps(session.send(r="saved <- 42L; saved")))
+        result = session.send(
+            requirements={"r": ["digest"]},
+            r="stopifnot(saved == 42L); digest::digest('prepared')",
+        )
+        self.assertFalse(result.get("isError"), result)
+        inspection = session.send(requirements={"action": "get"})
+        self.assertIn("digest", inspection["structuredContent"]["requirements"]["r"])
+        result = session.send(
+            control="restart",
+            r="stopifnot(!exists('saved')); digest::digest('prepared')",
+        )
+        self.assertFalse(result.get("isError"), result)
 
     def test_python_initializes_before_r(self):
         session = Session()

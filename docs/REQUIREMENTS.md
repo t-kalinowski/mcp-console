@@ -1,7 +1,7 @@
 # Requirements and environments
 
-Managed dependency resolution and the `resolve` subcommand are not yet supported on [Windows](WINDOWS.md).
-Windows local sessions use preinstalled R/Python packages and reject preparation requests with an unavailable error.
+Local [Windows](WINDOWS.md) sessions use the same managed R/Python resolution and hidden `resolve` subcommand as macOS and Linux.
+Windows SQL remains unavailable, and Windows defaults do not prepare DuckDB extensions.
 
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
@@ -211,6 +211,8 @@ R-present preparation prefers PATH `ir`, then uv (`uv tool run --from r-lib-ir i
 Selected broken tools fail rather than silently selecting alternatives.
 `ir` must be at least 0.4.0 and receives the exact selected Rscript.
 No available R-present bootstrap means a bare runtime; a bootstrap that fails is an error, not bare mode.
+On Windows, resolver processes enter an owned Job before executing; completion requires confirmed descendant retirement.
+Interrupt terminates the active resolver Job, preserving the previously accepted environment and worker state.
 
 ## Custom workers
 
