@@ -28,6 +28,86 @@ The packaging backend stages the companion automatically.
 Direct Cargo/Maturin builds need staging first.
 See [release and build setup](../RELEASE.md) for prerequisites, companion pinning, and cache recovery.
 
+### Windows development through WSL2
+
+Use a Linux checkout in each distro, such as `~/src/mcp-console`, with Linux Git and LF line endings.
+Keep the checkout, `target`, and runtime caches in the [WSL filesystem](https://learn.microsoft.com/en-us/windows/wsl/filesystems#file-storage-and-performance-across-file-systems).
+A Windows Git worktree can contain CRLF scripts and a Git-directory pointer that Linux cannot resolve.
+Independent Ubuntu and Fedora clones also keep their build outputs and checkout ownership separate; transfer committed changes through Git.
+The distros test different userspaces but share the WSL kernel.
+
+The following system prerequisites were exercised on Ubuntu 26.04 and Fedora 44 with R/Python/SQL development:
+
+```sh
+# Ubuntu
+sudo apt-get update
+sudo apt-get install -y \
+    build-essential git curl ca-certificates pkg-config libcap-dev tar xz-utils \
+    libcurl4-openssl-dev binutils python3 python3-dev python3-venv bubblewrap \
+    ripgrep r-base-dev libuv1-dev libxml2-dev libssl-dev libcairo2-dev \
+    libfontconfig1-dev libharfbuzz-dev libfribidi-dev \
+    libjpeg-dev libpng-dev libtiff-dev
+
+# Fedora
+sudo dnf install -y \
+    gcc gcc-c++ make git gawk tar xz ca-certificates pkgconf-pkg-config \
+    libcap-devel libcurl-devel binutils python3 python3-devel bubblewrap \
+    ripgrep R-devel libuv-devel libxml2-devel openssl-devel cairo-devel \
+    fontconfig-devel harfbuzz-devel fribidi-devel \
+    libjpeg-turbo-devel libpng-devel libtiff-devel
+```
+
+Install Linux rustup and uv, and ensure `curl` is available, before the build commands above.
+Use Rust at least as new as `Cargo.toml` requires, with Clippy and rustfmt installed.
+Run builds as your ordinary Linux user; use root only for system packages.
+Install the resolver and formatting tools:
+
+```sh
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+uv tool install r-lib-ir
+uv tool install ruff
+uv tool install yamark
+uv tool install air-formatter
+```
+
+Use Python 3.13 for development scripts, matching CI.
+Ubuntu's system Python 3.14 did not execute the isolated virtualenv `sitecustomize` hooks used by existing resolver fixtures.
+Create the development environment once, then activate it in each development shell:
+
+```sh
+uv python install 3.13
+uv venv --python 3.13 .dev-workflow/python-dev
+source .dev-workflow/python-dev/bin/activate
+export UV_PYTHON=3.13
+export CARGO_BUILD_JOBS=4
+export MAKEFLAGS=-j4
+```
+
+Prepare the default R packages serially before the first concurrent transcript run, as CI does.
+This avoids multiple cold-cache sessions racing while bootstrapping the shared resolver tooling.
+On Fedora, `export LIBARROW_BINARY=true` opts into [Arrow's compatible Linux C++ binaries](https://arrow.apache.org/docs/r/articles/install.html#r-source-package-with-libarrow-binary), avoiding a full C++ source build when one is available.
+DuckDB's R package may still require a lengthy first source build.
+
+```sh
+scripts/with-checkout ir run \
+    --with DBI --with arrow --with duckdb --with jsonlite \
+    --with nanoarrow --with pillar --with reticulate --with tibble \
+    --with tidyverse --with utf8 --with yyjsonr \
+    --isolated --vanilla -e 'sessionInfo()'
+scripts/preflight
+scripts/check
+```
+
+Use preflight's capability results and [Linux compatibility](LINUX_COMPATIBILITY.md) to diagnose namespace or native-sandbox failures.
+For an MCP client on Windows, launch the built server through WSL using its Linux workspace and environment; for example, from PowerShell:
+
+```powershell
+wsl -d Ubuntu-26.04 --cd /home/USER/src/mcp-console --exec bash -lc 'source .dev-workflow/python-dev/bin/activate && exec target/release/mcp-console serve'
+```
+
+Replace the distro, user, and workspace path for the session.
+`serve` expects MCP protocol input over stdio.
+
 ## Validation ladder
 
 | Command                               | Use                                                      |
