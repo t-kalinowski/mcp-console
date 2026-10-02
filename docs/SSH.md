@@ -16,7 +16,7 @@ target:
 ```
 
 Run `mcp-console serve` through an MCP client.
-Discovery, preparation, and the default worker start in the background; MCP initialization and tool discovery do not wait for them.
+Discovery, preparation, the default worker, and enabled R/Python initialization start in the background; MCP initialization and tool discovery do not wait for them.
 Early calls follow the [shared readiness rules](SEND_OPERATIONS.md#server-readiness).
 Omitting `extends` retains host reads and private temporary writes, not workspace write access.
 
@@ -84,6 +84,8 @@ Results can commit only after a compatible response and confirmed resolver clean
 A normal installation failure preserves the accepted environment and current worker.
 A missing or malformed result, transport loss, or uncertain cleanup blocks further preparation and replacement; the operation is not replayed.
 The [target envelope](RELAY_PROTOCOL.md#target-launch-envelope) owns version negotiation and framing.
+Launch protocol version 10 distinguishes interrupted bootstrap from other incomplete setup, carries the controller’s enabled-language selection and requires built-in interpreter-bootstrap completion after transport readiness; older executables are rejected before evaluation even when package versions match.
+Preparation protocol version 5 is unchanged.
 
 Preparation is trusted host execution, not a secure isolation boundary.
 Package builds and startup code can run with the remote account's permissions, independently of the worker's network policy.

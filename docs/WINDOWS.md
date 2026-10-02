@@ -1,9 +1,9 @@
 # Windows local execution
 
 Native Windows x64 support is experimental and supports local sandboxed or `--no-sandbox` sessions with R and Python.
-R and Python are peer runtimes: each initializes lazily on first use, in either order, and either can run without the other installed.
+R and Python are peer runtimes: enabled interpreters initialize in the background before the first cell, and either can run without the other installed.
 Persistent state, interactive input, plots, cooperative interruption, restart, and session recording are supported.
-Reticulate provides interoperability when both runtimes and the bridge are available; ordinary Python execution does not initialize R or require reticulate.
+Reticulate provides interoperability when both runtimes and the bridge are available; Python-only sessions do not require R or reticulate.
 
 Managed R and Python dependencies use the shared hidden `resolve` subcommand, with `ir` and `uv` materializing the environments on the host.
 SQL remains deferred; Windows defaults do not prepare DuckDB extensions.
@@ -36,7 +36,7 @@ R preparation prefers `ir` (at least 0.4.0) on `PATH`, then `uv tool run --from 
 Without an R resolver bootstrap, R uses preinstalled packages, with an available PATH Python as a fallback.
 Use `requirements` to stage packages, add them to a compatible live environment, or replace the declaration with a restart; reached missing imports and R package loads can request dependencies automatically.
 See [requirements](REQUIREMENTS.md) for selection, activation, and the host trust boundary.
-Python selection is inspected at startup, while interpreter initialization remains lazy.
+Python selection is inspected at startup, and enabled interpreters initialize in the background before the first cell.
 
 The server waits for an MCP client on standard input; it does not open an interactive terminal.
 Configure clients with command `mcp-console` and arguments `["serve"]`; use `["serve", "--no-sandbox"]` to explicitly run with host permissions.

@@ -318,6 +318,9 @@ def python_inventory_client(
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")
+    # These cases resolve synthetic Python inventories without embedding their
+    # interpreter selections. R can query version constraints before selection.
+    environment["MCP_CONSOLE_LANGUAGES"] = "r"
     arguments = directory / "uv-arguments.jsonl"
     environment["MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"] = str(arguments)
     inventories = directory / "uv-python-inventories.json"
@@ -339,6 +342,7 @@ def python_inventory_client(
         current_directory=directory,
     )
     client.initialize_and_list_tools()
+    client.transcript.clear()
     client.send(requirements={"r": ["DBI"]})
     assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")
@@ -537,6 +541,6 @@ def send_and_collect_runtime_python_resolution(
         None,
         "automatic Python resolution",
         expected_error=None,
-        completion_timeout_seconds=240,
+        completion_timeout_seconds=client.response_timeout,
         **arguments,
     )

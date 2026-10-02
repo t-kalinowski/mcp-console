@@ -120,6 +120,7 @@ struct PythonApi {
     err_print: PyErrPrint,
     err_exception_matches: PyErrExceptionMatches,
     system_exit: usize,
+    keyboard_interrupt: usize,
     exception_set_traceback: PyExceptionSetTraceback,
 }
 
@@ -276,8 +277,6 @@ pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String>
         // Interactive argv names no script; orig_argv retains the interpreter
         // executable. Initialize both before site hooks, and only once.
         (api.set_argv_ex)(0, std::ptr::null_mut(), 0);
-        #[cfg(unix)]
-        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut slot = PYTHON_LIBRARY
         .lock()
@@ -634,7 +633,14 @@ pub(super) fn environment_call(name: &CStr, request: &str) -> Result<Option<Stri
             (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
         (api.dec_ref)(argument);
         if result.is_null() {
-            if services::take_interrupt() {
+            if (api.err_exception_matches)(api.keyboard_interrupt as *mut PyObject) != 0 {
+                if name == c"initialize" {
+                    // Startup's R adapter rethrows the retained exception;
+                    // preparation carries a separate interrupted outcome.
+                    api.finish_setup(result)?;
+                } else {
+                    (api.err_clear)();
+                }
                 return Ok(None);
             }
             api.display_pending_exception();
@@ -898,6 +904,9 @@ impl PythonApi {
             if !result.is_null() {
                 (self.dec_ref)(result);
                 return Ok(true);
+            }
+            if (self.err_exception_matches)(self.keyboard_interrupt as *mut PyObject) != 0 {
+                crate::worker::record_bootstrap_interrupt();
             }
             let mut exception_type = std::ptr::null_mut();
             let mut exception_value = std::ptr::null_mut();
@@ -1218,6 +1227,9 @@ impl PythonApi {
             },
             system_exit: unsafe {
                 *load_symbol::<*const *mut PyObject>(library, path, b"PyExc_SystemExit\0")?
+            } as usize,
+            keyboard_interrupt: unsafe {
+                *load_symbol::<*const *mut PyObject>(library, path, b"PyExc_KeyboardInterrupt\0")?
             } as usize,
             exception_set_traceback: unsafe {
                 load_symbol(library, path, b"PyException_SetTraceback\0")?

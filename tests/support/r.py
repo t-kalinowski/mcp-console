@@ -34,6 +34,43 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
     return environment, home / "bin" / "Rscript"
 
 
+def install_r_startup(
+    directory: Path, environment: dict[str, str], source: str
+) -> Path:
+    """Install the shared interactive startup package with a case-specific script."""
+    rscript = Path(environment["R_HOME"]) / "bin/Rscript"
+    libraries = subprocess.check_output(
+        [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
+        env=environment,
+        text=True,
+    ).splitlines()
+    script = directory / "startup.R"
+    script.write_text(
+        f".libPaths(c({', '.join(json.dumps(path) for path in libraries)}, .libPaths()))\n"
+        + source
+    )
+    library = directory / "library"
+    library.mkdir()
+    subprocess.run(
+        [
+            rscript.with_name("R"),
+            "CMD",
+            "INSTALL",
+            f"--library={library}",
+            FIXTURES / "bootstrap_r",
+        ],
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    environment.update(
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolebootstrap",
+        MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT=str(script),
+    )
+    return library
+
+
 def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
     """Retain installed R files while isolating bootstrap settings and loader paths."""
     original = Path(environment["R_HOME"])

@@ -614,7 +614,8 @@ def test_live_extension_additions_require_an_idle_worker(
             assert "already evaluating a cell" in last_result_text(client)
             retained = client.send(requirements={"duckdb": ["json"]})
             assert not retained.get("isError"), retained
-            client.send(stdin="kept\n")
+            # Enqueuing stdin can return before Python consumes it.
+            client.expect(stdin="kept\n")
             client.send(
                 python="assert id(identity) == identity_id and answer == 'kept'; print('input retained')"
             )
@@ -633,7 +634,7 @@ def test_live_extension_additions_require_an_idle_worker(
                 python="identity = None",
             )
             assert denied.get("isError"), denied
-            client.send(stdin="continue\n")
+            client.expect("debugger continued\n", stdin="continue\n")
             assert "debugger continued" in last_result_text(client)
             client.send(
                 python="assert id(identity) == identity_id; print('still live')"

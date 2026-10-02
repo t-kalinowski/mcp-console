@@ -284,7 +284,7 @@ def test_finishes_startup_failure_while_relay_stdout_is_backpressured(
 @contextmanager
 def retirement_clock_environment(
     after_frame: dict[str, object],
-) -> Iterator[tuple[Path, dict[str, str]]]:
+) -> Iterator[tuple[Path, dict[str, str], FifoCheckpoint]]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -306,14 +306,17 @@ def retirement_clock_environment(
             capture_output=True,
             text=True,
         )
-        marker = root / "output-complete"
+        completed = FifoCheckpoint.create(root / "output-complete")
         environment = os.environ.copy()
         environment[LOADER_VARIABLE] = str(interposer)
-        environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(marker)
+        environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(completed.path)
         environment["MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME"] = (
             json.dumps(after_frame, separators=(",", ":")) + "\n"
         )
-        yield root, environment
+        try:
+            yield root, environment, completed
+        finally:
+            completed.close()
 
 
 @requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -321,6 +324,7 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
     with retirement_clock_environment({"kind": "worker_exited", "code": 0}) as (
         root,
         environment,
+        completed,
     ):
         # fmt: python
         worker = code(r"""
@@ -336,7 +340,7 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
             env=environment,
             timeout=10,
         )
-        assert (root / "output-complete").read_text() == "1"
+        completed.wait("retirement clock advanced after final output")
         events = [json.loads(line) for line in result.stdout.splitlines()]
         assert events == [
             {"kind": "ready"},
@@ -357,6 +361,7 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
     with retirement_clock_environment({"kind": "stdout_closed"}) as (
         root,
         environment,
+        completed,
     ):
         # fmt: python
         worker = code(r"""
@@ -375,7 +380,7 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
                 env=environment,
                 timeout=10,
             )
-        assert (root / "output-complete").read_text() == "1"
+        completed.wait("retirement clock advanced before regular-file output")
         assert result.returncode == 0, result.stderr
         assert result.stderr == "", result.stderr
         events = [json.loads(line) for line in destination.read_text().splitlines()]

@@ -71,7 +71,11 @@ pub enum Command {
 
     /// Run the internal R worker
     #[command(hide = true)]
-    Worker,
+    Worker {
+        /// Initialize enabled runtimes after transport readiness
+        #[arg(long, hide = true)]
+        bootstrap_runtimes: bool,
+    },
 
     /// Run the internal host resolver
     #[command(hide = true)]

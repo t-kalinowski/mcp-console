@@ -49,12 +49,17 @@ release.release()
 ```
 
 A fixture marker alone does not prove public evaluation admission.
+Writing a request to stdin does not prove its handler has started.
+When cancelling a send during gated discovery, observe its exclusive polling claim before submitting a competing cell or cancellation.
+Before closing input to check response delivery, gate an accepted result; EOF can cancel a call that has not been accepted yet.
 Process startup does not prove a cell log has closed.
 For shutdown output, establish cell completion and its recorded `cell_output` event before asserting which file owns later bytes.
 Sleeps, broader matching, and longer timeouts do not establish ordering.
 
 `wait_for_evaluation_output()` submits once, accumulates every text delta, and bounds transport receives with its completion budget.
 Give cold preparation an explicit longer budget.
+The default `send` observation deadline can return while setup is still running; establish completion before dependent requests.
+Use the client's preparation budget for resolver collection and initial requirements inspection.
 Retain raw exchanges when delivery or polling is the contract being tested.
 
 See the [Python lifecycle cases](client_server/python/test_lifecycle.py) and [retention cases](client_server/output/test_spools.py).

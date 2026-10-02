@@ -5,69 +5,7 @@ use rmcp::handler::server::router::tool::ToolRouter;
 
 use super::ConsoleServer;
 
-// Internal eval configuration; intentionally not exposed through the CLI.
-pub(super) const LANGUAGES_ENV: &str = "MCP_CONSOLE_LANGUAGES";
-
-#[derive(Clone, Copy, Default)]
-pub(super) struct Languages {
-    r: bool,
-    python: bool,
-    sql: bool,
-}
-
-impl Languages {
-    pub(super) fn from_environment() -> Result<Self, String> {
-        let Some(value) = std::env::var_os(LANGUAGES_ENV) else {
-            return Ok(Self::all());
-        };
-        let value = value
-            .into_string()
-            .map_err(|_| Self::invalid_configuration())?;
-        let mut languages = Self::default();
-        for language in value.split(',') {
-            match language {
-                "r" => languages.r = true,
-                "python" => languages.python = true,
-                "sql" if !cfg!(windows) => languages.sql = true,
-                _ => return Err(Self::invalid_configuration()),
-            }
-        }
-        Ok(languages)
-    }
-
-    fn all() -> Self {
-        Self {
-            r: true,
-            python: true,
-            sql: !cfg!(windows),
-        }
-    }
-
-    pub(super) fn enables(self, language: crate::cell::Language) -> bool {
-        match language {
-            crate::cell::Language::R => self.r,
-            crate::cell::Language::Python => self.python,
-            crate::cell::Language::Sql => self.sql,
-        }
-    }
-
-    pub(super) fn field(language: crate::cell::Language) -> &'static str {
-        match language {
-            crate::cell::Language::R => "r",
-            crate::cell::Language::Python => "python",
-            crate::cell::Language::Sql => "sql",
-        }
-    }
-
-    fn invalid_configuration() -> String {
-        let available = if cfg!(windows) {
-            "`r` and `python`"
-        } else {
-            "`r`, `python`, and `sql`"
-        };
-        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of {available}")
-    }
-}
+use crate::cell::Languages;
 
 impl ConsoleServer {
     pub(super) fn configured_tool_router(
@@ -220,7 +158,7 @@ fn configure_windows(description: &mut String, properties: &mut Map<String, Valu
         .split_once("\n\nSend one complete")
         .expect("send description");
     *description = format!(
-        "Persistent R and Python workbench for local execution on Windows. State persists across calls. Each runtime initializes on demand and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
+        "Persistent R and Python workbench for local execution on Windows. State persists across calls. Enabled runtimes initialize in the background and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
     ).replace("`r`, `python`, or `sql`", "`r` or `python`");
     // Retain shared runtime and preparation guidance, but omit SQL-only helpers.
     for (field, start, end) in [

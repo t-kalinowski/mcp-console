@@ -135,7 +135,8 @@ def test_prepares_initial_python_requirements(
 def test_preserves_python_requirement_values(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -225,14 +226,15 @@ def test_preserves_python_requirement_values(
         )
         """)
     client.expect(r=r)
-    return client.finish()
+    return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
 def test_materializes_lazy_python_requirements_without_initializing(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -263,15 +265,9 @@ def test_materializes_lazy_python_requirements_without_initializing(
         )
         """)
     client.expect(r=r)
-    # fmt: python
-    python = code("""
-        import yaml12
-
-        yaml12.__name__
-        """)
-    client.send(python=python)
-    assert last_tool_text(client) == "'yaml12'\n"
-    return client.finish()
+    client.send(r='reticulate::import("yaml12")$`__name__`')
+    assert last_tool_text(client) == '[1] "yaml12"\n'
+    return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -766,7 +762,7 @@ def test_prepares_after_idle_python_resolution(
     release_worker_callback_gate(client, "idle Python callback")
 
     client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
-    client.send(r="reticulate::py_require()$packages")
+    client.send(r="dput(reticulate::py_require()$packages)")
     assert "idle Python ready\n" in last_tool_text(client)
     assert '"py-yaml12"' in last_tool_text(client)
     return client.finish()
@@ -993,6 +989,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
     execution: Execution,
 ) -> Transcript:
     environment, rscript = r_test_environment()
+    environment["MCP_CONSOLE_LANGUAGES"] = "r"
     fixture = Path(__file__).parents[3] / "fixtures" / "py_require"
     with tempfile.TemporaryDirectory() as library:
         subprocess.run(
@@ -1049,7 +1046,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         client.send(r=r)
         output = last_tool_text(client)
         assert output == "[1] FALSE\n", repr(output)
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)

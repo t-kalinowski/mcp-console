@@ -3,6 +3,7 @@
 ---
 send:
   r: |
+    reticulate::use_python(normalizePath(Sys.which("python3")), required = TRUE)
     interrupted <- TRUE
     invisible(suppressMessages(base::trace(
       "py_discover_config",

@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,8 @@ from support.suites import run_this_suite
 def test_round_trips_python_requirement_attributes_and_copies(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -83,7 +85,7 @@ def test_round_trips_python_requirement_attributes_and_copies(
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
-    return client.finish()
+    return client.finish()[3:]
 
 
 if __name__ == "__main__":

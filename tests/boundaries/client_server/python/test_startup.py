@@ -15,6 +15,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.requirements import FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, R, requires
+from support.r import install_r_startup, r_test_environment
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import (
@@ -137,6 +138,42 @@ def test_embeds_framework_python(binary: Path, execution: Execution) -> list:
             return client.finish()
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_preserves_broken_pipe_errors_after_r_startup(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        with McpClient(
+            binary, execution.serve(), selected_python(root, python), root
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+
+                    reader, writer = os.pipe()
+                    os.close(reader)
+                    try:
+                        os.write(writer, b"closed reader")
+                    except BrokenPipeError:
+                        print("caught Python broken pipe")
+                    finally:
+                        os.close(writer)
+                    """)
+            )
+            assert last_result_text(client) == "caught Python broken pipe\n", (
+                last_result_text(client)
+            )
+            client.send(r="1L + 1L")
+            assert last_result_text(client) == "[1] 2\n", last_result_text(client)
+            client.finish()
+            return [{"broken_pipe_errors_survive_r_startup": True}]
+
+
 @executions(DIRECT, SANDBOXED)
 def test_processes_initial_site_directories_once(
     binary: Path, execution: Execution
@@ -255,7 +292,8 @@ def interrupted_initialization(
 
             if sys.argv[0] != "-c" and (
                 {not r_first!r}
-                or os.getpid() == int(Path({str(worker_identity)!r}).read_text())
+                or (Path({str(worker_identity)!r}).exists()
+                    and os.getpid() == int(Path({str(worker_identity)!r}).read_text()))
             ):
                 builtins.startup_attempts = getattr(builtins, "startup_attempts", 0) + 1
                 marker = Path({str(marker)!r})
@@ -266,11 +304,27 @@ def interrupted_initialization(
         (site / f"{hook}.py").write_text(source)
         if hook != "sitecustomize":
             (site / "console-startup.pth").write_text(f"import {hook}\n")
-        environment = (
-            dict(os.environ, RETICULATE_PYTHON=str(python))
-            if r_first
-            else selected_python(root, python)
-        )
+        environment = selected_python(root, python)
+        if r_first:
+            # Select Python from an R startup package, after R has initialized.
+            # The controller has no explicit Python hint, so eager bootstrap
+            # follows the unresolved R selection path before entering Python.
+            r_environment, _ = r_test_environment()
+            library = install_r_startup(
+                root,
+                r_environment,
+                # fmt: r
+                code(f"""
+                Sys.setenv(RETICULATE_PYTHON = {
+                  json.dumps(str(python))
+                })
+                writeLines(as.character(Sys.getpid()), {
+                  json.dumps(str(worker_identity))
+                })
+                startup_state <- 41L
+                    """),
+            )
+            environment = bare_runtime_environment(r_environment, library)
         if language == "sql":
             commands = root / "no-r-commands"
             commands.mkdir()
@@ -288,15 +342,6 @@ def interrupted_initialization(
             root,
         ) as client:
             client.initialize_and_list_tools()
-            if r_first:
-                # Reticulate may inspect Python through a script before embedding.
-                # Identify the worker through the public R cell, not probe argv.
-                client.send(r="startup_state <- 41L; Sys.getpid()")
-                identity = last_result_text(client).removeprefix("[1] ").strip()
-                worker_identity.write_text(str(int(identity)))
-                client.transcript[-1]["result"]["content"][0]["text"] = (
-                    "[1] <worker pid>\n"
-                )
             cell = "never_run = True" if language == "python" else "SELECT 42"
             # Interpreter discovery/bootstrap precedes arrival at the hook.
             # The input notice, rather than the first response cut, admits SIGINT.
@@ -306,6 +351,8 @@ def interrupted_initialization(
                 timeout_ms=10_000,
             )
             worker = int(marker.read_text())
+            if r_first:
+                assert worker == int(worker_identity.read_text())
             client.send(control="interrupt", timeout_ms=10_000)
             interrupted = last_result_text(client)
             assert "KeyboardInterrupt" in interrupted, interrupted

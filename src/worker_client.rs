@@ -139,6 +139,8 @@ impl std::ops::Deref for ClientInner {
 
 /// Describes one worker launch for the current runtime.
 struct WorkerSpec<'a> {
+    builtin: bool,
+    languages: Option<crate::cell::Languages>,
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
     relay: Option<&'a std::path::Path>,
@@ -414,6 +416,19 @@ impl Client {
 }
 
 impl WorkerCallbacks {
+    fn interrupt_bootstrap_cell(&self) -> Result<(), String> {
+        // Admission and interruption share the evaluation-slot lock. The marker
+        // survives delayed blocking-task scheduling and applies only to the
+        // generation whose bootstrap was interrupted.
+        let active = self.client.evaluation()?;
+        if let Some(active) = active.as_ref()
+            && active.generation.is(&self.generation)
+        {
+            active.evaluation.interrupt_bootstrap()?;
+        }
+        Ok(())
+    }
+
     fn resolve_r(
         &self,
         packages: Vec<String>,

@@ -34,7 +34,8 @@ Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, A
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
 Without R, an empty Python declaration omits DuckDB, but a user-selected DB-API connection can still provide SQL.
 
-Default preparation and built-in worker launch run in the background; languages initialize on demand.
+Default preparation, built-in worker launch, and enabled R/Python initialization run in the background.
+Transport readiness connects input and resolver services before startup hooks run; DuckDB connections and queries remain lazy.
 Discovery and first-use preparation are different stages.
 See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early requirements and replacement of an unused prewarmed worker.
 
@@ -60,6 +61,8 @@ send(control="restart", requirements={"action": "reset"})
 A bare `{}` is invalid.
 Changed `set`/`reset` on a worker that has accepted user execution requires explicit restart; unchanged replacement is a no-op, though an explicitly requested restart still occurs.
 The [startup exception](SEND_OPERATIONS.md#server-readiness) applies only to an unused prewarmed candidate.
+Interpreter initialization alone does not require explicit restart for the first `set` or `reset`; user code or nonempty stdin ends this exception.
+Failed candidate preparation resumes the existing bootstrap; successful replacement retires it before its successor's hooks run.
 Removing declarations does not uninstall or prohibit later runtime use, and automatic resolution may acquire packages again.
 
 Inspection returns `requirements`, `prepared`, and `runtime_requirements` in structured content.

@@ -35,6 +35,12 @@ On cancellation or timeout, the supervisor requests cleanup and allows 15 second
 Fixtures must retire their own subprocesses; killing a case cannot guarantee descendant cleanup.
 Runner progress and rerun messages are UI output, not captured protocol records.
 
+Locally and in CI, case failures are collected while the remaining cases continue.
+After more than 15% of the selected, capability-applicable cases fail, the runner stops starting new cases and lets active cases finish under their existing deadlines.
+The final failure report lists the failed selectors, their diagnostics, and how many cases were not started; any failure makes the command fail.
+Execution modes count as one case, and the initialization case is included in the total.
+User cancellation still interrupts active cases and waits for their cleanup.
+
 ## Requirements and execution modes
 
 Declare capabilities beside cases with `@requires(...)` from `support.requirements`; platform detection belongs in test support.

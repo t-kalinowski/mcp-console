@@ -61,21 +61,22 @@ Every frame has a string `kind` plus exactly the fields listed below.
 
 ### Worker to server
 
-| Kind                                                       | Fields                                                  |
-| ---------------------------------------------------------- | ------------------------------------------------------- |
-| `ready`, `completed`, `python_prepared`                    | —                                                       |
-| `console_output`, `console_diagnostic`                     | `data`: string                                          |
-| `image`                                                    | `data`: valid base64 string; `mime_type`: string        |
-| `input_requested`                                          | `prompt`: string                                        |
-| `input_received`, `input_cancelled`                        | —                                                       |
-| `r_prepared`, `r_activated`                                | `library`: string                                       |
-| `r_preparation_failed`                                     | `message`: string                                       |
-| `resolve_r`                                                | `packages`: string[]                                    |
-| `r_activation_failed`                                      | `library`: string; `message`: string                    |
-| `resolve_python`                                           | `request`: Python resolution request                    |
-| `resolve_python_version`                                   | `request`: object with required `constraints`: string[] |
-| `python_activated`, `python_activation_failed`             | `requirements`: complete Python manifest                |
-| `python_preparation_failed`, `python_preparation_rejected` | `message`: string                                       |
+| Kind                                                       | Fields                                                      |
+| ---------------------------------------------------------- | ----------------------------------------------------------- |
+| `ready`, `completed`, `python_prepared`                    | —                                                           |
+| `runtime_initialized`                                      | `interrupted`: boolean; built-in interpreter bootstrap only |
+| `console_output`, `console_diagnostic`                     | `data`: string                                              |
+| `image`                                                    | `data`: valid base64 string; `mime_type`: string            |
+| `input_requested`                                          | `prompt`: string                                            |
+| `input_received`, `input_cancelled`                        | —                                                           |
+| `r_prepared`, `r_activated`                                | `library`: string                                           |
+| `r_preparation_failed`                                     | `message`: string                                           |
+| `resolve_r`                                                | `packages`: string[]                                        |
+| `r_activation_failed`                                      | `library`: string; `message`: string                        |
+| `resolve_python`                                           | `request`: Python resolution request                        |
+| `resolve_python_version`                                   | `request`: object with required `constraints`: string[]     |
+| `python_activated`, `python_activation_failed`             | `requirements`: complete Python manifest                    |
+| `python_preparation_failed`, `python_preparation_rejected` | `message`: string                                           |
 
 For example:
 
@@ -105,7 +106,7 @@ Their packages and cutoff must match; version constraints may differ to pin phys
 Optional `initialized` defaults to false and identifies a live interpreter requiring the accepted executable.
 
 Optional `import_resolution` contains `module` and `distribution` strings.
-It is valid only during evaluation: the module is a top-level ASCII identifier and the distribution a bare name present in both manifests.
+It is valid during evaluation or built-in interpreter bootstrap: the module is a top-level ASCII identifier and the distribution a bare name present in both manifests.
 The server validates it against the proposed addition and emits any differently-named resolution notice only after matching activation.
 
 `python_resolved.native` contains `selected` and `requirements`.
@@ -119,6 +120,17 @@ No request carries an arbitrary resolver environment map.
 `ready` must be the first semantic frame and occur exactly once.
 Startup diagnostics may use raw stdout/stderr before it.
 For the built-in worker, readiness means command admission is available, not that either interpreter has initialized.
+Enabled R and Python then initialize on the existing serialized worker thread; hooks may emit output, images, input, resolver, and activation messages before evaluation.
+The bootstrap attempt ends with `{"kind":"runtime_initialized","interrupted":false}`; an interrupt observed during initialization reports `interrupted:true`.
+Other incomplete setup preserves an admitted cell, allowing its language to retry initialization as needed.
+It sends no `completed` frame and consumes no Python user-cell filename ID.
+The server withholds an accepted cell's `evaluate` frame until bootstrap finishes, while delivering its stdin normally.
+An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete setup in the same interpreter.
+The controller also orders interrupt admission against this receipt and withholds the waiting cell when the interrupt comes first.
+This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
+Fatal startup failure follows ordinary generation failure and replacement handling.
+Custom workers retain their existing readiness and evaluation contract and do not send this event.
+Default local and target launchers opt into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
 
 The server admits one evaluation or explicit preparation at a time.
 Each ordinary operation has exactly one matching terminal result:
@@ -146,7 +158,7 @@ Direct fd-0 readers emit no input events.
 
 ### Nested managed-R resolution
 
-During evaluation or an idle callback, `resolve_r` requests host resolution of validated plain package names.
+During evaluation, built-in interpreter bootstrap, or an idle callback, `resolve_r` requests host resolution of validated plain package names.
 The server resolves the complete retained environment outside the worker sandbox.
 `r_resolved` is provisional: after applying the library, the worker sends matching `r_activated` before continuing the package load.
 Only that current-generation receipt commits the candidate.
@@ -182,7 +194,7 @@ See [live environment behavior](REQUIREMENTS.md#live-python-preparation) for com
 
 ### Nested managed-Python resolution
 
-`resolve_python` and `resolve_python_version` are allowed during evaluation, Python preparation, or idle runtime callbacks.
+`resolve_python` and `resolve_python_version` are allowed during evaluation, built-in interpreter bootstrap, Python preparation, or idle runtime callbacks.
 Environment replies are provisional; version replies create no environment candidate.
 The worker reports a complete normalized logical manifest in `python_activated` before the enclosing result or resumed import.
 It must match a provisional candidate or the unchanged managed environment.

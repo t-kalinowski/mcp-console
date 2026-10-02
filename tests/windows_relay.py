@@ -208,7 +208,8 @@ class WindowsRelay(unittest.TestCase):
                         # fmt: r
                         source = dedent("""
                             stopifnot(identical(
-                              normalizePath(path.expand("~")), normalizePath(Sys.getenv("HOME"))
+                              normalizePath(path.expand("~")),
+                              normalizePath(Sys.getenv("HOME"))
                             ))
                             cat("HOME selected")
                             """).strip()

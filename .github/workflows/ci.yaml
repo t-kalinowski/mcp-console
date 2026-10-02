@@ -23,6 +23,7 @@ env:
   CI_BUILD_CACHE_VERSION: "3"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   UV_VERSION: 0.12.4
+  QUARTO_VERSION: 1.10.18
 
 jobs:
   windows:
@@ -82,8 +83,9 @@ jobs:
       - name: Install Windows R bridge
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          cache-version: windows-runtime-v1-${{ steps.epoch.outputs.week }}
+          cache-version: windows-runtime-v2-${{ steps.epoch.outputs.week }}
           upgrade: "FALSE"
+          dependencies: "NA"
           packages: |
             any::reticulate
             any::jsonlite
@@ -136,6 +138,9 @@ jobs:
   check:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Install missing system requirements, retaining the runner's installed versions.
+      PKG_SYSREQS_UPDATE: "false"
     strategy:
       fail-fast: false
       matrix:
@@ -243,11 +248,24 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Restore Linux dependency downloads
+        if: runner.os == 'Linux'
+        id: apt-cache
+        uses: actions/cache/restore@v6
+        with:
+          # Cache compressed downloads only, never the installed system or apt lists.
+          # One baseline per runner OS and week, without accumulating older versions.
+          path: ${{ runner.temp }}/apt-archives/*.deb
+          key: apt-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.arch }}
+
       - name: Install Linux build and sandbox dependencies
         if: runner.os == 'Linux'
         run: |
+          sudo mkdir -p "$RUNNER_TEMP/apt-archives/partial"
+          printf 'Dir::Cache::archives "%s";\nAPT::Install-Recommends "false";\n' \
+            "$RUNNER_TEMP/apt-archives" | sudo tee /etc/apt/apt.conf.d/99-ci-archives
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev openssh-server
+          sudo apt-get install -y --no-upgrade build-essential pkg-config libcurl4-openssl-dev libcap-dev openssh-server
           sudo mkdir -p /run/sshd
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -472,13 +490,43 @@ jobs:
       - name: Install transcript dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          cache-version: transcripts-v1-${{ steps.cache-epoch.outputs.value }}
-          install-quarto: true
+          cache: always
+          cache-version: transcripts-v2-${{ steps.cache-epoch.outputs.value }}
+          install-quarto: false
           upgrade: "FALSE"
+          dependencies: "NA"
           packages: |
             any::devtools
             any::processx
             any::reticulate
+
+      - name: Save Linux dependency downloads
+        if: runner.os == 'Linux' && steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/apt-archives/*.deb
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
+
+      - name: Install Quarto portable archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          case "$RUNNER_OS" in
+            macOS) platform=macos ;;
+            Linux) platform=linux-amd64 ;;
+            *) exit 1 ;;
+          esac
+          archive="quarto-$QUARTO_VERSION-$platform.tar.gz"
+          checksums="quarto-$QUARTO_VERSION-checksums.txt"
+          gh release download "v$QUARTO_VERSION" --repo quarto-dev/quarto-cli \
+            --pattern "$archive" --pattern "$checksums"
+          grep "  $archive$" "$checksums" | shasum -a 256 --check --strict
+          mkdir quarto
+          tar -xzf "$archive" --strip-components=1 -C quarto
+          test "$(quarto/bin/quarto --version)" = "$QUARTO_VERSION"
+          printf '%s\n' "$RUNNER_TEMP/quarto/bin" >> "$GITHUB_PATH"
+          rm "$archive" "$checksums"
 
       - name: Prewarm R test environments
         env:
@@ -503,15 +551,52 @@ jobs:
               "$@" \
               -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow", "jsonlite", "pillar", "tibble", "utf8"))'
           }
+          # shellcheck disable=SC2016 # The dollar sign belongs to R, not the shell.
           prewarm_r -e 'cat("MCP_CONSOLE_TEST_SSH_R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep), "\n", sep = "", file = Sys.getenv("GITHUB_ENV"), append = TRUE)'
           prewarm_r --with praise
           prewarm_r --with praise --with zeallot
 
       - name: Run transcripts
+        id: transcripts
         env:
           GITHUB_PAT: ${{ github.token }}
+          MCP_CONSOLE_TEST_TIMINGS: ${{ runner.temp }}/transcript-metrics/case-timings.jsonl
         # Use the prepared executable; scripts/test also invokes Cargo.
-        run: uv run --script tests/boundaries/_run.py --full --jobs 6
+        run: |
+          mkdir -p "$RUNNER_TEMP/transcript-metrics"
+          {
+            printf 'Revision: %s\n' "$(git rev-parse HEAD)"
+            printf 'Transcript workers: 6\n'
+            printf 'Runner: %s / %s / %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageVersion"
+            python3 -c 'import os; print(f"Logical CPUs: {os.cpu_count()}")'
+          } > "$RUNNER_TEMP/transcript-metrics/environment.txt"
+          case "$RUNNER_OS" in
+            macOS) time_args=(-l) ;;
+            Linux) time_args=(-v) ;;
+            *) exit 1 ;;
+          esac
+          /usr/bin/time "${time_args[@]}" \
+            -o "$RUNNER_TEMP/transcript-metrics/resource-usage.txt" \
+            uv run --script tests/boundaries/_run.py --full --jobs 6
+
+      - name: Summarize transcript measurements
+        if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
+        run: |
+          {
+            printf '### Transcript measurements\n\n```text\n'
+            cat "$RUNNER_TEMP/transcript-metrics/environment.txt"
+            cat "$RUNNER_TEMP/transcript-metrics/resource-usage.txt"
+            printf '\n```\n\n'
+            printf 'Maximum RSS is a per-process high-water mark, not the combined peak of concurrent workers. Units: bytes on macOS, KiB on Linux.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload transcript measurements
+        if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: transcript-metrics-${{ matrix.os }}-6-workers
+          path: ${{ runner.temp }}/transcript-metrics
+          retention-days: 14
 
       - name: Check uv source installations
         env:

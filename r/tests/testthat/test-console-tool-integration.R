@@ -190,13 +190,27 @@ test_that("console_tool works when registered with an ellmer chat", {
 })
 
 
+inspect_requirements <- function(send) {
+  deadline <- Sys.time() + 600
+  text <- send(requirements = list(action = "get"), timeout_ms = 0)@text
+  while (identical(text, "[worker starting]")) {
+    remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+    stopifnot(remaining > 0)
+    # This is the public readiness poll. Each call waits for startup rather
+    # than parsing a pending notice as a JSON requirements declaration.
+    text <- send(
+      requirements = list(action = "get"),
+      timeout_ms = as.integer(1000 * min(60, remaining))
+    )@text
+  }
+  jsonlite::fromJSON(text)
+}
+
+
 test_that("requirements actions preserve scalar fields and empty lists", {
   with_temp_working_directory({
     send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
-    expect_identical(send(timeout_ms = 600000)@text, "\n[idle]")
-    startup <- jsonlite::fromJSON(
-      send(requirements = list(action = "get"))@text
-    )
+    startup <- inspect_requirements(send)
     # Inspect the committed default environment after worker readiness.
     expect_true(startup$prepared)
     prepared <- send(
@@ -210,9 +224,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
       )
     )
     expect_identical(prepared@text, "[prepared]")
-    selected <- jsonlite::fromJSON(
-      send(requirements = list(action = "get"))@text
-    )
+    selected <- inspect_requirements(send)
     expect_length(selected$requirements$python, 0L)
     expect_identical(selected$requirements$python_version, ">=3.11")
     expect_identical(selected$requirements$exclude_newer, "2026-01-01")
@@ -220,7 +232,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
     declaration$action <- "set"
     expect_identical(send(requirements = declaration)@text, "[prepared]")
     expect_identical(
-      jsonlite::fromJSON(send(requirements = list(action = "get"))@text),
+      inspect_requirements(send),
       selected
     )
   })

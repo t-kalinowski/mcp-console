@@ -96,27 +96,6 @@ impl Client {
             }
             return Err(active.reject_preparation_message().to_string());
         }
-        let mut pending_requirements = Some(requirements);
-        let available_environment = match environment.try_lock() {
-            Ok(environment) => {
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements
-                        .take()
-                        .expect("environment requirements were already consumed"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-                self.require_explicit_restart(&delta)?;
-                Some((environment, delta))
-            }
-            Err(std::sync::TryLockError::WouldBlock) => None,
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err("worker environment lock poisoned".to_string());
-            }
-        };
         // Preparation owns admission and no evaluation is active. A delivered
         // completion can precede release of the evaluator's worker lock.
         let mut worker = self
@@ -124,8 +103,13 @@ impl Client {
             .worker
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
+        let replace_default = self
+            .0
+            .unused_default
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(&*worker, WorkerState::Running(_));
         let environment_preparation = if let WorkerState::Running(running) = &*worker {
-            match running.reserve_environment_preparation() {
+            match running.reserve_environment_preparation(replace_default) {
                 Ok(reservation) => Ok(Some(reservation)),
                 Err(EnvironmentPreparationAdmissionFailure::Busy(error)) => {
                     return self.finish_environment_resolution_failure(
@@ -139,31 +123,15 @@ impl Client {
         } else {
             Ok(None)
         };
-        let (mut environment, delta) = match available_environment {
-            Some(snapshot) => snapshot,
-            None => {
-                let environment = environment
-                    .lock()
-                    .map_err(|_| "worker environment lock poisoned".to_string())?;
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements
-                        .take()
-                        .expect("environment requirements were already consumed"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-                self.require_explicit_restart(&delta)?;
-                (environment, delta)
-            }
-        };
-        let replace_default = self
-            .0
-            .unused_default
-            .load(std::sync::atomic::Ordering::Acquire)
-            && matches!(&*worker, WorkerState::Running(_));
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        self.ensure_generation(generation)?;
+        let delta = RequirementDelta::calculate(&environment, requirements)?;
+        if delta.is_empty() {
+            return Ok(PrepareResult::Prepared);
+        }
+        self.require_explicit_restart(&delta)?;
         if self.0.python_only && !replace_default {
             match &*worker {
                 WorkerState::Initial => {}

@@ -726,7 +726,10 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
             current_directory=temporary,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
+        client.send(
+            requirements={"r": ["DBI"]},
+            timeout_ms=int(client.response_timeout * 1_000),
+        )
         assert last_result_text(client) == "[prepared]"
         uv_record.write_text("", encoding="utf-8")
         resolver_record.write_text("", encoding="utf-8")
@@ -944,7 +947,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         assert interrupt_result.get("isError") is not True, interrupt_result
 
         client.send()
-        assert last_result_text(client) == "\n[idle]"
+        assert last_result_text(client) == "\n[idle]", client.transcript[-1]
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
         assert len(recorded_tool_run_pythons(arguments)) == 2
@@ -1064,7 +1067,7 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
         )
 
         client.send()
-        assert last_result_text(client) == "\n[idle]"
+        assert last_result_text(client) == "\n[idle]", client.transcript[-1]
         block_tool_run.unlink()
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"

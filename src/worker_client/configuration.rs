@@ -21,6 +21,8 @@ pub(crate) struct ClientConfiguration {
     pub(super) python_preparation: bool,
     pub(super) local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
     pub(super) target: Option<crate::target_session::Session>,
+    /// Local built-in workers retain the controller selection across generations.
+    pub(super) languages: Option<crate::cell::Languages>,
     /// A default worker may be replaced without discarding user runtime state.
     pub(super) unused_default: AtomicBool,
 }
@@ -71,6 +73,7 @@ impl ClientConfiguration {
         python: Option<PathBuf>,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
+        let languages = crate::cell::Languages::from_environment()?;
         let configured_python = python
             .map(PathBuf::into_os_string)
             .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
@@ -177,7 +180,7 @@ impl ClientConfiguration {
                     )
                 }
             };
-        // Preserve Windows' lazy peer runtimes even in a bare R session. An
+        // Preserve Windows' independent peer runtimes even in a bare R session. An
         // explicit Python selection is inspected by the same preparation owner.
         #[cfg(windows)]
         let mut local_runtime = local_runtime;
@@ -217,7 +220,10 @@ impl ClientConfiguration {
         }
         let mut configuration = Self::with_arguments(
             program,
-            vec![OsString::from("worker")],
+            vec![
+                OsString::from("worker"),
+                OsString::from("--bootstrap-runtimes"),
+            ],
             None,
             no_sandbox,
             sandbox_settings,
@@ -232,6 +238,7 @@ impl ClientConfiguration {
             },
         );
         configuration.local_preparation = Mutex::new(local_preparation);
+        configuration.languages = Some(languages);
         Ok(configuration)
     }
 
@@ -274,6 +281,7 @@ impl ClientConfiguration {
             python_preparation,
             local_preparation: Mutex::new(None),
             target: None,
+            languages: None,
             unused_default: AtomicBool::new(false),
         }
     }
@@ -286,9 +294,10 @@ impl ClientConfiguration {
         python: Option<PathBuf>,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
+        let languages = crate::cell::Languages::from_environment()?;
         if matches!(target.compute, crate::settings::Compute::Host {}) {
             return Self::ssh(
-                crate::ssh::Session::new(target, roots),
+                crate::ssh::Session::new(target, roots, languages),
                 no_sandbox,
                 policy,
                 python,
@@ -298,6 +307,7 @@ impl ClientConfiguration {
         let session = crate::target_session::Session::setup_compute(
             target,
             roots,
+            languages,
             &policy,
             no_sandbox,
             python.as_deref(),

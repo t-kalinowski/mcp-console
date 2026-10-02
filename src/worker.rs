@@ -20,9 +20,10 @@ pub(crate) use coordinator::run;
 pub(crate) use core::mark_shutting_down;
 #[cfg(any(unix, windows))]
 pub(crate) use core::{
-    emit_output, publish_plot, publish_python_activation, publish_python_activation_failure,
-    publish_r_activation, publish_r_activation_failure, record_worker_failure, resolve_python,
-    resolve_python_version, resolve_r,
+    bootstrapping, emit_output, publish_plot, publish_python_activation,
+    publish_python_activation_failure, publish_r_activation, publish_r_activation_failure,
+    record_bootstrap_interrupt, record_worker_failure, resolve_python, resolve_python_version,
+    resolve_r,
 };
 #[cfg(unix)]
 pub(crate) use input::python_interrupt_wakeup;
@@ -38,7 +39,7 @@ pub(crate) use interrupt::{
 };
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn run(_bootstrap_runtimes: bool) -> Result<(), Box<dyn std::error::Error>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "embedded R workers are supported only on macOS",

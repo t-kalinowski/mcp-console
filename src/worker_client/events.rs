@@ -1,3 +1,4 @@
+mod deferred;
 mod operation;
 
 pub(super) use operation::{
@@ -14,6 +15,10 @@ use super::lifecycle::OldGenerationCommitDisposition;
 use super::{OutputTape, WorkerCallbacks, WorkerProcessOutcome};
 
 pub(super) enum WorkerEvent {
+    SuspendBootstrap {
+        admitted: mpsc::SyncSender<Result<(), String>>,
+    },
+    ResumeBootstrap,
     Relay(RelayEvent),
     TransportFailure(String),
     RetireOperation {
@@ -116,9 +121,45 @@ fn dispatch_worker_events(
     let mut process_outcome = None;
     let mut relay_closed = false;
 
-    while let Ok(event) = events.recv() {
+    let mut deferred = deferred::DeferredEvents::default();
+    loop {
+        let event = if !operation.bootstrap_suspended()? && !deferred.is_empty() {
+            match deferred.pop() {
+                Ok(Some(event)) => WorkerEvent::Relay(event),
+                Ok(None) => unreachable!("nonempty deferred bootstrap spool"),
+                Err(error) => {
+                    deferred.clear();
+                    fail_dispatch(&operation, &mut startup, &interrupts, error);
+                    semantic_failure = true;
+                    continue;
+                }
+            }
+        } else {
+            let Ok(event) = events.recv() else { break };
+            event
+        };
         match event {
+            WorkerEvent::SuspendBootstrap { admitted } => {
+                let _ = admitted.send(operation.suspend_bootstrap());
+            }
+            WorkerEvent::ResumeBootstrap => operation.resume_bootstrap()?,
             WorkerEvent::Relay(event) => {
+                if !semantic_failure
+                    && !retiring
+                    && operation.bootstrap_suspended()?
+                    && (bootstrap_callback(&event)
+                        || (!deferred.is_empty() && sideband_semantic(&event)))
+                {
+                    // Once a callback waits, later events from the same worker
+                    // sideband must not overtake its commit. Independent streams
+                    // and relay lifetime observations remain responsive.
+                    if let Err(error) = deferred.push(&event) {
+                        deferred.clear();
+                        fail_dispatch(&operation, &mut startup, &interrupts, error);
+                        semantic_failure = true;
+                    }
+                    continue;
+                }
                 if process_outcome.is_some() {
                     fail_dispatch(
                         &operation,
@@ -287,6 +328,7 @@ fn dispatch_worker_events(
                 }
             }
             WorkerEvent::RetireOperation { error, reached } => {
+                deferred.clear();
                 if let Some(startup) = startup.take() {
                     let _ = startup.send(Err(error.clone()));
                 }
@@ -340,10 +382,43 @@ fn dispatch_worker_events(
     retirement_failure.map_or(Ok(process_outcome), Err)
 }
 
+fn bootstrap_callback(event: &RelayEvent) -> bool {
+    matches!(
+        event,
+        RelayEvent::ResolveR { .. }
+            | RelayEvent::RActivated { .. }
+            | RelayEvent::RActivationFailed { .. }
+            | RelayEvent::ResolvePython { .. }
+            | RelayEvent::ResolvePythonVersion { .. }
+            | RelayEvent::PythonActivated { .. }
+            | RelayEvent::PythonActivationFailed { .. }
+            | RelayEvent::RuntimeInitialized { .. }
+    )
+}
+
+fn sideband_semantic(event: &RelayEvent) -> bool {
+    !matches!(
+        event,
+        RelayEvent::Stdout { .. }
+            | RelayEvent::StdoutBytes { .. }
+            | RelayEvent::Stderr { .. }
+            | RelayEvent::StderrBytes { .. }
+            | RelayEvent::StdoutClosed
+            | RelayEvent::StderrClosed
+            | RelayEvent::WorkerSidebandClosed
+            | RelayEvent::InterruptResult { .. }
+            | RelayEvent::ShutdownStarted
+            | RelayEvent::WorkerExited { .. }
+            | RelayEvent::WorkerSignaled { .. }
+            | RelayEvent::Fatal { .. }
+    )
+}
+
 fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
+            | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::InputRequested { .. }
             | RelayEvent::InputReceived
             | RelayEvent::InputCancelled
@@ -406,21 +481,21 @@ fn handle_semantic_event(
     match event {
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 output.push_console_text(Output, data);
                 Ok(())
             }
         }),
         RelayEvent::ConsoleDiagnostic { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Diagnostic, data),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 output.push_console_text(Diagnostic, data);
                 Ok(())
             }
         }),
         RelayEvent::Image { data, mime_type } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.image(data, mime_type),
-            Route::Preparation | Route::Idle => {
+            Route::Bootstrap | Route::Preparation | Route::Idle => {
                 crate::transcript::validate_image_data(&data)?;
                 output.push_image(data, mime_type, None);
                 Ok(())
@@ -497,7 +572,7 @@ fn handle_semantic_event(
         RelayEvent::ResolvePython { request } => {
             if request.import_resolution.is_some() {
                 operation.with_route(|route| match route {
-                    Route::Cell(_) => Ok(()),
+                    Route::Cell(_) | Route::Bootstrap => Ok(()),
                     Route::Preparation | Route::Idle => Err(
                         "worker requested automatic Python import resolution outside an evaluation"
                             .to_string(),
@@ -563,6 +638,13 @@ fn handle_semantic_event(
                         "resolved PyPI distribution '{}' for Python import '{}'",
                         resolution.distribution, resolution.module
                     )),
+                    Route::Bootstrap => {
+                        output.push_notice_line(format!(
+                            "resolved PyPI distribution '{}' for Python import '{}'",
+                            resolution.distribution, resolution.module
+                        ));
+                        Ok(())
+                    }
                     Route::Preparation | Route::Idle => Err(
                         "worker activated an automatic Python import resolution outside an evaluation"
                             .to_string(),
@@ -586,6 +668,12 @@ fn handle_semantic_event(
             candidates.python.clear();
             callbacks.fail_python_activation()?;
             Ok(())
+        }
+        RelayEvent::RuntimeInitialized { interrupted } => {
+            if interrupted {
+                callbacks.interrupt_bootstrap_cell()?;
+            }
+            operation.finish_bootstrap()
         }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }

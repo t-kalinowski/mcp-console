@@ -21,10 +21,10 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v7 uses one package-preparation request for every runtime composition and
-// permits prepared R-only targets. The host preparation protocol is unchanged.
-pub(crate) const VERSION: u32 = 7;
-pub(crate) const SSH_VERSION: u32 = 7;
+// v10 distinguishes interrupted bootstrap from other incomplete setup.
+// Host preparation is unchanged.
+pub(crate) const VERSION: u32 = 10;
+pub(crate) const SSH_VERSION: u32 = 10;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;
@@ -64,6 +64,8 @@ pub(crate) fn run(
 pub(crate) struct Bootstrap {
     pub version: u32,
     pub build: String,
+    #[serde(default = "crate::cell::Languages::all")]
+    pub languages: crate::cell::Languages,
     pub workspace: String,
     pub policy: crate::settings::SandboxSettings,
     pub writable_roots: Vec<PathBuf>,

@@ -27,7 +27,6 @@ struct Services {
     set_none: unsafe extern "C" fn(*mut PyObject),
     set_string: unsafe extern "C" fn(*mut PyObject, *const c_char),
     set_interrupt: unsafe extern "C" fn(),
-    exception_matches: unsafe extern "C" fn(*mut PyObject) -> c_int,
     none: usize,
     runtime_error: usize,
     keyboard_interrupt: usize,
@@ -41,6 +40,11 @@ static METHODS_REGISTERED: AtomicBool = AtomicBool::new(false);
 static MODULE_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
+    // R startup replaces this handler even when Python initialized first.
+    #[cfg(unix)]
+    unsafe {
+        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN)
+    };
     if installed {
         let services = SERVICES
             .get()
@@ -66,7 +70,6 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             set_none: unsafe { load_symbol(&library, path, b"PyErr_SetNone\0")? },
             set_string: unsafe { load_symbol(&library, path, b"PyErr_SetString\0")? },
             set_interrupt: unsafe { load_symbol(&library, path, b"PyErr_SetInterrupt\0")? },
-            exception_matches: unsafe { load_symbol(&library, path, b"PyErr_ExceptionMatches\0")? },
             none: unsafe { load_symbol::<*mut PyObject>(&library, path, b"_Py_NoneStruct\0")? }
                 as usize,
             runtime_error: exception(b"PyExc_RuntimeError\0")?,
@@ -299,18 +302,6 @@ unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject)
         let result = result.map_err(|error| error.to_string())?;
         Ok(services.string(&result.to_string()))
     })
-}
-
-// Called only with the GIL held at the environment-call boundary.
-pub(super) fn take_interrupt() -> bool {
-    let services = SERVICES.get().expect("Python services initialized");
-    unsafe {
-        if (services.exception_matches)(services.keyboard_interrupt as *mut PyObject) == 0 {
-            return false;
-        }
-        (services.api.err_clear)();
-    }
-    true
 }
 
 unsafe extern "C" fn activate_python_environment(

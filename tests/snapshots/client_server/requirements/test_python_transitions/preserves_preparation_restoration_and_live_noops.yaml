@@ -1,6 +1,4 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
   r: |
     reticulate::py_require(
@@ -54,7 +52,7 @@ result:
   isError: false
 ---
 send:
-  python: None
+  r: invisible(reticulate::py_config())
 result:
   content:
     - type: text

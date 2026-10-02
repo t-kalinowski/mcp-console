@@ -1,6 +1,6 @@
 # Architecture
 
-The shared runtime coordinator supports lazy, independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
+The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
 Windows uses native pipe/event/process primitives, and resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code; cancellation and normal completion require confirmed empty Jobs.
 These Jobs own trusted host preparation and inspection processes, not evaluated user code, and are not sandboxes.
 Windows SQL and remote controllers are deferred.
@@ -58,6 +58,7 @@ Each producer preserves its own order; observation order does not reconstruct ch
 
 The server captures launch configuration and constructs tool presentation before runtime discovery.
 One connection-owned background task discovers capabilities, prepares defaults, and prelaunches the built-in worker through transport readiness.
+The worker then initializes enabled R and Python on its serialized interpreter thread, after input, resolver, and output services are connected.
 MCP initialization, tool discovery, and pings do not wait for it.
 Custom workers remain lazy.
 Configured language fields stay visible even when a runtime is unavailable; execution validates discovered capabilities.
@@ -66,11 +67,24 @@ Early cells reserve the ordinary evaluation slot while startup finishes.
 There is no cell queue.
 A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
 Connection closure cancels startup through the existing preparation/provider owners and waits for their cleanup contract.
+It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
+
+Initialization alone does not consume the unused-worker replacement exception.
+Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
+Once a callback is deferred, later output, images, and input events from that worker sideband wait behind it; independent stdout, stderr, and retirement observations remain responsive.
+Deferred events use a private temporary spool capped at 16 MiB and removed when its last handle closes; the dispatcher resumes them in order before accepting later sideband events.
+Exceeding that limit or a spool I/O failure fails the worker boundary and releases the spool; retirement also releases it.
+Failed preparation resumes the current bootstrap; successful replacement confirms old-worker retirement before starting its successor.
+The accepted first cell retains its admission and is never replayed.
 
 Worker readiness is not interpreter initialization.
-One coordinator runs cells on a single owning thread, initializing each language when needed.
+One coordinator initializes enabled interpreters and runs cells on a single owning thread.
+Bootstrap owns a graphics scope without marking user code active; startup output and plots use the ordinary output tape.
+Managed SQL connections and first-query work remain lazy.
 An explicit or host-resolved Python selection can start without R.
-Unresolved R-side selection hints may require R; R cells, Python's R bridge, and R-owned SQL do.
+Unresolved R-side selection hints use R's compatibility adapter when installed; its absence does not prevent bare R use.
+Background selection also permits an ordinary absent-interpreter discovery result, preserving R without treating selection errors as absence.
+Later R cells, Python's R bridge, and R-owned SQL retry incomplete initialization through the same facade.
 Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
 
