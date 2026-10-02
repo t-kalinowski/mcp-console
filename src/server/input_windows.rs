@@ -12,7 +12,7 @@ pub(crate) struct Input {
 }
 
 impl Input {
-    pub(crate) fn new(on_closed: impl FnOnce() + Send + 'static) -> io::Result<Self> {
+    pub(crate) fn new(on_startup_closed: impl FnOnce() + Send + 'static) -> io::Result<Self> {
         let (sender, messages) = mpsc::channel(16);
         // Windows cannot observe anonymous-pipe EOF without reading. Keep
         // this single reader for the entire server lifetime, transferring its
@@ -38,7 +38,7 @@ impl Input {
                         }
                     }
                 }
-                on_closed();
+                on_startup_closed();
             })?;
         Ok(Self {
             messages,

@@ -135,8 +135,11 @@ impl From<OwnedHandle> for Pipe {
 
 impl Pipe {
     pub(crate) fn with_cancel(mut self, cancel: Event) -> Self {
-        self.cancel = Some(cancel);
+        self.set_cancel(cancel);
         self
+    }
+    pub(crate) fn set_cancel(&mut self, cancel: Event) {
+        self.cancel = Some(cancel);
     }
     pub(crate) fn clear_cancel(&mut self) {
         self.cancel = None;

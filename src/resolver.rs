@@ -35,22 +35,22 @@ pub(crate) fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.
-    std::env::split_paths(&path)
-        .map(|directory| {
-            if directory.as_os_str().is_empty() {
-                std::path::PathBuf::from(".").join(program)
-            } else {
-                directory.join(program)
-            }
-        })
-        .map(|candidate| {
-            #[cfg(windows)]
-            if candidate.extension().is_none() {
-                return candidate.with_extension("exe");
-            }
+    std::env::split_paths(&path).find_map(|directory| {
+        let candidate = if directory.as_os_str().is_empty() {
+            std::path::PathBuf::from(".").join(program)
+        } else {
+            directory.join(program)
+        };
+        #[cfg(windows)]
+        let candidate = if candidate.extension().is_none() {
+            candidate.with_extension("exe")
+        } else {
             candidate
-        })
-        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
+        };
+        std::fs::symlink_metadata(&candidate)
+            .is_ok()
+            .then_some(candidate)
+    })
 }
 
 #[cfg(unix)]

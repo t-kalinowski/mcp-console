@@ -43,6 +43,10 @@ fn native_pending() -> bool {
 
 fn acknowledge_native_interrupt() -> bool {
     #[cfg(windows)]
+    let _publication = WINDOWS_REQUEST_LOCK
+        .lock()
+        .expect("interrupt publication lock");
+    #[cfg(windows)]
     WINDOWS_WAKEUP.get().expect("interrupt initialized").reset();
     NATIVE_PENDING.swap(false, Ordering::SeqCst)
 }
@@ -78,9 +82,12 @@ pub(super) fn attach_r(state: State) -> io::Result<()> {
     R_STATE
         .set(state)
         .map_err(|_| io::Error::other("R interrupt state already attached"))?;
+    #[cfg(unix)]
     if NATIVE_PENDING.swap(false, Ordering::SeqCst) {
         unsafe { (R_STATE.get().unwrap().signal)() };
     }
+    #[cfg(windows)]
+    deliver_windows_r_interrupt();
     reinstall()
 }
 
@@ -368,16 +375,43 @@ pub(crate) fn finish_python_commit() -> bool {
 #[cfg(windows)]
 static WINDOWS_WAKEUP: OnceLock<crate::windows::Event> = OnceLock::new();
 #[cfg(windows)]
+static WINDOWS_REQUESTS: OnceLock<crate::windows::Event> = OnceLock::new();
+// Windows publication runs on an ordinary watcher thread. Serialize the flag
+// and event with consumption, including transfer to R during attachment.
+#[cfg(windows)]
+static WINDOWS_REQUEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(windows)]
+static WINDOWS_REQUEST_PUBLISHED: std::sync::Condvar = std::sync::Condvar::new();
+#[cfg(windows)]
 static PYTHON_INTERRUPT: OnceLock<unsafe extern "C" fn()> = OnceLock::new();
+
+#[cfg(windows)]
+pub(super) fn windows_wakeup() -> crate::windows::Event {
+    WINDOWS_WAKEUP.get().expect("interrupt initialized").clone()
+}
+
+#[cfg(windows)]
+pub(super) fn finish_windows_publication() -> io::Result<()> {
+    let mut publication = WINDOWS_REQUEST_LOCK
+        .lock()
+        .expect("interrupt publication lock");
+    let requests = WINDOWS_REQUESTS.get().expect("interrupt initialized");
+    while requests.wait(Some(std::time::Duration::ZERO))? {
+        publication = WINDOWS_REQUEST_PUBLISHED
+            .wait(publication)
+            .expect("interrupt publication lock");
+    }
+    Ok(())
+}
 
 #[cfg(windows)]
 pub(super) fn deliver_windows_r_interrupt() {
     // R callbacks and Python interrupt checks run on the interpreter thread.
     // Transfer the atomic request only after R has installed its native state.
     if let Some(state) = R_STATE.get()
-        && NATIVE_PENDING.swap(false, Ordering::SeqCst)
+        && native_pending()
+        && acknowledge_native_interrupt()
     {
-        WINDOWS_WAKEUP.get().expect("interrupt initialized").reset();
         unsafe {
             (state.signal)();
             libr::set(libr::UserBreak, libr::Rboolean_TRUE);
@@ -426,6 +460,9 @@ pub(super) fn initialize_native() -> io::Result<()> {
         return Err(io::Error::other("invalid worker interrupt handle"));
     }
     let requests = unsafe { crate::windows::Event::from_inherited(handle as _)? };
+    WINDOWS_REQUESTS
+        .set(requests.clone())
+        .map_err(|_| io::Error::other("interrupt requests already initialized"))?;
     let pending = crate::windows::Event::new()?;
     super::input::initialize_windows_stdin(pending.clone())
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -437,18 +474,30 @@ pub(super) fn initialize_native() -> io::Result<()> {
         .name("worker-interrupt".into())
         .spawn(move || {
             while requests.wait(None).is_ok() {
-                requests.reset();
-                NATIVE_PENDING.store(true, Ordering::SeqCst);
+                {
+                    let _publication = WINDOWS_REQUEST_LOCK
+                        .lock()
+                        .expect("interrupt publication lock");
+                    NATIVE_PENDING.store(true, Ordering::SeqCst);
+                    pending.set();
+                }
                 // CPython's signal API is safe without the GIL, including while R
                 // has not been initialized. Wake managed stdin and inspection too.
                 if let Some(interrupt) = PYTHON_INTERRUPT.get() {
                     unsafe { interrupt() };
                 }
-                pending.set();
                 // Native libraries may temporarily install their own CRT handler.
                 unsafe {
                     libc::raise(libc::SIGINT);
                 }
+                // Keep the request visible until all signal APIs have returned.
+                // Idle command dispatch waits here before acknowledging it, so
+                // a delayed watcher cannot interrupt the following cell.
+                let _publication = WINDOWS_REQUEST_LOCK
+                    .lock()
+                    .expect("interrupt publication lock");
+                requests.reset();
+                WINDOWS_REQUEST_PUBLISHED.notify_all();
             }
         })?;
     unsafe {
@@ -483,7 +532,6 @@ pub(crate) fn with_python_interrupt<T>(
     use windows_sys::Win32::System::Threading::{INFINITE, WaitForMultipleObjects};
     check_python_selection_interrupt()?;
     let wakeup = WINDOWS_WAKEUP.get().expect("interrupt initialized");
-    wakeup.reset();
     let (finished, completion) =
         crate::windows::notification().map_err(|error| error.to_string())?;
     std::thread::scope(|scope| {
