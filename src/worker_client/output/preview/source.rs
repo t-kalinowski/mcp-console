@@ -61,14 +61,14 @@ impl Summary {
                 // File retention only changes from accepting bytes to discarding
                 // them. Limit its cumulative discarded count to this interval.
                 let discarded = source.raw_bytes.min(source.discarded_bytes);
-                let (session, _) = file
-                    .public_path()
-                    .rsplit_once("/outputs/")
-                    .expect("cell output path");
+                let session = std::path::Path::new(file.public_path())
+                    .parent()
+                    .and_then(std::path::Path::parent)
+                    .expect("recorded output has a session directory");
                 (
                     source.raw_bytes - discarded,
                     discarded,
-                    Some(format!("{session}/internal/events.jsonl")),
+                    Some(session.join("internal/events.jsonl").display().to_string()),
                 )
             }
             None => (0, source.raw_bytes, None),
