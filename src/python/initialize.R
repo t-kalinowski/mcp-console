@@ -84,9 +84,26 @@ base::local(
             prefix = sys$prefix,
             exec_prefix = sys$exec_prefix,
             base_prefix = sys$base_prefix,
-            base_exec_prefix = sys$base_exec_prefix
+            base_exec_prefix = sys$base_exec_prefix,
+            metadata = list(
+              base_executable = sys$`_base_executable`,
+              pythonpath = paste(sys$path, collapse = .Platform$path.sep),
+              version = gsub("\n", " ", sys$version, fixed = TRUE),
+              version_number = as.character(config$version),
+              architecture = config$architecture,
+              conda = isTRUE(as.logical(config$conda)),
+              numpy = if (is.null(config$numpy)) {
+                NULL
+              } else {
+                list(
+                  path = config$numpy$path,
+                  version = as.character(config$numpy$version)
+                )
+              }
+            )
           ),
-          auto_unbox = TRUE
+          auto_unbox = TRUE,
+          null = "null"
         )
         selected <<- config
         return(selected)

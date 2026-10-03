@@ -1,6 +1,9 @@
 use crate::windows::{Event, Pipe};
 use std::io::{self, Read};
 
+pub(crate) type DiagnosticProducer = Box<dyn FnMut(&[u8]) + Send>;
+pub(crate) type Diagnostics = std::sync::Arc<dyn Fn() -> DiagnosticProducer + Send + Sync>;
+
 pub(crate) struct RelayOutput {
     stdout: Pipe,
     exited: Event,

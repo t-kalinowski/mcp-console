@@ -28,7 +28,8 @@ relay ───── worker                                  sandboxed workload
             └─ R, Python, SQL
 ```
 
-The frontend verifies the installed companion and passes immutable launch configuration. Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
+The frontend verifies the installed companion and passes immutable launch configuration.
+Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
 Native enforcement, private storage, and descendant supervision belong to that runner, not to Console's relay.
 
 [SSH](SSH.md) places the launcher, relay, worker, and preparation owner on the remote host.
@@ -91,6 +92,9 @@ Background selection also permits an ordinary absent-interpreter discovery resul
 Later R cells, Python's R bridge, and R-owned SQL retry incomplete initialization through the same facade.
 Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
+Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing or importing optional packages.
+NumPy metadata comes from an already loaded module or a matching installed distribution; a shadowing workspace module/package is treated as absent.
+Missing or unusable optional distribution metadata is also treated as absent.
 
 The coordinator owns command dispatch, cell bookkeeping, input, and completion.
 Language adapters own their runtime-specific event, graphics, error, and unwind boundaries.
@@ -165,6 +169,10 @@ The server owns an ordered output tape across generations.
 It selects finite output cuts for responses, retains bounded text beginnings and tails, admits images separately, and adds lifecycle notices.
 The final text budget is 8 KiB including notices.
 Raw-file retention and inline omission are separate; collection stays bounded even when recording fails.
+Startup diagnostics use this tape, including preparation and launcher stderr on Unix.
+Each diagnostic producer retains its own incomplete UTF-8 scalar until more bytes arrive or that producer closes.
+Diagnostic ingestion also preserves pending UTF-8 bytes from the worker's direct streams.
+Closing one diagnostic producer does not flush another producer's pending terminal update; response cuts and shutdown finish the shared terminal projection.
 
 One recoverable response remains owned until local delivery or cancellation settles it.
 Controlled sends can combine earlier output with a following cell; a failed delivery restores the whole combined region, not just its last part.
@@ -176,6 +184,9 @@ A journaled result likewise records assembly, not receipt.
 The controller records calls and assembled output independently of the private protocols.
 The journal is authoritative; Markdown and Quarto are projections, not worker checkpoints.
 Paths, formats, failure behavior, and rendering safety are covered in [recordings](RECORDING.md).
+Startup and idle output can be recorded before a tool call; discovery fills in pending recording metadata without replacing the session owner.
+Buffered calls and results retain their original timestamps and precede the discovery event when startup output has already materialized the recording.
+Discovery failure retains pending calls and their results alongside the startup failure, with unavailable metadata left unknown.
 
 ## Where to look in source
 

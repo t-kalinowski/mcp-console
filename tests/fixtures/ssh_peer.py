@@ -1,9 +1,11 @@
 """Deterministic local failure peer for the SSH transport adapter boundary."""
 
+import base64
 import json
 import os
 import struct
 import sys
+import threading
 from pathlib import Path
 
 
@@ -26,7 +28,62 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 5, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
+    if mode in {"discovery-diagnostics", "discovery-image"}:
+        print("preparation detail", file=sys.stderr, flush=True)
+        with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
+            assert signal.write(b"1") == 1
+        with (log.parent / "discovery-release").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+    if mode == "diagnostic-overlap":
+        sys.stderr.buffer.write(b"producer prefix \xce")
+        sys.stderr.buffer.flush()
+        with (log.parent / "discovery-release").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+
+        def finish_diagnostic():
+            with (log.parent / "diagnostic-release").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            sys.stderr.buffer.write(b"\xb1 diagnostic complete\n")
+            sys.stderr.buffer.flush()
+
+        diagnostic = threading.Thread(target=finish_diagnostic)
+        diagnostic.start()
+    if mode == "diagnostic-terminal-overlap":
+
+        def progress_diagnostic():
+            for checkpoint, data in (
+                ("diagnostic-start", b"progress 1\r"),
+                ("diagnostic-finish", b"progress 2\n"),
+            ):
+                with (log.parent / checkpoint).open("rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
+                sys.stderr.buffer.write(data)
+                sys.stderr.buffer.flush()
+
+        diagnostic = threading.Thread(target=progress_diagnostic)
+        diagnostic.start()
+    if mode in {"discovery-failure", "discovery-diagnostics-failure"}:
+        if mode == "discovery-diagnostics-failure":
+            print("preparation failure detail", file=sys.stderr, flush=True)
+        with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
+            assert signal.write(b"1") == 1
+        with (log.parent / "discovery-release").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+        preparation_frame(
+            {
+                "Completed": {
+                    "id": 0,
+                    "result": {"Err": "synthetic discovery failure"},
+                    "control": None,
+                    "confirmed": True,
+                }
+            }
+        )
+        length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
+        assert json.loads(sys.stdin.buffer.read(length)) == "Close"
+        preparation_frame("Closed")
+        sys.exit(0)
     preparation_frame(
         {
             "Completed": {
@@ -45,6 +102,8 @@ if "Open" in bootstrap:
     length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
     assert json.loads(sys.stdin.buffer.read(length)) == "Close"
     preparation_frame("Closed")
+    if mode in {"diagnostic-overlap", "diagnostic-terminal-overlap"}:
+        diagnostic.join()
     sys.exit(0)
 with log.open("a") as output:
     output.write("launched\n")
@@ -70,6 +129,27 @@ frame(
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
+if mode == "startup-recording-failure":
+    stream = os.environ["CONSOLE_TEST_DIRECT_STREAM"]
+    frame(
+        2,
+        {"kind": stream + "_bytes", "data": base64.b64encode(b"\xce").decode()},
+    )
+    with (log.parent / "partial-release").open("rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    frame(
+        2,
+        {"kind": stream + "_bytes", "data": base64.b64encode(b"\xb1\n").decode()},
+    )
+if mode == "discovery-image":
+    frame(
+        2,
+        {
+            "kind": "image",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "mime_type": "image/png",
+        },
+    )
 if (
     mode == "bootstrap-input-completion"
     and not (log.parent / "invalid-bootstrap-sent").exists()
@@ -92,6 +172,42 @@ for line in sys.stdin.buffer:
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
     if command["kind"] == "evaluate":
+        if mode == "direct-diagnostic-overlap":
+            stream = os.environ["CONSOLE_TEST_DIRECT_STREAM"]
+            frame(
+                2,
+                {"kind": stream + "_bytes", "data": base64.b64encode(b"\xce").decode()},
+            )
+            with (log.parent / "evaluation-started").open("wb", buffering=0) as signal:
+                assert signal.write(b"1") == 1
+            with (log.parent / "diagnostic-start").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            print("launcher detail", file=sys.stderr, flush=True)
+            with (log.parent / "evaluation-finish").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            frame(
+                2,
+                {
+                    "kind": stream + "_bytes",
+                    "data": base64.b64encode(b"\xb1\n").decode(),
+                },
+            )
+            frame(2, {"kind": "completed"})
+            continue
+        if mode == "diagnostic-terminal-overlap":
+            sys.stderr.buffer.write(b"diagnostic reader ready\n")
+            sys.stderr.buffer.flush()
+            with (log.parent / "diagnostic-close").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            os.close(2)
+            with (log.parent / "evaluation-finish").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            frame(2, {"kind": "completed"})
+            continue
+        if mode == "diagnostic-overlap":
+            with (log.parent / "evaluation-started").open("wb", buffering=0) as signal:
+                assert signal.write(b"1") == 1
+            continue
         if mode in {"bootstrap-interrupted", "bootstrap-input-completion"}:
             if command["source"] == "never_run = True":
                 (log.parent / "cell-ran").touch()

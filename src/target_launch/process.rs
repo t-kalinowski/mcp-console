@@ -13,6 +13,7 @@ pub(crate) struct Cancel {
     pub protocol: crate::target_launch::Protocol,
     pub reader: Arc<io::PipeReader>,
     writer: Arc<Mutex<Option<io::PipeWriter>>>,
+    diagnostics: Option<crate::process_output::Diagnostics>,
 }
 
 impl Cancel {
@@ -22,7 +23,12 @@ impl Cancel {
             protocol,
             reader: Arc::new(reader),
             writer: Arc::new(Mutex::new(Some(writer))),
+            diagnostics: None,
         })
+    }
+    pub fn with_diagnostics(mut self, output: crate::process_output::Diagnostics) -> Self {
+        self.diagnostics = Some(output);
+        self
     }
     pub fn cancel(&self) {
         self.writer.lock().expect("cancellation lock").take();
@@ -72,7 +78,7 @@ pub(crate) struct OwnerInput {
 pub(crate) enum OutputMode {
     /// Capture provider data and retain stderr for a failed command's error.
     Capture,
-    /// Stream setup output and errors to controller stderr.
+    /// Stream setup output and errors to the diagnostic owner.
     Diagnostics,
     /// Capture stdout data while streaming provider diagnostics on stderr.
     Data,
@@ -106,6 +112,21 @@ pub(crate) fn run(
             Stdio::piped()
         })
         .process_group(0);
+    let diagnostics = if let Some(output) = &cancel.diagnostics
+        && (!matches!(mode, OutputMode::Capture) || owner)
+    {
+        let (reader, writer) = io::pipe().map_err(|error| error.to_string())?;
+        command.stderr(Stdio::from(
+            writer.try_clone().map_err(|error| error.to_string())?,
+        ));
+        if matches!(mode, OutputMode::Diagnostics) {
+            // Preserve the CLI's combined diagnostic producer order.
+            command.stdout(Stdio::from(writer));
+        }
+        Some((reader, output.clone()))
+    } else {
+        None
+    };
     crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
     let mut child = command
         .spawn()
@@ -113,6 +134,11 @@ pub(crate) fn run(
     let (exited, notify) = io::pipe().map_err(|e| e.to_string())?;
     let mut exit =
         crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || drop(notify))?;
+    drop(command);
+    let diagnostics = diagnostics.map(|(reader, output)| {
+        let exited = exited.try_clone().expect("exit pipe clone");
+        std::thread::spawn(move || crate::process_output::forward(reader, exited, output))
+    });
     let output = child.stdout.take().map(|stdout| {
         let exited = exited.try_clone().expect("exit pipe clone");
         std::thread::spawn(move || {
@@ -179,6 +205,12 @@ pub(crate) fn run(
         return Err(format!("{label} CLI did not exit after cancellation"));
     }
     let status = child.wait().map_err(|e| e.to_string())?;
+    if let Some(diagnostics) = diagnostics {
+        diagnostics
+            .join()
+            .map_err(|_| "target diagnostic task panicked")?
+            .map_err(|error| format!("{label} diagnostic read failed: {error}"))?;
+    }
     let output = output
         .map(|task| task.join().map_err(|_| "target output task panicked")?)
         .transpose()?;

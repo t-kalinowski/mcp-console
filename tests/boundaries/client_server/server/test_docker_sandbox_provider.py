@@ -138,7 +138,16 @@ def test_cancelled_creation_and_probe_retire_owned_resources(binary: Path) -> li
                     client.process.wait(timeout=5)
             assert not (root / "peer/vms").exists()
             if mode.startswith("create-"):
-                assert "unconfirmed" in error, error
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                diagnostics = (session / "outputs/session.log").read_text()
+                assert "unconfirmed" in diagnostics, diagnostics
+                expected = (
+                    "creation returned no identity"
+                    if mode == "create-unacknowledged"
+                    else "removal was observed, but creation was not acknowledged"
+                )
+                assert expected in diagnostics, diagnostics
+                assert error == "Docker Sandbox setup cancelled\n", error
             records.append(
                 {
                     "fake_provider": True,
@@ -165,12 +174,14 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.startup_error()
+                startup_error = client.startup_error()
+                result = client.send()
+                assert result["isError"], result
                 client.stdin.close()
                 assert client.stdout.read(timeout=15) == ""
                 errors = client.stderr.read(timeout=15)
                 assert client.process.wait(timeout=5) != 0
-            assert expected in errors, errors
+            assert expected in startup_error, startup_error
             invoked = calls(root)
             assert not any(call["args"][0] in ("exec", "rm") for call in invoked), (
                 invoked
@@ -179,9 +190,40 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
                 mode == "create-failed"
             )
             records += normalize_recording(
-                [{"fake_provider": mode, "stderr": errors}], root
+                [
+                    {
+                        "fake_provider": mode,
+                        "startup_error": startup_error,
+                        "stderr": errors,
+                    }
+                ],
+                root,
             )
     return records
+
+
+@requires(POSIX)
+def test_rejects_prior_python_identity_protocol_before_runtime_decode(
+    binary: Path,
+) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("prior-python-metadata-protocol")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            response = client.send(r="must_not_run <- TRUE")
+            assert response["isError"], response
+            error = last_result_text(client)
+            assert (
+                "incompatible Docker Sandbox bootstrap: expected protocol 11" in error
+            ), error
+            assert "received protocol 10" in error, error
+            assert "missing field" not in error, error
+            assert not (root / "peer/evaluations").exists()
+            client.finish_with_standard_error(expected_exit_status=1)
+        assert not (root / "peer/vms").exists()
+        return [{"prior_python_identity_rejected_before_decode": True}]
 
 
 @requires(POSIX)
@@ -224,7 +266,7 @@ def test_argument_arrays_and_unrelated_ownership(binary: Path) -> list:
 
 
 @requires(POSIX)
-def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
+def test_provider_diagnostics_are_recorded_with_worker_output(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")
         configure(root, template=TEMPLATE)
@@ -232,8 +274,15 @@ def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
         with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(r="42")
-            assert last_result_text(client) == "provider peer\n"
-            transcript, diagnostics = client.finish_with_standard_error()
+            text = last_result_text(client)
+            assert text.endswith("provider peer\n"), text
+            assert text.count("fixture: version diagnostic\n") == 1, text
+            assert text.count("fixture: create diagnostic\n") == 2, text
+            assert text.count("fixture: create progress\n") == 2, text
+            transcript, stderr = client.finish_with_standard_error()
+        assert stderr == "", stderr
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        diagnostics = (session / "outputs/session.log").read_text()
         assert diagnostics.count("fixture: version diagnostic\n") == 1, diagnostics
         for operation in ("create", "rm"):
             assert diagnostics.count(f"fixture: {operation} diagnostic\n") == 2, (
@@ -244,7 +293,49 @@ def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
             )
         assert "fixture: ls diagnostic\n" in diagnostics, diagnostics
         return transcript[3:] + [
-            {"provider_diagnostics_preserved_on_controller_stderr": True}
+            {"provider_diagnostics_preserved_in_session_recording": True}
+        ]
+
+
+@requires(POSIX)
+def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("diagnostics-gate")
+        with closing(FifoCheckpoint.create(root / "peer/reached")) as reached:
+            with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
+                reached.wait("provider output drained without a send", timeout=15)
+                client.request("ping")
+                # Setup cancellation has no compute retirement receipt. Retain
+                # its failure while requiring the CLI to exit before shutdown.
+                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+                assert stderr == (
+                    "Docker Sandbox setup cancelled; install standalone sbx v0.42.1 "
+                    "or newer and complete Docker login and policy setup before "
+                    "starting Console; see docs/DOCKER_SANDBOX.md\n"
+                ), stderr
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        assert (
+            session / "outputs/session.log"
+        ).read_text() == "provider startup\n" * 20000
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        assert not any(
+            event["event"] in ("tool_call", "cell_output") for event in events
+        )
+        assert [call["args"] for call in calls(root)] == [["version"]]
+        return [
+            {
+                "recorded_provider_bytes": 340000,
+                "tool_calls": 0,
+                "setup_cancelled": True,
+                "exit_status": 1,
+                "standard_error": stderr,
+            }
         ]
 
 

@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1351,6 +1352,301 @@ def early_python_reference_plots(
         dpi=96,
         pages=2,
     )
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_unusable_installed_numpy_metadata_does_not_block_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return unusable_numpy_metadata(binary, execution, configured_path=False)
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_unusable_configured_numpy_metadata_does_not_block_attachment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return unusable_numpy_metadata(binary, execution, configured_path=True)
+
+
+def unusable_numpy_metadata(
+    binary: Path, execution: Execution, *, configured_path: bool
+) -> Transcript:
+    for metadata in (
+        b"Name: numpy\n",
+        b"\xff",
+        b"Name: numpy\nVersion: invalid\n",
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "venv"
+            subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(selected)],
+                capture_output=True,
+                check=True,
+            )
+            executable = selected / "bin/python"
+            if configured_path:
+                modules = root / "configured modules"
+                modules.mkdir()
+            else:
+                modules = Path(
+                    subprocess.check_output(
+                        [
+                            executable,
+                            "-I",
+                            "-c",
+                            "import sysconfig; print(sysconfig.get_path('purelib'))",
+                        ],
+                        text=True,
+                    ).strip()
+                )
+            package = modules / "numpy"
+            package.mkdir()
+            package.joinpath("__init__.py").write_text(
+                "raise RuntimeError('metadata collection imported optional NumPy')\n"
+            )
+            distribution = modules / "numpy-0.0.0.dist-info"
+            distribution.mkdir()
+            distribution.joinpath("METADATA").write_bytes(metadata)
+            environment, _ = r_test_environment()
+            environment.pop("PYTHONPATH", None)
+            environment.pop("RETICULATE_PYTHONPATH", None)
+            environment.update(
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_LANGUAGES="r,python",
+                RETICULATE_CHECK_REQUIRED_PACKAGES="false",
+            )
+            if configured_path:
+                environment["PYTHONPATH"] = str(modules)
+            arguments = execution.serve(
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+            )
+            with McpClient(binary, arguments, environment, root) as client:
+                client.initialize_and_list_tools()
+                client.expect(
+                    "unusable optional NumPy metadata absent\n",
+                    # fmt: r
+                    r=code("""
+                        stopifnot(is.null(reticulate::py_config()$numpy))
+                        stopifnot(reticulate::py_eval("'numpy' not in __import__('sys').modules"))
+                        cat("unusable optional NumPy metadata absent\\n")
+                        """),
+                )
+                client.expect(
+                    "Python remains available\n",
+                    python="print('Python remains available')",
+                )
+                client.finish()
+    return [{"unusable_numpy_metadata_is_absent": True}]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_conversion_metadata_matches_configured_import_paths(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        selected = root / "venv"
+        modules = root / "configured modules"
+        extra = root / "startup modules"
+        modules.mkdir()
+        extra.mkdir()
+        subprocess.run(
+            ["uv", "venv", "--python", sys.executable, str(selected)],
+            capture_output=True,
+            check=True,
+        )
+        executable = selected / "bin/python"
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(executable),
+                "--target",
+                str(modules),
+                "numpy",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        (modules / "sitecustomize.py").write_text(
+            code(f"""
+                import sys
+                if "_mcp_console_services" in sys.modules:
+                    sys.path.append({str(extra)!r})
+                """)
+        )
+        worker = root / "worker"
+        worker.write_text(
+            "#!/bin/sh\nexec " + shlex.join([str(binary), "worker"]) + "\n"
+        )
+        worker.chmod(0o755)
+        for variable, lazy in (
+            ("PYTHONPATH", False),
+            ("RETICULATE_PYTHONPATH", False),
+            ("PYTHONPATH", True),
+            ("RETICULATE_PYTHONPATH", True),
+        ):
+            environment, _ = r_test_environment()
+            environment.pop("RETICULATE_PYTHONPATH", None)
+            environment.update(
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_LANGUAGES="r,python",
+                # NumPy intentionally lives on configured paths, outside the
+                # virtualenv that reticulate's package probe inspects.
+                RETICULATE_CHECK_REQUIRED_PACKAGES="false",
+            )
+            environment[variable] = str(modules)
+            arguments = execution.serve(
+                *(("--worker", str(worker)) if lazy else ()),
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            )
+            with McpClient(binary, arguments, environment, root) as client:
+                client.initialize_and_list_tools()
+                client.expect(
+                    "live conversion metadata retained\n",
+                    # fmt: r
+                    r=code("""
+                        config <- reticulate::py_config()
+                        sys <- reticulate::import("sys")
+                        numpy <- reticulate::import("numpy")
+                        stopifnot(
+                          identical(config$pythonpath, paste(sys$path, collapse = .Platform$path.sep)),
+                          identical(
+                            normalizePath(config$numpy$path),
+                            normalizePath(numpy$`__path__`[[1L]])
+                          ),
+                          identical(as.character(config$numpy$version), numpy$`__version__`)
+                        )
+                        cat("live conversion metadata retained\\n")
+                        """),
+                )
+                client.finish()
+        return [
+            {
+                "configured_import_paths": ["PYTHONPATH", "RETICULATE_PYTHONPATH"],
+                "live_numpy_metadata": True,
+            }
+        ]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_conversion_metadata_does_not_import_shadowed_numpy(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for package in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "venv"
+            subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(selected)],
+                capture_output=True,
+                check=True,
+            )
+            executable = selected / "bin/python"
+            subprocess.run(
+                ["uv", "pip", "install", "--python", str(executable), "numpy"],
+                capture_output=True,
+                check=True,
+            )
+            shadow = root / "numpy.py"
+            if package:
+                (root / "numpy").mkdir()
+                shadow = root / "numpy/__init__.py"
+            marker = root / "numpy-imported"
+            shadow.write_text(
+                # fmt: python
+                code(f"""
+                    import sys
+                    if "_mcp_console_services" in sys.modules:
+                        from pathlib import Path
+                        Path({str(marker)!r}).touch()
+                        raise RuntimeError("workspace NumPy imported during metadata collection")
+                    __version__ = "0.0.0"
+                    """)
+            )
+            environment, _ = r_test_environment()
+            environment.update(
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_LANGUAGES="r,python",
+                RETICULATE_CHECK_REQUIRED_PACKAGES="false",
+            )
+            arguments = execution.serve(
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+            )
+            with McpClient(binary, arguments, environment, root) as client:
+                client.initialize_and_list_tools()
+                client.expect(
+                    "shadowed NumPy metadata absent\n",
+                    # fmt: r
+                    r=code("""
+                        stopifnot(is.null(reticulate::py_config()$numpy))
+                        stopifnot(reticulate::py_eval("'numpy' not in __import__('sys').modules"))
+                        cat("shadowed NumPy metadata absent\\n")
+                        """),
+                )
+                client.expect(
+                    "Python remains available\n",
+                    python="print('Python remains available')",
+                )
+                client.finish()
+            assert not marker.exists(), (
+                "metadata executed the workspace NumPy candidate"
+            )
+    return [{"shadowed_numpy_module_and_package_remain_unimported": True}]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_attaches_to_reticulate_initialized_by_r_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    _, library = installed_early_python_library()
+    environment, _ = r_test_environment()
+    environment.update(
+        MCP_CONSOLE_LANGUAGES="r",
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsoleearlypython",
+        RETICULATE_PYTHON=sys.executable,
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        worker = root / "worker"
+        worker.write_text(
+            "#!/bin/sh\nexec " + shlex.join([str(binary), "worker"]) + "\n"
+        )
+        worker.chmod(0o755)
+        with McpClient(
+            binary, execution.serve("--worker", str(worker)), environment, root
+        ) as client:
+            client.initialize_and_list_tools()
+            # Custom workers retain lazy startup. The first R cell lets its startup
+            # package initialize reticulate before Console installs its adapter.
+            client.expect(
+                "attached to startup Python\n",
+                # fmt: r
+                r=code("""
+                    reticulate::py_run_string(
+                      "assert id(early_object) == early_identity; assert sys.executable == early_executable; assert (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix) == early_prefixes"
+                    )
+                    stopifnot(identical(reticulate::py_eval("{'answer': 42}"), list(answer = 42L)))
+                    cat("attached to startup Python\\n")
+                    """),
+            )
+            client.expect(
+                "same interpreter retained\n",
+                r="stopifnot(reticulate::py_eval('id(early_object) == early_identity')); cat('same interpreter retained\\n')",
+            )
+            client.finish()
+            return [
+                {"startup_interpreter_attached": True, "conversion_available": True}
+            ]
 
 
 @cache

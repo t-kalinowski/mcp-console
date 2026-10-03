@@ -53,9 +53,12 @@ base::local(
 
     conversion_config <- function(selection) {
       python <- selection$embedding$python
-      connection <- textConnection(reticulate:::python_config_impl(python))
-      on.exit(close(connection), add = TRUE)
-      metadata <- read.dcf(connection, all = TRUE)
+      metadata <- selection$metadata
+      if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
+        metadata <- jsonlite::fromJSON(.Call(
+          "mcp_console_python_conversion_metadata"
+        ))
+      }
       root <- dirname(dirname(python))
       activate <- file.path(dirname(python), "activate_this.py")
       config <- structure(
@@ -68,17 +71,17 @@ base::local(
           exec_prefix = selection$exec_prefix,
           base_prefix = selection$base_prefix,
           base_exec_prefix = selection$base_exec_prefix,
-          base_executable = metadata$BaseExecutable,
-          pythonpath = metadata$PythonPath,
-          version_string = metadata$Version,
-          version = as.package_version(metadata$VersionNumber),
-          architecture = metadata$Architecture,
+          base_executable = metadata$base_executable,
+          pythonpath = metadata$pythonpath,
+          version_string = metadata$version,
+          version = as.package_version(metadata$version_number),
+          architecture = metadata$architecture,
           anaconda = grepl(
             "anaconda|continuum",
-            metadata$Version,
+            metadata$version,
             ignore.case = TRUE
           ),
-          conda = as.logical(metadata$IsConda),
+          conda = as.logical(metadata$conda),
           virtualenv = if (reticulate:::is_virtualenv(root)) {
             root
           } else {
@@ -86,11 +89,11 @@ base::local(
           },
           virtualenv_activate = if (file.exists(activate)) activate else "",
           python_versions = python,
-          numpy = if (!is.null(metadata$NumpyPath)) {
+          numpy = if (!is.null(metadata$numpy$path)) {
             list(
-              path = reticulate:::canonical_path(metadata$NumpyPath),
+              path = reticulate:::canonical_path(metadata$numpy$path),
               version = numeric_version(reticulate:::clean_version(
-                metadata$NumpyVersion
+                metadata$numpy$version
               ))
             )
           } else {
@@ -449,14 +452,23 @@ base::local(
       if (!check_python_version(python_config, strict)) {
         return(invisible(FALSE))
       }
-      if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
-        return(invisible(TRUE))
+      if (!isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
+        check_python_setup(.Call(
+          "mcp_console_setup_python_runtime",
+          python_config$libpython,
+          !is.na(managed)
+        ))
       }
-      check_python_setup(.Call(
-        "mcp_console_setup_python_runtime",
-        python_config$libpython,
-        !is.na(managed)
-      ))
+      # R-first attachment precedes shared site and workspace setup. Publish
+      # metadata after those paths are active, as for Python-first attachment.
+      live <- conversion_config(jsonlite::fromJSON(.Call(
+        "mcp_console_running_python"
+      )))
+      globals <- get(".globals", envir = asNamespace("reticulate"))
+      globals$py_config[c("pythonpath", "numpy")] <- live[c(
+        "pythonpath",
+        "numpy"
+      )]
       invisible(TRUE)
     }
 

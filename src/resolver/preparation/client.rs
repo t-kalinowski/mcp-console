@@ -139,11 +139,12 @@ impl Preparation {
     pub(crate) fn open(
         session: &crate::ssh::Session,
         selections: Selections,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         #[cfg(not(unix))]
         {
-            let _ = (session, selections, on_started);
+            let _ = (session, selections, diagnostics, on_started);
             Err("SSH preparation requires macOS or Linux".into())
         }
         #[cfg(unix)]
@@ -156,12 +157,20 @@ impl Preparation {
                 selections,
                 mode: Mode::Auto,
             };
-            Self::open_with(command, session.blocked.clone(), open, false, on_started)
+            Self::open_with(
+                command,
+                session.blocked.clone(),
+                open,
+                false,
+                diagnostics,
+                on_started,
+            )
         }
     }
 
     pub(crate) fn open_local(
         mode: Mode,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         let mut command =
@@ -174,7 +183,7 @@ impl Preparation {
             selections: Selections::default(),
             mode,
         };
-        Self::open_with(command, Arc::default(), open, true, on_started)
+        Self::open_with(command, Arc::default(), open, true, diagnostics, on_started)
     }
 
     fn open_with(
@@ -182,11 +191,19 @@ impl Preparation {
         blocked: Arc<Mutex<Option<String>>>,
         open: Input,
         local: bool,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         #[cfg(unix)]
-        command.stdin(Stdio::piped()).stdout(Stdio::piped());
-        command.stderr(Stdio::inherit());
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            let _ = diagnostics;
+            command.stderr(Stdio::inherit());
+        }
         #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
         #[cfg(windows)]
@@ -208,6 +225,23 @@ impl Preparation {
         let stdout = child.stdout.take().expect("preparation stdout");
         #[cfg(unix)]
         let stdin = child.stdin.take().expect("preparation stdin");
+        #[cfg(unix)]
+        let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let diagnostic_reader = {
+            let stderr = child.stderr.take().expect("preparation stderr");
+            let diagnostic_events = events.clone();
+            thread::spawn(move || {
+                if let Err(error) =
+                    crate::process_output::forward(stderr, diagnostic_exit, diagnostics)
+                {
+                    let _ = diagnostic_events.send(Event::Received(Err(format!(
+                        "{} stderr read failed: {error}",
+                        label(local)
+                    ))));
+                }
+            })
+        };
         #[cfg(unix)]
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
         #[cfg(windows)]
@@ -264,6 +298,8 @@ impl Preparation {
         let exit_events = events.clone();
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
+                #[cfg(unix)]
+                drop(notify_diagnostic_exit);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
@@ -290,6 +326,8 @@ impl Preparation {
                 .wait()
                 .map(|_| ())
                 .map_err(|error| format!("cannot reap {}: {error}", label(local)));
+            #[cfg(unix)]
+            let _ = diagnostic_reader.join();
             result.and(reaped)
         });
         let connection = Self(Arc::new(Connection {
@@ -328,8 +366,10 @@ impl Preparation {
             Err(error) => {
                 // Startup has no Client to own shutdown after discovery fails.
                 // Join preparation cleanup before the MCP process can exit.
-                let _ = connection.close();
-                Err(error)
+                match connection.close() {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(format!("{error}; {cleanup}")),
+                }
             }
         }
     }

@@ -213,3 +213,46 @@ def r_input_handler_client(
             current_directory=directory,
         ) as client:
             yield client, directory
+
+
+@contextmanager
+def startup_r_package(directory: Path, source: str) -> Iterator[dict[str, str]]:
+    """Run a default package's .onLoad hook before ordinary Python startup."""
+    environment, rscript = r_test_environment()
+    package = directory / "startup-package"
+    (package / "R").mkdir(parents=True)
+    library = directory / "startup-library"
+    library.mkdir()
+    hook = directory / "startup.R"
+    hook.write_text(source)
+    (package / "DESCRIPTION").write_text(
+        "Package: mcpconsolestartup\nVersion: 0.0.1\nTitle: Startup fixture\n"
+        "Description: Exercises public R package startup.\nLicense: MIT\n"
+        "Author: Test\nMaintainer: Test <test@example.org>\n"
+    )
+    (package / "NAMESPACE").write_text("")
+    (package / "R/startup.R").write_text(
+        ".onLoad <- function(libname, pkgname) {\n"
+        '  if (!nzchar(Sys.getenv("MCP_CONSOLE_LOCAL_RUNTIME"))) return(invisible())\n'
+        '  sys.source(Sys.getenv("MCP_CONSOLE_TEST_R_STARTUP"), envir = .GlobalEnv)\n'
+        "}\n"
+    )
+    subprocess.run(
+        [
+            rscript.with_name("R"),
+            "CMD",
+            "INSTALL",
+            "--no-test-load",
+            f"--library={library}",
+            package,
+        ],
+        env=environment,
+        capture_output=True,
+        check=True,
+    )
+    environment.update(
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolestartup",
+        MCP_CONSOLE_TEST_R_STARTUP=str(hook),
+    )
+    yield environment

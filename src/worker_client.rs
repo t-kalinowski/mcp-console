@@ -404,13 +404,31 @@ impl Client {
             if lifecycle.state == lifecycle::LifecycleState::Ready
                 && lifecycle.generation.is(generation)
             {
+                if let Some(recording) = self.0.recording.lock().expect("recording lock").as_ref() {
+                    recording.startup_failed(&failure.message);
+                }
                 self.0.output.push_failure(failure);
                 self.0.startup_failed.store(true, Ordering::Release);
             }
         }
     }
 
+    pub(crate) fn diagnostics(&self) -> crate::process_output::Diagnostics {
+        self.0.output.diagnostics()
+    }
+
+    pub(crate) fn startup_failure_response(&self, error: String) -> Response {
+        let mut response = self.0.output.take();
+        response.push_tool_error(error);
+        response
+    }
+
+    pub(crate) fn finish_recording(&self) {
+        self.0.output.finish_session_output();
+    }
+
     pub(crate) fn record_with(&self, transcript: crate::transcript::Transcript) {
+        self.0.output.record_session_output(transcript.clone());
         *self.0.recording.lock().expect("recording lock") = Some(transcript);
     }
 }

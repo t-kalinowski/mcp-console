@@ -54,6 +54,9 @@ signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 if args == ["version"]:
+    if mode == "diagnostics-gate":
+        print("provider startup\n" * 20000, end="", file=sys.stderr, flush=True)
+        gate()
     print(
         "sbx version: v0.42.0 fixture"
         if mode == "unsupported-version"
@@ -124,7 +127,9 @@ elif args[0] == "exec":
         1,
         {
             "version": (
-                3
+                10
+                if mode == "prior-python-metadata-protocol"
+                else 3
                 if mode == "probe-version"
                 else 8
                 if mode == "prior-bootstrap-protocol"
@@ -166,6 +171,15 @@ elif args[0] == "exec":
                         "exec_prefix": prefix,
                         "base_prefix": prefix,
                         "base_exec_prefix": prefix,
+                        "metadata": {
+                            "base_executable": executable,
+                            "pythonpath": prefix,
+                            "version": "3.14.0",
+                            "version_number": "3.14",
+                            "architecture": "64bit",
+                            "conda": False,
+                            "numpy": None,
+                        },
                     },
                     "explicit": None,
                     "managed": False,
@@ -175,6 +189,8 @@ elif args[0] == "exec":
         }
         if mode == "r-only-probe":
             runtime["native"]["python"] = None
+        if mode == "prior-python-metadata-protocol":
+            runtime["native"]["python"]["selected"].pop("metadata")
         if mode == "native-managed":
             runtime["native"]["python"]["managed"] = True
         if mode == "native-r-conflict":

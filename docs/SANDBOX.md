@@ -16,12 +16,15 @@ caller / MCP server
       └─ relay → worker, or a standalone command
 ```
 
-On Unix, exec preserves the frontend PID and caller. Windows uses a waiting frontend; the runner observes both its frontend and the session owner with process handles.
+On Unix, exec preserves the frontend PID and caller.
+Windows uses a waiting frontend; the runner observes both its frontend and the session owner with process handles.
 Console passes one immutable JSON policy through `--config-env MCP_CONSOLE_SANDBOX_CONFIG -- COMMAND...`; the runner consumes and removes that variable.
 Arguments, cwd, environment, and fd 0/1/2 remain ordinary launch inputs.
-There is no policy file or stdin handoff. The native runner owns enforcement and process cleanup.
+There is no policy file or stdin handoff.
+The native runner owns enforcement and process cleanup.
 
-Without a selected profile, Console requests host reads, restricted networking without a proxy, and private writable storage exported as `TMPDIR` (also `TEMP` and `TMP` on Windows). macOS adds its trusted policy extension.
+Without a selected profile, Console requests host reads, restricted networking without a proxy, and private writable storage exported as `TMPDIR` (also `TEMP` and `TMP` on Windows).
+macOS adds its trusted policy extension.
 The runner creates/owns `sandbox-XXXXXX/data`.
 Additional writable paths are persistent user data and are never deleted on retirement.
 Console preserves `MCP_CONSOLE_SANDBOX=1` and removes `DYLD_INSERT_LIBRARIES` / `LD_PRELOAD` from the trusted frontend handoff.
@@ -36,7 +39,8 @@ Docker materializes native policy in its owned container.
 Controller paths and proxy addresses must not be substituted for execution-host paths/addresses.
 
 The server owns one ordinary launcher child per generation.
-It requests relay shutdown and reaps the child before joining old I/O and allowing replacement. Unix can request runner retirement through SIGTERM; Windows keeps its waiting frontend alive until the native runner reports confirmed Job cleanup.
+It requests relay shutdown and reaps the child before joining old I/O and allowing replacement.
+Unix can request runner retirement through SIGTERM; Windows keeps its waiting frontend alive until the native runner reports confirmed Job cleanup.
 Cancellation before ready uses the same retirement path, not an early SIGKILL that bypasses cleanup.
 Logical generation retirement and successful native cleanup are distinct facts.
 
@@ -74,12 +78,12 @@ A final forced launcher kill cannot establish successful cleanup.
 Cleanup failures are nonzero errors with diagnostics; unproven retirement retains private storage.
 SSH requires remote cleanup acknowledgment, not just SSH exit; undetected network partitions have no lease deadline.
 Provider removal has its own receipts.
-**Windows x64:** The elevated native backend uses Console-specific sandbox accounts,
-filesystem ACLs, network rules, and a non-breakaway Job. Account provisioning is an
-explicit interactive setup operation. Restricted-token execution is opt-in and
-requires enabled networking and host reads. Both modes confirm Job retirement before
-returning, and private storage is removed only after confirmation. Forced frontend
-exit is not a cleanup receipt. See [Windows setup, validation, and limits](WINDOWS.md).
+**Windows x64:** The elevated native backend uses Console-specific sandbox accounts, filesystem ACLs, network rules, and a non-breakaway Job.
+Account provisioning is an explicit interactive setup operation.
+Restricted-token execution is opt-in and requires enabled networking and host reads.
+Both modes confirm Job retirement before returning, and private storage is removed only after confirmation.
+Forced frontend exit is not a cleanup receipt.
+See [Windows setup, validation, and limits](WINDOWS.md).
 Other operating systems are unsupported.
 
 Unrestricted, external, and explicit Landlock modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).

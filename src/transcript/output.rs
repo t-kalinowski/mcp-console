@@ -8,7 +8,7 @@ use chrono::Utc;
 
 pub(super) const MAX_CELL_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
-/// One private append-only file containing explicit text produced by a cell.
+/// One private append-only file containing cell or session output.
 ///
 /// The pending-output tape remains independently bounded for MCP projection.
 /// This file retains console text and direct stdout/stderr bytes before that
@@ -39,7 +39,7 @@ pub(crate) struct OutputRecord {
 
 struct OutputRecordState {
     transcript: Transcript,
-    call_id: u64,
+    call_id: Option<u64>,
     path: String,
     summary: CellOutputSummary,
     finished: bool,
@@ -87,6 +87,14 @@ impl OutputRecord {
 }
 
 impl Transcript {
+    pub(crate) fn create_session_output(&self) -> Result<Option<CellOutput>, String> {
+        let result = self.create_output(None);
+        if let Err(error) = &result {
+            self.disable(error.clone());
+        }
+        result
+    }
+
     pub(crate) fn create_cell_output(
         &self,
         call_id: Option<u64>,
@@ -94,6 +102,10 @@ impl Transcript {
         let Some(call_id) = call_id else {
             return Ok(None);
         };
+        self.create_output(Some(call_id))
+    }
+
+    fn create_output(&self, call_id: Option<u64>) -> Result<Option<CellOutput>, String> {
         let (mut state, poisoned) = self.lock();
         if poisoned {
             return Err("transcript lock poisoned while creating cell output".to_string());
@@ -101,8 +113,9 @@ impl Transcript {
         if state.failure.is_some() {
             return Ok(None);
         }
-        let active = state.active()?;
-        let filename = format!("call-{call_id:06}.log");
+        let active = state.materialize()?;
+        let filename =
+            call_id.map_or_else(|| "session.log".into(), |id| format!("call-{id:06}.log"));
         let relative_path = format!("outputs/{filename}");
         let file_path = active.directory.join(&relative_path);
         let public_path = active
@@ -129,10 +142,10 @@ impl Transcript {
         }))
     }
 
-    fn record_cell_output(&self, call_id: u64, path: &str, summary: CellOutputSummary) {
+    fn record_cell_output(&self, call_id: Option<u64>, path: &str, summary: CellOutputSummary) {
         self.update(|state| {
-            state.active()?.append(
-                Event::CellOutput {
+            let event = match call_id {
+                Some(call_id) => Event::CellOutput {
                     call_id,
                     path,
                     retained_bytes: summary.retained_bytes,
@@ -140,8 +153,15 @@ impl Transcript {
                     discarded_bytes: summary.discarded_bytes,
                     retention_limit_bytes: MAX_CELL_OUTPUT_BYTES,
                 },
-                Utc::now(),
-            )
+                None => Event::SessionOutput {
+                    path,
+                    retained_bytes: summary.retained_bytes,
+                    inline_omitted_bytes: summary.inline_omitted_bytes,
+                    discarded_bytes: summary.discarded_bytes,
+                    retention_limit_bytes: MAX_CELL_OUTPUT_BYTES,
+                },
+            };
+            state.active()?.append(event, Utc::now())
         });
     }
 }

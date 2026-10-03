@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -17,14 +18,24 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_idle_output,
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.events import Events
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.r import install_r_startup, r_test_environment
-from support.requirements import SANDBOX, WORKER, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    POSIX,
+    SANDBOX,
+    WORKER,
+    requires,
+)
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
 
@@ -514,6 +525,256 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
             if mode == "resolver":
                 assert client.process.returncode == 0 and not stderr, stderr
             return client.transcript[3:] + [{"standard_error": stderr}]
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_direct_utf8_survives_session_recording_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for stream in ("stdout", "stderr"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configure(root, root, [str(binary)])
+            sessions = root / ".agents/console/sessions"
+            sessions.write_text("occupied")
+            environment = peer_environment(root, "startup-recording-failure")
+            environment["CONSOLE_TEST_DIRECT_STREAM"] = stream
+            with (
+                closing(FifoCheckpoint.create(root / "partial-release")) as release,
+                McpClient(binary, execution.serve(), environment, root) as client,
+            ):
+                try:
+                    client.initialize_and_list_tools()
+                    # This warning proves that the prefix has reached the tape's
+                    # recording failure path before any tool call can materialize
+                    # the transcript or the producer supplies its continuation.
+                    warning = client.stderr.readline()
+                    prefix = "mcp-console: transcript recording disabled: "
+                    assert warning.startswith(prefix + "failed to create "), warning
+                    error = warning.removeprefix(prefix).removesuffix("\n")
+                    result = client.send()
+                    assert not result["isError"], result
+                    assert last_result_text(client) == f"[{error}]\n\n[idle]", result
+                    release.release()
+                    wait_for_idle_output(
+                        client,
+                        "α\n\n[idle]",
+                        "direct scalar completes after recording failure",
+                    )
+                    assert not client.send(
+                        r="recording failure leaves cells available"
+                    )["isError"]
+                    _, stderr = client.finish_with_standard_error()
+                    assert stderr == "", stderr
+                    assert sessions.read_text() == "occupied"
+                finally:
+                    release.release()
+    return [{"direct_stdout_and_stderr_utf8_survive_recording_failure": True}]
+
+
+@requires(PROCESS_EVENTS)
+def test_direct_utf8_survives_launcher_diagnostics(binary: Path) -> Transcript:
+    for stream in ("stdout", "stderr"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configure(root, root, [str(binary)])
+            environment = peer_environment(root, "direct-diagnostic-overlap")
+            environment["CONSOLE_TEST_DIRECT_STREAM"] = stream
+            with (
+                closing(
+                    FifoCheckpoint.create(root / "evaluation-started")
+                ) as evaluating,
+                closing(FifoCheckpoint.create(root / "diagnostic-start")) as diagnostic,
+                closing(FifoCheckpoint.create(root / "evaluation-finish")) as finished,
+                McpClient(binary, DIRECT.serve(), environment, root) as client,
+            ):
+                client.initialize_and_list_tools()
+                client.send(r="hold_cell", timeout_ms=0)
+                evaluating.wait("direct scalar prefix emitted")
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                raw = session / "outputs/call-000001.log"
+                with Events() as events:
+                    events.watch_file(raw)
+                    diagnostic.release()
+                    expected = b"\xcelauncher detail\n"
+                    deadline = time.monotonic() + 10
+                    while raw.stat().st_size < len(expected):
+                        remaining = deadline - time.monotonic()
+                        assert remaining > 0 and events.wait(remaining), (
+                            "diagnostic not captured"
+                        )
+                    assert raw.read_bytes() == expected
+                finished.release()
+                client.expect("launcher detail\nα\n")
+                client.finish()
+                assert raw.read_bytes() == expected + b"\xb1\n"
+    return [{"direct_stdout_and_stderr_utf8_preserved": True}]
+
+
+def test_diagnostic_producers_keep_separate_utf8_decoders(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        configure(root, root, [str(binary)])
+        with (
+            closing(FifoCheckpoint.create(root / "discovery-release")) as discovery,
+            closing(FifoCheckpoint.create(root / "diagnostic-release")) as diagnostic,
+            closing(FifoCheckpoint.create(root / "evaluation-started")) as evaluating,
+            McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "diagnostic-overlap"),
+                root,
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            wait_for_evaluation_output(
+                client,
+                "producer prefix \n[running; poll with an empty send]",
+                "partial diagnostic scalar ingested during discovery",
+                r="hold_first_cell",
+                timeout_ms=0,
+            )
+            discovery.release()
+            evaluating.wait("first worker accepted the cell")
+            client.send(control="restart", r="hold_replacement_cell", timeout_ms=0)
+            evaluating.wait("old launcher retired before replacement evaluation")
+            diagnostic.release()
+            wait_for_evaluation_output(
+                client,
+                "α diagnostic complete\n\n[running; poll with an empty send]",
+                "preparation scalar survived another diagnostic producer's exit",
+                timeout_ms=0,
+            )
+            client.finish()
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            # The first bytes precede evaluation; the remainder arrives while
+            # the replacement cell owns output. Both raw files retain bytes.
+            paths = [
+                session / "outputs/session.log",
+                *sorted((session / "outputs").glob("call-*.log")),
+            ]
+            raw = b"".join(path.read_bytes() for path in paths)
+            assert raw == "producer prefix α diagnostic complete\n".encode(), raw
+            return [{"diagnostic_utf8_survives_overlapping_producer_exit": True}]
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_diagnostic_close_preserves_another_producers_progress(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        configure(root, root, [str(binary)])
+        environment = peer_environment(root, "diagnostic-terminal-overlap")
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(root, "diagnostic_reader_exit")
+        )
+        environment["MCP_CONSOLE_TEST_DIAGNOSTIC_EXIT"] = str(
+            root / "diagnostic-exited"
+        )
+        with (
+            closing(FifoCheckpoint.create(root / "diagnostic-start")) as started,
+            closing(FifoCheckpoint.create(root / "diagnostic-finish")) as finished,
+            closing(FifoCheckpoint.create(root / "diagnostic-close")) as close,
+            closing(FifoCheckpoint.create(root / "diagnostic-exited")) as exited,
+            closing(FifoCheckpoint.create(root / "evaluation-finish")) as evaluation,
+            McpClient(binary, DIRECT.serve(), environment, root) as client,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                wait_for_evaluation_output(
+                    client,
+                    "diagnostic reader ready\n\n[running; poll with an empty send]",
+                    "launcher diagnostic reader identified",
+                    r="hold_cell",
+                    timeout_ms=0,
+                )
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                raw = session / "outputs/call-000001.log"
+                with Events() as events:
+                    events.watch_file(raw)
+                    for gate, expected in (
+                        (started, b"diagnostic reader ready\nprogress 1\r"),
+                        (
+                            finished,
+                            b"diagnostic reader ready\nprogress 1\rprogress 2\n",
+                        ),
+                    ):
+                        gate.release()
+                        deadline = time.monotonic() + 10
+                        while raw.stat().st_size < len(expected):
+                            remaining = deadline - time.monotonic()
+                            assert remaining > 0 and events.wait(remaining), (
+                                "diagnostic bytes not captured"
+                            )
+                        assert raw.read_bytes() == expected
+                        if gate is started:
+                            close.release()
+                            # The thread's TLS destructor runs after its EOF
+                            # publication, before the other producer continues.
+                            exited.wait("launcher diagnostics closed")
+                evaluation.release()
+                client.expect("progress 2\n")
+                client.finish()
+                return [{"diagnostic_close_preserves_progress_replacement": True}]
+            finally:
+                started.release()
+                finished.release()
+                close.release()
+                evaluation.release()
+
+
+def test_first_startup_failure_response_includes_diagnostics(
+    binary: Path,
+) -> Transcript:
+    records = []
+    for arguments in (
+        {"requirements": {"action": "get"}},
+        {"requirements": {"python": ["numpy"]}},
+        {"requirements": {"action": "reset"}},
+        {"control": "restart", "r": "stop('failed startup ran a cell')"},
+    ):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configure(root, root, [str(binary)])
+            with (
+                closing(FifoCheckpoint.create(root / "discovery-started")) as reached,
+                closing(FifoCheckpoint.create(root / "discovery-release")) as release,
+                McpClient(
+                    binary,
+                    DIRECT.serve(),
+                    peer_environment(root, "discovery-diagnostics-failure"),
+                    root,
+                ) as client,
+            ):
+                try:
+                    client.initialize_and_list_tools()
+                    reached.wait("discovery awaiting its failure")
+                    request = client.start_request(
+                        "tools/call", name="send", arguments=arguments
+                    )
+                    # The connection remains responsive while this first send
+                    # waits on the preparation owner's explicit failure gate.
+                    client.request("ping")
+                    release.release()
+                    client.receive(request)
+                    assert request["result"]["isError"], request
+                    text = request["result"]["content"][0]["text"]
+                    assert text.count("preparation failure detail\n") == 1, text
+                    assert "synthetic discovery failure" in text, text
+                    client.send()
+                    assert "preparation failure detail" not in last_result_text(client)
+                    _, stderr = client.finish_with_standard_error(
+                        expected_exit_status=1
+                    )
+                    assert stderr == "synthetic discovery failure\n", stderr
+                    records.append(
+                        {"arguments": arguments, "diagnostics_in_first_failure": True}
+                    )
+                finally:
+                    release.release()
+    return records
 
 
 def test_unexpected_stdout(binary: Path) -> Transcript:

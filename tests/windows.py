@@ -1063,6 +1063,58 @@ class WindowsConsole(unittest.TestCase):
         result = session.send(python="managed_value")
         self.assertIn("42", json.dumps(result))
 
+    def test_summarizes_empty_cell_after_oversized_startup_output(self):
+        with tempfile.TemporaryDirectory(prefix="console startup ") as directory:
+            root = Path(directory)
+            (root / "sitecustomize.py").write_text(
+                # fmt: python
+                dedent("""
+                    import sys
+
+                    if "_mcp_console_services" in sys.modules:
+                        print("startup head")
+                        print("s" * 32768)
+                        print("startup tail")
+                    """)
+            )
+            environment = dict(
+                os.environ,
+                RETICULATE_PYTHON=sys.executable,
+                RETICULATE_PYTHONPATH=str(root),
+            )
+            session = Session(environment, overrides=('languages=["python"]',))
+            try:
+                session.initialize()
+                raw = "startup head\n" + "s" * 32768 + "\nstartup tail\n"
+                sessions = Path(session.directory.name) / ".agents/console/sessions"
+                deadline = time.monotonic() + session.timeout
+                while True:
+                    session.send(requirements={"action": "get"})
+                    logs = list(sessions.glob("*/outputs/session.log"))
+                    if logs and logs[0].read_text() == raw:
+                        break
+                    self.assertLess(
+                        time.monotonic(), deadline, "startup log was not retained"
+                    )
+                result = session.send(python="pass")
+                self.assertFalse(result["isError"], result)
+                text = "".join(item.get("text", "") for item in result["content"])
+                self.assertLessEqual(len(text.encode()), 8192)
+                self.assertTrue(text.startswith("startup head\n"), text)
+                self.assertTrue(text.endswith("startup tail\n"), text)
+                (recording,) = (
+                    Path(session.directory.name) / ".agents/console/sessions"
+                ).iterdir()
+                self.assertEqual(
+                    (recording / "outputs/session.log").read_text(),
+                    raw,
+                )
+                (cell_log,) = (recording / "outputs").glob("call-*.log")
+                self.assertEqual(cell_log.read_bytes(), b"")
+                self.assertIn("42", json.dumps(session.send(python="42")))
+            finally:
+                session.close()
+
     def test_worker_exit_and_output_retention(self):
         session = self.session()
         result = session.send(r='cat(strrep("x", 20000))')

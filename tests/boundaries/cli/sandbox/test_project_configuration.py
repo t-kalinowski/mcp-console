@@ -86,7 +86,31 @@ def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX)
-def test_native_validation_precedes_server_readiness(binary: Path) -> Transcript:
+def test_requirements_get_exposes_builtin_prelaunch_failure(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        config = root / CONFIG
+        config.parent.mkdir(parents=True)
+        config.write_text("sandbox: {network: full}\n", encoding="utf-8")
+        with McpClient(binary, ("serve",), current_directory=root) as client:
+            client.initialize_and_list_tools()
+            result = client.send(requirements={"action": "get"})
+            assert result.get("isError"), result
+            text = "".join(item.get("text", "") for item in result["content"])
+            assert "mcp-console-sandbox:" in text, text
+            client.request("ping")
+            # The launch failure is consumed once; discovery still supplies the
+            # declaration and the ordinary worker recovery path remains usable.
+            inspected = client.send(requirements={"action": "get"})
+            assert not inspected.get("isError"), inspected
+            assert "requirements" in inspected["structuredContent"], inspected
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+    return [{"requirements_get_reports_prelaunch_failure_once": True}]
+
+
+@requires(SANDBOX)
+def test_native_validation_preserves_protocol_availability(binary: Path) -> Transcript:
     proxy_cases = (
         ("proxy disabled", {**NATIVE_PROXY, "enabled": False}),
         (
@@ -136,15 +160,35 @@ def test_native_validation_precedes_server_readiness(binary: Path) -> Transcript
         for name, yaml in cases:
             config.write_text(yaml, encoding="utf-8")
             for arguments in ((), ("sandbox", "--", "/bin/echo", "workload started")):
-                result = invoke(binary, host, *arguments)
-                assert result.returncode == 1 and result.stdout == "", (name, result)
-                assert f"{CONFIG}: sandbox preflight failed" in result.stderr, (
-                    name,
-                    result,
-                )
+                if not arguments:
+                    zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
+                    with McpClient(
+                        binary, ("serve", "--worker", str(zod)), current_directory=host
+                    ) as client:
+                        client.initialize_and_list_tools()
+                        result = client.send(
+                            r="native validation must reject this cell"
+                        )
+                        assert result["isError"], (name, result)
+                        client.request("ping")
+                        _, stderr = client.finish_with_standard_error()
+                        assert stderr == "", (name, stderr)
+                    errors = "".join(item.get("text", "") for item in result["content"])
+                    assert "mcp-console-sandbox:" in errors, (name, errors)
+                else:
+                    result = invoke(binary, host, *arguments)
+                    assert result.returncode == 1 and result.stdout == "", (
+                        name,
+                        result,
+                    )
+                    assert f"{CONFIG}: sandbox preflight failed" in result.stderr, (
+                        name,
+                        result,
+                    )
+                    errors = result.stderr
                 # Native JSON offsets include platform policy and the launch PID.
                 stderr = re.sub(
-                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", result.stderr
+                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", errors
                 )
                 transcript.append(
                     {

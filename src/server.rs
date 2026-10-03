@@ -68,44 +68,51 @@ impl ConsoleServer {
             ),
         });
         let prelaunch = worker.is_none();
-        let startup = startup::Startup::new(input_closed, runtime, prelaunch, move |started| {
-            let configuration = if let Some((target, roots)) = target {
-                crate::worker_client::ClientConfiguration::target(
+        let startup = startup::Startup::new(
+            input_closed,
+            runtime,
+            prelaunch,
+            move |started, diagnostics| {
+                let configuration = if let Some((target, roots)) = target {
+                    crate::worker_client::ClientConfiguration::target(
+                        target,
+                        roots,
+                        no_sandbox,
+                        sandbox_settings,
+                        python,
+                        diagnostics,
+                        started,
+                    )?
+                } else if let Some(program) = worker {
+                    crate::worker_client::ClientConfiguration::new(
+                        program,
+                        relay,
+                        no_sandbox,
+                        sandbox_settings,
+                    )
+                } else {
+                    crate::worker_client::ClientConfiguration::builtin(
+                        no_sandbox,
+                        sandbox_settings,
+                        python,
+                        diagnostics,
+                        started,
+                    )?
+                };
+                let target = configuration.target_metadata();
+                let transcript = crate::transcript::Transcript::with_target(
+                    recording_directory,
+                    configuration.dynamic_resolution(),
+                    configuration.python_preparation(),
+                    !configuration.python_only(),
                     target,
-                    roots,
-                    no_sandbox,
-                    sandbox_settings,
-                    python,
-                    started,
-                )?
-            } else if let Some(program) = worker {
-                crate::worker_client::ClientConfiguration::new(
-                    program,
-                    relay,
-                    no_sandbox,
-                    sandbox_settings,
-                )
-            } else {
-                crate::worker_client::ClientConfiguration::builtin(
-                    no_sandbox,
-                    sandbox_settings,
-                    python,
-                    started,
-                )?
-            };
-            let target = configuration.target_metadata();
-            let transcript = crate::transcript::Transcript::with_target(
-                recording_directory,
-                configuration.dynamic_resolution(),
-                configuration.python_preparation(),
-                !configuration.python_only(),
-                target,
-            );
-            Ok(startup::PreparedRuntime {
-                configuration,
-                transcript,
-            })
-        });
+                );
+                Ok(startup::PreparedRuntime {
+                    configuration,
+                    transcript,
+                })
+            },
+        );
         Ok(Self {
             startup,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
@@ -198,7 +205,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         return Ok(response_to_tool_result(
-                            crate::worker_client::Response::tool_error(error),
+                            runtime.worker.startup_failure_response(error),
                             &call,
                             &runtime.transcript,
                             &self.deliveries,
@@ -216,6 +223,15 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                             &delivery,
                         ));
                     }
+                }
+                if let Some(response) = runtime.worker.take_prelaunch_failure()? {
+                    return Ok(response_to_tool_result(
+                        response,
+                        &call,
+                        &runtime.transcript,
+                        &self.deliveries,
+                        &delivery,
+                    ));
                 }
                 let snapshot = runtime.worker.inspect_requirements();
                 let json = serde_json::to_string_pretty(&snapshot).expect("requirements JSON");

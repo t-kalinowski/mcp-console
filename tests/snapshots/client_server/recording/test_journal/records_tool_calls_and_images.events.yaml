@@ -3,7 +3,8 @@
   session: default
   working_directory: <workspace>
   dynamic_resolution: true
-  schema_version: 1
+  python_preparation: false
+  schema_version: 2
   run_id: <run ID>
   sequence: 1
   at: <UTC timestamp>
@@ -19,7 +20,7 @@
       requirements:
         r:
           - praise
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 2
   at: <UTC timestamp>
@@ -29,7 +30,7 @@
   path: artifacts/call-000001-image-000001.png
   mime_type: image/png
   bytes: 68
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 3
   at: <UTC timestamp>
@@ -40,7 +41,7 @@
   inline_omitted_bytes: 0
   discarded_bytes: 0
   retention_limit_bytes: 1073741824
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 4
   at: <UTC timestamp>
@@ -59,7 +60,7 @@
         text: |
           after image
     isError: false
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 5
   at: <UTC timestamp>
@@ -73,7 +74,7 @@
     arguments:
       r: "1"
       python: "1"
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 6
   at: <UTC timestamp>
@@ -84,7 +85,7 @@
       - type: text
         text: only one of `r`, `python`, or `sql` may be supplied
     isError: true
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 7
   at: <UTC timestamp>
@@ -97,7 +98,7 @@
       requirements:
         python:
           - transcript-fixture
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 8
   at: <UTC timestamp>
@@ -108,7 +109,7 @@
       - type: text
         text: Python requirements are unavailable with a custom worker
     isError: true
-  schema_version: 1
+  schema_version: 2
   run_id: <run ID>
   sequence: 9
   at: <UTC timestamp>

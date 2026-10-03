@@ -138,7 +138,8 @@ Stdin always belongs to the target.
 
 The pinned [runner protocol](https://github.com/t-kalinowski/cobox/blob/6a18b21c2e75a10229a842424403d71cbd1e60ef/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is the canonical complete schema.
 Key differences from Console's application policy: `version: 2` is required; filesystem/network are required without a profile; environment inheritance defaults true; lifecycle storage and caller observation are opt-in.
-On Unix, `parent_pid` must identify the actual caller; supervised cleanup defaults to 1000 ms, with explicit values from 1 to 60000 ms. Windows observes the runner's direct parent plus an optional session owner and uses a fixed five-second Job retirement deadline.
+On Unix, `parent_pid` must identify the actual caller; supervised cleanup defaults to 1000 ms, with explicit values from 1 to 60000 ms.
+Windows observes the runner's direct parent plus an optional session owner and uses a fixed five-second Job retirement deadline.
 
 Use the runnable [shell](../examples/sandbox-config.sh), [Python](../examples/sandbox-config.py), or [R](../examples/sandbox-config.R) examples.
 They pass child-specific environment maps rather than mutating a multithreaded parent's global environment.
@@ -163,13 +164,12 @@ See [lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 ## Windows backend selection
 
-Windows defaults to `sandbox.windows_sandbox_level: elevated` and requires explicit
-`mcp-console sandbox-setup` provisioning. `sandbox.windows_state_dir` can select an
-absolute persistent state directory. An explicitly selected `restricted-token`
-backend requires `network: enabled` and host reads; it rejects read-deny policy.
-Neither mode silently weakens policy when a feature is unavailable. Managed proxy
-configuration and custom cleanup timeouts are currently unsupported. See
-[Windows support](WINDOWS.md#native-sandbox) for lifecycle and setup details.
+Windows defaults to `sandbox.windows_sandbox_level: elevated` and requires explicit `mcp-console sandbox-setup` provisioning.
+`sandbox.windows_state_dir` can select an absolute persistent state directory.
+An explicitly selected `restricted-token` backend requires `network: enabled` and host reads; it rejects read-deny policy.
+Neither mode silently weakens policy when a feature is unavailable.
+Managed proxy configuration and custom cleanup timeouts are currently unsupported.
+See [Windows support](WINDOWS.md#native-sandbox) for lifecycle and setup details.
 
 ## Explicit Linux backend selection
 
