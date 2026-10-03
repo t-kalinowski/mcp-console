@@ -15,7 +15,7 @@ input:
 result: {}
 ---
 send:
-  r: 42L
+  r: cat("1", file = Sys.getenv("MCP_CONSOLE_TEST_EVALUATED")); 42L
   requirements:
     action: set
   timeout_ms: 0

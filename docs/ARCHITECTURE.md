@@ -176,6 +176,7 @@ Closing one diagnostic producer does not flush another producer's pending termin
 
 One recoverable response remains owned until local delivery or cancellation settles it.
 Controlled sends can combine earlier output with a following cell; a failed delivery restores the whole combined region, not just its last part.
+A poll already waiting for startup waits for an intervening response's delivery before claiming that evaluation's output; cancellation leaves the output unclaimed.
 This is not exactly-once client observation: cancellation can race with bytes already visible to the client.
 A journaled result likewise records assembly, not receipt.
 

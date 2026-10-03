@@ -19,7 +19,7 @@ from boundaries.client_server.python.test_startup import (
 )
 from support.assertions import last_result_text
 from support.allocations import AllocationProfile
-from support.checkpoints import FifoCheckpoint
+from support.checkpoints import FifoCheckpoint, wait_for_path
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
@@ -389,7 +389,7 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(R, command("ir"), command("uv"))
+@requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_early_requirements_select_candidate_before_default_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -413,27 +413,60 @@ def test_early_requirements_select_candidate_before_default_preparation(
         proceed = FifoCheckpoint.create(root / "proceed")
         resources.callback(prepared.close)
         resources.callback(proceed.close)
+        write_reached = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "write-reached"))
+        )
+        write_release = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "write-release"))
+        )
+        evaluated = root / "evaluated"
         environment.update(
             {
                 "MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT": "DBI",
                 "MCP_CONSOLE_TEST_IR_STARTED": str(prepared.path),
                 "MCP_CONSOLE_TEST_IR_RELEASE": str(proceed.path),
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "response_write_interposer")
+                ),
+                "MCP_CONSOLE_TEST_RESPONSE_WRITE_REACHED": str(write_reached.path),
+                "MCP_CONSOLE_TEST_RESPONSE_WRITE_RELEASE": str(write_release.path),
+                "MCP_CONSOLE_TEST_RESPONSE_WRITE_MATCH": "[running; poll with an empty send]",
+                "MCP_CONSOLE_TEST_RESPONSE_WRITE_COMPLETE": "1",
+                "MCP_CONSOLE_TEST_RESPONSE_WRITE_ARMED": str(root / "write-armed"),
+                "MCP_CONSOLE_TEST_EVALUATED": str(evaluated),
             }
         )
         with McpClient(
-            binary, execution.serve(), environment, root, response_timeout=600
+            binary,
+            execution.serve(
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+            ),
+            environment,
+            root,
+            response_timeout=600,
         ) as client:
             reached.wait("runtime discovery is blocked")
             assert os.read(alive, 1) == b"1"
             client.initialize_and_list_tools()
             pending = client.start_send(timeout_ms=600_000)
             client.request("ping")
-            client.send(r="42L", requirements={"action": "set"}, timeout_ms=0)
-            assert last_result_text(client) == RUNNING
-            release.release()
+            (root / "write-armed").touch()
             try:
+                submitted = client.start_send(
+                    r='cat("1", file = Sys.getenv("MCP_CONSOLE_TEST_EVALUATED")); 42L',
+                    requirements={"action": "set"},
+                    timeout_ms=0,
+                )
+                write_reached.wait(
+                    "running response is visible before its write settles"
+                )
+                client.receive(submitted)
+                assert last_result_text(client) == RUNNING
+                release.release()
                 prepared.wait("initial polling does not block candidate preparation")
                 proceed.release()
+                wait_for_path(evaluated, "accepted cell ran", client=client)
+                write_release.release()
                 client.receive(pending)
                 assert pending["result"]["content"] == [
                     {"type": "text", "text": "[1] 42\n"}
@@ -444,6 +477,7 @@ def test_early_requirements_select_candidate_before_default_preparation(
                 )
                 return client.finish()
             finally:
+                write_release.release()
                 proceed.release()
 
 
