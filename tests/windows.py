@@ -193,6 +193,19 @@ class Session:
                 )
         return result
 
+    def expect(self, expected: str, **arguments) -> dict:
+        deadline = time.monotonic() + self.timeout
+        result = self.send(**arguments, timeout_ms=0)
+        while True:
+            assert not result.get("isError"), result
+            output = json.dumps(result, ensure_ascii=False)
+            if expected in output:
+                return result
+            assert "running;" in output or "waiting for stdin" in output, result
+            remaining = deadline - time.monotonic()
+            assert remaining > 0, f"did not observe {expected!r}: {result}"
+            result = self.send(timeout_ms=min(1000, max(1, int(remaining * 1000))))
+
     def close(self):
         self.process.stdin.close()
         try:
@@ -562,13 +575,15 @@ class WindowsConsole(unittest.TestCase):
         )
         self.assertIn("Python alone: 42", json.dumps(result))
         self.assertFalse(result.get("isError"), result)
-        result = session.send(
-            python="name = input('Name: '); print(name)", timeout_ms=100
+        result = session.expect(
+            "waiting for stdin", python="name = input('Name: '); print(name)"
         )
         self.assertIn("waiting for stdin", json.dumps(result))
         self.assertIn(
             "caf\u00e9",
-            json.dumps(session.send(stdin="caf\u00e9\n"), ensure_ascii=False),
+            json.dumps(
+                session.expect("caf\u00e9", stdin="caf\u00e9\n"), ensure_ascii=False
+            ),
         )
         result = session.send(python="while True: pass", timeout_ms=100)
         self.assertIn("running;", json.dumps(result))
@@ -1003,13 +1018,13 @@ class WindowsConsole(unittest.TestCase):
     def test_interrupt_waiting_for_input(self):
         session = self.session()
         session.send(r="1L")
-        result = session.send(r="readline('Name: ')", timeout_ms=100)
+        result = session.expect("waiting for stdin", r="readline('Name: ')")
         self.assertIn("waiting for stdin", json.dumps(result))
         result = session.send(control="interrupt", timeout_ms=1000)
         self.assertNotIn("waiting for stdin", json.dumps(result))
         result = session.send(python="answer = input('Python: '); answer")
         self.assertIn("waiting for stdin", json.dumps(result))
-        result = session.send(stdin="hello\n")
+        result = session.expect("hello", stdin="hello\n")
         self.assertIn("hello", json.dumps(result))
 
     def test_unicode_plots_and_raw_output(self):
@@ -1182,14 +1197,37 @@ class WindowsConsole(unittest.TestCase):
 
     def test_input_and_interrupt(self):
         session = self.session()
-        session.send(r="1L")
-        result = session.send(r="answer <- readline('Name: '); answer", timeout_ms=100)
+        with socket.create_server(("127.0.0.1", 0)) as listener:
+            listener.settimeout(session.timeout)
+            session.send(r=f"input_port <- {listener.getsockname()[1]}L")
+            result = session.send(
+                # fmt: r
+                r=dedent("""
+                    gate <- socketConnection(
+                      "127.0.0.1",
+                      port = input_port,
+                      blocking = TRUE,
+                      open = "r"
+                    )
+                    invisible(readLines(gate, n = 1L))
+                    close(gate)
+                    answer <- readline("Name: ")
+                    answer
+                    """),
+                timeout_ms=0,
+            )
+            with listener.accept()[0] as gate:
+                self.assertIn("running;", json.dumps(result))
+                gate.sendall(b"continue\n")
+            result = session.expect("waiting for stdin")
         self.assertIn("waiting for stdin", json.dumps(result))
-        result = session.send(stdin="Windows\n")
+        result = session.expect("Windows", stdin="Windows\n")
         self.assertIn("Windows", json.dumps(result))
-        result = session.send(r="saved <- 42; repeat {}", timeout_ms=100)
+        result = session.expect(
+            "Loop ready", r='saved <- 42; cat("Loop ready\\n"); repeat {}'
+        )
         self.assertIn("running", json.dumps(result))
-        result = session.send(control="interrupt", timeout_ms=1000)
+        result = session.send(control="interrupt")
         self.assertNotIn("running;", json.dumps(result))
         result = session.send(r="saved")
         self.assertIn("42", json.dumps(result))
