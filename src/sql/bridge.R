@@ -29,7 +29,7 @@ base::local(
       }
 
       storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
-      managed_connection <<- DBI::dbConnect(
+      connection <- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",
           config = list(
@@ -42,7 +42,8 @@ base::local(
           environment_scan = TRUE
         )
       )
-      DBI::dbExecute(managed_connection, "SET enable_progress_bar = false")
+      DBI::dbExecute(connection, "SET enable_progress_bar = false")
+      managed_connection <<- connection
       invisible(managed_connection)
     }
 
@@ -54,8 +55,20 @@ base::local(
       ) {
         return(0L)
       }
-      ensure_managed_connection()
-      1L
+      tryCatch(
+        {
+          ensure_managed_connection()
+          1L
+        },
+        interrupt = function(condition) {
+          cat("\n")
+          -1L
+        },
+        error = function(condition) {
+          cat("Error: ", conditionMessage(condition), "\n", sep = "")
+          0L
+        }
+      )
     }
 
     ensure_connection <- function() {

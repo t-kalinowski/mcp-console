@@ -16,6 +16,9 @@ Startup hooks run even without submitted code; their output, plots, and input pr
 When SQL is enabled and its optional provider is installed, bootstrap opens the managed DuckDB connection; first-query work remains lazy.
 Python-owned SQL warms only an installed DuckDB package matching the active import candidate; workspace modules/packages shadowing it are treated as absent during bootstrap.
 An absent provider can be prepared on later SQL demand.
+Warmup does not prepare missing packages.
+Provider errors remain visible through `send` and leave unrelated cells usable; later SQL demand retries connection creation.
+Interrupting warmup withholds an early waiting cell and retains the worker.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
 

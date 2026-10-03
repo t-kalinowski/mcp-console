@@ -4,7 +4,12 @@ pub(super) struct Backend(crate::r_bridge::Bridge);
 
 impl Backend {
     pub(super) fn initialize_managed(&self) -> Result<(), String> {
-        self.0.call0_integer(c"initialize_managed_connection")?;
+        let outcome = crate::r_environment::without_automatic_resolution(|| {
+            self.0.call0_integer(c"initialize_managed_connection")
+        })?;
+        if outcome == -1 {
+            crate::worker::record_bootstrap_interrupt();
+        }
         Ok(())
     }
 
