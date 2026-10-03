@@ -64,7 +64,8 @@
         if (state$startup_allow_sql_setup) {
           return(invisible())
         }
-        if (identical(behavior, "setup-interrupt")) {
+        if (startsWith(behavior, "setup-interrupt")) {
+          state$startup_allow_sql_setup <- TRUE
           readline("SQL warmup> ")
         } else {
           stop("optional SQL warmup setup failed")
@@ -76,6 +77,22 @@
         print = FALSE,
         tracer = bquote(.(observe_setup)(conn, statement))
       ))
+      if (endsWith(behavior, "disconnect-error")) {
+        observe_disconnect <- function(conn) {
+          if (
+            length(state$startup_setup_connections) > 0L &&
+              identical(conn, state$startup_setup_connections[[1L]])
+          ) {
+            stop("optional SQL disconnect failed")
+          }
+        }
+        suppressMessages(trace(
+          "dbDisconnect",
+          where = asNamespace("DBI"),
+          print = FALSE,
+          exit = bquote(.(observe_disconnect)(conn))
+        ))
+      }
     }
     if (startsWith(behavior, "probe-interrupt-")) {
       target <- substring(behavior, nchar("probe-interrupt-") + 1L)

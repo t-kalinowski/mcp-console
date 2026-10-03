@@ -1065,6 +1065,7 @@ def test_interrupts_sql_warmup_without_losing_worker(
         (False, "metadata-interrupt"),
         (True, "interrupt"),
         (True, "setup-interrupt"),
+        (True, "setup-interrupt-disconnect-error"),
         (True, "probe-interrupt-DBI"),
         (True, "probe-interrupt-duckdb"),
     ):
@@ -1088,9 +1089,13 @@ def test_interrupts_sql_warmup_without_losing_worker(
             assert "[running; poll with an empty send]" not in last_tool_text(client), (
                 result
             )
+            if behavior == "setup-interrupt-disconnect-error":
+                assert "optional SQL disconnect failed" in last_tool_text(client), (
+                    result
+                )
             if with_r:
                 client.expect(r="stopifnot(startup_sql_pid == Sys.getpid())")
-                if behavior == "setup-interrupt":
+                if behavior.startswith("setup-interrupt"):
                     client.expect(
                         # fmt: r
                         r=code("""
@@ -1100,6 +1105,9 @@ def test_interrupts_sql_warmup_without_losing_worker(
                             )
                             startup_allow_sql_setup <- TRUE
                             """),
+                    )
+                    client.expect(
+                        r='stopifnot(!"withheld_cell" %in% DBI::dbListTables(sql_connection()))'
                     )
             else:
                 client.expect(python="assert startup_sql_pid == os.getpid()")
@@ -1119,6 +1127,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
 ) -> Transcript:
     for with_r, behavior in (
         (True, "error"),
+        (True, "setup-error-disconnect-error"),
         (False, "error"),
         (False, "import-error"),
         (False, "metadata-error"),
@@ -1136,7 +1145,18 @@ def test_optional_sql_warmup_failure_preserves_runtime(
             result = client.transcript[-1]["result"]
             assert result.get("isError") is not True, result
             output = last_tool_text(client)
-            assert "optional SQL warmup failed" in output, result
+            if behavior == "setup-error-disconnect-error":
+                assert "optional SQL warmup setup failed" in output, result
+                assert "optional SQL disconnect failed" in output, result
+                client.expect(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(!DBI::dbIsValid(startup_setup_connections[[1L]]))
+                        startup_allow_sql_setup <- TRUE
+                        """),
+                )
+            else:
+                assert "optional SQL warmup failed" in output, result
             assert "available after SQL warmup failure" in output, result
             assert "[worker" not in output, result
             if behavior == "system-exit":

@@ -44,7 +44,17 @@ base::local(
       )
       on.exit({
         if (is.null(managed_connection)) {
-          DBI::dbDisconnect(connection)
+          tryCatch(
+            DBI::dbDisconnect(connection),
+            error = function(condition) {
+              cat(
+                "Error closing SQL connection: ",
+                conditionMessage(condition),
+                "\n",
+                sep = ""
+              )
+            }
+          )
         }
       })
       DBI::dbExecute(connection, "SET enable_progress_bar = false")
