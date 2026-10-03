@@ -7,6 +7,7 @@ use std::io::{self, BufRead, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,10 @@ pub(crate) struct Request<T> {
 }
 
 static SIGNAL: AtomicI32 = AtomicI32::new(-1);
+// Each dedicated owner runs once, then exits. Installed handlers and both pipe
+// endpoints share that process lifetime, including setup errors and retirement.
+// Closing either endpoint sooner could race an in-flight handler or cause SIGPIPE.
+static SIGNAL_PIPE: OnceLock<(io::PipeReader, io::PipeWriter)> = OnceLock::new();
 
 pub(crate) fn token() -> Result<String, String> {
     let mut bytes = [0; 16];
@@ -32,10 +37,18 @@ pub(crate) fn token() -> Result<String, String> {
 
 extern "C" fn stop_signal(_: libc::c_int) {
     let fd = SIGNAL.load(Ordering::Relaxed);
-    if fd >= 0 {
-        unsafe {
-            libc::write(fd, b"1".as_ptr().cast(), 1);
+    unsafe {
+        #[cfg(target_os = "macos")]
+        let errno = libc::__error();
+        #[cfg(target_os = "linux")]
+        let errno = libc::__errno_location();
+        let saved_errno = *errno;
+        if fd >= 0 {
+            // The watcher never drains this pipe: a queued byte, including a
+            // full pipe (EAGAIN), permanently records the shutdown request.
+            while libc::write(fd, b"1".as_ptr().cast(), 1) < 0 && *errno == libc::EINTR {}
         }
+        *errno = saved_errno;
     }
 }
 
@@ -45,7 +58,26 @@ pub(crate) fn run(
 ) -> Result<(), String> {
     let cancel = Cancel::new(protocol)?;
     let (signal, notify_signal) = io::pipe().map_err(|e| e.to_string())?;
-    SIGNAL.store(notify_signal.as_raw_fd(), Ordering::Relaxed);
+    let flags = unsafe { libc::fcntl(notify_signal.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0
+        || unsafe {
+            libc::fcntl(
+                notify_signal.as_raw_fd(),
+                libc::F_SETFL,
+                flags | libc::O_NONBLOCK,
+            )
+        } < 0
+    {
+        return Err(io::Error::last_os_error().to_string());
+    }
+    let signal_fd = signal.as_raw_fd();
+    let notify_fd = notify_signal.as_raw_fd();
+    SIGNAL_PIPE
+        .set((signal, notify_signal))
+        .map_err(|_| "target owner signal wakeup already initialized")?;
+    // Pin the endpoints before installing even the first handler. No later
+    // return path can invalidate a descriptor already observed by a handler.
+    SIGNAL.store(notify_fd, Ordering::Relaxed);
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = stop_signal as *const () as usize;
@@ -60,10 +92,7 @@ pub(crate) fn run(
     let watch_cancel = cancel.clone();
     let watcher = std::thread::spawn(move || {
         if let Ok(events) = poll(
-            &[
-                (signal.as_raw_fd(), libc::POLLIN),
-                (done.as_raw_fd(), libc::POLLIN),
-            ],
+            &[(signal_fd, libc::POLLIN), (done.as_raw_fd(), libc::POLLIN)],
             None,
         ) && events[0] != 0
         {
@@ -94,7 +123,6 @@ pub(crate) fn run(
     let _ = input_watcher.join();
     drop(completion);
     let _ = watcher.join();
-    SIGNAL.store(-1, Ordering::Relaxed);
     // Once retirement has been reported, the frame carries workload errors;
     // this owner's exit status describes only cleanup and frame delivery.
     if confirmed {
