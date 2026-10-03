@@ -33,9 +33,6 @@ if r_libs_record := os.environ.get("MCP_CONSOLE_TEST_R_LIBS_RECORD"):
         json.dump(os.environ.get("R_LIBS"), stream)
         stream.write("\n")
 
-intercept_marker = os.environ.get("MCP_CONSOLE_TEST_UV_INTERCEPT_MARKER")
-intercept = intercept_marker is None or os.path.exists(intercept_marker)
-
 if resolver_record := os.environ.get("MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"):
     resolver_state = {
         "arguments": arguments,
@@ -64,8 +61,7 @@ if (
 
 inventories = os.environ.get("MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES")
 if (
-    intercept
-    and inventories
+    inventories
     and os.path.exists(inventories)
     and arguments[:2] == ["python", "list"]
 ):
@@ -77,7 +73,7 @@ if (
     sys.stdout.write("\n")
     raise SystemExit(0)
 
-if intercept and arguments[:2] == ["tool", "run"] and "--" in arguments:
+if arguments[:2] == ["tool", "run"] and "--" in arguments:
     separator = arguments.index("--")
     command = arguments[separator + 1 :]
     if command and command[0] == "python":
