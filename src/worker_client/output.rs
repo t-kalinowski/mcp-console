@@ -49,7 +49,7 @@ pub(super) enum ResponseAcknowledgment {
 }
 
 enum ResponseDeliveryTarget {
-    Evaluation(SyncSender<ResponseAcknowledgment>),
+    Evaluation(SyncSender<ResponseAcknowledgment>, Arc<tokio::sync::Notify>),
     Output(OutputTape),
 }
 
@@ -201,12 +201,16 @@ impl Response {
         self.with_builder(|builder| builder.append_cell_after_idle_prelude(other));
     }
 
-    pub(super) fn acknowledge_with(&mut self, acknowledgment: SyncSender<ResponseAcknowledgment>) {
+    pub(super) fn acknowledge_with(
+        &mut self,
+        acknowledgment: SyncSender<ResponseAcknowledgment>,
+        changed: Arc<tokio::sync::Notify>,
+    ) {
         assert!(
             self.delivery.is_none(),
             "a response can carry only one acknowledgment"
         );
-        self.delivery = Some(ResponseDeliveryTarget::Evaluation(acknowledgment));
+        self.delivery = Some(ResponseDeliveryTarget::Evaluation(acknowledgment, changed));
     }
 
     pub(super) fn recover_to(&mut self, output: OutputTape) {
@@ -434,15 +438,17 @@ impl Drop for Response {
 
 impl ResponseDeliveryTarget {
     fn delivered(self) {
-        if let Self::Evaluation(acknowledgment) = self {
+        if let Self::Evaluation(acknowledgment, changed) = self {
             let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
+            changed.notify_waiters();
         }
     }
 
     fn unclaimed(self, response: Response) {
         match self {
-            Self::Evaluation(acknowledgment) => {
+            Self::Evaluation(acknowledgment, changed) => {
                 let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+                changed.notify_waiters();
             }
             Self::Output(output) => output.recover(response),
         }

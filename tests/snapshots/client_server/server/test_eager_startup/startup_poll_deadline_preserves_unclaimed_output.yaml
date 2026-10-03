@@ -2,13 +2,12 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  timeout_ms: 600000
+  timeout_ms: 10000
 result:
   content:
     - type: text
-      text: |
-        [1] 42
-  isError: false
+      text: "[previous send response delivery is still pending]"
+  isError: true
 ---
 input:
   method: ping
@@ -25,4 +24,13 @@ result:
       text: |-
 
         [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
   isError: false

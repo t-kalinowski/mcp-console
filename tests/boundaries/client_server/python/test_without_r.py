@@ -2401,10 +2401,14 @@ def test_inspection_excludes_workspace_and_pythonpath(
         poisoned_path.mkdir()
         # fmt: python
         payload = code("""
+            import sys
             from pathlib import Path
 
-            Path("host-import-executed").touch()
-            raise RuntimeError("inspection imported workspace code")
+            # Eager worker startup may import the configured site hook. Only
+            # host inspection must exclude workspace and PYTHONPATH imports.
+            if "_mcp_console_services" not in sys.modules:
+                Path("host-import-executed").touch()
+                raise RuntimeError("inspection imported workspace code")
             """)
         (workspace / "ctypes.py").write_text(payload)
         (poisoned_path / "sitecustomize.py").write_text(payload)
@@ -2415,12 +2419,11 @@ def test_inspection_excludes_workspace_and_pythonpath(
             client.initialize_and_list_tools()
             prepared = client.send(requirements={"action": "get"})
             assert not prepared.get("isError", False), prepared
+            client.expect("42\n", python="41 + 1")
             assert not (workspace / "host-import-executed").exists()
-            # Workload imports keep their ordinary semantics inside the worker.
             (workspace / "ctypes.py").unlink()
             (poisoned_path / "sitecustomize.py").unlink()
             shutil.rmtree(poisoned_path / "__pycache__", ignore_errors=True)
-            client.expect("42\n", python="41 + 1")
             return client.finish()
 
 

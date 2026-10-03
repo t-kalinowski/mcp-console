@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 static atomic_bool claimed = false;
+static atomic_bool complete_pending = false;
 static pid_t owner;
 typedef ssize_t (*write_function)(int, const void *, size_t);
 
@@ -31,19 +32,32 @@ static ssize_t gated_write(int descriptor, const void *buffer, size_t count) {
     write_function write_next = next_write();
     const char *reached_path = getenv("MCP_CONSOLE_TEST_RESPONSE_WRITE_REACHED");
     const char *release_path = getenv("MCP_CONSOLE_TEST_RESPONSE_WRITE_RELEASE");
-    const char match[] = "https://invalid.example/";
-    bool matches = false;
+    const char *armed_path = getenv("MCP_CONSOLE_TEST_RESPONSE_WRITE_ARMED");
+    if (armed_path != NULL && access(armed_path, F_OK) != 0)
+        return write_next(descriptor, buffer, count);
+    const char *match = getenv("MCP_CONSOLE_TEST_RESPONSE_WRITE_MATCH");
+    if (match == NULL) match = "https://invalid.example/";
+    size_t match_size = strlen(match);
+    bool complete = getenv("MCP_CONSOLE_TEST_RESPONSE_WRITE_COMPLETE") != NULL;
+    bool matches = complete && atomic_load(&complete_pending);
     const unsigned char *bytes = buffer;
-    for (size_t i = 0; i + sizeof(match) - 1 <= count; ++i) {
-        if (memcmp(bytes + i, match, sizeof(match) - 1) == 0) { matches = true; break; }
+    for (size_t i = 0; i + match_size <= count; ++i) {
+        if (memcmp(bytes + i, match, match_size) == 0) { matches = true; break; }
     }
     if (descriptor != 1 || getpid() != owner || reached_path == NULL ||
-        release_path == NULL || !matches || atomic_exchange(&claimed, true)) {
+        release_path == NULL || !matches) {
         return write_next(descriptor, buffer, count);
     }
+    if (complete && count != 0 && bytes[count - 1] != '\n') {
+        atomic_store(&complete_pending, true);
+        return write_next(descriptor, buffer, count);
+    }
+    if (atomic_exchange(&claimed, true)) return write_next(descriptor, buffer, count);
     // Publish a real response prefix, then hold its remaining write behind a
     // FIFO. The checkpoint does not depend on output length or socket capacity.
     size_t prefix_size = count < 256 ? 1 : 256;
+    // A complete visible response can still have an unsettled write future.
+    if (complete) prefix_size = count;
     ssize_t prefix = write_next(descriptor, buffer, prefix_size);
     if (prefix != (ssize_t)prefix_size) { _exit(125); }
     int release = open(release_path, O_RDONLY);
