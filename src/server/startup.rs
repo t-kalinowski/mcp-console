@@ -67,8 +67,10 @@ impl Startup {
                         },
                         diagnostics,
                     )?;
-                    initialize_worker.configure(prepared.configuration);
+                    // Early control calls can launch once worker configuration
+                    // is published. Replay their pending records before that.
                     task_recording.configure(prepared.transcript);
+                    initialize_worker.configure(prepared.configuration);
                     if prelaunch {
                         initialize_worker.prelaunch(&generation);
                     }

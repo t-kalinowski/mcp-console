@@ -29,7 +29,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.flush()
 
     preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
-    if mode == "discovery-diagnostics":
+    if mode in {"discovery-diagnostics", "discovery-image"}:
         print("preparation detail", file=sys.stderr, flush=True)
         with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
             assert signal.write(b"1") == 1
@@ -129,6 +129,15 @@ frame(
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
+if mode == "discovery-image":
+    frame(
+        2,
+        {
+            "kind": "image",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "mime_type": "image/png",
+        },
+    )
 if (
     mode == "bootstrap-input-completion"
     and not (log.parent / "invalid-bootstrap-sent").exists()

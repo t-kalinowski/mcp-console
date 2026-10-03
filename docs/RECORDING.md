@@ -31,6 +31,7 @@ A `tool_result` is recorded before transport delivery, so it does not prove that
 Polling remains separate calls in the Markdown ledger, not a reconstructed notebook cell with one inferred result.
 Calls admitted before discovery completes are retained with their results even if discovery fails.
 Recording metadata remains unknown until discovery supplies it; a startup failure does not fabricate runtime capabilities.
+Discovery configures the ledger and replays pending records before publishing worker configuration, so startup artifacts follow earlier calls and results.
 
 ## Raw output and failures
 

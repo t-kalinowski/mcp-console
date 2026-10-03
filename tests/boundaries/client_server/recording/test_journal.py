@@ -943,6 +943,65 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             release.close()
 
 
+@requires(PROCESS_EVENTS)
+def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        configure(root, root, [str(binary)])
+        reached = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            with McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "discovery-image"),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery awaiting release")
+                client.expect(
+                    "[worker starting]", requirements={"action": "get"}, timeout_ms=0
+                )
+                sessions = root / ".agents/console/sessions"
+                assert not list(sessions.glob("*/artifacts/*"))
+                release.release()
+                image = wait_for_checkpoint(
+                    lambda: next(sessions.glob("*/artifacts/*.png"), None),
+                    "startup image retained after discovery",
+                    root=sessions,
+                    recursive=True,
+                    client=client,
+                )
+                client.finish()
+            session = image.parent.parent
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            (artifact,) = [
+                event for event in events if event["event"] == "artifact_created"
+            ]
+            early = [event for event in events if event.get("call_id") == 1]
+            assert [event["event"] for event in early] == [
+                "tool_call",
+                "tool_result",
+            ], events
+            assert all(event["sequence"] < artifact["sequence"] for event in early), (
+                events
+            )
+            assert all(event["at"] < artifact["at"] for event in early), events
+            assert artifact["call_id"] is None, artifact
+            assert image.read_bytes() == base64.b64decode(PNG_1X1)
+            markdown = (session / "transcript.md").read_text()
+            assert markdown.index("## Call 1:") < markdown.index(
+                "## Artifact 1 for session"
+            ), markdown
+            return [{"early_call_and_result_precede_startup_artifact": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
 def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
