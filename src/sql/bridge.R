@@ -46,6 +46,18 @@ base::local(
       invisible(managed_connection)
     }
 
+    initialize_managed_connection <- function() {
+      # Bare and prepared environments may omit the optional managed provider.
+      if (
+        !nzchar(system.file(package = "DBI")) ||
+          !nzchar(system.file(package = "duckdb"))
+      ) {
+        return(0L)
+      }
+      ensure_managed_connection()
+      1L
+    }
+
     ensure_connection <- function() {
       if (is.null(selected_connection)) {
         selected_connection <<- ensure_managed_connection()

@@ -722,6 +722,10 @@ pub(super) fn use_r_sql() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
 }
 
+pub(super) fn initialize_managed_sql() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"initialize_managed_connection"))
+}
+
 pub(super) fn configure_native_sql() -> Result<(), String> {
     api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"enable_native"))
 }

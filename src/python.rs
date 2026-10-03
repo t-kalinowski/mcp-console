@@ -206,6 +206,13 @@ pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
+pub(crate) fn initialize_managed_sql() -> Result<(), String> {
+    if ensure_initialized()? {
+        library::initialize_managed_sql()?;
+    }
+    Ok(())
+}
+
 pub(crate) fn take_sql_restore_request() -> Result<bool, String> {
     library::take_sql_restore_request()
 }

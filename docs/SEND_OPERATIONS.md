@@ -14,7 +14,8 @@ The interface comes from captured configuration, not installed-runtime availabil
 One shared startup owner prepares and prelaunches the real worker.
 After transport readiness connects resolver, input, and output services, the built-in worker initializes enabled R and Python on its serialized thread without waiting for code.
 Explicit or host-resolved Python selections start through the native facade; unresolved R-side selection retains its compatibility rules.
-SQL bridges accompany runtime setup; managed DuckDB connections and queries remain lazy.
+SQL bridges accompany runtime setup; enabled SQL opens its managed connection during bootstrap when its optional provider is installed.
+First-query work remains lazy.
 Custom workers remain lazy.
 
 A structurally valid early cell immediately reserves the evaluation slot.
