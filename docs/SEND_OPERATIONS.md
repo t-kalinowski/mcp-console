@@ -45,7 +45,8 @@ Timeout likewise cancels nothing.
 Closing MCP input cancels startup and follows normal retirement; outstanding response delivery after closure is unspecified.
 
 Discovery failure is retained and requires a new server after correcting setup; tool discovery remains usable.
-Buffered recording is discarded when discovery cannot establish metadata.
+The first failure response includes captured startup diagnostics, including for requirements-only calls and restart.
+Early calls and their results remain recorded if discovery fails; unavailable metadata stays unknown.
 Later environment/worker-start failures follow the ordinary later-cell retry boundary, not an automatic retry loop.
 
 ## Validation before actions

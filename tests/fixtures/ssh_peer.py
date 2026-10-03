@@ -56,7 +56,9 @@ if "Open" in bootstrap:
 
         diagnostic = threading.Thread(target=progress_diagnostic)
         diagnostic.start()
-    if mode == "discovery-failure":
+    if mode in {"discovery-failure", "discovery-diagnostics-failure"}:
+        if mode == "discovery-diagnostics-failure":
+            print("preparation failure detail", file=sys.stderr, flush=True)
         with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
             assert signal.write(b"1") == 1
         with (log.parent / "discovery-release").open("rb", buffering=0) as gate:

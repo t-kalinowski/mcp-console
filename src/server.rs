@@ -205,7 +205,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
                         return Ok(response_to_tool_result(
-                            crate::worker_client::Response::tool_error(error),
+                            runtime.worker.startup_failure_response(error),
                             &call,
                             &runtime.transcript,
                             &self.deliveries,

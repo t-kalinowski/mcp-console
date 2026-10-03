@@ -107,7 +107,8 @@ impl Client {
             )
             .await
             {
-                Ok(readiness) => readiness?,
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => return Ok(self.startup_failure_response(error)),
                 Err(_) => {
                     let mut response = output::render_response(SendResponse::ReplacementStarting(
                         self.0.output.take(),
@@ -333,9 +334,9 @@ impl Client {
                         }
                         if let Some(result) = startup.borrow_and_update().as_ref() {
                             if let Err(error) = result {
-                                let mut response = self.0.output.take();
-                                response.push_tool_error(error.clone());
-                                return Ok(SendResponse::Failed(response));
+                                return Ok(SendResponse::Failed(
+                                    self.startup_failure_response(error.clone()),
+                                ));
                             }
                             break;
                         }

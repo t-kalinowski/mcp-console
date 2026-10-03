@@ -417,6 +417,12 @@ impl Client {
         self.0.output.diagnostics()
     }
 
+    pub(crate) fn startup_failure_response(&self, error: String) -> Response {
+        let mut response = self.0.output.take();
+        response.push_tool_error(error);
+        response
+    }
+
     pub(crate) fn finish_recording(&self) {
         self.0.output.finish_session_output();
     }

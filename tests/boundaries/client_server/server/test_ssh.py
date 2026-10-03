@@ -638,6 +638,58 @@ def test_diagnostic_close_preserves_another_producers_progress(
                 evaluation.release()
 
 
+def test_first_startup_failure_response_includes_diagnostics(
+    binary: Path,
+) -> Transcript:
+    records = []
+    for arguments in (
+        {"requirements": {"action": "get"}},
+        {"requirements": {"python": ["numpy"]}},
+        {"requirements": {"action": "reset"}},
+        {"control": "restart", "r": "stop('failed startup ran a cell')"},
+    ):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configure(root, root, [str(binary)])
+            with (
+                closing(FifoCheckpoint.create(root / "discovery-started")) as reached,
+                closing(FifoCheckpoint.create(root / "discovery-release")) as release,
+                McpClient(
+                    binary,
+                    DIRECT.serve(),
+                    peer_environment(root, "discovery-diagnostics-failure"),
+                    root,
+                ) as client,
+            ):
+                try:
+                    client.initialize_and_list_tools()
+                    reached.wait("discovery awaiting its failure")
+                    request = client.start_request(
+                        "tools/call", name="send", arguments=arguments
+                    )
+                    # The connection remains responsive while this first send
+                    # waits on the preparation owner's explicit failure gate.
+                    client.request("ping")
+                    release.release()
+                    client.receive(request)
+                    assert request["result"]["isError"], request
+                    text = request["result"]["content"][0]["text"]
+                    assert text.count("preparation failure detail\n") == 1, text
+                    assert "synthetic discovery failure" in text, text
+                    client.send()
+                    assert "preparation failure detail" not in last_result_text(client)
+                    _, stderr = client.finish_with_standard_error(
+                        expected_exit_status=1
+                    )
+                    assert stderr == "synthetic discovery failure\n", stderr
+                    records.append(
+                        {"arguments": arguments, "diagnostics_in_first_failure": True}
+                    )
+                finally:
+                    release.release()
+    return records
+
+
 def test_unexpected_stdout(binary: Path) -> Transcript:
     return _peer(binary, "stdout")
 
