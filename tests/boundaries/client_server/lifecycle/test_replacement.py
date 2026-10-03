@@ -23,7 +23,12 @@ from support.processes import (
     stop_process,
 )
 from support.r import r_test_environment
-from support.previews import compact_previews, assert_preview, normalize_preview_paths
+from support.previews import (
+    compact_previews,
+    assert_preview,
+    normalize_preview_paths,
+    session_directory,
+)
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
@@ -55,9 +60,8 @@ def test_reports_missing_worker_launch_failure(
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     failure = result["content"][0]["text"]
-    assert failure.startswith("[failed to launch worker: "), failure
-    assert failure.endswith("]"), failure
-    result["content"][0]["text"] = "[failed to launch worker: <missing executable>]"
+    assert failure.startswith("failed to launch worker: "), failure
+    result["content"][0]["text"] = "failed to launch worker: <missing executable>"
 
     transcript, standard_error = client.finish_with_standard_error()
     if standard_error:
@@ -308,7 +312,10 @@ def test_orders_explicit_restart_output(
         output = last_tool_text(client)
         assert output.endswith(suffix), output[-500:]
         assert_preview(output.removesuffix(suffix), large_output("zod stdin closed\n"))
-        assert "no retained cell log" in output
+        assert "outputs/session.log" in output
+        assert (
+            session_directory(client) / "outputs/session.log"
+        ).read_text() == large_output("zod stdin closed\n")
         normalize_preview_paths(client)
 
         client.send(r="echo echo")

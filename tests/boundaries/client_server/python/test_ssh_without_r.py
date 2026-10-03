@@ -441,6 +441,15 @@ def test_failed_and_interrupted_remote_preparation_keeps_committed_state(
                 {
                     "executable": str(invalid),
                     "libpython": str(remote_bin / "missing-libpython"),
+                    "metadata": {
+                        "base_executable": str(invalid),
+                        "pythonpath": "",
+                        "version": "3.12.7",
+                        "version_number": "3.12",
+                        "architecture": "64bit",
+                        "conda": False,
+                        "numpy": None,
+                    },
                     **{
                         name: str(remote_bin)
                         for name in (

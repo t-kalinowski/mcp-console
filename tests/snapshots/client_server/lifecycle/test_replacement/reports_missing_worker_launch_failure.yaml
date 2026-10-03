@@ -6,5 +6,5 @@ send:
 result:
   content:
     - type: text
-      text: "[failed to launch worker: <missing executable>]"
+      text: "failed to launch worker: <missing executable>"
   isError: true

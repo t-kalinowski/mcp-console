@@ -62,6 +62,10 @@ def test_discovery_outlives_connection_setup_timeout(binary):
                     release.release()
                 assert client.process.poll() is None, client.stderr.read()
                 client.initialize_and_list_tools()
+                # The synthetic discovery selects an absent remote R installation.
+                # Consume its prelaunch failure before reading the declaration.
+                startup = client.send(requirements={"action": "get"})
+                assert startup["isError"], startup
                 client.send(requirements={"action": "get"})
                 assert not client.transcript[-1]["result"]["isError"]
                 records = client.finish()[3:]
@@ -85,6 +89,9 @@ def test_python_preparation_preserves_v3_peer_compatibility(binary):
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
                 client.initialize_and_list_tools()
+                # Keep the synthetic absent-runtime failure separate from preparation.
+                startup = client.send(requirements={"action": "get"})
+                assert startup["isError"], startup
                 client.send(requirements={"action": "set", "python": ["six"]})
                 requests = [
                     json.loads(line) for line in record.read_text().splitlines()

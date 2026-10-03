@@ -3,16 +3,15 @@ settings:
   filesystem:
     kind: future-filesystem
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+diagnostic: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 settings:
   filesystem:
     kind: future-filesystem
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
   <column>)
@@ -24,10 +23,9 @@ settings:
           type: future-path
         access: read
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+diagnostic: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 settings:
   filesystem:
@@ -36,7 +34,7 @@ settings:
           type: future-path
         access: read
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
   <column>)
@@ -50,10 +48,9 @@ settings:
             kind: root
         access: future-access
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+diagnostic: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 settings:
   filesystem:
@@ -64,7 +61,7 @@ settings:
             kind: root
         access: future-access
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
   <column>)
@@ -73,16 +70,15 @@ settings:
   proxy:
     enabled: true
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+diagnostic: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 settings:
   proxy:
     enabled: true
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
   <column>)
@@ -97,10 +93,9 @@ settings:
     mode: full
     allowLocalBinding: false
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: executor-local network proxy launch requires an
-  enabled proxy
+diagnostic: |-
+  mcp-console-sandbox: executor-local network proxy launch requires an enabled proxy
+  [worker relay exited before readiness]
 ---
 settings:
   proxy:
@@ -112,7 +107,7 @@ settings:
     mode: full
     allowLocalBinding: false
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: executor-local network proxy launch requires an
   enabled proxy
@@ -121,15 +116,15 @@ settings:
   environment:
     INVALID_VALUE: "\0"
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
+diagnostic: |-
   mcp-console-sandbox: target environment value contains NUL
+  [worker relay exited before readiness]
 ---
 settings:
   environment:
     INVALID_VALUE: "\0"
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: target environment value contains NUL
 ---
@@ -137,16 +132,15 @@ settings:
   future_policy:
     enabled: true
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+diagnostic: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 settings:
   future_policy:
     enabled: true
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
   <column>)
@@ -154,15 +148,14 @@ stderr: >
 settings:
   linux_backend: future-backend
 command: serve
-stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+diagnostic: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 settings:
   linux_backend: future-backend
 command: sandbox
-stderr: >
+diagnostic: >
   .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
   <column>)

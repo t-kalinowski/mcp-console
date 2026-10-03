@@ -110,11 +110,13 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
                 client.stdout.read(timeout=12)
                 stderr = client.stderr.read(timeout=12)
                 client.process.wait(timeout=12)
-                assert "mcp-console-sandbox: invalid configuration JSON" in stderr, (
-                    stderr
-                )
-                stderr = re.sub(
-                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", stderr
+                assert (
+                    "mcp-console-sandbox: invalid configuration JSON"
+                    in last_result_text(client)
+                ), stderr
+                content = client.transcript[-1]["result"]["content"][0]
+                content["text"] = re.sub(
+                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", content["text"]
                 )
                 transcript.extend(client.transcript[3:])
                 transcript.append({"standard_error": stderr})
@@ -176,10 +178,14 @@ def test_invalid_environment_reaches_remote_native_validation(
                         stderr = client.stderr.read(timeout=12)
                         client.process.wait(timeout=12)
                         assert (
-                            "mcp-console-sandbox: invalid configuration JSON" in stderr
+                            "mcp-console-sandbox: invalid configuration JSON"
+                            in last_result_text(client)
                         ), stderr
-                        stderr = re.sub(
-                            r"(at line [0-9]+, column )[0-9]+", r"\1<column>", stderr
+                        content = client.transcript[-1]["result"]["content"][0]
+                        content["text"] = re.sub(
+                            r"(at line [0-9]+, column )[0-9]+",
+                            r"\1<column>",
+                            content["text"],
                         )
                         transcript.append(
                             {"inherit_environment": inherit, "environment": invalid}
@@ -207,15 +213,16 @@ def test_nul_runtime_selectors_fail_on_remote_host_without_panicking(
                     sandbox={"environment": {name: "invalid\0selection"}},
                 )
                 with McpClient(binary, ("serve",), environment, root) as client:
-                    client.startup_error()
+                    startup = client.startup_error()
                     client.stdin.close()
                     assert client.process.wait(timeout=12) != 0
                     assert not client.stdout.read()
                     errors = client.stderr.read()
-                    assert f"remote {name} selection must not contain NUL" in errors, (
+                    assert f"remote {name} selection must not contain NUL" in startup, (
                         errors
                     )
                     assert "panicked" not in errors, errors
+                    transcript.extend(client.transcript[3:])
                     transcript.append({"selection": name, "standard_error": errors})
             assert not trap.exists(), "controller discovered an execution runtime"
     return transcript
