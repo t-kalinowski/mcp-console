@@ -883,6 +883,9 @@ impl Client {
     }
 
     pub(crate) fn take_prelaunch_failure(&self) -> Result<Option<super::Response>, String> {
+        // Admission and idle collection acquire evaluation before lifecycle.
+        // Retain both guards so an accepted cell keeps ownership of its failure.
+        let evaluation = self.evaluation()?;
         let lifecycle = self
             .0
             .lifecycle
@@ -892,7 +895,7 @@ impl Client {
             return Ok(None);
         }
         // An accepted cell owns its startup failure and the accompanying output.
-        if self.current_evaluation()?.is_some()
+        if evaluation.is_some()
             || !self
                 .0
                 .startup_failed

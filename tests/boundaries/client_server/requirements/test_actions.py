@@ -43,6 +43,59 @@ def inspect(client: McpClient) -> dict:
 
 
 @executions(DIRECT, SANDBOXED)
+def test_inspection_completes_while_prepared_cells_overlap(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        declaration = inspect(client)
+        client.expect("42\n", python="42")
+        for _ in range(256):
+            pending = [
+                client.start_send(**arguments)
+                for arguments in (
+                    {
+                        "python": "42",
+                        "requirements": {"action": "add", "python": ["numpy"]},
+                    },
+                    *({"requirements": {"action": "get"}},) * 8,
+                )
+            ]
+            client.receive_many(pending)
+            for entry in pending:
+                result = entry["result"]
+                assert not result["isError"], result
+                if entry["send"]["requirements"]["action"] == "get":
+                    assert result["structuredContent"] == declaration, result
+                else:
+                    assert result["content"] == [{"type": "text", "text": "42\n"}], (
+                        result
+                    )
+        idle = [
+            client.start_send(**arguments)
+            for arguments in ({}, {"requirements": {"action": "get"}}) * 8
+        ]
+        client.receive_many(idle)
+        for entry in idle:
+            result = entry["result"]
+            assert not result["isError"], result
+            if entry["send"]:
+                assert result["structuredContent"] == declaration, result
+            else:
+                assert result["content"] == [{"type": "text", "text": "\n[idle]"}], (
+                    result
+                )
+        assert client.request("ping")["result"] == {}
+        client.finish()
+    return [
+        {
+            "concurrent_inspections_and_prepared_cells_completed": 2304,
+            "concurrent_inspections_and_idle_polls_completed": 16,
+        }
+    ]
+
+
+@executions(DIRECT, SANDBOXED)
 def test_empty_declaration_and_round_trip(
     binary: Path, execution: Execution
 ) -> Transcript:
