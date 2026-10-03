@@ -106,13 +106,15 @@ __attribute__((constructor)) static void initialize(void) {
 }
 
 static void observe_signal(int signal) {
+    int saved_errno = errno;
     in_handler = true;
     errno = EDOM;
     handlers[signal](signal);
-    // Verify the interrupted thread's errno, including EAGAIN publication.
+    // Verify the delegated handler preserves errno, including EAGAIN publication.
     if (errno != EDOM) _exit(95);
     in_handler = false;
     notify(returned);
+    errno = saved_errno;
 }
 
 static int observed_sigaction(int signal, const struct sigaction *action, struct sigaction *old) {
