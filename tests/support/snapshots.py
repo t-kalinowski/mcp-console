@@ -152,12 +152,36 @@ def check_text_snapshot(
         raise SystemExit(f"{difference}{case} differs from its snapshot")
 
 
-def without_request_ids(transcript: Transcript) -> Transcript:
+def normalize_request_ids(transcript: Transcript) -> Transcript:
+    # CLI transcripts also record raw input strings under the same key.
+    cancelled_ids = {
+        message["params"]["requestId"]
+        for entry in transcript
+        if isinstance(message := entry.get("input"), dict)
+        and message.get("method") == "notifications/cancelled"
+    }
+    labels = {}
+    for entry in transcript:
+        if "id" in entry and entry["id"] in cancelled_ids:
+            labels[entry["id"]] = f"<cancelled request {len(labels) + 1}>"
     rendered = []
     for entry in transcript:
         entry = entry.copy()
         if entry.keys() & {"input", "send"}:
-            entry.pop("id", None)
+            request_id = entry.pop("id", None)
+            if request_id in labels:
+                entry["id"] = labels[request_id]
+        message = entry.get("input", {})
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "notifications/cancelled"
+        ):
+            params = message["params"]
+            if params["requestId"] in labels:
+                entry["input"] = {
+                    **message,
+                    "params": {**params, "requestId": labels[params["requestId"]]},
+                }
         rendered.append(entry)
     return rendered
 
@@ -166,7 +190,8 @@ def compact_initializations(
     actual: Transcript, references: list[Path], *, execution: str | None
 ) -> YamlStream:
     expected = [
-        (path, without_request_ids(read_yaml(path, multi=True))) for path in references
+        (path, normalize_request_ids(read_yaml(path, multi=True)))
+        for path in references
     ]
     assert all(reference for _, reference in expected), "empty initialization reference"
     compacted = []
@@ -209,7 +234,7 @@ def check_recording(
     if execution is not None:
         case += f"[{execution}]"
     if isinstance(recorded, TranscriptWithCompanions):
-        actual = without_request_ids(recorded.transcript)
+        actual = normalize_request_ids(recorded.transcript)
         companions = []
         for name, contents in recorded.companions.items():
             assert name and Path(name).name == name and not name.startswith("."), name
@@ -221,7 +246,7 @@ def check_recording(
             )
             companions.append((snapshot.with_suffix(suffix), contents))
     else:
-        actual = without_request_ids(recorded)
+        actual = normalize_request_ids(recorded)
         companions = []
     if not initialization:
         reference = root / initialization_reference
@@ -251,7 +276,7 @@ def check_recording(
             if initialization:
                 # These companions are MCP handshakes; other YAML companions
                 # can carry protocol IDs that must remain visible.
-                contents = without_request_ids(contents)
+                contents = normalize_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)
     return checked

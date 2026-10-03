@@ -96,6 +96,7 @@ Narrow exceptions require stronger evidence, not weaker assertions:
 
 `transcript_normalization` is harness metadata, never a wire field.
 MCP request IDs and the invariant JSON-RPC version are abbreviated only after validation.
+Cancellation targets retain matching labels on the request and notification; IDs without a recorded request remain literal.
 
 ### Canonical handshake
 
