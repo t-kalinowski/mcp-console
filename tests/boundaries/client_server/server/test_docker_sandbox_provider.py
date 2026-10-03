@@ -5,7 +5,8 @@ import select
 import signal
 import subprocess
 import sys
-from contextlib import ExitStack, closing
+from collections.abc import Iterator
+from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -28,6 +29,35 @@ from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, require
 from support.suites import run_this_suite
 
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
+
+
+@contextmanager
+def signal_client(
+    binary: Path,
+    environment: dict[str, str],
+    root: Path,
+    checkpoints: dict[str, FifoCheckpoint],
+) -> Iterator[McpClient]:
+    with McpClient(binary, ("serve",), environment, root) as client:
+        try:
+            yield client
+        finally:
+            # Cancellation stays readable across every native gate, including
+            # gates not yet entered when an assertion or checkpoint wait fails.
+            checkpoints["cancel"].release()
+            client.close()
+            owner_path = root / "peer/pid"
+            if owner_path.exists():
+                owner = int(owner_path.read_text())
+                with Events() as events:
+                    try:
+                        events.watch_process(owner)
+                    except ProcessLookupError:
+                        pass  # The controller already reaped its owner.
+                    else:
+                        assert owner in events.wait(5), (
+                            "signal fixture owner did not exit"
+                        )
 
 
 @requires(POSIX)
@@ -196,6 +226,7 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                         "blocked",
                         "reached",
                         "input-closed",
+                        "cancel",
                     )
                 }
                 environment[LOADER_VARIABLE] = str(interposer)
@@ -212,7 +243,7 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                         "signal-create" if phase == "creation" else "signal-output"
                     )
                 stopped = False
-                with McpClient(binary, ("serve",), environment, root) as client:
+                with signal_client(binary, environment, root, checkpoints) as client:
                     try:
                         client.initialize_and_list_tools()
                         if installation_phase:
@@ -348,6 +379,91 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                 else:
                     record["standard_error"] = normalize_recording([stderr], root)[0]
                 records.append(record)
+    return records
+
+
+@requires(POSIX, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_signal_fixture_failure_retires_gated_owner(binary: Path) -> list:
+    records = []
+    with TemporaryDirectory(dir="/tmp") as native:
+        interposer = build_interposer(Path(native), "target_owner_signals")
+        for gate in ("installation", "retirement-input", "retirement"):
+            with workspace() as root, ExitStack() as stack:
+                environment = cli_peer(root / "peer")
+                configure(root, template=TEMPLATE)
+                (root / "peer/mode").write_text("create-unacknowledged")
+                checkpoints = {
+                    name: stack.enter_context(
+                        closing(FifoCheckpoint.create(root / "peer" / name))
+                    )
+                    for name in (
+                        "installed",
+                        "full",
+                        "returned",
+                        "release",
+                        "retirement",
+                        "blocked",
+                        "input-closed",
+                        "cancel",
+                    )
+                }
+                environment[LOADER_VARIABLE] = str(interposer)
+                environment["MCP_CONSOLE_TEST_OWNER_SIGNALS"] = str(root / "peer")
+                environment["MCP_CONSOLE_TEST_SIGNAL_INSTALLATION"] = "1"
+                environment["MCP_CONSOLE_TEST_SIGNAL_CONTROLLER_CLOSE"] = "1"
+                with Events() as events:
+                    owner = None
+                    exited = False
+                    try:
+                        try:
+                            with signal_client(
+                                binary, environment, root, checkpoints
+                            ) as client:
+                                client.initialize_and_list_tools()
+                                checkpoints["installed"].wait("owner installation")
+                                owner = int((root / "peer/pid").read_text())
+                                events.watch_process(owner)
+                                if gate != "installation":
+                                    os.kill(owner, signal.SIGTERM)
+                                    checkpoints["full"].wait("wakeups coalesced")
+                                    checkpoints["returned"].wait("handler returned")
+                                    checkpoints["release"].release()
+                                    checkpoints["retirement"].wait("owner retirement")
+                                    if gate == "retirement":
+                                        client.stdin.close()
+                                        checkpoints["input-closed"].wait(
+                                            "owner input closed"
+                                        )
+                                    raise AssertionError(
+                                        "injected retirement assertion"
+                                    )
+                                # No signal was sent: this checkpoint must fail.
+                                checkpoints["full"].wait(
+                                    "injected checkpoint failure", timeout=0
+                                )
+                        except AssertionError as error:
+                            assert "injected" in str(error), error
+                        else:
+                            raise AssertionError("expected a fixture-body failure")
+                        exited = owner in events.wait(0)
+                        assert exited, (
+                            f"{gate} cleanup left owner alive; controller status "
+                            f"{client.process.returncode}"
+                        )
+                        assert client.process.returncode != -signal.SIGKILL
+                        assert not (root / "peer/vms").exists()
+                    finally:
+                        # A failing regression must also retire its probe owner.
+                        if (
+                            owner is not None
+                            and not exited
+                            and owner not in events.wait(0)
+                        ):
+                            os.kill(owner, signal.SIGKILL)
+                            assert owner in events.wait(5), "probe owner did not exit"
+                records.append(
+                    {"failed_at": gate, "owner_exited_before_workspace_removal": True}
+                )
     return records
 
 

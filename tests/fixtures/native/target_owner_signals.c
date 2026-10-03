@@ -30,6 +30,7 @@ static _Thread_local bool in_handler;
 static void (*handlers[NSIG])(int);
 static int full, returned, installed, release, retirement, output_blocked;
 static int input_closed;
+static int cancelled;
 static bool installation_gate;
 static bool controller_closure;
 static bool interrupted_write;
@@ -67,7 +68,21 @@ static void notify(int fd) {
     if (write(fd, "1", 1) != 1) _exit(92);
 }
 
+static short wait_checkpoint(int fd, short events) {
+    struct pollfd waits[] = {
+        {.fd = fd, .events = events},
+        {.fd = cancelled, .events = POLLIN},
+    };
+    int ready;
+    do { ready = poll(waits, 2, -1); } while (ready < 0 && errno == EINTR);
+    if (ready <= 0) _exit(93);
+    // Leave cancellation unread so it also releases later gates.
+    if (waits[1].revents & POLLIN) return 0;
+    return waits[0].revents;
+}
+
 static void gate(void) {
+    if (!wait_checkpoint(release, POLLIN)) return;
     char byte;
     ssize_t result;
     do { result = read(release, &byte, 1); } while (result < 0 && errno == EINTR);
@@ -92,6 +107,7 @@ __attribute__((constructor)) static void initialize(void) {
     retirement = checkpoint(root, "retirement");
     output_blocked = checkpoint(root, "blocked");
     input_closed = checkpoint(root, "input-closed");
+    cancelled = checkpoint(root, "cancel");
     installation_gate = getenv("MCP_CONSOLE_TEST_SIGNAL_INSTALLATION") != NULL;
     controller_closure = getenv("MCP_CONSOLE_TEST_SIGNAL_CONTROLLER_CLOSE") != NULL;
     interrupted_write = getenv("MCP_CONSOLE_TEST_SIGNAL_EINTR") != NULL;
@@ -164,11 +180,11 @@ static ssize_t observed_write(int fd, const void *buffer, size_t length) {
         if (controller_closure) {
             // The controller closes owner stdin after observing cancellation.
             // Wait for that boundary before allowing owner exit.
-            struct pollfd input = {.fd = STDIN_FILENO, .events = POLLIN};
-            int ready;
-            do { ready = poll(&input, 1, -1); } while (ready < 0 && errno == EINTR);
-            if (ready != 1 || !(input.revents & POLLHUP)) _exit(98);
-            notify(input_closed);
+            short events = wait_checkpoint(STDIN_FILENO, POLLIN);
+            if (events) {
+                if (!(events & POLLHUP)) _exit(98);
+                notify(input_closed);
+            }
         }
         gate();
     }
