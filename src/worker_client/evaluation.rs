@@ -12,6 +12,7 @@ const CELL_COMPLETION_GRACE: Duration = Duration::from_millis(1);
 pub(super) struct Evaluation {
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
+    delivery_changed: Arc<tokio::sync::Notify>,
     transcript: crate::transcript::Transcript,
     call_id: Option<u64>,
     output: OutputTape,
@@ -29,6 +30,7 @@ struct EvaluationState {
     reclaimed: Option<Response>,
     /// Delivery of the most recently assembled response, until one owner settles it.
     delivery: Option<mpsc::Receiver<ResponseAcknowledgment>>,
+    delivery_changed: Arc<tokio::sync::Notify>,
     /// Whether a waiter already drained the response for a completion phase.
     completion_collected: bool,
     /// Whether successful cell completion must end with an explicit final marker.
@@ -114,6 +116,7 @@ impl Evaluation {
         idle_prelude: Response,
         controlled_completion: bool,
     ) -> Self {
+        let delivery_changed = Arc::new(tokio::sync::Notify::new());
         Self {
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
@@ -122,6 +125,7 @@ impl Evaluation {
                 idle_prelude: Some(idle_prelude),
                 reclaimed: None,
                 delivery: None,
+                delivery_changed: Arc::clone(&delivery_changed),
                 completion_collected: false,
                 controlled_completion,
                 input_report_at: None,
@@ -134,6 +138,7 @@ impl Evaluation {
                 pending_stdin: String::new(),
             }),
             changed: tokio::sync::Notify::new(),
+            delivery_changed,
             transcript,
             call_id,
             output,
@@ -142,12 +147,17 @@ impl Evaluation {
     }
 
     fn claim_wait(self: &Arc<Self>) -> Result<WaitClaim, String> {
+        self.try_claim_wait()?
+            .ok_or_else(|| "previous send response delivery is still pending".to_string())
+    }
+
+    fn try_claim_wait(self: &Arc<Self>) -> Result<Option<WaitClaim>, String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         if !state.settle_delivery()? {
-            return Err("previous send response delivery is still pending".to_string());
+            return Ok(None);
         }
         if state.completion_collected && state.reclaimed.is_none() {
             return Err("evaluation response was already delivered".to_string());
@@ -159,9 +169,9 @@ impl Evaluation {
             return Err("worker evaluation is already being polled".to_string());
         }
         state.waiting = true;
-        Ok(WaitClaim {
+        Ok(Some(WaitClaim {
             evaluation: self.clone(),
-        })
+        }))
     }
 
     pub(super) fn is_interruptible(&self) -> Result<bool, String> {
@@ -564,6 +574,29 @@ impl Evaluation {
         self.claim_wait()
     }
 
+    /// A poll already waiting for startup can encounter a later call's reply
+    /// before its transport write settles. Retain observation within the call's
+    /// deadline; expiry or cancellation leaves the response unclaimed.
+    pub(super) async fn claim_after_delivery(
+        self: &Arc<Self>,
+        deadline: Instant,
+    ) -> Result<WaitClaim, String> {
+        loop {
+            let delivered = self.delivery_changed.notified();
+            tokio::pin!(delivered);
+            delivered.as_mut().enable();
+            if let Some(claim) = self.try_claim_wait()? {
+                return Ok(claim);
+            }
+            tokio::time::timeout(
+                deadline.saturating_duration_since(Instant::now()),
+                delivered,
+            )
+            .await
+            .map_err(|_| "previous send response delivery is still pending".to_string())?;
+        }
+    }
+
     pub(super) async fn wait(
         &self,
         _claim: WaitClaim,
@@ -698,7 +731,7 @@ impl EvaluationState {
             "an evaluation can have only one response awaiting delivery"
         );
         let (acknowledgment, delivered) = mpsc::sync_channel(1);
-        response.acknowledge_with(acknowledgment);
+        response.acknowledge_with(acknowledgment, Arc::clone(&self.delivery_changed));
         self.delivery = Some(delivered);
     }
 
@@ -806,7 +839,7 @@ impl EvaluationReservation {
         // Publish the single settlement without waiting for restart's receiver
         // to be scheduled. Restart still receives it before composing its reply.
         let (acknowledged, wait_for_acknowledgment) = mpsc::sync_channel(1);
-        response.acknowledge_with(acknowledged);
+        response.acknowledge_with(acknowledged, Arc::clone(&self.evaluation.delivery_changed));
         state.restart_handoff = Some(response);
         self.evaluation.changed.notify_one();
         Ok(RestartDelivery::Waiting(wait_for_acknowledgment))

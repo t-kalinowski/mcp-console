@@ -322,7 +322,7 @@ impl Client {
                                     .to_string()
                                     .into());
                             }
-                            let claim = active.evaluation.claim()?;
+                            let claim = active.evaluation.claim_after_delivery(deadline).await?;
                             drop(preparation.take());
                             drop(operation.take());
                             return Ok(send_response_from_wait(
