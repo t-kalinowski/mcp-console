@@ -4,6 +4,7 @@ import ctypes
 import json
 import importlib.metadata
 import os
+import re
 import struct
 import sys
 import sysconfig
@@ -105,15 +106,21 @@ def describe() -> dict[str, object]:
 
     # This installation snapshot stays isolated. Once Python is configured,
     # the R bridge gets path and module metadata from the running interpreter.
+    numpy = None
     try:
         distribution = importlib.metadata.distribution("numpy")
-    except importlib.metadata.PackageNotFoundError:
-        numpy = None
-    else:
-        numpy = {
-            "path": str(distribution.locate_file("numpy")),
-            "version": distribution.version,
-        }
+        version = distribution.version
+        # Reticulate parses the numeric prefix after removing a version suffix.
+        if isinstance(version, str) and re.fullmatch(
+            r"[0-9]+(?:\.[0-9]+)*(?:\.?[A-Za-z_+].*)?", version
+        ):
+            numpy = {
+                "path": str(distribution.locate_file("numpy")),
+                "version": version,
+            }
+    except Exception:
+        # Missing or unusable optional metadata does not invalidate CPython.
+        pass
 
     return {
         "metadata": {

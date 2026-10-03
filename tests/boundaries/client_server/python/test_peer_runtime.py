@@ -1356,6 +1356,94 @@ def early_python_reference_plots(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_unusable_installed_numpy_metadata_does_not_block_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return unusable_numpy_metadata(binary, execution, configured_path=False)
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_unusable_configured_numpy_metadata_does_not_block_attachment(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return unusable_numpy_metadata(binary, execution, configured_path=True)
+
+
+def unusable_numpy_metadata(
+    binary: Path, execution: Execution, *, configured_path: bool
+) -> Transcript:
+    for metadata in (
+        b"Name: numpy\n",
+        b"\xff",
+        b"Name: numpy\nVersion: invalid\n",
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "venv"
+            subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(selected)],
+                capture_output=True,
+                check=True,
+            )
+            executable = selected / "bin/python"
+            if configured_path:
+                modules = root / "configured modules"
+                modules.mkdir()
+            else:
+                modules = Path(
+                    subprocess.check_output(
+                        [
+                            executable,
+                            "-I",
+                            "-c",
+                            "import sysconfig; print(sysconfig.get_path('purelib'))",
+                        ],
+                        text=True,
+                    ).strip()
+                )
+            package = modules / "numpy"
+            package.mkdir()
+            package.joinpath("__init__.py").write_text(
+                "raise RuntimeError('metadata collection imported optional NumPy')\n"
+            )
+            distribution = modules / "numpy-0.0.0.dist-info"
+            distribution.mkdir()
+            distribution.joinpath("METADATA").write_bytes(metadata)
+            environment, _ = r_test_environment()
+            environment.pop("PYTHONPATH", None)
+            environment.pop("RETICULATE_PYTHONPATH", None)
+            environment.update(
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_LANGUAGES="r,python",
+                RETICULATE_CHECK_REQUIRED_PACKAGES="false",
+            )
+            if configured_path:
+                environment["PYTHONPATH"] = str(modules)
+            arguments = execution.serve(
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+            )
+            with McpClient(binary, arguments, environment, root) as client:
+                client.initialize_and_list_tools()
+                client.expect(
+                    "unusable optional NumPy metadata absent\n",
+                    # fmt: r
+                    r=code("""
+                        stopifnot(is.null(reticulate::py_config()$numpy))
+                        stopifnot(reticulate::py_eval("'numpy' not in __import__('sys').modules"))
+                        cat("unusable optional NumPy metadata absent\\n")
+                        """),
+                )
+                client.expect(
+                    "Python remains available\n",
+                    python="print('Python remains available')",
+                )
+                client.finish()
+    return [{"unusable_numpy_metadata_is_absent": True}]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_conversion_metadata_matches_configured_import_paths(
     binary: Path, execution: Execution
 ) -> Transcript:

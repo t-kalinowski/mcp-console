@@ -94,6 +94,7 @@ Console owns CPython bootstrap and services; reticulate supplies R selection com
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
 Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing or importing optional packages.
 NumPy metadata comes from an already loaded module or a matching installed distribution; a shadowing workspace module/package is treated as absent.
+Missing or unusable optional distribution metadata is also treated as absent.
 
 The coordinator owns command dispatch, cell bookkeeping, input, and completion.
 Language adapters own their runtime-specific event, graphics, error, and unwind boundaries.

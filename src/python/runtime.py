@@ -10,6 +10,7 @@ import io as _io
 import json as _json
 import logging as _logging
 import os as _os
+import re as _re
 import sys as _sys
 import threading as _threading
 import traceback as _traceback
@@ -938,6 +939,7 @@ def _mcp_console_conversion_metadata(
     _metadata=_importlib_metadata,
     _util=_importlib_util,
     _without_resolution=_mcp_console_without_automatic_resolution,
+    _numpy_version=_re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.?[A-Za-z_+].*)?"),
 ) -> str:
     def describe() -> str:
         import struct
@@ -947,26 +949,40 @@ def _mcp_console_conversion_metadata(
         if module is not None:
             # Already imported NumPy can outlive a managed path activation.
             namespace = vars(module)
-            if namespace.get("__path__") and namespace.get("__version__"):
+            version = namespace.get("__version__")
+            if (
+                namespace.get("__path__")
+                and isinstance(version, str)
+                and _numpy_version.fullmatch(version)
+            ):
                 numpy = {
                     "path": _os.path.realpath(namespace["__path__"][0]),
-                    "version": namespace["__version__"],
+                    "version": version,
                 }
         else:
             specification = _util.find_spec("numpy")
             if specification is not None and specification.submodule_search_locations:
                 try:
                     distribution = _metadata.distribution("numpy")
-                except _metadata.PackageNotFoundError:
-                    pass
-                else:
                     path = _os.path.realpath(distribution.locate_file("numpy"))
+                    version = distribution.version
                     # A workspace module/package may shadow the installed
                     # distribution. Metadata never executes that candidate.
-                    if list(
-                        map(_os.path.realpath, specification.submodule_search_locations)
-                    ) == [path]:
-                        numpy = {"path": path, "version": distribution.version}
+                    if (
+                        isinstance(version, str)
+                        and _numpy_version.fullmatch(version)
+                        and list(
+                            map(
+                                _os.path.realpath,
+                                specification.submodule_search_locations,
+                            )
+                        )
+                        == [path]
+                    ):
+                        numpy = {"path": path, "version": version}
+                except Exception:
+                    # Optional distribution metadata may be stale or unreadable.
+                    pass
         return _json.dumps(
             {
                 "base_executable": _sys._base_executable,
