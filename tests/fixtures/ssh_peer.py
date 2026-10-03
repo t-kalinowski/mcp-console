@@ -129,6 +129,18 @@ frame(
 if mode == "incompatible":
     sys.exit(0)
 frame(2, {"kind": "ready"})
+if mode == "startup-recording-failure":
+    stream = os.environ["CONSOLE_TEST_DIRECT_STREAM"]
+    frame(
+        2,
+        {"kind": stream + "_bytes", "data": base64.b64encode(b"\xce").decode()},
+    )
+    with (log.parent / "partial-release").open("rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    frame(
+        2,
+        {"kind": stream + "_bytes", "data": base64.b64encode(b"\xb1\n").decode()},
+    )
 if mode == "discovery-image":
     frame(
         2,

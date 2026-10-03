@@ -18,6 +18,7 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_idle_output,
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -30,6 +31,7 @@ from support.r import install_r_startup, r_test_environment
 from support.requirements import (
     NATIVE_FIXTURES,
     PROCESS_EVENTS,
+    POSIX,
     SANDBOX,
     WORKER,
     requires,
@@ -523,6 +525,52 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
             if mode == "resolver":
                 assert client.process.returncode == 0 and not stderr, stderr
             return client.transcript[3:] + [{"standard_error": stderr}]
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_direct_utf8_survives_session_recording_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for stream in ("stdout", "stderr"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configure(root, root, [str(binary)])
+            sessions = root / ".agents/console/sessions"
+            sessions.write_text("occupied")
+            environment = peer_environment(root, "startup-recording-failure")
+            environment["CONSOLE_TEST_DIRECT_STREAM"] = stream
+            with (
+                closing(FifoCheckpoint.create(root / "partial-release")) as release,
+                McpClient(binary, execution.serve(), environment, root) as client,
+            ):
+                try:
+                    client.initialize_and_list_tools()
+                    # This warning proves that the prefix has reached the tape's
+                    # recording failure path before any tool call can materialize
+                    # the transcript or the producer supplies its continuation.
+                    warning = client.stderr.readline()
+                    prefix = "mcp-console: transcript recording disabled: "
+                    assert warning.startswith(prefix + "failed to create "), warning
+                    error = warning.removeprefix(prefix).removesuffix("\n")
+                    result = client.send()
+                    assert not result["isError"], result
+                    assert last_result_text(client) == f"[{error}]\n\n[idle]", result
+                    release.release()
+                    wait_for_idle_output(
+                        client,
+                        "α\n\n[idle]",
+                        "direct scalar completes after recording failure",
+                    )
+                    assert not client.send(
+                        r="recording failure leaves cells available"
+                    )["isError"]
+                    _, stderr = client.finish_with_standard_error()
+                    assert stderr == "", stderr
+                    assert sessions.read_text() == "occupied"
+                finally:
+                    release.release()
+    return [{"direct_stdout_and_stderr_utf8_survive_recording_failure": True}]
 
 
 @requires(PROCESS_EVENTS)

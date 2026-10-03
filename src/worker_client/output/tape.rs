@@ -365,7 +365,7 @@ impl OutputTapeState {
 
     fn recording_notice(&mut self, notice: Option<String>) {
         if let Some(notice) = notice {
-            self.flush_decoders();
+            // A recording failure does not retire a direct output stream.
             self.flush_terminal();
             self.current.notice_line(notice);
         }
