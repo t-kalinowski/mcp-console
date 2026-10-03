@@ -42,6 +42,20 @@ if "Open" in bootstrap:
 
         diagnostic = threading.Thread(target=finish_diagnostic)
         diagnostic.start()
+    if mode == "diagnostic-terminal-overlap":
+
+        def progress_diagnostic():
+            for checkpoint, data in (
+                ("diagnostic-start", b"progress 1\r"),
+                ("diagnostic-finish", b"progress 2\n"),
+            ):
+                with (log.parent / checkpoint).open("rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
+                sys.stderr.buffer.write(data)
+                sys.stderr.buffer.flush()
+
+        diagnostic = threading.Thread(target=progress_diagnostic)
+        diagnostic.start()
     if mode == "discovery-failure":
         with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
             assert signal.write(b"1") == 1
@@ -79,7 +93,7 @@ if "Open" in bootstrap:
     length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
     assert json.loads(sys.stdin.buffer.read(length)) == "Close"
     preparation_frame("Closed")
-    if mode == "diagnostic-overlap":
+    if mode in {"diagnostic-overlap", "diagnostic-terminal-overlap"}:
         diagnostic.join()
     sys.exit(0)
 with log.open("a") as output:
@@ -128,6 +142,16 @@ for line in sys.stdin.buffer:
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
     if command["kind"] == "evaluate":
+        if mode == "diagnostic-terminal-overlap":
+            sys.stderr.buffer.write(b"diagnostic reader ready\n")
+            sys.stderr.buffer.flush()
+            with (log.parent / "diagnostic-close").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            os.close(2)
+            with (log.parent / "evaluation-finish").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            frame(2, {"kind": "completed"})
+            continue
         if mode == "diagnostic-overlap":
             with (log.parent / "evaluation-started").open("wb", buffering=0) as signal:
                 assert signal.write(b"1") == 1

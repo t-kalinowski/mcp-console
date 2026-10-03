@@ -81,9 +81,8 @@ impl OutputTape {
                 if bytes.is_empty() {
                     state.text(Stream::Stderr, &String::from_utf8_lossy(&pending));
                     pending.clear();
-                    if state.stream == Some(Stream::Stderr) {
-                        state.flush_terminal();
-                    }
+                    // Response cuts and shutdown finish the shared terminal.
+                    // This EOF cannot finish another producer's progress line.
                     return;
                 }
                 let notice = state.spool(bytes);

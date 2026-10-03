@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -21,10 +22,18 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.events import Events
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.r import install_r_startup, r_test_environment
-from support.requirements import SANDBOX, WORKER, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    SANDBOX,
+    WORKER,
+    requires,
+)
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
 
@@ -561,6 +570,72 @@ def test_diagnostic_producers_keep_separate_utf8_decoders(binary: Path) -> Trans
             raw = b"".join(path.read_bytes() for path in paths)
             assert raw == "producer prefix α diagnostic complete\n".encode(), raw
             return [{"diagnostic_utf8_survives_overlapping_producer_exit": True}]
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_diagnostic_close_preserves_another_producers_progress(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        configure(root, root, [str(binary)])
+        environment = peer_environment(root, "diagnostic-terminal-overlap")
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(root, "diagnostic_reader_exit")
+        )
+        environment["MCP_CONSOLE_TEST_DIAGNOSTIC_EXIT"] = str(
+            root / "diagnostic-exited"
+        )
+        with (
+            closing(FifoCheckpoint.create(root / "diagnostic-start")) as started,
+            closing(FifoCheckpoint.create(root / "diagnostic-finish")) as finished,
+            closing(FifoCheckpoint.create(root / "diagnostic-close")) as close,
+            closing(FifoCheckpoint.create(root / "diagnostic-exited")) as exited,
+            closing(FifoCheckpoint.create(root / "evaluation-finish")) as evaluation,
+            McpClient(binary, DIRECT.serve(), environment, root) as client,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                wait_for_evaluation_output(
+                    client,
+                    "diagnostic reader ready\n\n[running; poll with an empty send]",
+                    "launcher diagnostic reader identified",
+                    r="hold_cell",
+                    timeout_ms=0,
+                )
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                raw = session / "outputs/call-000001.log"
+                with Events() as events:
+                    events.watch_file(raw)
+                    for gate, expected in (
+                        (started, b"diagnostic reader ready\nprogress 1\r"),
+                        (
+                            finished,
+                            b"diagnostic reader ready\nprogress 1\rprogress 2\n",
+                        ),
+                    ):
+                        gate.release()
+                        deadline = time.monotonic() + 10
+                        while raw.stat().st_size < len(expected):
+                            remaining = deadline - time.monotonic()
+                            assert remaining > 0 and events.wait(remaining), (
+                                "diagnostic bytes not captured"
+                            )
+                        assert raw.read_bytes() == expected
+                        if gate is started:
+                            close.release()
+                            # The thread's TLS destructor runs after its EOF
+                            # publication, before the other producer continues.
+                            exited.wait("launcher diagnostics closed")
+                evaluation.release()
+                client.expect("progress 2\n")
+                client.finish()
+                return [{"diagnostic_close_preserves_progress_replacement": True}]
+            finally:
+                started.release()
+                finished.release()
+                close.release()
+                evaluation.release()
 
 
 def test_unexpected_stdout(binary: Path) -> Transcript:
