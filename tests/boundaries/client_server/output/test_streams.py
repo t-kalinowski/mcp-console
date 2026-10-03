@@ -85,7 +85,6 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                 assert client.send(r="42", timeout_ms=0)["content"] == [
                     {"type": "text", "text": running}
                 ]
-                session = next((directory / ".agents/console/sessions").iterdir())
                 raw = b""
                 for data, expected in (
                     (b"A\xe2", "A"),
@@ -95,6 +94,8 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                 ):
                     release.release()
                     processed.wait("direct bytes reached the output tape")
+                    # The initial nonblocking send can precede recording metadata.
+                    session = next((directory / ".agents/console/sessions").iterdir())
                     raw += data
                     result = client.send(timeout_ms=0)
                     assert result == {
