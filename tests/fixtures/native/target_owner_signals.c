@@ -3,6 +3,7 @@
 #endif
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -28,7 +29,9 @@ static bool blocked;
 static _Thread_local bool in_handler;
 static void (*handlers[NSIG])(int);
 static int full, returned, installed, release, retirement, output_blocked;
+static int input_closed;
 static bool installation_gate;
+static bool controller_closure;
 static bool interrupted_write;
 static atomic_bool interrupt_once;
 static struct stat output_identity;
@@ -88,7 +91,9 @@ __attribute__((constructor)) static void initialize(void) {
     release = checkpoint(root, "release");
     retirement = checkpoint(root, "retirement");
     output_blocked = checkpoint(root, "blocked");
+    input_closed = checkpoint(root, "input-closed");
     installation_gate = getenv("MCP_CONSOLE_TEST_SIGNAL_INSTALLATION") != NULL;
+    controller_closure = getenv("MCP_CONSOLE_TEST_SIGNAL_CONTROLLER_CLOSE") != NULL;
     interrupted_write = getenv("MCP_CONSOLE_TEST_SIGNAL_EINTR") != NULL;
     interrupt_once = interrupted_write;
     if (fstat(STDOUT_FILENO, &output_identity) < 0) _exit(94);
@@ -154,6 +159,15 @@ static ssize_t observed_write(int fd, const void *buffer, size_t length) {
         // Hold the one retirement frame after provider cleanup, while handlers
         // remain installed and the ordinary signal watcher has already exited.
         notify(retirement);
+        if (controller_closure) {
+            // The controller closes owner stdin after observing cancellation.
+            // Wait for that boundary before allowing owner exit.
+            struct pollfd input = {.fd = STDIN_FILENO, .events = POLLIN};
+            int ready;
+            do { ready = poll(&input, 1, -1); } while (ready < 0 && errno == EINTR);
+            if (ready != 1 || !(input.revents & POLLHUP)) _exit(98);
+            notify(input_closed);
+        }
         gate();
     }
     ssize_t result = write(fd, buffer, length);

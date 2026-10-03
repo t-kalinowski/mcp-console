@@ -195,10 +195,13 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                         "retirement",
                         "blocked",
                         "reached",
+                        "input-closed",
                     )
                 }
                 environment[LOADER_VARIABLE] = str(interposer)
                 environment["MCP_CONSOLE_TEST_OWNER_SIGNALS"] = str(root / "peer")
+                if phase != "blocked-output":
+                    environment["MCP_CONSOLE_TEST_SIGNAL_CONTROLLER_CLOSE"] = "1"
                 if installation_phase:
                     environment["MCP_CONSOLE_TEST_SIGNAL_INSTALLATION"] = "1"
                     (root / "peer/mode").write_text("create-unacknowledged")
@@ -271,9 +274,16 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                             stopped = False
                             client.receive(pending)
                             assert pending["result"]["isError"], pending
+                            client.stdin.close()
                         else:
+                            # Close MCP input while the owner is held at retirement.
+                            # Its stdin EOF proves the controller observed cancellation
+                            # before owner exit, preserving the setup diagnostic.
+                            client.stdin.close()
+                            checkpoints["input-closed"].wait(
+                                "controller cancelled setup and closed owner input"
+                            )
                             checkpoints["release"].release()
-                        client.stdin.close()
                         client.stdout.read(timeout=15)
                         stderr = client.stderr.read(timeout=15)
                         status = client.process.wait(timeout=5)
@@ -304,6 +314,8 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                 )[0], "owner attempted more than one retirement frame"
                 assert not (root / "peer/vms").exists()
                 (session,) = (root / ".agents/console/sessions").iterdir()
+                if phase != "blocked-output":
+                    assert stderr == "Docker Sandbox setup cancelled\n", stderr
                 if phase == "creation":
                     diagnostics = (session / "outputs/session.log").read_text()
                     assert (
@@ -320,8 +332,6 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                         diagnostics.count("fixture: original attachment diagnostic\n")
                         == 1
                     )
-                else:
-                    assert stderr == "Docker Sandbox setup cancelled\n", stderr
                 record = {
                     "phase": phase,
                     "full_pipe_wakeups_coalesced": phase != "interrupted-write",
