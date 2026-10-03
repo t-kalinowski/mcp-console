@@ -38,38 +38,13 @@ base::local(
       if (!active) {
         stop("managed plot device opened outside an R evaluation")
       }
-      width <- positive_option("console.plot.width_in", 800 / 96)
-      height <- positive_option("console.plot.height_in", 600 / 96)
-      dpi <- positive_option("console.plot.dpi", 96)
-      pixels <- ceiling(c(width, height) * dpi)
-      # Bound both sides before multiplying, including nonfinite products.
-      # The area limit allows a 64 MiB RGBA buffer, excluding renderer overhead.
-      if (
-        any(!is.finite(pixels)) ||
-          any(pixels > 16384) ||
-          prod(pixels) > 16777216
-      ) {
-        stop(
-          sprintf(
-            paste0(
-              "managed R plot exceeds limit: ",
-              "%.15g x %.15g inches at %.15g DPI requests %.15g x %.15g pixels; ",
-              "maximum 16384 pixels per side and 16777216 pixels total. ",
-              "Reduce console.plot.width_in, console.plot.height_in (inches), or console.plot.dpi."
-            ),
-            width,
-            height,
-            dpi,
-            pixels[[1]],
-            pixels[[2]]
-          ),
-          call. = FALSE
-        )
-      }
-
       if (!dir.exists(directory) && !dir.create(directory, mode = "0700")) {
         stop("failed to create managed plot directory")
       }
+
+      width <- positive_option("console.plot.width_in", 800 / 96)
+      height <- positive_option("console.plot.height_in", 600 / 96)
+      dpi <- positive_option("console.plot.dpi", 96)
       device_counter <<- device_counter + 1L
       path <- file.path(
         directory,

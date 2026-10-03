@@ -216,11 +216,6 @@ options(
 )
 ```
 
-Before opening the managed device, Console multiplies each dimension by DPI and rounds up for the size check.
-It rejects requests above **16,384 pixels per side** or **16,777,216 pixels total**, including numeric overflow.
-The total limit allows a 64 MiB RGBA buffer; rendering can use additional memory.
-The error reports the supplied inches and DPI, derived pixel dimensions, and limits.
-Reduce the options and plot again; the session remains usable.
 Explicit user devices are not closed or captured by Console.
 R plots invoked through Python follow these same rules.
 
