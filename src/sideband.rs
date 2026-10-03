@@ -79,16 +79,6 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 fn split(reader: PipeReader, writer: PipeWriter) -> io::Result<(Reader, Writer)> {
     set_nonblocking(reader.as_raw_fd())?;
     set_nonblocking(writer.as_raw_fd())?;
-    #[cfg(target_os = "macos")]
-    {
-        // Darwin can deliver a pipe's SIGPIPE to another native thread. A
-        // writer-local mask cannot protect R's handler once DuckDB has threads.
-        // sys/fcntl.h supplies this option; libc does not expose it on macOS.
-        const F_SETNOSIGPIPE: libc::c_int = 73;
-        if unsafe { libc::fcntl(writer.as_raw_fd(), F_SETNOSIGPIPE, 1) } < 0 {
-            return Err(io::Error::last_os_error());
-        }
-    }
     Ok((Reader::new(reader), Writer::new(writer)))
 }
 
@@ -237,16 +227,9 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 fn write_without_sigpipe(mut pipe: &PipeWriter, bytes: &[u8]) -> io::Result<usize> {
-    // split() disabled SIGPIPE on this descriptor before native startup.
-    pipe.write(bytes)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn write_without_sigpipe(mut pipe: &PipeWriter, bytes: &[u8]) -> io::Result<usize> {
-    // Linux directs SIGPIPE to the writing thread. R may have installed its
-    // own process-wide handler, so suppress this write's signal locally.
+    // UnixStream suppresses SIGPIPE per write. Pipes need a thread-local mask
+    // instead: R may have installed its own process-wide SIGPIPE handler.
     // Consume only a newly generated signal on EPIPE, preserving an already
     // pending signal and restoring the caller's mask before returning.
     unsafe {

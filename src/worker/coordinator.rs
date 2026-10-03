@@ -134,9 +134,6 @@ impl Coordinator {
         if complete && languages.enables(Language::R) && super::r_available() {
             super::ensure_r().map_err(io::Error::other)?;
         }
-        if complete && languages.enables(Language::Sql) && !core::bootstrap_interrupted() {
-            self.sql.initialize().map_err(io::Error::other)?;
-        }
         self.r.finish_graphics().map_err(io::Error::other)?;
         // Acknowledge late signals before publishing the bootstrap receipt.
         let interrupted =
