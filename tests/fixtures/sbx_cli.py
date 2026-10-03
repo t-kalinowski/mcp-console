@@ -235,16 +235,6 @@ elif args[0] == "exec":
             frame(2, {"kind": "input_requested", "prompt": "target startup> "})
         else:
             frame(2, {"kind": "runtime_initialized", "interrupted": False})
-        if mode == "signal-output":
-            with (root / "reached").open("wb", buffering=0) as stream:
-                stream.write(b"1")
-            with (root / "release").open("rb", buffering=0) as stream:
-                assert stream.read(1) == b"1"
-            print(
-                "fixture: original attachment diagnostic", file=sys.stderr, flush=True
-            )
-            for _ in range(2048):
-                frame(2, {"kind": "console_output", "data": "x" * 32768})
         for line in source:
             command = json.loads(line)
             if command["kind"] == "stdin":
@@ -256,6 +246,19 @@ elif args[0] == "exec":
                 assert not initializing, "cell reached worker before runtime bootstrap"
                 with (root / "evaluations").open("a") as stream:
                     stream.write(json.dumps(command) + "\n")
+                if mode == "signal-output":
+                    # Pressure belongs to the admitted cell, after evaluate receipt.
+                    with (root / "reached").open("wb", buffering=0) as stream:
+                        stream.write(b"1")
+                    with (root / "release").open("rb", buffering=0) as stream:
+                        assert stream.read(1) == b"1"
+                    print(
+                        "fixture: original attachment diagnostic",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    for _ in range(2048):
+                        frame(2, {"kind": "console_output", "data": "x" * 32768})
                 frame(2, {"kind": "console_output", "data": "provider peer\n"})
                 frame(2, {"kind": "completed"})
             elif command["kind"] == "shutdown":
