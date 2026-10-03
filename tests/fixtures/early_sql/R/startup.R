@@ -23,6 +23,9 @@
         if (identical(behavior, "error")) {
           stop("optional SQL warmup failed")
         }
+        if (!identical(behavior, "observe")) {
+          return(invisible())
+        }
         signal <- fifo(
           Sys.getenv("MCP_CONSOLE_TEST_SQL_STARTED"),
           open = "wb",
@@ -45,5 +48,22 @@
       print = FALSE,
       exit = bquote(.(observe_connection)(returnValue()))
     ))
+    behavior <- Sys.getenv("MCP_CONSOLE_TEST_SQL_BEHAVIOR")
+    if (startsWith(behavior, "probe-interrupt-")) {
+      target <- substring(behavior, nchar("probe-interrupt-") + 1L)
+      probed <- FALSE
+      observe_probe <- function(package) {
+        if (identical(package, target) && !probed) {
+          probed <<- TRUE
+          readline("SQL warmup> ")
+        }
+      }
+      suppressMessages(trace(
+        "system.file",
+        where = baseenv(),
+        print = FALSE,
+        tracer = bquote(.(observe_probe)(package))
+      ))
+    }
   }
 }

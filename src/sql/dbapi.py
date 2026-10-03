@@ -343,7 +343,9 @@ def initialize_managed_connection() -> None:
         _runtime.without_automatic_resolution(_ensure_managed_connection)
     except importlib.metadata.PackageNotFoundError:
         return
-    except Exception:
+    except KeyboardInterrupt:
+        raise
+    except BaseException:
         _traceback.print_exc()
 
 

@@ -18,6 +18,8 @@ def observed_connect(*args, **kwargs):
             input("SQL warmup> ")
         elif behavior == "error":
             raise RuntimeError("optional SQL warmup failed")
+        elif behavior == "system-exit":
+            raise SystemExit("optional SQL warmup failed")
     connection = connect(*args, **kwargs)
     connection.execute("CREATE TABLE startup_catalog AS SELECT 42 AS answer")
     if behavior == "observe":

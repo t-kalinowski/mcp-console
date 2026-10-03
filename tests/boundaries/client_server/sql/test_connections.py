@@ -1060,8 +1060,13 @@ def display_width(text: str) -> int:
 def test_interrupts_sql_warmup_without_losing_worker(
     binary: Path, execution: Execution
 ) -> Transcript:
-    for with_r in (False, True):
-        with startup_sql_client(binary, execution, with_r, "interrupt") as (
+    for with_r, behavior in (
+        (False, "interrupt"),
+        (True, "interrupt"),
+        (True, "probe-interrupt-DBI"),
+        (True, "probe-interrupt-duckdb"),
+    ):
+        with startup_sql_client(binary, execution, with_r, behavior) as (
             client,
             _,
             _,
@@ -1103,6 +1108,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
         (True, "error"),
         (False, "error"),
         (False, "import-error"),
+        (False, "system-exit"),
     ):
         with startup_sql_client(binary, execution, with_r, behavior) as (client, _, _):
             if with_r:
@@ -1119,6 +1125,8 @@ def test_optional_sql_warmup_failure_preserves_runtime(
             assert "optional SQL warmup failed" in output, result
             assert "available after SQL warmup failure" in output, result
             assert "[worker" not in output, result
+            if behavior == "system-exit":
+                assert "SystemExit: optional SQL warmup failed" in output, result
             if not with_r:
                 client.expect(
                     python="import sqlite3; selected = sqlite3.connect(':memory:'); console_sql_connection(selected)"
