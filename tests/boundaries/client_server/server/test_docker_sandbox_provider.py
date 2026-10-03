@@ -226,6 +226,9 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                             )
                         owner = int((root / "peer/pid").read_text())
                         if phase == "blocked-output":
+                            assert (root / "peer/evaluations").exists(), (
+                                "output pressure checkpoint preceded evaluation receipt"
+                            )
                             os.kill(client.process.pid, signal.SIGSTOP)
                             stopped = True
                             checkpoints["release"].release()
