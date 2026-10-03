@@ -6,14 +6,14 @@ send:
     local({
       invalid <- list(0, -1, Inf, -Inf, NaN, NA_real_, numeric(), c(1, 2), "4")
       for (option in c(
-        "console.plot.width",
-        "console.plot.height",
+        "console.plot.width_in",
+        "console.plot.height_in",
         "console.plot.dpi"
       )) {
         for (value in invalid) {
           options(
-            console.plot.width = 4,
-            console.plot.height = 3,
+            console.plot.width_in = 4,
+            console.plot.height_in = 3,
             console.plot.dpi = 100
           )
           options(setNames(list(value), option))
@@ -30,7 +30,7 @@ result:
   content:
     - type: text
       text: |
-        console.plot.width: invalid values rejected
-        console.plot.height: invalid values rejected
+        console.plot.width_in: invalid values rejected
+        console.plot.height_in: invalid values rejected
         console.plot.dpi: invalid values rejected
   isError: false

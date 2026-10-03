@@ -38,8 +38,8 @@ base::local(
       if (!active) {
         stop("managed plot device opened outside an R evaluation")
       }
-      width <- positive_option("console.plot.width", 800 / 96)
-      height <- positive_option("console.plot.height", 600 / 96)
+      width <- positive_option("console.plot.width_in", 800 / 96)
+      height <- positive_option("console.plot.height_in", 600 / 96)
       dpi <- positive_option("console.plot.dpi", 96)
       pixels <- ceiling(c(width, height) * dpi)
       # Bound both sides before multiplying, including nonfinite products.
@@ -55,7 +55,7 @@ base::local(
               "managed R plot exceeds limit: ",
               "%.15g x %.15g inches at %.15g DPI requests %.15g x %.15g pixels; ",
               "maximum 16384 pixels per side and 16777216 pixels total. ",
-              "Reduce console.plot.width, console.plot.height (inches), or console.plot.dpi."
+              "Reduce console.plot.width_in, console.plot.height_in (inches), or console.plot.dpi."
             ),
             width,
             height,

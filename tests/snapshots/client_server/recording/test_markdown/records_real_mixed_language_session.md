@@ -19,8 +19,8 @@ This document is an append-only chronological record of MCP Console events.
 
 ```r
 options(
-  console.plot.width = 4,
-  console.plot.height = 3,
+  console.plot.width_in = 4,
+  console.plot.height_in = 3,
   console.plot.dpi = 100
 )
 measurements <- data.frame(

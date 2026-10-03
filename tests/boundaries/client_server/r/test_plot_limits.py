@@ -32,8 +32,8 @@ def test_checks_plot_limits_before_allocating(
                     tracer = quote({
                       stopifnot(
                         identical(units, "in"),
-                        identical(width, getOption("console.plot.width", 800 / 96)),
-                        identical(height, getOption("console.plot.height", 600 / 96)),
+                        identical(width, getOption("console.plot.width_in", 800 / 96)),
+                        identical(height, getOption("console.plot.height_in", 600 / 96)),
                         identical(res, getOption("console.plot.dpi", 96))
                       )
                       stop("PNG allocation intercepted", call. = FALSE)
@@ -46,8 +46,8 @@ def test_checks_plot_limits_before_allocating(
                   )))
                   check_plot <- function(label, size, accepted) {
                     options(
-                      console.plot.width = size[[1]],
-                      console.plot.height = size[[2]],
+                      console.plot.width_in = size[[1]],
+                      console.plot.height_in = size[[2]],
                       console.plot.dpi = size[[3]]
                     )
                     message <- tryCatch(plot(1:3), error = conditionMessage)
@@ -99,8 +99,8 @@ def test_checks_plot_limits_before_allocating(
             # fmt: r
             r=code(r"""
                 options(
-                  console.plot.width = 16,
-                  console.plot.height = 10.5,
+                  console.plot.width_in = 16,
+                  console.plot.height_in = 10.5,
                   console.plot.dpi = 100
                 )
                 plot(3:1)
@@ -123,14 +123,14 @@ def test_rejects_invalid_plot_options(binary: Path, execution: Execution) -> Tra
                 local({
                   invalid <- list(0, -1, Inf, -Inf, NaN, NA_real_, numeric(), c(1, 2), "4")
                   for (option in c(
-                    "console.plot.width",
-                    "console.plot.height",
+                    "console.plot.width_in",
+                    "console.plot.height_in",
                     "console.plot.dpi"
                   )) {
                     for (value in invalid) {
                       options(
-                        console.plot.width = 4,
-                        console.plot.height = 3,
+                        console.plot.width_in = 4,
+                        console.plot.height_in = 3,
                         console.plot.dpi = 100
                       )
                       options(setNames(list(value), option))
@@ -146,8 +146,8 @@ def test_rejects_invalid_plot_options(binary: Path, execution: Execution) -> Tra
                 """),
         )
         assert last_tool_text(client) == (
-            "console.plot.width: invalid values rejected\n"
-            "console.plot.height: invalid values rejected\n"
+            "console.plot.width_in: invalid values rejected\n"
+            "console.plot.height_in: invalid values rejected\n"
             "console.plot.dpi: invalid values rejected\n"
         )
         return client.finish()

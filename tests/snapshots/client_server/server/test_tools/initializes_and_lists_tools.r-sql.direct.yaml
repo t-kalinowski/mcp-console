@@ -117,7 +117,7 @@ result:
               `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
               selected connection before disconnecting it. Default-device plots return as PNG images. Keep
               all drawing operations for one plot in the same cell. Set persistent dimensions with
-              `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`;
+              `options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`;
               width and height are in inches. Omit this field for polling or stdin-only calls.
             type:
               - string
