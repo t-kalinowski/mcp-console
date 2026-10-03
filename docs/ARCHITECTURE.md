@@ -85,7 +85,8 @@ The accepted first cell retains its admission and is never replayed.
 Worker readiness is not interpreter initialization.
 One coordinator initializes enabled interpreters and runs cells on a single owning thread.
 Bootstrap owns a graphics scope without marking user code active; startup output and plots use the ordinary output tape.
-Managed SQL connections and first-query work remain lazy.
+Enabled SQL opens its managed connection during bootstrap when its optional provider is installed; first-query work remains lazy.
+Custom workers retain lazy initialization, and an absent provider can be prepared on later SQL demand.
 An explicit or host-resolved Python selection can start without R.
 Unresolved R-side selection hints use R's compatibility adapter when installed; its absence does not prevent bare R use.
 Background selection also permits an ordinary absent-interpreter discovery result, preserving R without treating selection errors as absence.
@@ -104,7 +105,7 @@ Do not split evaluators across threads without a new ownership design.
 [Runtime limitations](BUILTIN_RUNTIME.md#current-limitations) include the remaining late-R-startup environment constraint.
 
 SQL routes to an R DBI or Python DB-API provider.
-R capability selects the default managed provider independently of initialization order; without R, DuckDB is created lazily in Python.
+R capability selects the default managed provider independently of initialization order; without R, Python owns the managed DuckDB connection.
 Explicitly selected connections remain user-owned.
 The [runtime guide](BUILTIN_RUNTIME.md) owns connection and interoperability rules.
 

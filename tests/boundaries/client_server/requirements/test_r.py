@@ -521,14 +521,28 @@ def test_evaluates_with_default_managed_r(
         # fmt: r
         r = code(r"""
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+            managed_packages <- c(
+              "tidyverse",
+              "reticulate",
+              "DBI",
+              "duckdb",
+              "arrow",
+              "nanoarrow",
+              "yyjsonr"
+            )
+            # Loaded namespaces report canonical cache paths; ir libraries can
+            # contain symlinks to those same package directories.
             stopifnot(
-              identical(dirname(find.package("tidyverse")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("reticulate")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("DBI")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("duckdb")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("arrow")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("nanoarrow")), .libPaths()[[managed_index]]),
-              identical(dirname(find.package("yyjsonr")), .libPaths()[[managed_index]]),
+              vapply(
+                managed_packages,
+                function(package) {
+                  identical(
+                    normalizePath(find.package(package)),
+                    normalizePath(file.path(.libPaths()[[managed_index]], package))
+                  )
+                },
+                logical(1L)
+              ),
               vapply(
                 c("ggplot2", "dplyr", "readr", "jsonlite", "yyjsonr"),
                 requireNamespace,

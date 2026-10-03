@@ -161,6 +161,13 @@ def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
             with McpClient(binary, ("serve",), environment, root) as client:
                 client.initialize_and_list_tools()
                 tools.append(client.transcript[-1]["result"]["tools"])
+                sql_description = tools[-1][0]["inputSchema"]["properties"]["sql"][
+                    "description"
+                ]
+                assert "during background startup" in sql_description, sql_description
+                assert "first-query work remains deferred" in sql_description, (
+                    sql_description
+                )
                 client.send(requirements={"action": "get"})
                 client.finish()
     assert tools[0] == tools[1]

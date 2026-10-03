@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
@@ -199,7 +199,11 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
 ) -> Transcript:
     with no_r_client(binary, execution) as client:
         client.initialize_and_list_tools()
-        client.send(
+        wait_for_evaluation_output(
+            client,
+            '[input requested: "original cell> "]\n[waiting for stdin]',
+            "original cell input checkpoint",
+            completion_timeout_seconds=client.response_timeout,
             # fmt: python
             python=code("""
                 import os
@@ -207,7 +211,7 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
                 original_pid = os.getpid()
                 received = input("original cell> ")
                 print(received)
-                """)
+                """),
         )
         assert "[waiting for stdin]" in last_result_text(client)
         for requirements, expected in (
@@ -329,7 +333,7 @@ def test_no_r_extension_preparation_uses_candidate_provider(
             original_pid = os.getpid()
             original_executable = sys.executable
             answer = 41
-            assert "duckdb" not in sys.modules
+            original_connection = sql_connection()
             """)
         client.send(python=python)
         client.send(
@@ -352,6 +356,7 @@ def test_no_r_extension_preparation_uses_candidate_provider(
         python = code("""
             assert os.getpid() == original_pid
             assert sys.executable == original_executable
+            assert sql_connection() is original_connection
             answer + 1
             """)
         client.send(python=python)

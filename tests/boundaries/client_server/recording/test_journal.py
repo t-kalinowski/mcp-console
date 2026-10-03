@@ -822,6 +822,33 @@ def test_flushes_calls_and_keeps_unpolled_images(
         unpolled_quarto_inode = quarto.stat().st_ino
 
         (image_started.parent / "zod-release-image-completion").touch()
+
+        def completed_image_output() -> Path | None:
+            # Completion belongs to call 2 even when it precedes the next poll.
+            # Ignore an incomplete append until its terminating newline arrives.
+            lines = journal.read_text(encoding="utf-8").rsplit("\n", 1)[0].splitlines()
+            if any(
+                event.get("event") == "cell_output" and event.get("call_id") == 2
+                for event in map(json.loads, lines)
+            ):
+                return journal
+            return None
+
+        wait_for_checkpoint(
+            completed_image_output,
+            "unpolled cell completion recorded",
+            root=journal.parent,
+            client=client,
+        )
+        completed_events = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["event"] for event in completed_events] == [
+            *[event["event"] for event in final_events],
+            "cell_output",
+        ], completed_events
+        assert completed_events[-1]["call_id"] == 2, completed_events[-1]
         client.send(timeout_ms=3_000)
         poll_result = client.transcript[-1]["result"]
         assert poll_result == {
@@ -832,9 +859,9 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [event["event"] for event in polled_events[-3:]] == [
+        assert [event["event"] for event in polled_events] == [
+            *[event["event"] for event in completed_events],
             "tool_call",
-            "cell_output",
             "tool_result",
         ], polled_events
         assert polled_events[-1]["call_id"] == 3, polled_events[-1]
