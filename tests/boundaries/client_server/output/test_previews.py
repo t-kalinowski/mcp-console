@@ -522,9 +522,10 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
         assert idle.startswith(head) and cell.endswith(tail)
         assert len(head.encode()) + int(markers[0][1]) == len(idle.encode())
         assert int(markers[1][1]) + len(tail.encode()) == len(cell.encode())
-        assert "no retained cell log" in markers[0][0]
+        assert "outputs/session.log" in markers[0][0]
         assert "outputs/call-000001.log" in markers[1][0]
         session = session_directory(client)
+        assert (session / "outputs/session.log").read_text(errors="replace") == idle
         assert (session / "outputs/call-000001.log").read_text() == cell
         summaries = [
             json.loads(line)

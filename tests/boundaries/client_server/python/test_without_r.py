@@ -97,6 +97,15 @@ def preparation_environment(root: Path, *, with_r: bool = False) -> dict[str, st
     description = {
         "executable": str(root / "invalid-python"),
         "libpython": str(root / "missing-libpython"),
+        "metadata": {
+            "base_executable": str(root / "invalid-python"),
+            "pythonpath": "",
+            "version": "3.12.7",
+            "version_number": "3.12",
+            "architecture": "64bit",
+            "conda": False,
+            "numpy": None,
+        },
     }
     description.update(
         {
@@ -454,10 +463,21 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
     return records
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_ignores_unrelated_non_utf8_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return non_utf8_environment_preparation(binary, execution)
+
+
+@executions(SANDBOXED)
+def test_prepares_after_native_non_utf8_environment_rejection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return non_utf8_environment_preparation(binary, execution)
+
+
+def non_utf8_environment_preparation(binary: Path, execution: Execution) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
         (root / "uv").symlink_to(shutil.which("uv"))
@@ -468,16 +488,18 @@ def test_ignores_unrelated_non_utf8_environment(
             client.initialize_and_list_tools()
             # Preparation accepts unrelated non-UTF-8 values. Eager native
             # launch still enforces its existing UTF-8 environment requirement.
+            startup = client.send(requirements={"action": "get"})
+            assert startup["isError"] == (execution == SANDBOXED), startup
+            if execution == SANDBOXED:
+                assert last_result_text(client) == (
+                    "mcp-console-sandbox: environment key must be UTF-8\n"
+                    "[worker relay exited before readiness]"
+                ), startup
             result = client.send(requirements={"python": ["py-yaml12"]})
             assert not result["isError"], result
             assert last_result_text(client) == "[prepared]"
             transcript, stderr = client.finish_with_standard_error()
-            if execution == SANDBOXED:
-                assert stderr == (
-                    "mcp-console-sandbox: environment key must be UTF-8\n"
-                ), stderr
-            else:
-                assert stderr == "", stderr
+            assert stderr == "", stderr
             return transcript[3:]
 
 

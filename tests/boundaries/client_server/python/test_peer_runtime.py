@@ -320,7 +320,7 @@ def test_late_attachment_preserves_environment_metadata(
 ) -> Transcript:
     records = []
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         modules = root / "modules"
         modules.mkdir()
         (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
@@ -791,7 +791,7 @@ def test_python_contract_with_and_without_r(
 @executions(DIRECT, SANDBOXED)
 def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         venv = root / "selected environment"
         subprocess.run(
             [sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True
@@ -1500,6 +1500,7 @@ def test_conversion_metadata_matches_configured_import_paths(
                 # NumPy intentionally lives on configured paths, outside the
                 # virtualenv that reticulate's package probe inspects.
                 RETICULATE_CHECK_REQUIRED_PACKAGES="false",
+                TMPDIR=str(root),
             )
             environment[variable] = str(modules)
             arguments = execution.serve(
@@ -1617,6 +1618,7 @@ def test_attaches_to_reticulate_initialized_by_r_startup(
     )
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        environment["TMPDIR"] = str(root)
         worker = root / "worker"
         worker.write_text(
             "#!/bin/sh\nexec " + shlex.join([str(binary), "worker"]) + "\n"

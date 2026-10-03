@@ -418,7 +418,7 @@ def test_drains_background_stderr_while_idle(
         output = last_tool_text(client)
         assert output.endswith("\n[idle]"), output[-100:]
         assert len(output.encode()) <= TEXT_BUDGET
-        assert "no retained cell log" in output
+        assert "outputs/session.log" in output
         assert "outputs/call-" not in output
         assert cell_text(client, 1) == ""
         preview = output.removesuffix("\n[idle]")
@@ -430,7 +430,10 @@ def test_drains_background_stderr_while_idle(
         )
         expected = large_output("zod background stderr\n")
         assert len(expected) <= observed <= len(expected) + LARGE_OUTPUT_SIZE, observed
-        assert f"({observed} raw bytes observed)" in preview
+        assert f"{observed} raw bytes retained" in preview
+        assert (
+            session_directory(client) / "outputs/session.log"
+        ).read_text() == expected + ("y" * (observed - len(expected)))
         assert_preview(preview, expected + ("y" * (observed - len(expected))))
         normalize_pipe_counts(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")

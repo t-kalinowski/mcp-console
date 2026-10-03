@@ -521,7 +521,7 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
             stderr = client.stderr.read(timeout=12)
             client.process.wait(timeout=12)
             if mode == "auth":
-                assert "Permission denied (publickey)" in stderr, stderr
+                assert "Permission denied (publickey)" in result, result
             if mode == "resolver":
                 assert client.process.returncode == 0 and not stderr, stderr
             return client.transcript[3:] + [{"standard_error": stderr}]
@@ -596,6 +596,15 @@ def test_direct_utf8_survives_launcher_diagnostics(binary: Path) -> Transcript:
                 raw = session / "outputs/call-000001.log"
                 with Events() as events:
                     events.watch_file(raw)
+                    # The sideband and launcher stderr are independent producers.
+                    # Observe the prefix at the server before releasing diagnostics.
+                    deadline = time.monotonic() + 10
+                    while raw.stat().st_size < 1:
+                        remaining = deadline - time.monotonic()
+                        assert remaining > 0 and events.wait(remaining), (
+                            "direct prefix not captured"
+                        )
+                    assert raw.read_bytes() == b"\xce"
                     diagnostic.release()
                     expected = b"\xcelauncher detail\n"
                     deadline = time.monotonic() + 10

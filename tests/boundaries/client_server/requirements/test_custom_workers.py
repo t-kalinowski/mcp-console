@@ -502,7 +502,11 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
         recorded_result = events[-1]
         assert artifact["event"] == "artifact_created", artifact
         assert recorded_result["event"] == "tool_result", recorded_result
-        assert artifact["call_id"] == recorded_result["call_id"], events[-2:]
+        assert artifact["call_id"] is None, artifact
+        call = next(
+            event for event in reversed(events[:-2]) if event["event"] == "tool_call"
+        )
+        assert recorded_result["call_id"] == call["call_id"], events[-2:]
         assert recorded_result["result"]["content"][1] == {
             "type": "image",
             "artifactId": artifact["artifact_id"],

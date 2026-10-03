@@ -1,9 +1,9 @@
 ---
 case: network value
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: network value
 command: sandbox
@@ -14,9 +14,9 @@ stderr: >
 ---
 case: network type
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Syntax at line 1,
-  column <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Syntax at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: network type
 command: sandbox
@@ -27,9 +27,9 @@ stderr: >
 ---
 case: YAML 1.2 boolean
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: YAML 1.2 boolean
 command: sandbox
@@ -40,9 +40,9 @@ stderr: >
 ---
 case: path type mapping
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: path type mapping
 command: sandbox
@@ -53,9 +53,9 @@ stderr: >
 ---
 case: filesystem type
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: filesystem type
 command: sandbox
@@ -66,9 +66,9 @@ stderr: >
 ---
 case: entries type
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: entries type
 command: sandbox
@@ -79,9 +79,9 @@ stderr: >
 ---
 case: entry form
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: entry form
 command: sandbox
@@ -92,9 +92,9 @@ stderr: >
 ---
 case: path type
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: path type
 command: sandbox
@@ -105,9 +105,9 @@ stderr: >
 ---
 case: sandbox field
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: sandbox field
 command: sandbox
@@ -118,9 +118,9 @@ stderr: >
 ---
 case: merge key
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: merge key
 command: sandbox
@@ -131,9 +131,9 @@ stderr: >
 ---
 case: proxy disabled
 command: serve
-stderr: >
-  mcp-console-sandbox: executor-local network proxy launch requires an
-  enabled proxy
+stderr: |-
+  mcp-console-sandbox: executor-local network proxy launch requires an enabled proxy
+  [worker relay exited before readiness]
 ---
 case: proxy disabled
 command: sandbox
@@ -144,9 +144,9 @@ stderr: >
 ---
 case: proxy missing enabled
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: proxy missing enabled
 command: sandbox
@@ -157,9 +157,9 @@ stderr: >
 ---
 case: proxy mode
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: proxy mode
 command: sandbox
@@ -170,9 +170,9 @@ stderr: >
 ---
 case: proxy domains
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: proxy domains
 command: sandbox
@@ -183,9 +183,9 @@ stderr: >
 ---
 case: domain permission
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: domain permission
 command: sandbox
@@ -196,9 +196,9 @@ stderr: >
 ---
 case: proxy option type
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: proxy option type
 command: sandbox
@@ -209,9 +209,9 @@ stderr: >
 ---
 case: native domain pattern
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid glob pattern: [: error parsing glob '[':
-  unclosed character class; missing ']'
+stderr: |-
+  mcp-console-sandbox: invalid glob pattern: [: error parsing glob '[': unclosed character class; missing ']'
+  [worker relay exited before readiness]
 ---
 case: native domain pattern
 command: sandbox
@@ -222,9 +222,9 @@ stderr: >
 ---
 case: proxy type
 command: serve
-stderr: >
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column
-  <column>)
+stderr: |-
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+  [worker relay exited before readiness]
 ---
 case: proxy type
 command: sandbox

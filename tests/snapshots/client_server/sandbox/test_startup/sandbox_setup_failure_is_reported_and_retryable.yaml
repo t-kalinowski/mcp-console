@@ -6,7 +6,9 @@ send:
 result:
   content:
     - type: text
-      text: "[worker relay exited before readiness]"
+      text: |-
+        mcp-console-sandbox: create private storage: Not a directory (os error 20)
+        [worker relay exited before readiness]
   isError: true
 ---
 send:
@@ -18,5 +20,4 @@ result:
         zod: echo
   isError: false
 ---
-stderr: |
-  mcp-console-sandbox: create private storage: Not a directory (os error 20)
+stderr: ""
