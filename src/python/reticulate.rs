@@ -281,6 +281,17 @@ pub extern "C-unwind" fn mcp_console_python_runtime_is_configured() -> harp::Res
     Ok(harp::object::RObject::from(configured).sexp)
 }
 
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_conversion_metadata() -> harp::Result<SEXP> {
+    let metadata =
+        super::library::conversion_metadata().map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(
+        serde_json::to_string(&metadata).map_err(|error| harp::anyhow!("{error}"))?,
+    )
+    .sexp)
+}
+
 // Release the initial GIL when control leaves reticulate's C initializer,
 // including its error paths. Later reticulate calls acquire the GIL normally.
 #[allow(clippy::result_large_err)]

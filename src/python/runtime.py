@@ -930,6 +930,43 @@ def _mcp_console_configure_module_defaults(
 
 _mcp_console.configure_module_defaults = _mcp_console_configure_module_defaults
 
+
+def _mcp_console_conversion_metadata(
+    _sys=_sys,
+    _os=_os,
+    _json=_json,
+    _importlib=_importlib,
+    _util=_importlib_util,
+    _without_resolution=_mcp_console_without_automatic_resolution,
+) -> str:
+    def describe():
+        import struct
+
+        numpy = None
+        if _util.find_spec("numpy") is not None:
+            module = _importlib.import_module("numpy")
+            numpy = {
+                "path": _os.path.realpath(module.__path__[0]),
+                "version": module.__version__,
+            }
+        return _json.dumps(
+            {
+                "base_executable": _sys._base_executable,
+                "pythonpath": _os.pathsep.join(_sys.path),
+                "version": _sys.version.replace("\n", " "),
+                "version_number": f"{_sys.version_info.major}.{_sys.version_info.minor}",
+                "architecture": f"{struct.calcsize('P') * 8}bit",
+                "conda": _os.path.isdir(_os.path.join(_sys.prefix, "conda-meta")),
+                "numpy": numpy,
+            }
+        )
+
+    # Metadata describes the live import environment and never prepares packages.
+    return _without_resolution(describe)
+
+
+_mcp_console.conversion_metadata = _mcp_console_conversion_metadata
+
 # The runtime runs with __main__ globals and private locals. Remember its code
 # objects so cell tracebacks can omit our frames without hiding user exec() code.
 _mcp_console_codes_to_record = []

@@ -103,8 +103,8 @@ def describe() -> dict[str, object]:
                 f"selected Python embedding library is missing {symbol}: {library}"
             ) from error
 
-    # Conversion metadata belongs to the same inspected identity. Do not run
-    # another interpreter in the worker or import optional packages to obtain it.
+    # This installation snapshot stays isolated. Once Python is configured,
+    # the R bridge gets path and module metadata from the running interpreter.
     try:
         distribution = importlib.metadata.distribution("numpy")
     except importlib.metadata.PackageNotFoundError:

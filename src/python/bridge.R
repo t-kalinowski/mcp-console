@@ -54,6 +54,11 @@ base::local(
     conversion_config <- function(selection) {
       python <- selection$embedding$python
       metadata <- selection$metadata
+      if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
+        metadata <- jsonlite::fromJSON(.Call(
+          "mcp_console_python_conversion_metadata"
+        ))
+      }
       root <- dirname(dirname(python))
       activate <- file.path(dirname(python), "activate_this.py")
       config <- structure(
@@ -447,14 +452,23 @@ base::local(
       if (!check_python_version(python_config, strict)) {
         return(invisible(FALSE))
       }
-      if (isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
-        return(invisible(TRUE))
+      if (!isTRUE(.Call("mcp_console_python_runtime_is_configured"))) {
+        check_python_setup(.Call(
+          "mcp_console_setup_python_runtime",
+          python_config$libpython,
+          !is.na(managed)
+        ))
       }
-      check_python_setup(.Call(
-        "mcp_console_setup_python_runtime",
-        python_config$libpython,
-        !is.na(managed)
-      ))
+      # R-first attachment precedes shared site and workspace setup. Publish
+      # metadata after those paths are active, as for Python-first attachment.
+      live <- conversion_config(jsonlite::fromJSON(.Call(
+        "mcp_console_running_python"
+      )))
+      globals <- get(".globals", envir = asNamespace("reticulate"))
+      globals$py_config[c("pythonpath", "numpy")] <- live[c(
+        "pythonpath",
+        "numpy"
+      )]
       invisible(TRUE)
     }
 

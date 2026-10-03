@@ -93,6 +93,7 @@ Background selection also permits an ordinary absent-interpreter discovery resul
 Later R cells, Python's R bridge, and R-owned SQL retry incomplete initialization through the same facade.
 Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
+Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing optional packages.
 
 The coordinator owns command dispatch, cell bookkeeping, input, and completion.
 Language adapters own their runtime-specific event, graphics, error, and unwind boundaries.
@@ -169,6 +170,7 @@ The final text budget is 8 KiB including notices.
 Raw-file retention and inline omission are separate; collection stays bounded even when recording fails.
 Startup diagnostics use this tape, including preparation and launcher stderr on Unix.
 Each diagnostic producer retains its own incomplete UTF-8 scalar until more bytes arrive or that producer closes.
+Closing one diagnostic producer does not flush another producer's pending terminal update; response cuts and shutdown finish the shared terminal projection.
 
 One recoverable response remains owned until local delivery or cancellation settles it.
 Controlled sends can combine earlier output with a following cell; a failed delivery restores the whole combined region, not just its last part.

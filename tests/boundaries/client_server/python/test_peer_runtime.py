@@ -1356,6 +1356,96 @@ def early_python_reference_plots(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_conversion_metadata_matches_configured_import_paths(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        selected = root / "venv"
+        modules = root / "configured modules"
+        extra = root / "startup modules"
+        modules.mkdir()
+        extra.mkdir()
+        subprocess.run(
+            ["uv", "venv", "--python", sys.executable, str(selected)],
+            capture_output=True,
+            check=True,
+        )
+        executable = selected / "bin/python"
+        subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                str(executable),
+                "--target",
+                str(modules),
+                "numpy",
+            ],
+            capture_output=True,
+            check=True,
+        )
+        (modules / "sitecustomize.py").write_text(
+            code(f"""
+                import sys
+                if "_mcp_console_services" in sys.modules:
+                    sys.path.append({str(extra)!r})
+                """)
+        )
+        worker = root / "worker"
+        worker.write_text(
+            "#!/bin/sh\nexec " + shlex.join([str(binary), "worker"]) + "\n"
+        )
+        worker.chmod(0o755)
+        for variable, lazy in (
+            ("PYTHONPATH", False),
+            ("RETICULATE_PYTHONPATH", False),
+            ("PYTHONPATH", True),
+            ("RETICULATE_PYTHONPATH", True),
+        ):
+            environment, _ = r_test_environment()
+            environment.pop("RETICULATE_PYTHONPATH", None)
+            environment.update(
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_LANGUAGES="r,python",
+            )
+            environment[variable] = str(modules)
+            arguments = execution.serve(
+                *(("--worker", str(worker)) if lazy else ()),
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            )
+            with McpClient(binary, arguments, environment, root) as client:
+                client.initialize_and_list_tools()
+                client.expect(
+                    "live conversion metadata retained\n",
+                    # fmt: r
+                    r=code("""
+                        config <- reticulate::py_config()
+                        sys <- reticulate::import("sys")
+                        numpy <- reticulate::import("numpy")
+                        stopifnot(
+                          identical(config$pythonpath, paste(sys$path, collapse = .Platform$path.sep)),
+                          identical(
+                            normalizePath(config$numpy$path),
+                            normalizePath(numpy$`__path__`[[1L]])
+                          ),
+                          identical(as.character(config$numpy$version), numpy$`__version__`)
+                        )
+                        cat("live conversion metadata retained\\n")
+                        """),
+                )
+                client.finish()
+        return [
+            {
+                "configured_import_paths": ["PYTHONPATH", "RETICULATE_PYTHONPATH"],
+                "live_numpy_metadata": True,
+            }
+        ]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_attaches_to_reticulate_initialized_by_r_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
