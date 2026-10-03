@@ -55,7 +55,10 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             tools = client.transcript[-1]["result"]["tools"]
             assert "requirements" in tools[0]["inputSchema"]["properties"], tools
             prepared = client.send(requirements={"action": "get"})
-            assert not prepared.get("isError", False), prepared
+            assert prepared["isError"] is True, prepared
+            assert "fixture ambient reticulate bootstrap failed" in str(prepared), (
+                prepared
+            )
             eager_calls = ["namespace:--probe", "namespace:", "uv_binary"]
             assert record.read_text(encoding="utf-8").splitlines() == eager_calls
 
@@ -66,7 +69,11 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             output = content[0]["text"]
             assert "fixture ambient reticulate bootstrap failed" in output, output
             assert "cell must not run" not in output, output
-            assert record.read_text(encoding="utf-8").splitlines() == eager_calls
+            assert record.read_text(encoding="utf-8").splitlines() == [
+                *eager_calls,
+                "namespace:",
+                "uv_binary",
+            ]
 
             retry = client.send(r='stop("retry cell must not run")')
             assert retry.get("isError") is True, retry
@@ -74,6 +81,8 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             assert "retry cell must not run" not in str(retry), retry
             assert record.read_text(encoding="utf-8").splitlines() == [
                 *eager_calls,
+                "namespace:",
+                "uv_binary",
                 "namespace:",
                 "uv_binary",
             ]

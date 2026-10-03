@@ -21,9 +21,9 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v10 distinguishes interrupted bootstrap from other incomplete setup.
-// Host preparation is unchanged.
-pub(crate) const VERSION: u32 = 10;
+// v11 requires conversion metadata in prepared Python identities.
+// SSH launch stays at v10; its identities use preparation protocol v6.
+pub(crate) const VERSION: u32 = 11;
 pub(crate) const SSH_VERSION: u32 = 10;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;

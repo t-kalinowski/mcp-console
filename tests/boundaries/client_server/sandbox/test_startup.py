@@ -73,7 +73,10 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
             result = client.send(r="echo echo")
             assert result == {
                 "content": [
-                    {"type": "text", "text": "[worker relay exited before readiness]"}
+                    {
+                        "type": "text",
+                        "text": "mcp-console-sandbox: create private storage: Not a directory (os error 20)\n[worker relay exited before readiness]",
+                    }
                 ],
                 "isError": True,
             }, result
@@ -84,10 +87,7 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
             client.send(r="echo echo")
             _assert_zod_echo(client.transcript[-1])
             transcript, stderr = client.finish_with_standard_error()
-            assert stderr == (
-                "mcp-console-sandbox: create private storage: "
-                "Not a directory (os error 20)\n"
-            ), stderr
+            assert stderr == "", stderr
             transcript.append({"stderr": stderr})
             return transcript
         finally:
@@ -146,12 +146,12 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 "content": [
                     {
                         "type": "text",
-                        "text": "[worker relay exited before readiness]",
+                        "text": "mcp-console-sandbox: failed to fill whole buffer\n[worker relay exited before readiness]",
                     }
                 ],
                 "isError": True,
             }, result
-            diagnostic = client.stderr.readline(timeout=TIMEOUT).rstrip("\n")
+            diagnostic = result["content"][0]["text"].splitlines()[0]
             assert diagnostic == ("mcp-console-sandbox: failed to fill whole buffer"), (
                 diagnostic
             )

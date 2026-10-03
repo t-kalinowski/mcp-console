@@ -10,6 +10,7 @@ import io as _io
 import json as _json
 import logging as _logging
 import os as _os
+import re as _re
 import sys as _sys
 import threading as _threading
 import traceback as _traceback
@@ -40,11 +41,15 @@ _MCP_CONSOLE_IMPORT_DISTRIBUTIONS = {
     "yaml12": "py-yaml12",
 }
 
+# Shared namespaces and alternate-interpreter toolchains need an explicit
+# distribution. In particular, CPython libraries can probe rpython with an
+# ImportError fallback; installing the Python 2 toolchain breaks that fallback.
 _MCP_CONSOLE_AMBIGUOUS_IMPORT_ROOTS = {
     "azure",
     "backports",
     "google",
     "opentelemetry",
+    "rpython",
     "zope",
 }
 
@@ -833,8 +838,13 @@ def _mcp_console_configure_native_child_environment(
     configuration: str,
     _json=_json,
     _os=_os,
+    _sys=_sys,
 ) -> None:
     expected = _json.loads(configuration)
+    # activate_this.py updates prefix, but does not update exec_prefix. Keep
+    # the complete inspected virtualenv identity in sync with child Python.
+    for name in ("prefix", "exec_prefix", "base_prefix", "base_exec_prefix"):
+        setattr(_sys, name, expected[name])
     executable = expected["embedding"]["python"]
     directory = _os.path.dirname(executable)
     inherited = _os.environ.get("PATH", "")
@@ -920,6 +930,76 @@ def _mcp_console_configure_module_defaults(
 
 
 _mcp_console.configure_module_defaults = _mcp_console_configure_module_defaults
+
+
+def _mcp_console_conversion_metadata(
+    _sys=_sys,
+    _os=_os,
+    _json=_json,
+    _metadata=_importlib_metadata,
+    _util=_importlib_util,
+    _without_resolution=_mcp_console_without_automatic_resolution,
+    _numpy_version=_re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.?[A-Za-z_+].*)?"),
+) -> str:
+    def describe() -> str:
+        import struct
+
+        numpy = None
+        module = _sys.modules.get("numpy")
+        if module is not None:
+            # Already imported NumPy can outlive a managed path activation.
+            namespace = vars(module)
+            version = namespace.get("__version__")
+            if (
+                namespace.get("__path__")
+                and isinstance(version, str)
+                and _numpy_version.fullmatch(version)
+            ):
+                numpy = {
+                    "path": _os.path.realpath(namespace["__path__"][0]),
+                    "version": version,
+                }
+        else:
+            specification = _util.find_spec("numpy")
+            if specification is not None and specification.submodule_search_locations:
+                try:
+                    distribution = _metadata.distribution("numpy")
+                    path = _os.path.realpath(distribution.locate_file("numpy"))
+                    version = distribution.version
+                    # A workspace module/package may shadow the installed
+                    # distribution. Metadata never executes that candidate.
+                    if (
+                        isinstance(version, str)
+                        and _numpy_version.fullmatch(version)
+                        and list(
+                            map(
+                                _os.path.realpath,
+                                specification.submodule_search_locations,
+                            )
+                        )
+                        == [path]
+                    ):
+                        numpy = {"path": path, "version": version}
+                except Exception:
+                    # Optional distribution metadata may be stale or unreadable.
+                    pass
+        return _json.dumps(
+            {
+                "base_executable": _sys._base_executable,
+                "pythonpath": _os.pathsep.join(_sys.path),
+                "version": _sys.version.replace("\n", " "),
+                "version_number": f"{_sys.version_info.major}.{_sys.version_info.minor}",
+                "architecture": f"{struct.calcsize('P') * 8}bit",
+                "conda": _os.path.isdir(_os.path.join(_sys.prefix, "conda-meta")),
+                "numpy": numpy,
+            }
+        )
+
+    # Metadata describes the live import environment and never prepares packages.
+    return _without_resolution(describe)
+
+
+_mcp_console.conversion_metadata = _mcp_console_conversion_metadata
 
 # The runtime runs with __main__ globals and private locals. Remember its code
 # objects so cell tracebacks can omit our frames without hiding user exec() code.

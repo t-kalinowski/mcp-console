@@ -8,6 +8,9 @@ pub(crate) mod process {
         pub fn new(_: super::super::Protocol) -> Result<Self, String> {
             Err("Windows currently supports local execution only".into())
         }
+        pub fn with_diagnostics(self, _: crate::process_output::Diagnostics) -> Self {
+            self
+        }
         pub fn check(&self) -> Result<(), String> {
             Err("target execution is unavailable on this platform".into())
         }

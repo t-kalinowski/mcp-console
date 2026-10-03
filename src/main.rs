@@ -174,7 +174,7 @@ fn run_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
         python,
-        source,
+        source: _,
         policy,
         target,
         provider,
@@ -200,7 +200,9 @@ fn run_server(
     } else if no_sandbox {
         settings::SandboxSettings::default()
     } else {
-        sandbox::capture_policy(source.as_deref(), policy, writable_roots)?
+        // Native validation belongs to the owned background launch. Running a
+        // preflight child here would precede MCP serving and EOF ownership.
+        sandbox::materialize_settings(policy, writable_roots, &std::env::current_dir()?)?
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

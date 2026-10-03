@@ -882,6 +882,30 @@ impl Client {
         worker.finish_retirement()
     }
 
+    pub(crate) fn take_prelaunch_failure(&self) -> Result<Option<super::Response>, String> {
+        // Admission and idle collection acquire evaluation before lifecycle.
+        // Retain both guards so an accepted cell keeps ownership of its failure.
+        let evaluation = self.evaluation()?;
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        if lifecycle.state != LifecycleState::Ready || lifecycle.controlled_send.is_some() {
+            return Ok(None);
+        }
+        // An accepted cell owns its startup failure and the accompanying output.
+        if evaluation.is_some()
+            || !self
+                .0
+                .startup_failed
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.0.output.take()))
+    }
+
     pub(crate) fn admit(&self) -> Result<WorkerGeneration, String> {
         let lifecycle = self
             .0
@@ -1325,7 +1349,7 @@ impl Client {
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let local = client
                 .0
                 .local_preparation
@@ -1370,7 +1394,9 @@ impl Client {
             }
         })
         .await
-        .map_err(|error| format!("process shutdown task failed: {error}"))?
+        .map_err(|error| format!("process shutdown task failed: {error}"))?;
+        self.finish_recording();
+        result
     }
 }
 

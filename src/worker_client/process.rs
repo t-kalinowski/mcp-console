@@ -97,6 +97,7 @@ struct RelayTasks {
     dispatcher: WorkerEventDispatcher,
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
+    diagnostic_reader: Option<thread::JoinHandle<()>>,
     relay_stdout_observer: OwnedFd,
 }
 
@@ -245,6 +246,8 @@ impl WorkerRuntime {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         #[cfg(unix)]
+        command.stderr(Stdio::piped());
+        #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
@@ -290,6 +293,22 @@ impl WorkerRuntime {
             .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
         #[cfg(windows)]
         let relay_stdout_observer = relay_stdout.duplicate().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let diagnostic_reader = {
+            let stderr = child.child.stderr.take().expect("piped launcher stderr");
+            let exited = output_exit.try_clone().map_err(|error| error.to_string())?;
+            let diagnostics = output.diagnostics();
+            let events = worker_events.clone();
+            Some(thread::spawn(move || {
+                if let Err(error) = crate::process_output::forward(stderr, exited, diagnostics) {
+                    let _ = events.send(WorkerEvent::TransportFailure(format!(
+                        "launcher stderr read failed: {error}"
+                    )));
+                }
+            }))
+        };
+        #[cfg(windows)]
+        let diagnostic_reader = None;
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new(builtin);
@@ -334,6 +353,7 @@ impl WorkerRuntime {
                 dispatcher,
                 command_writer,
                 event_reader,
+                diagnostic_reader,
                 relay_stdout_observer,
             })),
         };
@@ -1437,37 +1457,46 @@ impl RelayConnection {
             (Some(tasks), Ok(false)) if reaped => {
                 drop(tasks.command_writer.stop());
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
-                event_reader.and(tasks.dispatcher.join())
+                let diagnostics = join_diagnostic_reader(tasks.diagnostic_reader);
+                event_reader.and(diagnostics).and(tasks.dispatcher.join())
             }
             (Some(tasks), Ok(false)) => {
                 let RelayTasks {
                     dispatcher,
                     command_writer,
                     event_reader,
+                    diagnostic_reader,
                     relay_stdout_observer: _,
                 } = *tasks;
                 drop(command_writer.stop());
                 drop(dispatcher);
                 drop(event_reader);
+                drop(diagnostic_reader);
                 Ok(None)
             }
             (Some(tasks), Ok(true)) => {
                 let command_writer =
                     join_worker_thread(tasks.command_writer.stop(), "relay command writer");
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
+                let diagnostics = join_diagnostic_reader(tasks.diagnostic_reader);
                 let outcome = tasks.dispatcher.join();
-                command_writer.and(event_reader).and(outcome)
+                command_writer
+                    .and(event_reader)
+                    .and(diagnostics)
+                    .and(outcome)
             }
             (Some(tasks), Err(error)) => {
                 let RelayTasks {
                     dispatcher,
                     command_writer,
                     event_reader,
+                    diagnostic_reader,
                     relay_stdout_observer: _,
                 } = *tasks;
                 drop(command_writer.stop());
                 drop(dispatcher);
                 drop(event_reader);
+                drop(diagnostic_reader);
                 Err(error)
             }
             (None, _) => Ok(None),
@@ -1531,6 +1560,12 @@ impl ReadyCommit {
             false
         }
     }
+}
+
+fn join_diagnostic_reader(task: Option<thread::JoinHandle<()>>) -> Result<(), String> {
+    task.map_or(Ok(()), |task| {
+        join_worker_thread(task, "launcher diagnostics")
+    })
 }
 
 fn join_worker_thread(thread: thread::JoinHandle<()>, name: &str) -> Result<(), String> {

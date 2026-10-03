@@ -36,6 +36,7 @@ impl Startup {
         prelaunch: bool,
         initialize: impl FnOnce(
             &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+            crate::process_output::Diagnostics,
         ) -> Result<PreparedRuntime, String>
         + Send
         + 'static,
@@ -44,6 +45,8 @@ impl Startup {
         let control = Arc::clone(&cancellation);
         let worker = runtime.worker.clone();
         let recording = runtime.transcript.clone();
+        worker.record_with(recording.clone());
+        let diagnostics = worker.diagnostics();
         let task_recording = recording.clone();
         let initialize_worker = worker.clone();
         tokio::spawn(async move {
@@ -51,17 +54,23 @@ impl Startup {
                 observe_input(input_closed, || {
                     let generation = initialize_worker.admit()?;
                     let startup = initialize_worker.reserve_worker_startup(&generation)?;
-                    let prepared = initialize(&|resolver| {
-                        let mut control = control.lock().expect("startup cancellation lock");
-                        if control.closed {
-                            return Err("MCP connection closed during runtime preparation".into());
-                        }
-                        control.resolver = Some(resolver.clone());
-                        initialize_worker.register_resolver_stop_handle(&generation, resolver)
-                    })?;
-                    initialize_worker.configure(prepared.configuration);
+                    let prepared = initialize(
+                        &|resolver| {
+                            let mut control = control.lock().expect("startup cancellation lock");
+                            if control.closed {
+                                return Err(
+                                    "MCP connection closed during runtime preparation".into()
+                                );
+                            }
+                            control.resolver = Some(resolver.clone());
+                            initialize_worker.register_resolver_stop_handle(&generation, resolver)
+                        },
+                        diagnostics,
+                    )?;
+                    // Early control calls can launch once worker configuration
+                    // is published. Replay their pending records before that.
                     task_recording.configure(prepared.transcript);
-                    initialize_worker.record_with(task_recording);
+                    initialize_worker.configure(prepared.configuration);
                     if prelaunch {
                         initialize_worker.prelaunch(&generation);
                     }
@@ -72,8 +81,9 @@ impl Startup {
             .await
             .map_err(|error| format!("runtime preparation task failed: {error}"))
             .and_then(|result| result);
-            if result.is_err() {
-                recording.abandon_pending();
+            if let Err(error) = &result {
+                recording.startup_failed(error);
+                worker.finish_recording();
             }
             worker.finish_startup(result);
         });

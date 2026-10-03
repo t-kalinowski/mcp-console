@@ -192,6 +192,24 @@ pub(super) fn initialized_selection() -> Result<Option<super::NativePython>, Str
     }))
 }
 
+pub(super) fn conversion_metadata() -> Result<super::inspection::ConversionMetadata, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console", c"conversion_metadata")?;
+        let result = (api.call_no_args)(function);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err(python_function_error(
+                c"_mcp_console",
+                c"conversion_metadata",
+            ));
+        }
+        let response = services::response_text(result);
+        (api.dec_ref)(result);
+        serde_json::from_str(&response?)
+            .map_err(|error| format!("invalid running Python conversion metadata: {error}"))
+    })
+}
+
 pub(super) fn environment_selection_unchanged() -> Result<bool, String> {
     let slot = PYTHON_LIBRARY
         .lock()

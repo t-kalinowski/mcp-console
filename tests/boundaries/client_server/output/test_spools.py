@@ -20,6 +20,7 @@ from support.previews import (
     TEXT_BUDGET,
     assert_preview,
     compact_previews,
+    normalize_preview_paths,
 )
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -64,11 +65,15 @@ def test_separates_startup_omissions_from_retained_cell_text(
         assert output.endswith("cell output\n"), output[-1000:]
         marker = OMISSION.search(output)
         assert marker is not None
-        assert "no retained cell log" in marker[0]
+        assert "outputs/session.log" in marker[0]
+        assert (session / "outputs/session.log").read_text() == "s" * (
+            PENDING_TEXT_BUDGET + 7
+        )
         assert path not in marker[0]
         startup_preview = output.removesuffix("cell output\n")
         assert_preview(startup_preview, "s" * (PENDING_TEXT_BUDGET + 7))
         client.transcript[-1]["result"]["content"][0]["text"] = output
+        normalize_preview_paths(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 

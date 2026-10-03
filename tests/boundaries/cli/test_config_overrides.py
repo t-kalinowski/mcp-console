@@ -109,13 +109,17 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         for command in ("serve", "sandbox"):
             arguments = [*overrides[:2], command, *overrides[2:]]
             if command == "serve":
+                zod = Path(__file__).resolve().parents[2] / "fixtures/zod"
                 with McpClient(
                     binary,
-                    (*arguments, "--worker", "unused-worker"),
+                    (*arguments, "--worker", str(zod)),
                     current_directory=workspace,
                     environment=environment,
                 ) as client:
                     client.initialize_and_list_tools()
+                    # Native validation now belongs to the requested worker
+                    # launch. Its completed cell proves that launch occurred.
+                    client.expect("zod: overrides\n", r="echo overrides")
                     _, stderr = client.finish_with_standard_error()
                     assert stderr == "", stderr
             else:

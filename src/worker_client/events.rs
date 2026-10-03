@@ -497,8 +497,18 @@ fn handle_semantic_event(
             Route::Cell(evaluation) => evaluation.image(data, mime_type),
             Route::Bootstrap | Route::Preparation | Route::Idle => {
                 crate::transcript::validate_image_data(&data)?;
-                output.push_image(data, mime_type, None);
-                Ok(())
+                let recording = callbacks
+                    .client
+                    .0
+                    .recording
+                    .lock()
+                    .expect("recording lock")
+                    .clone();
+                output.push_image_with_artifact(data, mime_type, |data, mime_type| {
+                    recording.as_ref().map_or(Ok(None), |recording| {
+                        recording.persist_session_image(data, mime_type)
+                    })
+                })
             }
         }),
         RelayEvent::InputRequested { prompt } => {

@@ -105,14 +105,14 @@ def test_unavailable_remote_command(binary: Path) -> Transcript:
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, root
             ) as client:
-                client.startup_error()
+                startup = client.startup_error()
                 client.stdin.close()
                 client.stdout.read(timeout=12)
                 errors = client.stderr.read(timeout=12)
                 client.process.wait(timeout=12)
-                assert "/console-test-unavailable" in errors, errors
+                assert "/console-test-unavailable" in startup, startup
                 # Shell diagnostic spelling varies with the remote account's
-                # configured shell. The original diagnostic must reach stderr.
+                # configured shell. The original diagnostic must reach the startup response.
                 assert "SSH preparation retirement is unconfirmed" in errors, errors
                 return [{"mcp_ready": True, "remote_shell_diagnostic_retained": True}]
 

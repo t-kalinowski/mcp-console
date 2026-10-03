@@ -1,13 +1,13 @@
 ---
 mode: probe-version
 diagnostic: >
-  incompatible Docker Sandbox bootstrap: expected protocol 10, Console
+  incompatible Docker Sandbox bootstrap: expected protocol 11, Console
   0.0.4; received protocol 3, Console 0.0.4
 ---
 mode: probe-build
 diagnostic: >
-  incompatible Docker Sandbox bootstrap: expected protocol 10, Console
-  0.0.4; received protocol 10, Console unsupported
+  incompatible Docker Sandbox bootstrap: expected protocol 11, Console
+  0.0.4; received protocol 11, Console unsupported
 ---
 mode: missing-runtime
 diagnostic: |
@@ -64,7 +64,7 @@ diagnostic: |
 ---
 mode: native-unknown
 diagnostic: |
-  unknown field `unused`, expected `r_home` or `python` at line 1 column 496
+  unknown field `unused`, expected `r_home` or `python` at line 1 column 690
 ---
 mode: native-embedding-unknown
 diagnostic: >

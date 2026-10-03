@@ -110,11 +110,12 @@ impl Session {
         &mut self,
         policy: &crate::settings::SandboxSettings,
         python: Option<&std::path::Path>,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<preparation::Discovery, String> {
         let selections = preparation::Selections::from_policy(policy, python)?;
         let (preparation, discovery) =
-            preparation::Preparation::open(self, selections, on_started)?;
+            preparation::Preparation::open(self, selections, diagnostics, on_started)?;
         self.preparation = Some(preparation);
         // The session environment owns the current native selection after discovery.
         self.discovery = Some(preparation::Discovery {

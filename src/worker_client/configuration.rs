@@ -71,8 +71,11 @@ impl ClientConfiguration {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
+        #[cfg(windows)]
+        let _ = &diagnostics;
         let languages = crate::cell::Languages::from_environment()?;
         let configured_python = python
             .map(PathBuf::into_os_string)
@@ -88,6 +91,7 @@ impl ClientConfiguration {
                 let (preparation, discovery) =
                     crate::resolver::preparation::Preparation::open_local(
                         crate::resolver::preparation::Mode::PythonOnly,
+                        diagnostics.clone(),
                         on_started,
                     )?;
                 let resolver = crate::resolver::execution::PythonConfiguration::Local {
@@ -129,6 +133,7 @@ impl ClientConfiguration {
                 let (preparation, discovery) =
                     crate::resolver::preparation::Preparation::open_local(
                         crate::resolver::preparation::Mode::R,
+                        diagnostics.clone(),
                         on_started,
                     )?;
                 #[cfg(unix)]
@@ -292,6 +297,7 @@ impl ClientConfiguration {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let languages = crate::cell::Languages::from_environment()?;
@@ -301,6 +307,7 @@ impl ClientConfiguration {
                 no_sandbox,
                 policy,
                 python,
+                diagnostics,
                 started,
             );
         }
@@ -311,6 +318,7 @@ impl ClientConfiguration {
             &policy,
             no_sandbox,
             python.as_deref(),
+            diagnostics,
             started,
         )?;
         let mut configuration = Self::with_arguments(
@@ -348,11 +356,17 @@ impl ClientConfiguration {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         configured_python: Option<PathBuf>,
+        diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         #[cfg(unix)]
         let (discovery, duckdb_extensions) = (|| {
-            let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
+            let discovery = session.discover(
+                &policy,
+                configured_python.as_deref(),
+                diagnostics.clone(),
+                started,
+            )?;
             let extensions = if let Some(native) = &discovery.native {
                 native.selection.prepare_default_duckdb_extensions(
                     native.python.as_ref(),
@@ -380,7 +394,12 @@ impl ClientConfiguration {
             error
         })?;
         #[cfg(not(unix))]
-        let discovery = session.discover(&policy, configured_python.as_deref(), started)?;
+        let discovery = session.discover(
+            &policy,
+            configured_python.as_deref(),
+            diagnostics.clone(),
+            started,
+        )?;
         #[cfg(not(unix))]
         let duckdb_extensions = Default::default();
         let preparation = session

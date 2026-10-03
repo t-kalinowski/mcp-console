@@ -24,8 +24,11 @@ from support.checkpoints import (
     FifoCheckpoint,
     release_fixture_checkpoint,
     wait_for_worker_file,
+    wait_for_checkpoint,
 )
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.r import startup_r_package
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
@@ -93,6 +96,89 @@ after final image
         assert last_tool_text(client) == "zod: fresh\n"
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_summarizes_empty_cell_after_oversized_startup_output(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        raw = "startup head\n" + "s" * 32768 + "\nstartup tail\n"
+        with (
+            closing(FifoCheckpoint.create(root / "startup-reached")) as reached,
+            closing(FifoCheckpoint.create(root / "startup-release")) as release,
+        ):
+            # fmt: r
+            source = code(f"""
+                cat("startup head\\n", strrep("s", 32768L), "\\nstartup tail\\n", sep = "")
+                ready <- fifo(
+                  {
+                    json.dumps(str(reached.path))
+                  },
+                  "wb",
+                  blocking = TRUE
+                )
+                writeBin(charToRaw("1"), ready)
+                close(ready)
+                gate <- fifo(
+                  {
+                    json.dumps(str(release.path))
+                  },
+                  "rb",
+                  blocking = TRUE
+                )
+                readBin(gate, "raw", 1L)
+                """)
+            with startup_r_package(root, source) as environment:
+                environment["RETICULATE_PYTHON"] = sys.executable
+                args = (
+                    execution.serve("--writable-root", str(root))
+                    if execution == SANDBOXED
+                    else execution.serve()
+                )
+                with McpClient(binary, args, environment, root) as client:
+                    try:
+                        client.initialize_and_list_tools()
+                        reached.wait("startup output emitted", timeout=60)
+                        sessions = root / ".agents/console/sessions"
+                        log = wait_for_checkpoint(
+                            lambda: next(
+                                (
+                                    path
+                                    for path in sessions.glob("*/outputs/session.log")
+                                    if path.read_text() == raw
+                                ),
+                                None,
+                            ),
+                            "startup output recorded outside a cell",
+                            root=sessions,
+                            recursive=True,
+                            client=client,
+                        )
+                        release.release()
+                        result = client.send(python="pass")
+                        assert not result["isError"], result
+                        text = last_tool_text(client)
+                        assert len(text.encode()) <= TEXT_BUDGET, text
+                        assert text.startswith("startup head\n") and text.endswith(
+                            "startup tail\n"
+                        ), text
+                        session = log.parent.parent
+                        assert (session / "outputs/call-000001.log").read_bytes() == b""
+                        assert (
+                            str(
+                                Path(".agents/console/sessions")
+                                / session.name
+                                / "outputs/session.log"
+                            )
+                            in text
+                        ), text
+                        client.expect("42\n", python="42")
+                        client.finish()
+                    finally:
+                        release.release()
+        return [{"startup_preview_and_empty_cell_retained": True}]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -436,9 +522,10 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
         assert idle.startswith(head) and cell.endswith(tail)
         assert len(head.encode()) + int(markers[0][1]) == len(idle.encode())
         assert int(markers[1][1]) + len(tail.encode()) == len(cell.encode())
-        assert "no retained cell log" in markers[0][0]
+        assert "outputs/session.log" in markers[0][0]
         assert "outputs/call-000001.log" in markers[1][0]
         session = session_directory(client)
+        assert (session / "outputs/session.log").read_text(errors="replace") == idle
         assert (session / "outputs/call-000001.log").read_text() == cell
         summaries = [
             json.loads(line)

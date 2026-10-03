@@ -19,7 +19,7 @@ pub(crate) use client::Preparation;
 #[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 const LIMIT: usize = 1024 * 1024;
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 

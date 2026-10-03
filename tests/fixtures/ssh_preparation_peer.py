@@ -37,12 +37,12 @@ def complete(id, value, confirmed=True):
 
 
 opened = read()["Open"]
-assert opened["version"] == 5
+assert opened["version"] == 6
 assert opened["mode"] == "Auto"
 write(
     {
         "Hello": {
-            "version": 3 if mode == "incompatible" else 5,
+            "version": 3 if mode == "incompatible" else 6,
             "build": opened["build"],
         }
     }
@@ -68,6 +68,15 @@ python_identity = {
     "exec_prefix": "/remote-only",
     "base_prefix": "/remote-only",
     "base_exec_prefix": "/remote-only",
+    "metadata": {
+        "base_executable": "/remote-only/python",
+        "pythonpath": "/remote-only",
+        "version": "3.14.0",
+        "version_number": "3.14",
+        "architecture": "64bit",
+        "conda": False,
+        "numpy": None,
+    },
 }
 if mode in ("legacy-python", "delayed-discovery"):
     selected_python = Path(record).parent / "python"
