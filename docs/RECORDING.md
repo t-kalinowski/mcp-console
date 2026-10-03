@@ -57,6 +57,8 @@ None of these files is a live-state checkpoint.
 The QMD contains calls with exactly one R, Python, or SQL source field, including qualifying **rejected calls and failed evaluations**.
 It omits stdin, control, results, errors, polls, and recorded artifacts.
 Review and edit a copy before executing it outside the worker sandbox.
+Until discovery supplies runtime metadata, the QMD marks its environment as unknown and disables evaluation without inventing a dependency manifest.
+Failed discovery preserves that state and the submitted source.
 
 For a local recording, from the recording directory:
 

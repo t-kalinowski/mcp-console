@@ -910,6 +910,10 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
                     recursive=True,
                     client=client,
                 )
+                (quarto_path,) = sessions.glob("*/transcript.qmd")
+                pending_quarto = quarto_path.read_text()
+                assert "execute:\n  eval: false\n" in pending_quarto, pending_quarto
+                assert "environment: unknown" in pending_quarto, pending_quarto
                 client.expect(
                     "[worker starting]", requirements={"action": "get"}, timeout_ms=0
                 )
@@ -937,6 +941,9 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             assert markdown.index("## Call 1:") < markdown.index(
                 "## Runtime discovery"
             ), markdown
+            quarto = (session / "transcript.qmd").read_text()
+            assert "environment: unknown" not in quarto, quarto
+            assert "eval: false" not in quarto, quarto
             return [{"early_call_and_result_precede_discovery": True}]
         finally:
             reached.close()
@@ -1048,6 +1055,12 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert sum(event["event"] == "startup_failed" for event in events) == 1
             assert events[0]["dynamic_resolution"] is None, events[0]
             assert events[0]["python_preparation"] is None, events[0]
+            quarto = (session / "transcript.qmd").read_text()
+            header = quarto.split("---\n", 2)[1]
+            assert "execute:\n  eval: false\n" in header, quarto
+            assert "mcp-console:\n  environment: unknown\n" in header, quarto
+            assert "ir:" not in header and "knitr:" not in header, quarto
+            assert "stop('failed discovery ran the cell')" in quarto, quarto
             return [{"early_calls_recorded": 3, "startup_failure_recorded": True}]
         finally:
             reached.close()
