@@ -138,7 +138,16 @@ def test_cancelled_creation_and_probe_retire_owned_resources(binary: Path) -> li
                     client.process.wait(timeout=5)
             assert not (root / "peer/vms").exists()
             if mode.startswith("create-"):
-                assert "unconfirmed" in error, error
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                diagnostics = (session / "outputs/session.log").read_text()
+                assert "unconfirmed" in diagnostics, diagnostics
+                expected = (
+                    "creation returned no identity"
+                    if mode == "create-unacknowledged"
+                    else "removal was observed, but creation was not acknowledged"
+                )
+                assert expected in diagnostics, diagnostics
+                assert error == "Docker Sandbox setup cancelled\n", error
             records.append(
                 {
                     "fake_provider": True,
@@ -166,11 +175,14 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
             (root / "peer/mode").write_text(mode)
             with McpClient(binary, ("serve",), environment, root) as client:
                 client.startup_error()
+                result = client.send()
+                assert result["isError"], result
+                startup_error = last_result_text(client)
                 client.stdin.close()
                 assert client.stdout.read(timeout=15) == ""
                 errors = client.stderr.read(timeout=15)
                 assert client.process.wait(timeout=5) != 0
-            assert expected in errors, errors
+            assert expected in startup_error, startup_error
             invoked = calls(root)
             assert not any(call["args"][0] in ("exec", "rm") for call in invoked), (
                 invoked
@@ -179,7 +191,14 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
                 mode == "create-failed"
             )
             records += normalize_recording(
-                [{"fake_provider": mode, "stderr": errors}], root
+                [
+                    {
+                        "fake_provider": mode,
+                        "startup_error": startup_error,
+                        "stderr": errors,
+                    }
+                ],
+                root,
             )
     return records
 
@@ -224,7 +243,7 @@ def test_argument_arrays_and_unrelated_ownership(binary: Path) -> list:
 
 
 @requires(POSIX)
-def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
+def test_provider_diagnostics_are_recorded_with_worker_output(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")
         configure(root, template=TEMPLATE)
@@ -232,8 +251,15 @@ def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
         with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(r="42")
-            assert last_result_text(client) == "provider peer\n"
-            transcript, diagnostics = client.finish_with_standard_error()
+            text = last_result_text(client)
+            assert text.endswith("provider peer\n"), text
+            assert text.count("fixture: version diagnostic\n") == 1, text
+            assert text.count("fixture: create diagnostic\n") == 2, text
+            assert text.count("fixture: create progress\n") == 2, text
+            transcript, stderr = client.finish_with_standard_error()
+        assert stderr == "", stderr
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        diagnostics = (session / "outputs/session.log").read_text()
         assert diagnostics.count("fixture: version diagnostic\n") == 1, diagnostics
         for operation in ("create", "rm"):
             assert diagnostics.count(f"fixture: {operation} diagnostic\n") == 2, (
@@ -244,7 +270,7 @@ def test_provider_diagnostics_stay_on_controller_stderr(binary: Path) -> list:
             )
         assert "fixture: ls diagnostic\n" in diagnostics, diagnostics
         return transcript[3:] + [
-            {"provider_diagnostics_preserved_on_controller_stderr": True}
+            {"provider_diagnostics_preserved_in_session_recording": True}
         ]
 
 

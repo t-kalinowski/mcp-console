@@ -333,9 +333,9 @@ impl Client {
                         }
                         if let Some(result) = startup.borrow_and_update().as_ref() {
                             if let Err(error) = result {
-                                return Ok(SendResponse::Failed(Response::tool_error(
-                                    error.clone(),
-                                )));
+                                let mut response = self.0.output.take();
+                                response.push_tool_error(error.clone());
+                                return Ok(SendResponse::Failed(response));
                             }
                             break;
                         }
