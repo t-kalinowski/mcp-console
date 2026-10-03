@@ -1016,6 +1016,60 @@ def test_selected_environment_uses_custom_connection_without_duckdb(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_bootstrap_ignores_workspace_duckdb_shadows(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for package in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            python = workspace / ".venv/bin/python"
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", python.parent.parent],
+                check=True,
+            )
+            subprocess.run(
+                ["uv", "pip", "install", "--python", python, "duckdb"],
+                check=True,
+                capture_output=True,
+            )
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text("python: .venv/bin/python\n")
+            shadow = workspace / "duckdb.py"
+            if package:
+                (workspace / "duckdb").mkdir()
+                shadow = workspace / "duckdb/__init__.py"
+            shadow.write_text(
+                "raise RuntimeError('workspace DuckDB shadow was imported')\n"
+            )
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            env = dict(environment(bin_dir), MCP_CONSOLE_LANGUAGES="python,sql")
+            with sql_client(binary, execution, env, workspace) as client:
+                client.expect(
+                    "Python remains available; DuckDB shadow remains unimported\n",
+                    # fmt: python
+                    python=code("""
+                        import sqlite3
+                        import sys
+
+                        assert "duckdb" not in sys.modules
+                        selected = sqlite3.connect(":memory:")
+                        selected.execute("CREATE TABLE custom(value INTEGER)")
+                        selected.execute("INSERT INTO custom VALUES (42)")
+                        console_sql_connection(selected)
+                        print("Python remains available; DuckDB shadow remains unimported")
+                        """),
+                )
+                client.send(sql="SELECT value FROM custom")
+                assert "42" in last_tool_text(client), last_tool_text(client)
+                client.finish()
+    return [{"workspace_duckdb_module_and_package_remain_unimported": True}]
+
+
+@executions(DIRECT, SANDBOXED)
 def test_selected_environment_uses_preinstalled_duckdb(
     binary: Path, execution: Execution
 ) -> Transcript:

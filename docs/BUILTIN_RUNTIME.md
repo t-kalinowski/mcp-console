@@ -14,6 +14,7 @@ The default worker starts in the background while MCP discovery remains usable.
 Worker transport readiness precedes background initialization of enabled R and Python on the serialized interpreter thread.
 Startup hooks run even without submitted code; their output, plots, and input prompts remain available through `send`.
 When SQL is enabled and its optional provider is installed, bootstrap opens the managed DuckDB connection; first-query work remains lazy.
+Python-owned SQL warms only an installed DuckDB package matching the active import candidate; workspace modules/packages shadowing it are treated as absent during bootstrap.
 An absent provider can be prepared on later SQL demand.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
