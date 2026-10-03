@@ -23,7 +23,8 @@ mod output;
 
 pub(crate) use output::{CellOutput, OutputRecord};
 
-const SCHEMA_VERSION: u64 = 1;
+// v2 includes startup events and nullable discovery metadata/artifact owners.
+const SCHEMA_VERSION: u64 = 2;
 
 #[derive(Clone)]
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
