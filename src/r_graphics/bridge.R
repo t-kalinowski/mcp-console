@@ -42,8 +42,8 @@ base::local(
         stop("failed to create managed plot directory")
       }
 
-      width <- positive_option("console.plot.width", 800 / 96)
-      height <- positive_option("console.plot.height", 600 / 96)
+      width <- positive_option("console.plot.width_in", 800 / 96)
+      height <- positive_option("console.plot.height_in", 600 / 96)
       dpi <- positive_option("console.plot.dpi", 96)
       device_counter <<- device_counter + 1L
       path <- file.path(

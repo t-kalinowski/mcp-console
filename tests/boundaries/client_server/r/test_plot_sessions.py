@@ -67,8 +67,8 @@ def test_workers_keep_plot_files_separate(
                 # fmt: r
                 r = code(r"""
                     options(
-                      console.plot.width = 4,
-                      console.plot.height = 3,
+                      console.plot.width_in = 4,
+                      console.plot.height_in = 3,
                       console.plot.dpi = 100
                     )
                     plot(VALUES)

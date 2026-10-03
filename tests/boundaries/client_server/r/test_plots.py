@@ -96,8 +96,8 @@ def test_returns_cell_scoped_plots(binary: Path, execution: Execution) -> Transc
     # fmt: r
     r = code(r"""
         options(
-          console.plot.width = 4,
-          console.plot.height = 3,
+          console.plot.width_in = 4,
+          console.plot.height_in = 3,
           console.plot.dpi = 100
         )
         cat("before plots\n")
@@ -152,6 +152,55 @@ def test_returns_cell_scoped_plots(binary: Path, execution: Execution) -> Transc
 
 
 @executions(DIRECT, SANDBOXED)
+def test_preserves_large_plot_dimensions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(
+            # fmt: r
+            r=code(r"""
+                local({
+                  # Observe the requested dimensions without allocating a large image.
+                  invisible(suppressMessages(trace(
+                    "png",
+                    where = asNamespace("grDevices"),
+                    tracer = quote({
+                      stopifnot(identical(units, "in"))
+                      stop(
+                        sprintf("%g x %g inches at %g DPI", width, height, res),
+                        call. = FALSE
+                      )
+                    }),
+                    print = FALSE
+                  )))
+                  on.exit(suppressMessages(untrace(
+                    "png",
+                    where = asNamespace("grDevices")
+                  )))
+                  for (size in list(c(8, 6, 600), c(32, 1, 600))) {
+                    options(
+                      console.plot.width_in = size[[1]],
+                      console.plot.height_in = size[[2]],
+                      console.plot.dpi = size[[3]]
+                    )
+                    message <- tryCatch(plot(1:3), error = conditionMessage)
+                    cat(message, "\n", sep = "")
+                    stopifnot(identical(
+                      message,
+                      sprintf("%g x %g inches at %g DPI", size[[1]], size[[2]], size[[3]])
+                    ))
+                  }
+                })
+                """),
+        )
+        assert last_tool_text(client) == (
+            "8 x 6 inches at 600 DPI\n32 x 1 inches at 600 DPI\n"
+        ), last_tool_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_emits_managed_plots_when_pages_finalize(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -161,8 +210,8 @@ def test_emits_managed_plots_when_pages_finalize(
     # fmt: r
     r = code(r"""
         options(
-          console.plot.width = 4,
-          console.plot.height = 3,
+          console.plot.width_in = 4,
+          console.plot.height_in = 3,
           console.plot.dpi = 100
         )
         local({
