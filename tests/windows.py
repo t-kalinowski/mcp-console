@@ -1081,8 +1081,9 @@ class WindowsConsole(unittest.TestCase):
                 os.environ,
                 RETICULATE_PYTHON=sys.executable,
                 RETICULATE_PYTHONPATH=str(root),
+                MCP_CONSOLE_LANGUAGES="python",
             )
-            session = Session(environment, overrides=('languages=["python"]',))
+            session = Session(environment)
             try:
                 session.initialize()
                 raw = "startup head\n" + "s" * 32768 + "\nstartup tail\n"
