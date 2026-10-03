@@ -153,10 +153,12 @@ def check_text_snapshot(
 
 
 def normalize_request_ids(transcript: Transcript) -> Transcript:
+    # CLI transcripts also record raw input strings under the same key.
     cancelled_ids = {
-        entry["input"]["params"]["requestId"]
+        message["params"]["requestId"]
         for entry in transcript
-        if entry.get("input", {}).get("method") == "notifications/cancelled"
+        if isinstance(message := entry.get("input"), dict)
+        and message.get("method") == "notifications/cancelled"
     }
     labels = {}
     for entry in transcript:
@@ -170,7 +172,10 @@ def normalize_request_ids(transcript: Transcript) -> Transcript:
             if request_id in labels:
                 entry["id"] = labels[request_id]
         message = entry.get("input", {})
-        if message.get("method") == "notifications/cancelled":
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "notifications/cancelled"
+        ):
             params = message["params"]
             if params["requestId"] in labels:
                 entry["input"] = {
