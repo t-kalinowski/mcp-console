@@ -142,10 +142,11 @@ result:
             description: >-
               One complete SQL cell through the active R DBI or Python DB-API
               connection, depending on available runtimes and the selected connection.
-              Console opens its in-memory DuckDB catalog lazily when the adapter and
-              DuckDB are preinstalled. R-owned DuckDB can query R global data frames
-              by name; without R, Python data frames require explicit registration
-              with sql_connection().register(name, frame).
+              Console opens its in-memory DuckDB catalog during background startup
+              when SQL is enabled and the adapter and DuckDB are preinstalled;
+              first-query work remains deferred. R-owned DuckDB can query R global
+              data frames by name; without R, Python data frames require explicit
+              registration with sql_connection().register(name, frame).
               console_sql_connection(connection) selects a user-owned connection;
               console_sql_connection(None) in Python or console_sql_connection(NULL)
               in R restores the Console-owned catalog without discarding it. A query

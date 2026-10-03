@@ -42,6 +42,11 @@ base::local(
           environment_scan = TRUE
         )
       )
+      on.exit({
+        if (is.null(managed_connection)) {
+          DBI::dbDisconnect(connection)
+        }
+      })
       DBI::dbExecute(connection, "SET enable_progress_bar = false")
       managed_connection <<- connection
       invisible(managed_connection)

@@ -45,3 +45,21 @@ if os.environ["MCP_CONSOLE_TEST_SQL_BEHAVIOR"] == "import-error":
         return original_import(name, *args, **kwargs)
 
     builtins.__import__ = failed_import
+
+if os.environ["MCP_CONSOLE_TEST_SQL_BEHAVIOR"].startswith("metadata-"):
+    original_import = builtins.__import__
+
+    def failed_metadata_import(name, globals=None, *args, **kwargs):
+        if (
+            name == "importlib.metadata"
+            and globals is not None
+            and globals.get("__name__") == "_mcp_console_sql"
+        ):
+            builtins.__import__ = original_import
+            if os.environ["MCP_CONSOLE_TEST_SQL_BEHAVIOR"] == "metadata-interrupt":
+                input("SQL warmup> ")
+            else:
+                raise ImportError("optional SQL warmup failed")
+        return original_import(name, globals, *args, **kwargs)
+
+    builtins.__import__ = failed_metadata_import

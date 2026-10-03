@@ -35,7 +35,8 @@ Clearing optional requirements does not remove that infrastructure, ambient libr
 Without R, an empty Python declaration omits DuckDB, but a user-selected DB-API connection can still provide SQL.
 
 Default preparation, built-in worker launch, and enabled R/Python initialization run in the background.
-Transport readiness connects input and resolver services before startup hooks run; DuckDB connections and queries remain lazy.
+Transport readiness connects input and resolver services before startup hooks run.
+When SQL is enabled and its optional provider is installed, bootstrap opens the managed DuckDB connection; first-query work remains lazy.
 Discovery and first-use preparation are different stages.
 See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early requirements and replacement of an unused prewarmed worker.
 

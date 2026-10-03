@@ -1062,7 +1062,9 @@ def test_interrupts_sql_warmup_without_losing_worker(
 ) -> Transcript:
     for with_r, behavior in (
         (False, "interrupt"),
+        (False, "metadata-interrupt"),
         (True, "interrupt"),
+        (True, "setup-interrupt"),
         (True, "probe-interrupt-DBI"),
         (True, "probe-interrupt-duckdb"),
     ):
@@ -1088,6 +1090,17 @@ def test_interrupts_sql_warmup_without_losing_worker(
             )
             if with_r:
                 client.expect(r="stopifnot(startup_sql_pid == Sys.getpid())")
+                if behavior == "setup-interrupt":
+                    client.expect(
+                        # fmt: r
+                        r=code("""
+                            stopifnot(
+                              length(startup_setup_connections) == 1L,
+                              !DBI::dbIsValid(startup_setup_connections[[1L]])
+                            )
+                            startup_allow_sql_setup <- TRUE
+                            """),
+                    )
             else:
                 client.expect(python="assert startup_sql_pid == os.getpid()")
             client.send(
@@ -1108,6 +1121,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
         (True, "error"),
         (False, "error"),
         (False, "import-error"),
+        (False, "metadata-error"),
         (False, "system-exit"),
     ):
         with startup_sql_client(binary, execution, with_r, behavior) as (client, _, _):
@@ -1138,6 +1152,46 @@ def test_optional_sql_warmup_failure_preserves_runtime(
             assert "42" in last_tool_text(client), client.transcript[-1]
             client.finish()
     return [{"optional_sql_warmup_failure_preserves_runtime_and_later_sql": True}]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_closes_provisional_connections_after_sql_setup_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_sql_client(binary, execution, True, "setup-error") as (client, _, _):
+        for attempt in (1, 2):
+            if attempt == 2:
+                client.send(sql="SELECT 42 AS answer")
+                assert "optional SQL warmup setup failed" in last_tool_text(client)
+            client.send(
+                # fmt: r
+                r=code(f"""
+                    stopifnot(
+                      startup_sql_pid == Sys.getpid(),
+                      length(startup_setup_connections) == {attempt}L,
+                      vapply(startup_setup_connections, function(conn) !DBI::dbIsValid(conn), logical(1L))
+                    )
+                    cat("Failed connections closed\\n")
+                    """),
+            )
+            result = client.transcript[-1]["result"]
+            assert result.get("isError") is not True, result
+            assert "Failed connections closed" in last_tool_text(client), result
+        client.expect(r="startup_allow_sql_setup <- TRUE")
+        client.send(sql="SELECT 42 AS answer")
+        assert "42" in last_tool_text(client), client.transcript[-1]
+        client.expect(
+            # fmt: r
+            r=code("""
+                stopifnot(
+                  length(startup_setup_connections) == 3L,
+                  DBI::dbIsValid(startup_setup_connections[[3L]]),
+                  identical(sql_connection(), startup_setup_connections[[3L]])
+                )
+                """),
+        )
+        client.finish()
+    return [{"failed_sql_setup_connections_closed_and_retry_retained": True}]
 
 
 @contextmanager

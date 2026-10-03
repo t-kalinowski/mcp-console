@@ -49,6 +49,34 @@
       exit = bquote(.(observe_connection)(returnValue()))
     ))
     behavior <- Sys.getenv("MCP_CONSOLE_TEST_SQL_BEHAVIOR")
+    if (startsWith(behavior, "setup-")) {
+      state <- globalenv()
+      state$startup_setup_connections <- list()
+      state$startup_allow_sql_setup <- FALSE
+      observe_setup <- function(conn, statement) {
+        if (!identical(statement, "SET enable_progress_bar = false")) {
+          return(invisible())
+        }
+        state$startup_setup_connections <- c(
+          state$startup_setup_connections,
+          list(conn)
+        )
+        if (state$startup_allow_sql_setup) {
+          return(invisible())
+        }
+        if (identical(behavior, "setup-interrupt")) {
+          readline("SQL warmup> ")
+        } else {
+          stop("optional SQL warmup setup failed")
+        }
+      }
+      suppressMessages(trace(
+        "dbExecute",
+        where = asNamespace("DBI"),
+        print = FALSE,
+        tracer = bquote(.(observe_setup)(conn, statement))
+      ))
+    }
     if (startsWith(behavior, "probe-interrupt-")) {
       target <- substring(behavior, nchar("probe-interrupt-") + 1L)
       probed <- FALSE
