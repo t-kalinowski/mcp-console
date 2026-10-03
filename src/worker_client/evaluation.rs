@@ -575,9 +575,12 @@ impl Evaluation {
     }
 
     /// A poll already waiting for startup can encounter a later call's reply
-    /// before its transport write settles. Retain observation until delivery
-    /// releases that reply; cancellation drops this wait without claiming it.
-    pub(super) async fn claim_after_delivery(self: &Arc<Self>) -> Result<WaitClaim, String> {
+    /// before its transport write settles. Retain observation within the call's
+    /// deadline; expiry or cancellation leaves the response unclaimed.
+    pub(super) async fn claim_after_delivery(
+        self: &Arc<Self>,
+        deadline: Instant,
+    ) -> Result<WaitClaim, String> {
         loop {
             let delivered = self.delivery_changed.notified();
             tokio::pin!(delivered);
@@ -585,7 +588,12 @@ impl Evaluation {
             if let Some(claim) = self.try_claim_wait()? {
                 return Ok(claim);
             }
-            delivered.await;
+            tokio::time::timeout(
+                deadline.saturating_duration_since(Instant::now()),
+                delivered,
+            )
+            .await
+            .map_err(|_| "previous send response delivery is still pending".to_string())?;
         }
     }
 

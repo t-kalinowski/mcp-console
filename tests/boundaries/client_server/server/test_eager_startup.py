@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import json
 import sys
 import tempfile
 from contextlib import ExitStack, closing
@@ -19,7 +20,7 @@ from boundaries.client_server.python.test_startup import (
 )
 from support.assertions import last_result_text
 from support.allocations import AllocationProfile
-from support.checkpoints import FifoCheckpoint, wait_for_path
+from support.checkpoints import FifoCheckpoint, wait_for_checkpoint, wait_for_path
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
@@ -393,6 +394,20 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
 def test_early_requirements_select_candidate_before_default_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return early_requirements_with_pending_poll(binary, execution, expire=False)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
+def test_startup_poll_deadline_preserves_unclaimed_output(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return early_requirements_with_pending_poll(binary, execution, expire=True)
+
+
+def early_requirements_with_pending_poll(
+    binary: Path, execution: Execution, *, expire: bool
+) -> Transcript:
     r_environment, _ = r_test_environment()
     with (
         ExitStack() as resources,
@@ -448,7 +463,7 @@ def test_early_requirements_select_candidate_before_default_preparation(
             reached.wait("runtime discovery is blocked")
             assert os.read(alive, 1) == b"1"
             client.initialize_and_list_tools()
-            pending = client.start_send(timeout_ms=600_000)
+            pending = client.start_send(timeout_ms=10_000 if expire else 600_000)
             client.request("ping")
             (root / "write-armed").touch()
             try:
@@ -466,12 +481,57 @@ def test_early_requirements_select_candidate_before_default_preparation(
                 prepared.wait("initial polling does not block candidate preparation")
                 proceed.release()
                 wait_for_path(evaluated, "accepted cell ran", client=client)
+                if expire:
+                    journal = next(
+                        root.glob(".agents/console/sessions/*/internal/events.jsonl")
+                    )
+
+                    def poll_result_recorded() -> Path | None:
+                        # Observe completed journal lines while stdout remains
+                        # held. A stalled transport cannot hide an expired wait.
+                        lines = journal.read_text().rpartition("\n")[0].splitlines()
+                        events = [json.loads(line) for line in lines]
+                        poll_call = next(
+                            event
+                            for event in events
+                            if event["event"] == "tool_call"
+                            and event["request_id"] == pending["id"]
+                        )
+                        return (
+                            journal
+                            if any(
+                                event["event"] == "tool_result"
+                                and event["call_id"] == poll_call["call_id"]
+                                for event in events
+                            )
+                            else None
+                        )
+
+                    wait_for_checkpoint(
+                        poll_result_recorded,
+                        "startup poll deadline expires before response delivery",
+                        root=journal.parent,
+                        client=client,
+                        timeout=15,
+                    )
                 write_release.release()
                 client.receive(pending)
-                assert pending["result"]["content"] == [
-                    {"type": "text", "text": "[1] 42\n"}
-                ], pending
-                assert not pending["result"]["isError"]
+                if expire:
+                    assert pending["result"] == {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "[previous send response delivery is still pending]",
+                            }
+                        ],
+                        "isError": True,
+                    }, pending
+                    client.expect("[1] 42\n", timeout_ms=0)
+                else:
+                    assert pending["result"]["content"] == [
+                        {"type": "text", "text": "[1] 42\n"}
+                    ], pending
+                    assert not pending["result"]["isError"]
                 assert not any(
                     "tidyverse" in call["arguments"] for call in ir_run_records(record)
                 )

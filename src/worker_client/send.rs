@@ -291,7 +291,7 @@ impl Client {
                             .to_string()
                             .into());
                     }
-                    let wait_claim = active.evaluation.claim_after_delivery().await?;
+                    let wait_claim = active.evaluation.claim()?;
                     if let Some(stdin) = stdin {
                         active.evaluation.submit_stdin(stdin)?;
                     }
@@ -322,7 +322,7 @@ impl Client {
                                     .to_string()
                                     .into());
                             }
-                            let claim = active.evaluation.claim_after_delivery().await?;
+                            let claim = active.evaluation.claim_after_delivery(deadline).await?;
                             drop(preparation.take());
                             drop(operation.take());
                             return Ok(send_response_from_wait(
