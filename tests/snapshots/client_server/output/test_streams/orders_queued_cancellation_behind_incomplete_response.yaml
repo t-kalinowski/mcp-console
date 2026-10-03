@@ -19,11 +19,12 @@ result:
 ---
 send:
   r: "check response gate: 4"
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 4
+    requestId: <cancelled request 1>
     reason: cancel before worker admission
 ---
 send:

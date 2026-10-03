@@ -3,6 +3,7 @@
 ---
 send:
   r: cancelled_cell_ran <- TRUE
+id: <cancelled request 1>
 ---
 send:
   timeout_ms: 0
@@ -24,7 +25,7 @@ result:
 input:
   method: notifications/cancelled
   params:
-    requestId: 3
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping

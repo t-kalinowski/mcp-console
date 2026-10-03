@@ -22,11 +22,12 @@ transcript_normalization:
     template: preview recovery cell {index}
     index_start: 0
     index_count: 32
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 4
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping

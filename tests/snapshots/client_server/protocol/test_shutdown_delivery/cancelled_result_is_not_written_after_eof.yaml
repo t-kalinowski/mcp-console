@@ -12,11 +12,12 @@ result:
 ---
 send:
   r: echo held response
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 4
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping

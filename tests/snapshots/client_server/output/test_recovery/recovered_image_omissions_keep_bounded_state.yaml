@@ -12,11 +12,12 @@ result:
 ---
 send:
   r: preview rejected image
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 4
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping
@@ -30,11 +31,12 @@ transcript_normalization:
   repeated_exchange_count: 1023
   exchange_entry_count: 3
   request_ids: distinct in each exchange
+id: <cancelled request 2>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 6
+    requestId: <cancelled request 2>
 ---
 input:
   method: ping
