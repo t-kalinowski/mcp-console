@@ -1409,6 +1409,9 @@ def test_conversion_metadata_matches_configured_import_paths(
             environment.update(
                 RETICULATE_PYTHON=str(executable),
                 MCP_CONSOLE_LANGUAGES="r,python",
+                # NumPy intentionally lives on configured paths, outside the
+                # virtualenv that reticulate's package probe inspects.
+                RETICULATE_CHECK_REQUIRED_PACKAGES="false",
             )
             environment[variable] = str(modules)
             arguments = execution.serve(
