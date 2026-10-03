@@ -613,6 +613,10 @@ def test_cancelled_response_preserves_bootstrap_and_first_cell(
         )
         client.initialize_and_list_tools()
         bootstrap_output(client, "Python startup\n")
+        # Startup polls are compacted from the transcript, but still consume IDs.
+        # Add another completed request to exercise the cancellation reference.
+        client.request("ping")
+        client.transcript.pop()
         profile.pause_results(True)
         try:
             pending = client.start_send(python="counter = 1; counter", timeout_ms=0)
