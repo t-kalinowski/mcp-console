@@ -1,10 +1,13 @@
 #!/usr/bin/env -S uv run --script
 import json
 import os
+import select
+import signal
 import subprocess
 import sys
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -19,7 +22,9 @@ from support.docker_sandbox import (
     normalize_recording,
     workspace,
 )
-from support.requirements import POSIX, requires
+from support.events import Events
+from support.native import LOADER_VARIABLE, build_interposer
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
@@ -158,6 +163,178 @@ def test_cancelled_creation_and_probe_retire_owned_resources(binary: Path) -> li
                     ),
                 }
             )
+    return records
+
+
+@requires(POSIX, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> list:
+    records = []
+    # Signal publication and cancellation belong to the Console owner process,
+    # outside the fake microVM boundary. No real provider is needed here.
+    with TemporaryDirectory(dir="/tmp") as native:
+        interposer = build_interposer(Path(native), "target_owner_signals")
+        for phase in (
+            "installation",
+            "interrupted-write",
+            "creation",
+            "blocked-output",
+        ):
+            with workspace() as root, ExitStack() as stack:
+                installation_phase = phase in ("installation", "interrupted-write")
+                environment = cli_peer(root / "peer")
+                configure(root, template=TEMPLATE)
+                checkpoints = {
+                    name: stack.enter_context(
+                        closing(FifoCheckpoint.create(root / "peer" / name))
+                    )
+                    for name in (
+                        "installed",
+                        "full",
+                        "returned",
+                        "release",
+                        "retirement",
+                        "blocked",
+                        "reached",
+                    )
+                }
+                environment[LOADER_VARIABLE] = str(interposer)
+                environment["MCP_CONSOLE_TEST_OWNER_SIGNALS"] = str(root / "peer")
+                if installation_phase:
+                    environment["MCP_CONSOLE_TEST_SIGNAL_INSTALLATION"] = "1"
+                    (root / "peer/mode").write_text("create-unacknowledged")
+                    if phase == "interrupted-write":
+                        environment["MCP_CONSOLE_TEST_SIGNAL_EINTR"] = "1"
+                else:
+                    (root / "peer/mode").write_text(
+                        "signal-create" if phase == "creation" else "signal-output"
+                    )
+                stopped = False
+                with McpClient(binary, ("serve",), environment, root) as client:
+                    try:
+                        client.initialize_and_list_tools()
+                        if installation_phase:
+                            checkpoints["installed"].wait(
+                                "handlers installed before watcher"
+                            )
+                        else:
+                            if phase == "blocked-output":
+                                pending = client.start_request(
+                                    "tools/call", name="send", arguments={"r": "42"}
+                                )
+                            checkpoints["reached"].wait(
+                                "provider setup/output checkpoint"
+                            )
+                        owner = int((root / "peer/pid").read_text())
+                        if phase == "blocked-output":
+                            os.kill(client.process.pid, signal.SIGSTOP)
+                            stopped = True
+                            checkpoints["release"].release()
+                            checkpoints["blocked"].wait("owner output reached EAGAIN")
+                        # Return receipts prevent OS signal merging from being
+                        # mistaken for successful handler publication.
+                        first_signals = (
+                            (signal.SIGTERM,)
+                            if phase == "interrupted-write"
+                            else (signal.SIGTERM, signal.SIGINT, signal.SIGHUP) * 2
+                        )
+                        for index, signum in enumerate(first_signals):
+                            os.kill(owner, signum)
+                            if index == 0 and phase != "interrupted-write":
+                                checkpoints["full"].wait("actual wakeup pipe is full")
+                            checkpoints["returned"].wait(
+                                "handler returned with errno preserved", timeout=5
+                            )
+                        if installation_phase:
+                            checkpoints["release"].release()
+                        checkpoints["retirement"].wait(
+                            "ordinary owner reached its retirement frame"
+                        )
+                        assert not (root / "peer/vms").exists()
+                        # Cancellation has completed. Handlers still need a live
+                        # pipe throughout retirement-frame delivery.
+                        for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+                            os.kill(owner, signum)
+                            checkpoints["returned"].wait(
+                                "retirement handler returned", timeout=5
+                            )
+                        if stopped:
+                            with Events() as events:
+                                events.watch_process(owner)
+                                checkpoints["release"].release()
+                                assert owner in events.wait(5), (
+                                    "owner retirement was not bounded"
+                                )
+                            os.kill(client.process.pid, signal.SIGCONT)
+                            stopped = False
+                            client.receive(pending)
+                            assert pending["result"]["isError"], pending
+                        else:
+                            checkpoints["release"].release()
+                        client.stdin.close()
+                        client.stdout.read(timeout=15)
+                        stderr = client.stderr.read(timeout=15)
+                        status = client.process.wait(timeout=5)
+                        # Controller shutdown attribution can race an unexpected
+                        # owner exit. This case owns bounded owner retirement and
+                        # retained provider diagnostics; lifecycle cases own attribution.
+                        if phase != "blocked-output":
+                            assert status == 1, (phase, status, stderr)
+                    finally:
+                        if stopped and client.process.poll() is None:
+                            os.kill(client.process.pid, signal.SIGCONT)
+                invoked = calls(root)
+                removals = [
+                    call["args"][-1] for call in invoked if call["args"][0] == "rm"
+                ]
+                assert (
+                    len(removals)
+                    == {
+                        "installation": 0,
+                        "interrupted-write": 0,
+                        "creation": 1,
+                        "blocked-output": 2,
+                    }[phase]
+                )
+                assert len(set(removals)) == len(removals)
+                assert not select.select(
+                    [checkpoints["retirement"].descriptor], [], [], 0
+                )[0], "owner attempted more than one retirement frame"
+                assert not (root / "peer/vms").exists()
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                if phase == "creation":
+                    diagnostics = (session / "outputs/session.log").read_text()
+                    assert (
+                        diagnostics.count("fixture: original creation diagnostic\n")
+                        == 1
+                    )
+                    assert (
+                        "removal was observed, but creation was not acknowledged"
+                        in diagnostics
+                    )
+                elif phase == "blocked-output":
+                    diagnostics = (session / "outputs/call-000001.log").read_text()
+                    assert (
+                        diagnostics.count("fixture: original attachment diagnostic\n")
+                        == 1
+                    )
+                else:
+                    assert stderr == "Docker Sandbox setup cancelled\n", stderr
+                record = {
+                    "phase": phase,
+                    "full_pipe_wakeups_coalesced": phase != "interrupted-write",
+                    "interrupted_write_retried": phase == "interrupted-write",
+                    "handler_returns_with_errno_preserved": len(first_signals) + 3,
+                    "owner_cancellation_and_single_retirement": True,
+                    "original_diagnostics_retained": True,
+                }
+                if phase == "blocked-output":
+                    record["original_provider_diagnostic"] = (
+                        "fixture: original attachment diagnostic\n"
+                    )
+                    record["owner_retired_before_controller_resumed"] = True
+                else:
+                    record["standard_error"] = normalize_recording([stderr], root)[0]
+                records.append(record)
     return records
 
 

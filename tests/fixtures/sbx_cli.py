@@ -95,7 +95,9 @@ elif args[0] == "create":
         }
     )
     state.write_text(json.dumps(current))
-    if mode == "create-gate":
+    if mode == "signal-create":
+        print("fixture: original creation diagnostic", file=sys.stderr, flush=True)
+    if mode in ("create-gate", "signal-create"):
         gate()
 elif args[0] == "rm":
     assert args[1] == "--force"
@@ -233,6 +235,16 @@ elif args[0] == "exec":
             frame(2, {"kind": "input_requested", "prompt": "target startup> "})
         else:
             frame(2, {"kind": "runtime_initialized", "interrupted": False})
+        if mode == "signal-output":
+            with (root / "reached").open("wb", buffering=0) as stream:
+                stream.write(b"1")
+            with (root / "release").open("rb", buffering=0) as stream:
+                assert stream.read(1) == b"1"
+            print(
+                "fixture: original attachment diagnostic", file=sys.stderr, flush=True
+            )
+            for _ in range(2048):
+                frame(2, {"kind": "console_output", "data": "x" * 32768})
         for line in source:
             command = json.loads(line)
             if command["kind"] == "stdin":
