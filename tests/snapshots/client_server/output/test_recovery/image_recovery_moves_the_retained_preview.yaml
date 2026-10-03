@@ -12,11 +12,12 @@ result:
 ---
 send:
   r: preview allocation image
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 4
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping

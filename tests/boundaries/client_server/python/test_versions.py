@@ -641,7 +641,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as stack:
         temporary = Path(temporary_directory)
         original_path = os.environ.get("PATH", "")
         real_uv = shutil.which("uv", path=original_path)
@@ -679,6 +679,24 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         )
         managed_uv.chmod(0o755)
 
+        version_uv = temporary / "uv-version"
+        write_python_executable(
+            version_uv,
+            # fmt: python
+            code(r"""
+                #!/usr/bin/env python3
+                import os
+                import sys
+
+                assert sys.argv[1:] == ["--version"], (
+                    "synthetic inventory test attempted real uv resolution",
+                    sys.argv[1:],
+                )
+                uv = os.environ["MCP_CONSOLE_TEST_VERSION_UV"]
+                os.execv(uv, [uv, *sys.argv[1:]])
+                """),
+        )
+
         fake_bin = temporary / "bin"
         fake_bin.mkdir()
         path_uv = fake_bin / "uv"
@@ -702,45 +720,49 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         uv_record = temporary / "uv.jsonl"
         resolver_record = temporary / "uv-resolver.jsonl"
         inventories = temporary / "uv-python-inventories.json"
-        intercept_marker = temporary / "intercept-managed-uv"
+        write_uv_python_inventories(
+            inventories,
+            {"only-managed": [uv_python_row("3.12.9")]},
+        )
         environment = os.environ.copy()
         environment.pop("RETICULATE_PYTHON", None)
+        # Resolve the synthetic inventory on the host without embedding its
+        # interpreter or starting unrelated Python/SQL bootstrap work.
+        environment["MCP_CONSOLE_LANGUAGES"] = "r"
         environment["RETICULATE_UV"] = "managed"
         environment["R_USER_CACHE_DIR"] = str(r_user_cache)
         environment["IR_CACHE_DIR"] = host_ir_cache
         environment["UV_CACHE_DIR"] = str(temporary / "wrong-cache")
         environment["UV_PYTHON_INSTALL_DIR"] = str(temporary / "wrong-python")
         environment["PATH"] = os.pathsep.join((str(fake_bin), original_path))
-        environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
+        environment["MCP_CONSOLE_TEST_REAL_UV"] = str(version_uv)
+        environment["MCP_CONSOLE_TEST_VERSION_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         environment["MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"] = str(resolver_record)
         environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
-        environment["MCP_CONSOLE_TEST_UV_INTERCEPT_MARKER"] = str(intercept_marker)
         environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         environment["MCP_CONSOLE_TEST_PATH_UV_LOG"] = str(path_uv_log)
 
-        client = McpClient(
-            binary,
-            execution.serve(),
-            environment,
-            current_directory=temporary,
+        client = stack.enter_context(
+            McpClient(
+                binary,
+                execution.serve(),
+                environment,
+                current_directory=temporary,
+            )
         )
         client.initialize_and_list_tools()
+        client.transcript.clear()
         client.send(
             requirements={"r": ["DBI"]},
             timeout_ms=int(client.response_timeout * 1_000),
         )
-        assert last_result_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         uv_record.write_text("", encoding="utf-8")
         resolver_record.write_text("", encoding="utf-8")
-        write_uv_python_inventories(
-            inventories,
-            {"only-managed": [uv_python_row("3.12.9")]},
-        )
-        intercept_marker.touch()
 
         client.send(requirements={"python": ["py-yaml12"]})
-        assert last_result_text(client) == "[prepared]"
+        assert last_result_text(client) == "[prepared]", client.transcript[-1]
         assert not path_uv_log.exists(), "PATH uv handled managed resolution"
         records = read_uv_resolver_records(resolver_record)
         version_lists = [
