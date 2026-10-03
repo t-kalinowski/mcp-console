@@ -1446,6 +1446,73 @@ def test_conversion_metadata_matches_configured_import_paths(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_conversion_metadata_does_not_import_shadowed_numpy(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for package in (False, True):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = root / "venv"
+            subprocess.run(
+                ["uv", "venv", "--python", sys.executable, str(selected)],
+                capture_output=True,
+                check=True,
+            )
+            executable = selected / "bin/python"
+            subprocess.run(
+                ["uv", "pip", "install", "--python", str(executable), "numpy"],
+                capture_output=True,
+                check=True,
+            )
+            shadow = root / "numpy.py"
+            if package:
+                (root / "numpy").mkdir()
+                shadow = root / "numpy/__init__.py"
+            marker = root / "numpy-imported"
+            shadow.write_text(
+                # fmt: python
+                code(f"""
+                    import sys
+                    if "_mcp_console_services" in sys.modules:
+                        from pathlib import Path
+                        Path({str(marker)!r}).touch()
+                        raise RuntimeError("workspace NumPy imported during metadata collection")
+                    __version__ = "0.0.0"
+                    """)
+            )
+            environment, _ = r_test_environment()
+            environment.update(
+                RETICULATE_PYTHON=str(executable),
+                MCP_CONSOLE_LANGUAGES="r,python",
+                RETICULATE_CHECK_REQUIRED_PACKAGES="false",
+            )
+            arguments = execution.serve(
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+            )
+            with McpClient(binary, arguments, environment, root) as client:
+                client.initialize_and_list_tools()
+                client.expect(
+                    "shadowed NumPy metadata absent\n",
+                    # fmt: r
+                    r=code("""
+                        stopifnot(is.null(reticulate::py_config()$numpy))
+                        stopifnot(reticulate::py_eval("'numpy' not in __import__('sys').modules"))
+                        cat("shadowed NumPy metadata absent\\n")
+                        """),
+                )
+                client.expect(
+                    "Python remains available\n",
+                    python="print('Python remains available')",
+                )
+                client.finish()
+            assert not marker.exists(), (
+                "metadata executed the workspace NumPy candidate"
+            )
+    return [{"shadowed_numpy_module_and_package_remain_unimported": True}]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_attaches_to_reticulate_initialized_by_r_startup(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -93,7 +93,8 @@ Background selection also permits an ordinary absent-interpreter discovery resul
 Later R cells, Python's R bridge, and R-owned SQL retry incomplete initialization through the same facade.
 Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
-Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing optional packages.
+Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing or importing optional packages.
+NumPy metadata comes from an already loaded module or a matching installed distribution; a shadowing workspace module/package is treated as absent.
 
 The coordinator owns command dispatch, cell bookkeeping, input, and completion.
 Language adapters own their runtime-specific event, graphics, error, and unwind boundaries.

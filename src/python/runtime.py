@@ -935,20 +935,38 @@ def _mcp_console_conversion_metadata(
     _sys=_sys,
     _os=_os,
     _json=_json,
-    _importlib=_importlib,
+    _metadata=_importlib_metadata,
     _util=_importlib_util,
     _without_resolution=_mcp_console_without_automatic_resolution,
 ) -> str:
-    def describe():
+    def describe() -> str:
         import struct
 
         numpy = None
-        if _util.find_spec("numpy") is not None:
-            module = _importlib.import_module("numpy")
-            numpy = {
-                "path": _os.path.realpath(module.__path__[0]),
-                "version": module.__version__,
-            }
+        module = _sys.modules.get("numpy")
+        if module is not None:
+            # Already imported NumPy can outlive a managed path activation.
+            namespace = vars(module)
+            if namespace.get("__path__") and namespace.get("__version__"):
+                numpy = {
+                    "path": _os.path.realpath(namespace["__path__"][0]),
+                    "version": namespace["__version__"],
+                }
+        else:
+            specification = _util.find_spec("numpy")
+            if specification is not None and specification.submodule_search_locations:
+                try:
+                    distribution = _metadata.distribution("numpy")
+                except _metadata.PackageNotFoundError:
+                    pass
+                else:
+                    path = _os.path.realpath(distribution.locate_file("numpy"))
+                    # A workspace module/package may shadow the installed
+                    # distribution. Metadata never executes that candidate.
+                    if list(
+                        map(_os.path.realpath, specification.submodule_search_locations)
+                    ) == [path]:
+                        numpy = {"path": path, "version": distribution.version}
         return _json.dumps(
             {
                 "base_executable": _sys._base_executable,
