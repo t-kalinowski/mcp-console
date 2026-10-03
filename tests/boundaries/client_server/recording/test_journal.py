@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text, last_tool_text
-from support.checkpoints import FifoCheckpoint
+from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
 from support.normalization import code
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -886,6 +886,63 @@ def test_flushes_calls_and_keeps_unpolled_images(
         return transcript
 
 
+@requires(PROCESS_EVENTS)
+def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        configure(root, root, [str(binary)])
+        reached = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            with McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "discovery-diagnostics"),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery diagnostic emitted")
+                sessions = root / ".agents/console/sessions"
+                wait_for_checkpoint(
+                    lambda: next(sessions.glob("*/outputs/session.log"), None),
+                    "startup recording materialized",
+                    root=sessions,
+                    recursive=True,
+                    client=client,
+                )
+                client.expect(
+                    "[worker starting]", requirements={"action": "get"}, timeout_ms=0
+                )
+                release.release()
+                client.send(requirements={"action": "get"})
+                client.finish()
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            early = [event for event in events if event.get("call_id") == 1]
+            (discovered,) = [
+                event for event in events if event["event"] == "environment_discovered"
+            ]
+            assert [event["event"] for event in early] == [
+                "tool_call",
+                "tool_result",
+            ], early
+            assert all(event["sequence"] < discovered["sequence"] for event in early), (
+                events
+            )
+            assert all(event["at"] < discovered["at"] for event in early), events
+            markdown = (session / "transcript.md").read_text()
+            assert markdown.index("## Call 1:") < markdown.index(
+                "## Runtime discovery"
+            ), markdown
+            return [{"early_call_and_result_precede_discovery": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
 def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -929,6 +986,52 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert events[0]["dynamic_resolution"] is None, events[0]
             assert events[0]["python_preparation"] is None, events[0]
             return [{"early_calls_recorded": 3, "startup_failure_recorded": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_reports_startup_recording_failure_without_a_tool_call(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        reached = FifoCheckpoint.create(root / "startup-output")
+        release = FifoCheckpoint.create(root / "startup-release")
+        source = code(f"""
+            cat("unrecorded startup text\\n")
+            ready <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+            writeBin(charToRaw("1"), ready)
+            close(ready)
+            gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+            readBin(gate, "raw", 1L)
+            """)
+        try:
+            (root / ".agents/console").mkdir(parents=True)
+            (root / ".agents/console/sessions").write_text("occupied")
+            with startup_r_package(root, source) as env:
+                env["RETICULATE_PYTHON"] = sys.executable
+                args = (
+                    execution.serve("--writable-root", str(root))
+                    if execution == SANDBOXED
+                    else execution.serve()
+                )
+                with McpClient(binary, args, env, root) as client:
+                    client.initialize_and_list_tools()
+                    reached.wait("startup text emitted", timeout=60)
+                    client.request("ping")
+                    _, stderr = client.finish_with_standard_error()
+                    assert stderr.startswith(
+                        "mcp-console: transcript recording disabled: failed to create "
+                    ), stderr
+                    assert stderr.count("\n") == 1, stderr
+                    assert not any(
+                        entry.get("method") == "tools/call"
+                        for entry in client.transcript
+                    ), client.transcript
+                assert (root / ".agents/console/sessions").read_text() == "occupied"
+            return [{"startup_recording_failure_reported_without_send": True}]
         finally:
             reached.close()
             release.close()

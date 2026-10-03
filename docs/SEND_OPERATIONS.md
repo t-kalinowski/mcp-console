@@ -45,6 +45,8 @@ Timeout likewise cancels nothing.
 Closing MCP input cancels startup and follows normal retirement; outstanding response delivery after closure is unspecified.
 
 Discovery failure is retained and requires a new server after correcting setup; tool discovery remains usable.
+After discovery, a failed built-in worker prelaunch is reported once by the next idle poll, cell, or requirements inspection, with its diagnostics.
+The declaration remains available and ordinary worker recovery still applies.
 The first failure response includes captured startup diagnostics, including for requirements-only calls and restart.
 Early calls and their results remain recorded if discovery fails; unavailable metadata stays unknown.
 Later environment/worker-start failures follow the ordinary later-cell retry boundary, not an automatic retry loop.
@@ -75,7 +77,7 @@ Admission can still fail on a conflicting operation or generation transition.
 | Restart, optionally requirements/stdin/cell | Validate and resolve candidate → commit → retire old worker → start replacement → send input and code only to the ready replacement.                                                                  |
 | Empty poll                                  | Collect the current evaluation or idle output; do not start an initial/stopped worker.                                                                                                                |
 | Stdin only                                  | Queue for the current generation and observe; after shared startup, start an initial/stopped worker if needed. Empty text queues no bytes.                                                            |
-| Requirements `get`                          | Wait for initial readiness within budget → read committed snapshot without evaluation admission or output collection.                                                                                 |
+| Requirements `get`                          | Wait for initial readiness within budget → report an unconsumed prelaunch failure, otherwise read the committed snapshot without evaluation admission or output collection.                           |
 
 Control and optional cell admission share one lifecycle boundary.
 Interrupt's generation must remain current; restart's input/code can reach only its replacement.

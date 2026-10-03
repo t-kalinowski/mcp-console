@@ -882,6 +882,27 @@ impl Client {
         worker.finish_retirement()
     }
 
+    pub(crate) fn take_prelaunch_failure(&self) -> Result<Option<super::Response>, String> {
+        let lifecycle = self
+            .0
+            .lifecycle
+            .lock()
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        if lifecycle.state != LifecycleState::Ready || lifecycle.controlled_send.is_some() {
+            return Ok(None);
+        }
+        // An accepted cell owns its startup failure and the accompanying output.
+        if self.current_evaluation()?.is_some()
+            || !self
+                .0
+                .startup_failed
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Ok(None);
+        }
+        Ok(Some(self.0.output.take()))
+    }
+
     pub(crate) fn admit(&self) -> Result<WorkerGeneration, String> {
         let lifecycle = self
             .0

@@ -170,6 +170,7 @@ The final text budget is 8 KiB including notices.
 Raw-file retention and inline omission are separate; collection stays bounded even when recording fails.
 Startup diagnostics use this tape, including preparation and launcher stderr on Unix.
 Each diagnostic producer retains its own incomplete UTF-8 scalar until more bytes arrive or that producer closes.
+Diagnostic ingestion also preserves pending UTF-8 bytes from the worker's direct streams.
 Closing one diagnostic producer does not flush another producer's pending terminal update; response cuts and shutdown finish the shared terminal projection.
 
 One recoverable response remains owned until local delivery or cancellation settles it.
@@ -183,6 +184,7 @@ The controller records calls and assembled output independently of the private p
 The journal is authoritative; Markdown and Quarto are projections, not worker checkpoints.
 Paths, formats, failure behavior, and rendering safety are covered in [recordings](RECORDING.md).
 Startup and idle output can be recorded before a tool call; discovery fills in pending recording metadata without replacing the session owner.
+Buffered calls and results retain their original timestamps and precede the discovery event when startup output has already materialized the recording.
 Discovery failure retains pending calls and their results alongside the startup failure, with unavailable metadata left unknown.
 
 ## Where to look in source

@@ -88,7 +88,11 @@ impl OutputRecord {
 
 impl Transcript {
     pub(crate) fn create_session_output(&self) -> Result<Option<CellOutput>, String> {
-        self.create_output(None)
+        let result = self.create_output(None);
+        if let Err(error) = &result {
+            self.disable(error.clone());
+        }
+        result
     }
 
     pub(crate) fn create_cell_output(

@@ -86,7 +86,6 @@ impl OutputTape {
                     return;
                 }
                 let notice = state.spool(bytes);
-                state.flush_decoders();
                 let bytes = if pending.is_empty() {
                     bytes
                 } else {

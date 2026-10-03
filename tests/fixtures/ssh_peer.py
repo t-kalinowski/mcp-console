@@ -1,5 +1,6 @@
 """Deterministic local failure peer for the SSH transport adapter boundary."""
 
+import base64
 import json
 import os
 import struct
@@ -28,6 +29,12 @@ if "Open" in bootstrap:
         sys.stdout.buffer.flush()
 
     preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
+    if mode == "discovery-diagnostics":
+        print("preparation detail", file=sys.stderr, flush=True)
+        with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
+            assert signal.write(b"1") == 1
+        with (log.parent / "discovery-release").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
     if mode == "diagnostic-overlap":
         sys.stderr.buffer.write(b"producer prefix \xce")
         sys.stderr.buffer.flush()
@@ -144,6 +151,28 @@ for line in sys.stdin.buffer:
     with log.open("a") as output:
         output.write(json.dumps(command) + "\n")
     if command["kind"] == "evaluate":
+        if mode == "direct-diagnostic-overlap":
+            stream = os.environ["CONSOLE_TEST_DIRECT_STREAM"]
+            frame(
+                2,
+                {"kind": stream + "_bytes", "data": base64.b64encode(b"\xce").decode()},
+            )
+            with (log.parent / "evaluation-started").open("wb", buffering=0) as signal:
+                assert signal.write(b"1") == 1
+            with (log.parent / "diagnostic-start").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            print("launcher detail", file=sys.stderr, flush=True)
+            with (log.parent / "evaluation-finish").open("rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            frame(
+                2,
+                {
+                    "kind": stream + "_bytes",
+                    "data": base64.b64encode(b"\xb1\n").decode(),
+                },
+            )
+            frame(2, {"kind": "completed"})
+            continue
         if mode == "diagnostic-terminal-overlap":
             sys.stderr.buffer.write(b"diagnostic reader ready\n")
             sys.stderr.buffer.flush()

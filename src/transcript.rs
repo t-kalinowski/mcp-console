@@ -51,6 +51,7 @@ enum PendingCall {
     Finish {
         call: Call,
         response: Result<CallToolResponse, ErrorData>,
+        at: DateTime<Utc>,
     },
 }
 
@@ -126,7 +127,21 @@ impl Transcript {
             state.python_preparation = configuration.python_preparation;
             state.r_available = configuration.r_available;
             state.target = configuration.target.clone();
-            if let Some(active) = state.active.as_mut() {
+            let materialized_before_discovery = state.active.is_some();
+            if let Some(projections) = state
+                .active
+                .as_mut()
+                .and_then(|active| active.projections.as_mut())
+            {
+                projections.configure(
+                    configuration.dynamic_resolution,
+                    configuration.python_preparation,
+                    configuration.r_available,
+                    configuration.target.as_ref(),
+                );
+            }
+            state.replay_pending()?;
+            if materialized_before_discovery && let Some(active) = state.active.as_mut() {
                 active.append(
                     Event::EnvironmentDiscovered {
                         dynamic_resolution: configuration.dynamic_resolution,
@@ -137,7 +152,7 @@ impl Transcript {
                     Utc::now(),
                 )?;
             }
-            state.replay_pending()
+            Ok(())
         });
     }
 
@@ -286,11 +301,14 @@ impl Transcript {
                 pending.push(PendingCall::Finish {
                     call,
                     response: response.clone(),
+                    at: Utc::now(),
                 });
                 return Ok(());
             }
             let images = call.take_result_images()?;
-            state.active()?.finish(call_id, images, response)
+            state
+                .active()?
+                .finish(call_id, images, response, Utc::now())
         });
     }
 
@@ -384,10 +402,11 @@ impl TranscriptState {
                     },
                     at,
                 )?,
-                PendingCall::Finish { call, response } => active.finish(
+                PendingCall::Finish { call, response, at } => active.finish(
                     call.id.expect("pending call id"),
                     call.take_result_images()?,
                     &response,
+                    at,
                 )?,
             }
         }
@@ -626,6 +645,7 @@ impl ActiveTranscript {
         call_id: u64,
         result_images: Vec<Artifact>,
         response: &Result<CallToolResponse, ErrorData>,
+        at: DateTime<Utc>,
     ) -> Result<(), String> {
         let outcome = match response {
             Ok(CallToolResponse::Complete(result)) => Outcome::Result {
@@ -643,7 +663,7 @@ impl ActiveTranscript {
                 Outcome::Error { error }
             }
         };
-        self.append(Event::ToolResult { call_id, outcome }, Utc::now())
+        self.append(Event::ToolResult { call_id, outcome }, at)
     }
 
     fn persist_image(

@@ -46,6 +46,7 @@ The latest summary for a cell owns its cumulative totals.
 
 A journal or artifact failure disables further recording without stopping the worker.
 A cell-log failure affects that file and is reported in the response.
+Failure to create the session log disables recording and reports the error on server stderr, including sessions that close without a tool call.
 Failure of either derived projection disables both projections but leaves the journal and artifacts available.
 None of these files is a live-state checkpoint.
 

@@ -75,6 +75,17 @@ impl Writers {
         self.markdown.append(MARKDOWN_HEADER, &fragment)?;
         self.quarto.append(&event.event)
     }
+
+    pub(super) fn configure(
+        &mut self,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+        target: Option<&Value>,
+    ) {
+        self.quarto
+            .configure(dynamic_resolution, python_preparation, r_available, target);
+    }
 }
 
 impl QuartoWriter {
@@ -120,38 +131,40 @@ impl QuartoWriter {
         writer
     }
 
+    fn configure(
+        &mut self,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+        target: Option<&Value>,
+    ) {
+        self.dynamic_resolution = dynamic_resolution;
+        self.r_available = r_available;
+        self.r_requirements = if dynamic_resolution && r_available {
+            crate::worker_client::DEFAULT_R_REQUIREMENTS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.python_requirements = if python_preparation {
+            crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
+        } else if dynamic_resolution {
+            crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
+        } else {
+            &[]
+        }
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        self.target = target.cloned();
+    }
+
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
         let changed = match event {
             Event::SessionStarted { .. } => true,
-            Event::EnvironmentDiscovered {
-                dynamic_resolution,
-                python_preparation,
-                r_available,
-                target,
-            } => {
-                self.dynamic_resolution = *dynamic_resolution;
-                self.r_available = *r_available;
-                self.r_requirements = if *dynamic_resolution && *r_available {
-                    crate::worker_client::DEFAULT_R_REQUIREMENTS
-                        .iter()
-                        .map(|s| (*s).to_string())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                self.python_requirements = if *python_preparation {
-                    crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
-                } else if *dynamic_resolution {
-                    crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
-                } else {
-                    &[]
-                }
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect();
-                self.target = target.cloned();
-                true
-            }
+            Event::EnvironmentDiscovered { .. } => true,
             Event::PythonEnvironmentAccepted { packages } => {
                 self.python_requirements = packages.to_vec();
                 true

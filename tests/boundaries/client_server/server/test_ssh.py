@@ -525,6 +525,45 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
             return client.transcript[3:] + [{"standard_error": stderr}]
 
 
+@requires(PROCESS_EVENTS)
+def test_direct_utf8_survives_launcher_diagnostics(binary: Path) -> Transcript:
+    for stream in ("stdout", "stderr"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configure(root, root, [str(binary)])
+            environment = peer_environment(root, "direct-diagnostic-overlap")
+            environment["CONSOLE_TEST_DIRECT_STREAM"] = stream
+            with (
+                closing(
+                    FifoCheckpoint.create(root / "evaluation-started")
+                ) as evaluating,
+                closing(FifoCheckpoint.create(root / "diagnostic-start")) as diagnostic,
+                closing(FifoCheckpoint.create(root / "evaluation-finish")) as finished,
+                McpClient(binary, DIRECT.serve(), environment, root) as client,
+            ):
+                client.initialize_and_list_tools()
+                client.send(r="hold_cell", timeout_ms=0)
+                evaluating.wait("direct scalar prefix emitted")
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                raw = session / "outputs/call-000001.log"
+                with Events() as events:
+                    events.watch_file(raw)
+                    diagnostic.release()
+                    expected = b"\xcelauncher detail\n"
+                    deadline = time.monotonic() + 10
+                    while raw.stat().st_size < len(expected):
+                        remaining = deadline - time.monotonic()
+                        assert remaining > 0 and events.wait(remaining), (
+                            "diagnostic not captured"
+                        )
+                    assert raw.read_bytes() == expected
+                finished.release()
+                client.expect("launcher detail\nα\n")
+                client.finish()
+                assert raw.read_bytes() == expected + b"\xb1\n"
+    return [{"direct_stdout_and_stderr_utf8_preserved": True}]
+
+
 def test_diagnostic_producers_keep_separate_utf8_decoders(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
