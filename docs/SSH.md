@@ -85,7 +85,8 @@ A normal installation failure preserves the accepted environment and current wor
 A missing or malformed result, transport loss, or uncertain cleanup blocks further preparation and replacement; the operation is not replayed.
 The [target envelope](RELAY_PROTOCOL.md#target-launch-envelope) owns version negotiation and framing.
 Launch protocol version 10 distinguishes interrupted bootstrap from other incomplete setup, carries the controller’s enabled-language selection and requires built-in interpreter-bootstrap completion after transport readiness; older executables are rejected before evaluation even when package versions match.
-Preparation protocol version 5 is unchanged.
+Preparation protocol version 6 adds required conversion metadata to inspected Python identities.
+Version 5 peers are rejected during negotiation, even when Console package versions match; update the controller and remote executable together.
 
 Preparation is trusted host execution, not a secure isolation boundary.
 Package builds and startup code can run with the remote account's permissions, independently of the worker's network policy.

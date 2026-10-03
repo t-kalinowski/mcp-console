@@ -204,6 +204,30 @@ def test_cli_contract_failures_are_noninteractive(binary: Path) -> list:
 
 
 @requires(POSIX)
+def test_rejects_prior_python_identity_protocol_before_runtime_decode(
+    binary: Path,
+) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("prior-python-metadata-protocol")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            response = client.send(r="must_not_run <- TRUE")
+            assert response["isError"], response
+            error = last_result_text(client)
+            assert (
+                "incompatible Docker Sandbox bootstrap: expected protocol 11" in error
+            ), error
+            assert "received protocol 10" in error, error
+            assert "missing field" not in error, error
+            assert not (root / "peer/evaluations").exists()
+            client.finish_with_standard_error(expected_exit_status=1)
+        assert not (root / "peer/vms").exists()
+        return [{"prior_python_identity_rejected_before_decode": True}]
+
+
+@requires(POSIX)
 def test_argument_arrays_and_unrelated_ownership(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")

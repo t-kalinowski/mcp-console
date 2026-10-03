@@ -127,7 +127,9 @@ elif args[0] == "exec":
         1,
         {
             "version": (
-                3
+                10
+                if mode == "prior-python-metadata-protocol"
+                else 3
                 if mode == "probe-version"
                 else 8
                 if mode == "prior-bootstrap-protocol"
@@ -187,6 +189,8 @@ elif args[0] == "exec":
         }
         if mode == "r-only-probe":
             runtime["native"]["python"] = None
+        if mode == "prior-python-metadata-protocol":
+            runtime["native"]["python"]["selected"].pop("metadata")
         if mode == "native-managed":
             runtime["native"]["python"]["managed"] = True
         if mode == "native-r-conflict":
