@@ -30,6 +30,7 @@ const SCHEMA_VERSION: u64 = 2;
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
 struct TranscriptState {
+    started_at: DateTime<Utc>,
     working_directory: Result<PathBuf, String>,
     dynamic_resolution: bool,
     python_preparation: bool,
@@ -100,6 +101,7 @@ impl Transcript {
         target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
+            started_at: Utc::now(),
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
             dynamic_resolution,
@@ -418,6 +420,7 @@ impl TranscriptState {
             let working_directory = self.working_directory.clone()?;
             self.active = Some(ActiveTranscript::create(
                 &working_directory,
+                self.started_at,
                 self.dynamic_resolution,
                 self.python_preparation,
                 self.r_available,
@@ -448,6 +451,7 @@ impl TranscriptState {
 impl ActiveTranscript {
     fn create(
         working_directory: &Path,
+        started_at: DateTime<Utc>,
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
@@ -455,7 +459,6 @@ impl ActiveTranscript {
         metadata_known: bool,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
-        let started_at = Utc::now();
         // Keep incidental process-ID widths from shifting bounded output previews.
         let run_id = format!(
             "{}-{:010}",

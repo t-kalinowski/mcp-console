@@ -990,6 +990,8 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 events
             )
             assert all(event["at"] < artifact["at"] for event in early), events
+            assert events[0]["event"] == "session_started", events
+            assert all(events[0]["at"] <= event["at"] for event in events), events
             assert artifact["call_id"] is None, artifact
             assert image.read_bytes() == base64.b64decode(PNG_1X1)
             markdown = (session / "transcript.md").read_text()
@@ -1036,6 +1038,8 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             ]
             calls = [event for event in events if event["event"] == "tool_call"]
             results = [event for event in events if event["event"] == "tool_result"]
+            assert events[0]["event"] == "session_started", events
+            assert all(events[0]["at"] <= event["at"] for event in events), events
             assert len(calls) == len(results) == 3, events
             assert [event["call_id"] for event in calls] == [1, 2, 3], calls
             assert [event["call_id"] for event in results] == [1, 2, 3], results
