@@ -17,6 +17,50 @@ struct joiner {
 static struct joiner *joiners;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
+static char *preparation_environment[5];
+
+__attribute__((constructor)) static void initialize(void) {
+    const char *names[] = {
+#ifdef __APPLE__
+        "DYLD_INSERT_LIBRARIES",
+#else
+        "LD_PRELOAD",
+#endif
+        "MCP_CONSOLE_TEST_REAP_PID", "MCP_CONSOLE_TEST_REAP_DONE",
+        "MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE"
+    };
+    size_t count = 0;
+    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); ++index) {
+        const char *value = getenv(names[index]);
+        if (value != NULL && asprintf(&preparation_environment[count++], "%s=%s", names[index], value) < 0)
+            _exit(124);
+    }
+    // Production launches clear the broker environment. Keep this test hook
+    // in the server and explicitly instrument only the broker at exec below.
+    unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
+}
+
+static int instrument_preparation(const char *file, char *const arguments[]) {
+    if (arguments[1] != NULL && strcmp(arguments[1], "resolve") == 0) {
+        extern char **environ;
+        char *environment[4096];
+        size_t count = 0;
+        for (char **entry = environ; *entry != NULL; ++entry) {
+            if (count >= 4090) _exit(125);
+            environment[count++] = *entry;
+        }
+        for (char **entry = preparation_environment; *entry != NULL; ++entry)
+            environment[count++] = *entry;
+        environment[count] = NULL;
+        return execve(file, arguments, environment);
+    }
+#ifdef __APPLE__
+    return execvp(file, arguments);
+#else
+    return ((int (*)(const char *, char *const []))dlsym(RTLD_NEXT, "execvp"))(file, arguments);
+#endif
+}
 
 static ssize_t native_write(int fd, const void *bytes, size_t count) {
 #ifdef __APPLE__
@@ -115,8 +159,10 @@ static int observe_join(pthread_t thread, void **value) {
 INTERPOSE(observe_write, write)
 INTERPOSE(gated_waitpid, waitpid)
 INTERPOSE(observe_join, pthread_join)
+INTERPOSE(instrument_preparation, execvp)
 #else
 ssize_t write(int fd, const void *bytes, size_t count) { return observe_write(fd, bytes, count); }
 pid_t waitpid(pid_t pid, int *status, int options) { return gated_waitpid(pid, status, options); }
 int pthread_join(pthread_t thread, void **value) { return observe_join(thread, value); }
+int execvp(const char *file, char *const arguments[]) { return instrument_preparation(file, arguments); }
 #endif
