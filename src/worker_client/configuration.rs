@@ -49,6 +49,11 @@ impl ClientConfiguration {
         mut self,
         settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
+        let settings = if !self.no_sandbox && cfg!(unix) {
+            crate::resolver::cache::isolated_defaults(settings)?
+        } else {
+            settings
+        };
         let host_policy = Default::default();
         self.duckdb_extension_directory = crate::resolver::cache::duckdb_extension_directory(
             if !self.no_sandbox && cfg!(unix) {
@@ -95,6 +100,11 @@ impl ClientConfiguration {
     ) -> Result<Self, String> {
         #[cfg(windows)]
         let _ = &diagnostics;
+        let resolver_settings = if !no_sandbox && cfg!(unix) {
+            crate::resolver::cache::isolated_defaults(resolver_settings)?
+        } else {
+            resolver_settings
+        };
         let host_policy = Default::default();
         let duckdb_extension_directory =
             crate::resolver::cache::duckdb_extension_directory(if !no_sandbox && cfg!(unix) {

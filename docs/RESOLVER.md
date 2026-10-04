@@ -82,9 +82,21 @@ Custom workers receive the same captured path at launch, before accepting their 
 User-selected Python retains DuckDB's own cache settings and preinstalled extensions.
 An explicit `filesystem.entries` must grant writes to the selected directory.
 
-## Expanded default
+## Default cache namespace
 
-For a Linux account with `HOME=/home/alice` and no cache overrides, the following spells out the default permissions.
+With the default local resolver filesystem policy, omitted cache locations use `${XDG_CACHE_HOME:-$HOME/.cache}/mcp-console/resolver/payload`.
+An empty or relative `XDG_CACHE_HOME` uses the HOME fallback.
+uv caches, Python installations and tools, IR, R, renv, pak, Matplotlib, and DuckDB extensions have separate directories beneath this namespace.
+The existing native runner supplies filesystem enforcement, the download proxy, private temporary storage, and process retirement.
+
+Explicit cache environment values remain effective, including inherited values.
+An explicit `resolver.filesystem.entries` retains the existing host cache layout and requires its matching write grants.
+`--no-sandbox`, Windows preparation, and SSH preparation retain host cache selection.
+No broker protocol, cache lease, or automatic cache deletion is added.
+
+## Expanded policy for shared host caches
+
+For a Linux account with `HOME=/home/alice`, the following explicit filesystem policy selects shared host caches.
 The `macos_seatbelt_profile_extension` field is absent on Linux.
 On macOS Console supplies the same [trusted application extension](../src/sandbox/policy_extensions.sbpl) as the worker unless explicitly overridden, including by null.
 Version, caller observation, cleanup, and private `TMPDIR` are supplied by Console and are omitted here.
@@ -146,7 +158,7 @@ resolver:
   environment: {}
 ```
 
-Cache paths follow the resolver's effective environment:
+With an explicit filesystem policy, cache paths follow the resolver's effective environment:
 
 | Cache               | Selection                                                                                                                                                |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
