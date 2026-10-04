@@ -246,7 +246,7 @@ def test_inspection_during_input_and_replacement_resolution(
         environment, started, release = checkpoint_uv_environment(
             Path(directory), "six"
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         try:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"})
@@ -297,7 +297,7 @@ def test_interrupted_replacement_preserves_worker(
         environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
             interrupt_release.path
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         try:
             client.initialize_and_list_tools()
             client.expect(
@@ -375,7 +375,9 @@ def test_r_duckdb_replacement_failure_and_reset(
         rscript.write_text(f"#!{sys.executable}\n{capture}")
         rscript.chmod(0o755)
         environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = "missing.fixture"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             startup = inspect(client)
             assert startup["prepared"] is True
@@ -498,7 +500,10 @@ def test_records_requirement_boundaries(
         inventories = workspace / "uv-python-inventories.json"
         environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
         with McpClient(
-            binary, execution.serve(), environment, current_directory=workspace
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"}, python="first_environment = 1")

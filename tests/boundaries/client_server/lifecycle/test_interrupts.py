@@ -226,7 +226,7 @@ def test_reports_resolver_interrupt_permission_error(
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         resolver_group = None
@@ -329,7 +329,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
         ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         resolver_group = None

@@ -454,7 +454,9 @@ def early_requirements_with_pending_poll(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             ),
             environment,
             root,

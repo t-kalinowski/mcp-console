@@ -688,7 +688,7 @@ def test_interrupts_live_python_resolver(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -766,7 +766,7 @@ def test_restart_cancels_live_python_preparation(
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()

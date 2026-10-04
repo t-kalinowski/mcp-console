@@ -40,7 +40,7 @@ def test_rejects_automatic_resolution_from_background_thread(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -91,7 +91,7 @@ def test_rejects_automatic_resolution_from_fork_child(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -178,7 +178,7 @@ def test_times_out_and_polls_automatic_python_resolution(
             "py-yaml12",
         )
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
         try:
@@ -272,7 +272,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -360,7 +360,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         environment.pop("RETICULATE_PYTHON", None)
         environment["TMPDIR"] = temporary
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:

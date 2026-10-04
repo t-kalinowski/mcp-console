@@ -36,7 +36,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         ir_cache = ir_cache_directory(environment)
         client = McpClient(
             binary,
-            SANDBOXED.serve(),
+            SANDBOXED.serve("-c", "cache=host"),
             environment,
             current_directory=workspace,
         )

@@ -45,7 +45,9 @@ def test_optional_imports_do_not_inspect_unrelated_distribution_files(
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
             before = uv_tool_run_requirements(record)
@@ -122,7 +124,9 @@ def test_symlinked_package_origins_keep_optional_imports_on_the_ordinary_path(
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
             before = uv_tool_run_requirements(record)
@@ -167,7 +171,9 @@ def test_rply_optional_import_does_not_install_rpython(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = managed_environment(directory)
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": ["rply==0.7.8"]})
             before = uv_tool_run_requirements(record)
@@ -231,7 +237,10 @@ def test_installed_package_probes_leave_resolution_to_explicit_imports(
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
         with McpClient(
-            binary, execution.serve(), environment, current_directory=directory
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=directory,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"})
@@ -275,7 +284,10 @@ def test_local_module_shadowing_installed_package_resolves_missing_imports(
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
         with McpClient(
-            binary, execution.serve(), environment, current_directory=directory
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=directory,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
@@ -318,7 +330,10 @@ def test_installed_initializer_leaves_local_module_imports_eligible(
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
         with McpClient(
-            binary, execution.serve(), environment, current_directory=directory
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=directory,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
@@ -355,7 +370,9 @@ def test_installed_extension_optional_import_observes_absence(
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
             before = uv_tool_run_requirements(record)
@@ -408,7 +425,10 @@ def test_installed_initializer_leaves_cached_local_callback_eligible(
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
         with McpClient(
-            binary, execution.serve(), environment, current_directory=directory
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=directory,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
@@ -461,7 +481,9 @@ def test_loaded_package_optional_imports_survive_compatible_activation(
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
             client.send(
@@ -535,7 +557,9 @@ def test_deferred_lazy_module_imports_remain_eligible(
         environment, record = managed_environment(directory)
         environment["UV_INDEX"] = index.as_uri()
         environment["UV_INDEX_STRATEGY"] = "first-index"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set", "python": [package]})
             before = uv_tool_run_requirements(record)
@@ -571,7 +595,9 @@ def test_default_package_imports_do_not_prepare_optional_dependencies(
             else managed_environment(Path(temporary))
         )
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             if with_r:
                 client.send(r='reticulate::py_run_string("pass")')

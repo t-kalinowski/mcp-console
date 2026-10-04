@@ -338,7 +338,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         environment["MCP_CONSOLE_TEST_LEADER_RELEASE"] = str(leader_release.path)
         environment["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"] = str(lifetime.path)
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_group = None
         exit_events = Events()
         try:
@@ -412,7 +412,7 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -489,7 +489,7 @@ def restart_discards_pre_marker_activation(
         environment["TMPDIR"] = temporary_directory
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:
@@ -688,7 +688,9 @@ def test_failed_live_python_requirements_do_not_run_cell(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         environment, _ = recording_uv_environment(root, fail_requirement="py-yaml12")
-        with McpClient(binary, execution.serve(), environment, root) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 python="import os, sys; live_sentinel = 42; live_worker_pid = os.getpid(); print(sys.executable)"

@@ -1094,7 +1094,7 @@ def test_remote_managed_identity_survives_restart(
                     return result
 
             with ReleaseResolverAfterPoll(
-                binary, execution.serve(), controller, local
+                binary, execution.serve("-c", "cache=host"), controller, local
             ) as client:
                 client.initialize_and_list_tools()
                 client.expect(

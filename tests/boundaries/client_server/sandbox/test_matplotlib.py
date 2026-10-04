@@ -47,6 +47,7 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
                 test "$1" = "-xml"
                 test "$2" = "SPFontsDataType"
                 : > "$TMPDIR/mcp-console-font-discovery"
+                : > "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_MARKER"
                 /bin/cat "$MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"
                 """),
             encoding="utf-8",
@@ -73,12 +74,16 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
         environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_OUTPUT"] = str(profiler_output)
+        host_discovery = temporary / "profiler-record/mcp-console-font-discovery"
+        host_discovery.parent.mkdir()
+        environment["UV_TOOL_DIR"] = str(host_discovery.parent)
+        environment["MCP_CONSOLE_TEST_SYSTEM_PROFILER_MARKER"] = str(host_discovery)
         environment["PATH"] = os.pathsep.join((str(probe.parent), path))
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPL_IGNORE_SYSTEM_FONTS", None)
         client = McpClient(
             binary,
-            SANDBOXED.serve(),
+            SANDBOXED.serve("-c", "cache=host"),
             environment,
             current_directory=workspace,
         )
@@ -90,7 +95,6 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
                 invisible(reticulate::py_config())
                 """)
             client.expect(r=r)
-            host_discovery = temporary / "mcp-console-font-discovery"
             assert host_discovery.is_file()
             persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
             assert len(persistent_caches) == 1, persistent_caches
@@ -169,8 +173,9 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
             client.expect(
                 "(True, 7.25, True, True, True, True, False, False)\n", python=python
             )
-            assert not list(temporary.rglob("mcp-console-font-discovery"))
             transcript = client.finish()
+            discoveries = list(temporary.rglob("mcp-console-font-discovery"))
+            assert not discoveries, discoveries
             assert (
                 host_matplotlibrc.read_text(encoding="utf-8")
                 == "lines.linewidth: 7.25\n"
@@ -207,7 +212,7 @@ def test_explicit_matplotlib_config_is_read_only(binary: Path) -> Transcript:
         environment["MATPLOTLIBRC"] = str(explicit_rc)
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
-        client = McpClient(binary, SANDBOXED.serve(), environment)
+        client = McpClient(binary, SANDBOXED.serve("-c", "cache=host"), environment)
         with client:
             client.initialize_and_list_tools()
             client.expect("[prepared]", requirements={"python": ["matplotlib"]})

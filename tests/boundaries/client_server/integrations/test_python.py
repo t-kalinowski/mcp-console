@@ -89,7 +89,7 @@ def test_clients_inspect_and_replace_requirements(
         environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         settings = {
             "command": binary,
-            "args": execution.serve(),
+            "args": execution.serve("-c", "cache=host"),
             "server_parameters": {"cwd": directory, "env": environment},
         }
         with MCPConsole(**settings) as console:
