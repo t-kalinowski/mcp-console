@@ -92,7 +92,7 @@ The default local native sandbox allows host-file reads, restricts direct networ
 **It does not protect readable secrets.** Trusted [policy configuration](docs/SANDBOX_CONFIGURATION.md) can change these defaults.
 There is no automatic unsandboxed fallback; constrained Linux hosts may lack the required [capabilities](docs/LINUX_COMPATIBILITY.md).
 
-**Dependency preparation uses a separate native sandbox on macOS and Linux.** Its default policy permits host reads, package cache writes, and downloads through a managed proxy.
+**Dependency preparation uses a separate native sandbox on local macOS and Linux hosts.** Its default policy permits host reads, package cache writes, and downloads through a managed proxy.
 See [resolver configuration and expanded defaults](docs/RESOLVER.md).
 Shared caches and configurable permissions still require trusted requirements and resolver configuration.
 Read the [trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).

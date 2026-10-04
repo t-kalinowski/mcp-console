@@ -224,14 +224,15 @@ Interrupt terminates the active resolver Job, preserving the previously accepted
 Custom workers have no built-in defaults and no managed Python.
 Explicit R candidates include DBI, DuckDB, and jsonlite infrastructure and are supplied as `R_LIBS`.
 Live R additions require the [worker preparation contract](WORKER_PROTOCOL.md); optional runtime R callbacks must confirm or reject every candidate.
-Apply the managed library before loading DuckDB and use its normal extension cache.
+Apply the managed library before loading DuckDB.
+When `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY` is set, pass it as DuckDB's `extension_directory`; otherwise use the normal extension cache.
 
 ## Host resolution and trust
 
-Local `mcp-console resolve` and SSH preparation run in a separate native resolver sandbox on macOS and Linux.
+Local `mcp-console resolve` runs in a separate native resolver sandbox on macOS and Linux.
 Installation, builds, Python startup hooks, and cache warming can execute package code with that policy's host reads, cache writes, and proxy destinations.
 See [resolver configuration and expanded defaults](RESOLVER.md).
-`--no-sandbox` and Windows preparation retain host permissions.
+SSH, `--no-sandbox`, and Windows preparation retain host permissions.
 Use only trusted requirements, resolvers, configuration, and package sources.
 
 R references become separate `ir` arguments with `IR_NO_LOCAL_SOURCES=1`; Python requirements become validated uv arguments, and DuckDB names are data.
@@ -240,7 +241,7 @@ These restrictions reduce input syntax; they do not make remote package code saf
 
 Capturing paths/environment values does not freeze the files they name.
 A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can influence later preparation.
-That code runs under the resolver policy when sandboxing is enabled.
+That code runs under the resolver policy in local sandboxed preparation.
 Shared cache writes can also affect other users of those artifacts; Console does not isolate or protect cache contents.
 
 ### Host resolver uv configuration

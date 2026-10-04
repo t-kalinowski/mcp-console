@@ -109,4 +109,4 @@ Host resolver tests cannot establish worker sandbox compatibility.
 Public CLI sandbox, processx, parallel Python, Quarto, and offline uv cases are the regression evidence; historical test counts are not current acceptance results.
 
 Native enforcement does not make the whole application safe for hostile input: submitted code is shell-class capability and host reads can expose secrets.
-[Dependency preparation](RESOLVER.md) uses a separate native policy on macOS and Linux; its host reads and shared cache writes still require trusted package sources.
+[Dependency preparation](RESOLVER.md) uses a separate native policy on local macOS and Linux hosts; its host reads and shared cache writes still require trusted package sources.

@@ -292,7 +292,7 @@ fn perform<T>(
     result
 }
 
-pub(super) fn run(local: bool, open_env: Option<&str>) -> Result<(), String> {
+pub(super) fn run(local: bool) -> Result<(), String> {
     #[cfg(unix)]
     let mut input = Io::new(
         duplicate(0)?,
@@ -301,11 +301,7 @@ pub(super) fn run(local: bool, open_env: Option<&str>) -> Result<(), String> {
     )?;
     #[cfg(windows)]
     let mut input = io::stdin();
-    let first: Input = if let Some(name) = open_env {
-        let value = std::env::var(name).map_err(|error| error.to_string())?;
-        unsafe { std::env::remove_var(name) };
-        serde_json::from_str(&value).map_err(|error| error.to_string())?
-    } else if local {
+    let first: Input = if local {
         super::read_jsonl(&mut input)?
     } else {
         super::read(&mut input)?
@@ -316,7 +312,6 @@ pub(super) fn run(local: bool, open_env: Option<&str>) -> Result<(), String> {
         workspace,
         mut selections,
         mode,
-        resolver,
     } = first
     else {
         return Err("expected SSH preparation open".into());
@@ -353,32 +348,7 @@ pub(super) fn run(local: bool, open_env: Option<&str>) -> Result<(), String> {
         }
     }
     #[cfg(windows)]
-    let _ = (&workspace, &mut selections, &resolver);
-    #[cfg(unix)]
-    if let Some(mut settings) = resolver {
-        use std::os::unix::process::CommandExt as _;
-        const OPEN: &str = "MCP_CONSOLE_RESOLVER_OPEN";
-        let first = Input::Open {
-            version,
-            build,
-            workspace,
-            selections: Selections::default(),
-            mode,
-            resolver: None,
-        };
-        let first = serde_json::to_string(&first).map_err(|error| error.to_string())?;
-        crate::settings::preserve_environment(
-            &mut settings,
-            [(OPEN.as_ref(), Some(first.as_ref()))],
-        )?;
-        // Re-exec after host-relative workspace/runtime selection, before any
-        // discovery or package code. Stdin retains the remaining framed traffic.
-        let error = crate::resolver::sandbox::command(settings, unsafe { libc::getppid() } as u32)?
-            .args(["ssh-prepare", "--open-env", OPEN])
-            .env(OPEN, first)
-            .exec();
-        return Err(format!("cannot launch resolver sandbox: {error}"));
-    }
+    let _ = (workspace, &mut selections);
     let (events, received) = mpsc::channel();
     let (outgoing, output) = mpsc::channel::<Output>();
     #[cfg(unix)]

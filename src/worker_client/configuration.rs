@@ -13,6 +13,7 @@ pub(crate) struct ClientConfiguration {
     pub(super) no_sandbox: bool,
     pub(super) sandbox_settings: crate::settings::SandboxSettings,
     pub(super) resolver_settings: crate::settings::SandboxSettings,
+    pub(super) duckdb_extension_directory: Option<PathBuf>,
     pub(super) worker: Mutex<WorkerState>,
     pub(super) environment: Option<Mutex<Environment>>,
     pub(super) requirements_snapshot: Mutex<serde_json::Value>,
@@ -47,9 +48,17 @@ impl ClientConfiguration {
     pub(crate) fn with_resolver_settings(
         mut self,
         settings: crate::settings::SandboxSettings,
-    ) -> Self {
+    ) -> Result<Self, String> {
+        let host_policy = Default::default();
+        self.duckdb_extension_directory = crate::resolver::cache::duckdb_extension_directory(
+            if !self.no_sandbox && cfg!(unix) {
+                &settings
+            } else {
+                &host_policy
+            },
+        )?;
         self.resolver_settings = settings;
-        self
+        Ok(self)
     }
 
     pub(crate) fn new(
@@ -86,6 +95,13 @@ impl ClientConfiguration {
     ) -> Result<Self, String> {
         #[cfg(windows)]
         let _ = &diagnostics;
+        let host_policy = Default::default();
+        let duckdb_extension_directory =
+            crate::resolver::cache::duckdb_extension_directory(if !no_sandbox && cfg!(unix) {
+                &resolver_settings
+            } else {
+                &host_policy
+            })?;
         let languages = crate::cell::Languages::from_environment()?;
         let configured_python = python
             .map(PathBuf::into_os_string)
@@ -114,6 +130,7 @@ impl ClientConfiguration {
                 let selected = crate::local_runtime::Selection::python(
                     configured_python.clone(),
                     &resolver,
+                    duckdb_extension_directory.clone(),
                     on_started,
                 )
                 .and_then(|(selection, managed)| {
@@ -254,6 +271,7 @@ impl ClientConfiguration {
                 r_resolver,
             },
         );
+        configuration.duckdb_extension_directory = duckdb_extension_directory;
         configuration.local_preparation = Mutex::new(local_preparation);
         configuration.languages = Some(languages);
         Ok(configuration)
@@ -286,6 +304,7 @@ impl ClientConfiguration {
             no_sandbox,
             sandbox_settings,
             resolver_settings: Default::default(),
+            duckdb_extension_directory: None,
             worker: Mutex::new(WorkerState::Initial),
             requirements_snapshot: Mutex::new(environment.inspection()),
             runtime_r_requirements: environment
@@ -304,14 +323,12 @@ impl ClientConfiguration {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn target(
         target: crate::settings::Target,
         roots: Vec<PathBuf>,
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
-        resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -322,7 +339,6 @@ impl ClientConfiguration {
                 no_sandbox,
                 policy,
                 python,
-                resolver_settings,
                 diagnostics,
                 started,
             );
@@ -372,7 +388,6 @@ impl ClientConfiguration {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         configured_python: Option<PathBuf>,
-        resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -381,7 +396,6 @@ impl ClientConfiguration {
             let discovery = session.discover(
                 &policy,
                 configured_python.as_deref(),
-                (!no_sandbox).then(|| resolver_settings.clone()),
                 diagnostics.clone(),
                 started,
             )?;
@@ -415,7 +429,6 @@ impl ClientConfiguration {
         let discovery = session.discover(
             &policy,
             configured_python.as_deref(),
-            (!no_sandbox).then(|| resolver_settings.clone()),
             diagnostics.clone(),
             started,
         )?;

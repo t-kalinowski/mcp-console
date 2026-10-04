@@ -82,7 +82,6 @@ impl ConsoleServer {
                         no_sandbox,
                         sandbox_settings,
                         python,
-                        resolver.clone(),
                         diagnostics,
                         started,
                     )?
@@ -93,7 +92,7 @@ impl ConsoleServer {
                         no_sandbox,
                         sandbox_settings,
                     )
-                    .with_resolver_settings(resolver.clone())
+                    .with_resolver_settings(resolver.clone())?
                 } else {
                     crate::worker_client::ClientConfiguration::builtin(
                         no_sandbox,

@@ -37,6 +37,8 @@ def complete(id, value, confirmed=True):
 
 
 opened = read()["Open"]
+if mode == "capture-open":
+    Path(record).with_suffix(".open").write_text(json.dumps(opened))
 assert opened["version"] == 6
 assert opened["mode"] == "Auto"
 write(
@@ -78,7 +80,7 @@ python_identity = {
         "numpy": None,
     },
 }
-if mode in ("legacy-python", "delayed-discovery"):
+if mode in ("legacy-python", "delayed-discovery", "capture-open"):
     selected_python = Path(record).parent / "python"
     if not selected_python.exists():
         selected_python.symlink_to(sys.executable)
@@ -127,7 +129,7 @@ while (message := read()) is not None:
             }
         )
         continue
-    if mode in ("legacy-python", "delayed-discovery"):
+    if mode in ("legacy-python", "delayed-discovery", "capture-open"):
         operation = request["operation"]
         if operation == "Bootstrap" or "Duckdb" in operation:
             complete(id, None)

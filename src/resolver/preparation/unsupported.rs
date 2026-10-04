@@ -17,7 +17,6 @@ impl Preparation {
     pub(crate) fn open(
         _session: &crate::ssh::Session,
         _selections: Selections,
-        _resolver: Option<crate::settings::SandboxSettings>,
         _diagnostics: crate::process_output::Diagnostics,
         _on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {

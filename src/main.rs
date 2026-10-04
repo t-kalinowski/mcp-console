@@ -131,7 +131,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SshPrepare { open_env } => match ssh::preparation::run(open_env.as_deref()) {
+        cli::Command::SshPrepare => match ssh::preparation::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },

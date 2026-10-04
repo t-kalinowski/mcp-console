@@ -139,13 +139,12 @@ impl Preparation {
     pub(crate) fn open(
         session: &crate::ssh::Session,
         selections: Selections,
-        resolver: Option<crate::settings::SandboxSettings>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         #[cfg(not(unix))]
         {
-            let _ = (session, selections, resolver, diagnostics, on_started);
+            let _ = (session, selections, diagnostics, on_started);
             Err("SSH preparation requires macOS or Linux".into())
         }
         #[cfg(unix)]
@@ -157,7 +156,6 @@ impl Preparation {
                 workspace: session.target.workspace.clone(),
                 selections,
                 mode: Mode::Auto,
-                resolver,
             };
             Self::open_with(
                 command,
@@ -188,7 +186,6 @@ impl Preparation {
             workspace: String::new(),
             selections: Selections::default(),
             mode,
-            resolver: None,
         };
         Self::open_with(command, Arc::default(), open, true, diagnostics, on_started)
     }
@@ -201,14 +198,7 @@ impl Preparation {
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let native = command.get_args().next() == Some("sandbox".as_ref())
-            || matches!(
-                &open,
-                Input::Open {
-                    resolver: Some(_),
-                    ..
-                }
-            );
+        let native = command.get_args().next() == Some("sandbox".as_ref());
         #[cfg(unix)]
         command
             .stdin(Stdio::piped())

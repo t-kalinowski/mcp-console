@@ -2,10 +2,19 @@
 
 use crate::settings::SandboxSettings;
 use serde_json::{Value, json};
-use std::path::PathBuf;
 use std::process::Command;
 
 pub(crate) fn command(settings: SandboxSettings, parent: u32) -> Result<Command, String> {
+    let mut settings = materialize(settings)?;
+    let directory =
+        super::cache::duckdb_extension_directory(&settings)?.expect("absolute resolver HOME");
+    crate::settings::preserve_environment(
+        &mut settings,
+        [(
+            crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY.as_ref(),
+            Some(directory.as_os_str()),
+        )],
+    )?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut command = Command::new(&executable);
     command
@@ -15,74 +24,15 @@ pub(crate) fn command(settings: SandboxSettings, parent: u32) -> Result<Command,
         .arg(executable)
         .env(
             crate::settings::ENVIRONMENT,
-            serde_json::to_string(&materialize(settings)?).map_err(|error| error.to_string())?,
-        );
+            serde_json::to_string(&settings).map_err(|error| error.to_string())?,
+        )
+        .env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);
     Ok(command)
 }
 
 fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String> {
     let workspace = std::env::current_dir().map_err(|error| error.to_string())?;
-    // Cache selection uses the resolver's effective environment, including its
-    // own trusted YAML overrides. Worker environment settings do not reach here.
-    let inherit = settings.get("inherit_environment") != Some(&Value::Bool(false));
-    let env = |name: &str| -> Option<PathBuf> {
-        settings
-            .get("environment")
-            .and_then(|values| values.get(name))
-            .and_then(Value::as_str)
-            .map(PathBuf::from)
-            .or_else(|| {
-                inherit
-                    .then(|| std::env::var_os(name).map(PathBuf::from))
-                    .flatten()
-            })
-            .filter(|path| !path.as_os_str().is_empty())
-    };
-    let home = env("HOME").ok_or("resolver sandbox requires HOME")?;
-    if !home.is_absolute() {
-        return Err("resolver sandbox requires an absolute HOME".into());
-    }
-    let xdg_cache = env("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
-    let xdg_data = env("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local/share"));
-    let r_cache = env("R_USER_CACHE_DIR")
-        .or_else(|| env("XDG_CACHE_HOME"))
-        .unwrap_or_else(|| {
-            if cfg!(target_os = "macos") {
-                home.join("Library/Caches/org.R-project.R")
-            } else {
-                xdg_cache.clone()
-            }
-        });
-    let mut caches = vec![
-        env("UV_CACHE_DIR").unwrap_or_else(|| xdg_cache.join("uv")),
-        env("UV_PYTHON_INSTALL_DIR").unwrap_or_else(|| xdg_data.join("uv/python")),
-        env("UV_TOOL_DIR").unwrap_or_else(|| xdg_data.join("uv/tools")),
-        env("IR_CACHE_DIR").unwrap_or_else(|| r_cache.join("R/ir")),
-        r_cache.join("R/reticulate"),
-        home.join(".duckdb/extensions"),
-        env("MPLCONFIGDIR").unwrap_or_else(|| xdg_cache.join("matplotlib")),
-        env("RENV_PATHS_ROOT").unwrap_or_else(|| r_cache.join("R/renv")),
-        r_cache.join("R/pkgcache"),
-    ];
-    if cfg!(target_os = "macos") {
-        // uv retains existing installations in its pre-XDG native locations.
-        caches.extend([
-            home.join("Library/Caches/uv"),
-            home.join("Library/Application Support/uv"),
-        ]);
-    }
-    for name in [
-        "IR_LIBRARY_ROOT",
-        "RENV_PATHS_CACHE",
-        "RENV_PATHS_SOURCE",
-        "RENV_PATHS_BINARY",
-        "R_PKG_CACHE_DIR",
-        "PKG_CACHE_DIR",
-    ] {
-        if let Some(path) = env(name) {
-            caches.push(path);
-        }
-    }
+    let caches = super::cache::writable_roots(&settings)?;
     let filesystem = settings.entry("filesystem").or_insert_with(|| json!({}));
     if let Value::Object(filesystem) = filesystem {
         filesystem.entry("kind").or_insert("restricted".into());

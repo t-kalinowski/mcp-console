@@ -18,7 +18,7 @@ Default local execution:
 MCP client
   │ MCP over stdio
   ▼
-server ───── resolve ───── dependency resolvers       trusted host
+server ───── native runner → resolve → dependencies   resolver sandbox
   │
   ▼
 sandbox frontend → private native runner            same PID on Unix
@@ -130,8 +130,9 @@ Explicit and failure-driven replacement both respect retirement barriers.
 
 ## Preparation and activation
 
-Dependency resolution runs in a separate native resolver sandbox on macOS and Linux execution hosts.
+Local dependency resolution runs in a separate native resolver sandbox on macOS and Linux.
 Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
+SSH preparation retains execution-host permissions.
 Local sessions use the hidden `resolve` command; SSH has a remote preparation connection.
 Prepared Docker/SBX targets use preinstalled environments and never invoke controller or target dependency resolvers.
 

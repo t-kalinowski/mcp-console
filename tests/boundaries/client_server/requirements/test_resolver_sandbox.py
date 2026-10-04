@@ -9,14 +9,83 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
-from support.ssh import SSH, configure, localhost
+from support.ssh import SSH, configure, localhost, remote_command
 from boundaries.client_server.python.test_without_r import environment
+
+
+@requires(SANDBOX)
+def test_python_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
+    return duckdb_cache(binary, r=False)
+
+
+@requires(SANDBOX, R, command("ir"))
+def test_r_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
+    return duckdb_cache(binary, r=True)
+
+
+def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
+    for explicit in (False, True):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tools = root / "bin"
+            tools.mkdir()
+            (tools / "uv").symlink_to(shutil.which("uv"))
+            env = r_test_environment()[0] if r else environment(tools)
+            home = root / "resolver-home"
+            cache = root / "extensions" if explicit else home / ".duckdb/extensions"
+            resolver_env = {"HOME": str(home)}
+            if r:
+                resolver_env["IR_CACHE_DIR"] = env.get(
+                    "IR_CACHE_DIR",
+                    str(
+                        Path(env["HOME"])
+                        / (
+                            "Library/Caches/org.R-project.R/R/ir"
+                            if sys.platform == "darwin"
+                            else ".cache/R/ir"
+                        )
+                    ),
+                )
+            if explicit:
+                resolver_env["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(cache)
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"resolver": {"environment": resolver_env}}))
+            with McpClient(binary, ("serve",), env, root) as client:
+                client.initialize_and_list_tools()
+                result = client.send(
+                    sql="SELECT current_setting('extension_directory') AS directory"
+                )
+                assert not result.get("isError"), result
+                assert str(cache) in last_tool_text(client), last_tool_text(client)
+                assert list(cache.glob("v*/**/sqlite_scanner.duckdb_extension"))
+                client.send(sql="LOAD sqlite")
+                client.send(
+                    sql="SELECT CASE WHEN loaded THEN 'loaded' ELSE 'missing' END AS state FROM duckdb_extensions() WHERE extension_name = 'sqlite_scanner'"
+                )
+                assert "loaded" in last_tool_text(
+                    client
+                ) and "missing" not in last_tool_text(client), last_tool_text(client)
+                config.write_text("resolver: {environment: {HOME: /missing}}\n")
+                client.send(control="restart")
+                client.send(
+                    sql="SELECT current_setting('extension_directory') AS directory"
+                )
+                assert str(cache) in last_tool_text(client), last_tool_text(client)
+                client.finish()
+    return [
+        {
+            "resolver_home_cache": True,
+            "explicit_cache": True,
+            "retained_across_restart": True,
+        }
+    ]
 
 
 @requires(SANDBOX)
@@ -46,14 +115,14 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
         )
         with McpClient(binary, ("serve",), env, root) as client:
             client.initialize_and_list_tools()
-            client.send(
+            wait_for_evaluation_output(
+                client,
+                lambda output: output.endswith("TRUE\n"),
+                "cold R preparation and evaluation",
+                completion_timeout_seconds=client.response_timeout,
                 requirements={"action": "set", "r": ["utf8"]},
                 r='cat(utf8::utf8_valid("resolved"), "\\n", sep = "")',
             )
-            assert not client.transcript[-1]["result"].get("isError"), (
-                client.transcript[-1]
-            )
-            assert last_tool_text(client).endswith("TRUE\n"), last_tool_text(client)
             client.finish()
         assert list((root / "ir").rglob("utf8/DESCRIPTION"))
         return [{"cold_ir_cache": True, "resolved_r_package": "utf8"}]
@@ -117,6 +186,31 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
             }))
             os.execv(os.environ["RESOLVER_TEST_UV"], ["uv", *sys.argv[1:]])
             """)
+        if remote:
+            # fmt: python
+            probe = code(r"""
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                cache = Path(os.environ["UV_CACHE_DIR"])
+                cache.mkdir(exist_ok=True)
+                protected = Path(os.environ["RESOLVER_TEST_PROTECTED"])
+                assert protected.joinpath("readable").read_text() == "host read"
+                assert os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") != "1"
+                protected.joinpath("allowed").write_text("host permissions")
+                cache.joinpath("probe.json").write_text(
+                    json.dumps(
+                        {
+                            "host_read": True,
+                            "cache_write": True,
+                            "host_write_allowed": True,
+                        }
+                    )
+                )
+                os.execv(os.environ["RESOLVER_TEST_UV"], ["uv", *sys.argv[1:]])
+                """)
         (tools / "uv").write_text(f"#!{sys.executable}\n" + probe, encoding="utf-8")
         (tools / "uv").chmod(0o755)
         (protected / "readable").write_text("host read")
@@ -178,16 +272,25 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
             configure(
                 root,
                 root,
-                [str(binary)],
+                remote_command(
+                    root,
+                    binary,
+                    {
+                        "PATH": str(tools),
+                        "HOME": env["HOME"],
+                        **{
+                            name: env[name]
+                            for name in (
+                                "UV_CACHE_DIR",
+                                "RESOLVER_TEST_UV",
+                                "RESOLVER_TEST_PROTECTED",
+                            )
+                        },
+                    },
+                ),
                 resolver={
-                    "environment": {
-                        name: env[name]
-                        for name in (
-                            "UV_CACHE_DIR",
-                            "RESOLVER_TEST_UV",
-                            "RESOLVER_TEST_PROTECTED",
-                        )
-                    }
+                    "inherit_environment": False,
+                    "environment": {"HOME": "/local-only"},
                 },
             )
         with McpClient(binary, ("serve",), env, root) as client:

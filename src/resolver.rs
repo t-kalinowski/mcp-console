@@ -6,6 +6,7 @@ pub(crate) enum ResolverControlOutcome {
 
 mod environment;
 pub(crate) use environment::{ManagedPython, ManagedR};
+pub(crate) mod cache;
 pub(crate) mod execution;
 pub(crate) mod preparation;
 pub(crate) mod sandbox;
