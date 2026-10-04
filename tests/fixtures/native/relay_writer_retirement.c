@@ -48,8 +48,10 @@ static void mark(const char *event, int index) {
 
 static ssize_t observe_write(int descriptor, const void *bytes, size_t length) {
     int index = -1;
+    int first_large = 0;
     const unsigned char *frame = bytes;
-    int probe = length == 12 && memcmp(bytes, "writer-probe", 12) == 0;
+    int probe = (length == 12 && memcmp(bytes, "writer-probe", 12) == 0) ||
+        (length == 17 && memcmp(bytes, "echo writer-probe", 17) == 0);
     int large = length > 512 * 1024;
     int bootstrap = large && frame[4] == '{' &&
         (((uint32_t)frame[0] << 24) | ((uint32_t)frame[1] << 16) |
@@ -65,16 +67,20 @@ static ssize_t observe_write(int descriptor, const void *bytes, size_t length) {
             index = count++;
             writers[index] = (struct writer){ .thread = pthread_self(), .descriptor = descriptor };
         }
-        int first_large = index >= 0 && large && !writers[index].large_write;
+        first_large = index >= 0 && large && !writers[index].large_write;
         if (index >= 0) writers[index].large_write |= first_large;
         pthread_mutex_unlock(&lock);
         if (first_large) mark("large-write", index);
     }
 #ifdef __APPLE__
-    return write(descriptor, bytes, length);
+    ssize_t result = write(descriptor, bytes, length);
 #else
-    return ((ssize_t (*)(int, const void *, size_t))dlsym(RTLD_NEXT, "write"))(descriptor, bytes, length);
+    ssize_t result = ((ssize_t (*)(int, const void *, size_t))dlsym(RTLD_NEXT, "write"))(descriptor, bytes, length);
 #endif
+    int saved = errno;
+    if (first_large && result > 0 && (size_t)result < length) mark("partial-write", index);
+    errno = saved;
+    return result;
 }
 
 static int observe_close(int descriptor) {
@@ -126,14 +132,15 @@ static int observe_join(pthread_t thread, void **value) {
 
 static int gate_retirement_signal(pid_t pid, int number) {
     const char *mode = getpid() == server_pid ? getenv("MCP_CONSOLE_TEST_WRITER_MODE") : NULL;
-    if (root != NULL && mode != NULL && strcmp(mode, "interrupt_after_eof") == 0 && number == SIGTERM) {
+    if (root != NULL && mode != NULL &&
+        (strcmp(mode, "interrupt_after_eof") == 0 || strcmp(mode, "aborted_frame") == 0) && number == SIGTERM) {
         char path[4096];
         snprintf(path, sizeof(path), "%s/kill-reached-1", root);
         int reached = open(path, O_WRONLY);
         snprintf(path, sizeof(path), "%s/kill-release-1", root);
         int release = open(path, O_RDONLY);
         if (reached < 0 || release < 0 || write(reached, "1", 1) != 1) _exit(123);
-        // Let the real relay observe command EOF and send its late receipt
+        // Let the real relay observe command EOF and send its terminal events
         // before the already selected forced launcher signal is delivered.
         char token;
         ssize_t received;

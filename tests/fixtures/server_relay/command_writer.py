@@ -13,6 +13,17 @@ generation_path = root / "generation"
 generation = int(generation_path.read_text()) + 1 if generation_path.exists() else 1
 generation_path.write_text(str(generation))
 
+if mode == "aborted_frame":
+    # Use the real relay; gate its command read after the stdin frame header.
+    (root / f"relay-pid-{generation}").write_text(str(os.getpid()))
+    os.environ["MCP_CONSOLE_TEST_RELAY_READ_PID"] = str(os.getpid())
+    os.environ["MCP_CONSOLE_TEST_RELAY_READ_BLOCKED"] = str(root / "read-blocked")
+    os.environ["MCP_CONSOLE_TEST_RELAY_READ_RELEASE"] = str(root / "read-release")
+    loader = "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+    os.environ[loader] = os.environ["MCP_CONSOLE_TEST_RELAY_READ_DYLIB"]
+    binary = os.environ["MCP_CONSOLE_TEST_RELAY_BINARY"]
+    os.execv(binary, [binary, "worker-relay", *sys.argv[1:]])
+
 
 def signal(name: str) -> None:
     with (root / name).open("wb", buffering=0) as checkpoint:

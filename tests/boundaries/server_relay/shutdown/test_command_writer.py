@@ -129,6 +129,94 @@ def test_forced_retirement_aborts_full_command_pipe(
     return retirement_case(binary, execution, "forced", 1)
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_restart_accepts_aborted_frame_after_confirmed_retirement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
+        root = Path(temporary)
+        read_blocked, read_release, kill_reached, kill_release = [
+            stack.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in (
+                "read-blocked",
+                "read-release",
+                "kill-reached-1",
+                "kill-release-1",
+            )
+        ]
+        fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+        environment = {
+            **os.environ,
+            "TMPDIR": str(root),
+            LOADER_VARIABLE: str(build_interposer(root, "relay_writer_retirement")),
+            "MCP_CONSOLE_TEST_WRITER_ROOT": str(root),
+            "MCP_CONSOLE_TEST_WRITER_MODE": "aborted_frame",
+            "MCP_CONSOLE_TEST_RELAY_BINARY": str(binary),
+            "MCP_CONSOLE_TEST_RELAY_READ_DYLIB": str(
+                build_interposer(root, "relay_stdout_read_interposer")
+            ),
+            "MCP_CONSOLE_TEST_RELAY_READ_MATCH": '{"kind":"stdin"',
+        }
+        writable = ("--writable-root", str(root)) if execution == SANDBOXED else ()
+        client = McpClient(
+            binary,
+            execution.serve(
+                *writable,
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "server_relay/command_writer.py"),
+            ),
+            environment,
+        )
+        try:
+            client.initialize_and_list_tools()
+            assert (
+                tool_text(client.send(r="echo writer-probe")) == "zod: writer-probe\n"
+            )
+            pid = host_process_id(
+                int((root / "relay-pid-1").read_text()), client.process.pid
+            )
+            events = stack.enter_context(Events())
+            events.watch_process(pid)
+            client.send(stdin="x" * (8 * 1024 * 1024), timeout_ms=0)
+            read_blocked.wait("real relay read the partial stdin frame header")
+            wait_for_path(
+                root / "partial-write-1", "actual partial command write", client=client
+            )
+            restart = client.start_send(control="restart", r="echo writer-probe")
+            kill_reached.wait("operation retired and launcher signal selected")
+            wait_for_path(
+                root / "closed-1", "abort closed command stdin", client=client
+            )
+            # The real relay now observes partial-frame EOF, reaps its worker,
+            # publishes Fatal and exits before the selected signal is delivered.
+            read_release.release()
+            assert pid in events.wait(10), "real relay did not finish retirement"
+            kill_release.release()
+            client.receive(restart)
+            result = restart["result"]
+            assert not result.get("isError", False), result
+            assert tool_text(result).endswith("zod: writer-probe\n[done]"), result
+            assert (root / "joined-1").exists(), "old command writer was not joined"
+            assert (root / "generation").read_text() == "2"
+            assert (
+                tool_text(client.send(r="echo after restart")) == "zod: after restart\n"
+            )
+            client.finish()
+        finally:
+            read_release.release()
+            kill_release.release()
+            client.close()
+        return [
+            {
+                "aborted_frame_restart": "confirmed retirement",
+                "subsequent_send": "completed",
+            }
+        ]
+
+
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_eof_joins_blocked_target_bootstrap(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:

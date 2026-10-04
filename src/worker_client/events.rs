@@ -9,7 +9,7 @@ use operation::{Route, RuntimeRCallbackAdmission};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::relay_protocol::{RelayCommand, RelayEvent};
+use crate::relay_protocol::{PARTIAL_COMMAND_EOF, RelayCommand, RelayEvent};
 
 use super::lifecycle::OldGenerationCommitDisposition;
 use super::{OutputTape, WorkerCallbacks, WorkerProcessOutcome};
@@ -262,7 +262,19 @@ fn dispatch_worker_events(
                         } else {
                             relay_fatal = true;
                             if retiring {
-                                retirement_failure.get_or_insert(message);
+                                // Aborting the sole writer can leave a partial
+                                // command. Its EOF failure describes transport,
+                                // not cleanup. Other Fatal messages and the
+                                // launcher's/provider's retirement still gate replacement.
+                                let aborted_frame = commands.is_aborted()
+                                    && (message == PARTIAL_COMMAND_EOF
+                                        || message
+                                            == format!(
+                                                "relay stdin frame is invalid: {PARTIAL_COMMAND_EOF}"
+                                            ));
+                                if !aborted_frame {
+                                    retirement_failure.get_or_insert(message);
+                                }
                             } else {
                                 fail_dispatch(&operation, &mut startup, &interrupts, message);
                                 semantic_failure = true;

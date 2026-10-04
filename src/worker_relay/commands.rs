@@ -9,7 +9,7 @@ use super::io::{Cancellation, cancellation_pipe, set_nonblocking};
 use super::supervisor::{Control, FailureReporter};
 use crate::jsonl::JsonlBuffer;
 use crate::readiness::wait_for_io;
-use crate::relay_protocol::RelayCommand;
+use crate::relay_protocol::{PARTIAL_COMMAND_EOF, RelayCommand};
 use crate::worker_protocol::ServerMessage;
 
 const READ_CHUNK_SIZE: usize = 8 * 1024;
@@ -55,7 +55,7 @@ impl CommandReader {
                         return;
                     }
                     Ok(0) => {
-                        failures.report("relay stdin closed midway through a frame".to_string());
+                        failures.report(PARTIAL_COMMAND_EOF.to_string());
                         return;
                     }
                     Ok(length) => buffer.append(&chunk[..length]),

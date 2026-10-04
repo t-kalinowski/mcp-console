@@ -1114,6 +1114,14 @@ impl RelayCommandSender {
             .clone()
     }
 
+    pub(super) fn is_aborted(&self) -> bool {
+        self.state
+            .lock()
+            .expect("relay command admission lock")
+            .failure
+            .is_some()
+    }
+
     /// Abort this generation's descriptor independently of its queue. Taking
     /// the sole queue sender also wakes an idle writer and closes all clones'
     /// admission under the same boundary.
