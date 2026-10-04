@@ -108,4 +108,5 @@ To remove it as unnecessary, reproduce its actual sandboxed workflow without it 
 Host resolver tests cannot establish worker sandbox compatibility.
 Public CLI sandbox, processx, parallel Python, Quarto, and offline uv cases are the regression evidence; historical test counts are not current acceptance results.
 
-Native enforcement does not make the whole application safe for hostile input: submitted code is shell-class capability, host reads can expose secrets, and [trusted dependency preparation](REQUIREMENTS.md#host-resolution-and-trust) remains outside this boundary.
+Native enforcement does not make the whole application safe for hostile input: submitted code is shell-class capability and host reads can expose secrets.
+On macOS and Linux, [dependency preparation](RESOLVER.md) runs under a separate native policy with owned storage; Windows preparation remains a trusted host operation.

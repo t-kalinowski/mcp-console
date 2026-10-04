@@ -1,6 +1,6 @@
 # Resolver process boundary
 
-Dependency preparation and runtime inspection use a separate process tree:
+On macOS and Linux, dependency preparation and runtime inspection use a separate process tree:
 
 ```text
 server → hidden mcp-console resolve broker
@@ -18,6 +18,8 @@ The complete executable preparation graph runs in the resolver workload: runtime
 R-present and Python-only sessions use the same implementation.
 On SSH, the preparation transport starts this broker on the execution host.
 Docker and Docker Sandbox continue to use prepared images with dynamic preparation disabled.
+Windows retains host preparation with Job-owned descendants; the native resolver policy and owned payload described here are not available there.
+See [Windows support](WINDOWS.md).
 
 ## Trusted launch data and private protocol
 
@@ -26,7 +28,7 @@ Trusted launch data and operation requirements occupy separate protocol fields.
 Requirements cannot choose a command, filesystem grant, proxy policy, or cache root.
 Python registry syntax, automatic R package names, explicit ir reference framing, and DuckDB extension names retain their public validation.
 
-The private broker transport uses versioned, length-prefixed JSON frames bounded to 1 MiB, including assembled results.
+The version 6 preparation protocol uses JSON Lines locally and length-prefixed JSON frames over SSH, bounded to 1 MiB including assembled results.
 The workload receives bounded versioned JSON through stdin and returns JSON through stdout.
 Installer logs and native diagnostics use separate captured streams.
 Their bounded text previews retain the beginning and end with UTF-8 omission counts; a large installer log does not invalidate the protocol result.
@@ -108,7 +110,7 @@ Package code has the execution account's permissions in that mode.
 
 ## Lifetimes and weekly cleanup
 
-Each broker holds a lease from initial resolution until the server has retired its last worker and explicitly closes preparation.
+Each broker holds a lease while its preparation connection is open.
 Idle periods, retained environments, and gaps between restarts remain leased.
 A protected gate lock serializes lease metadata and cleanup.
 Each resolver and worker native launcher also retains an independent shared lock until native retirement; its descriptor is not inherited by package or worker code.
@@ -128,10 +130,12 @@ An explicitly unconfirmed retirement marks storage uncertain and prevents automa
 The native runner owns descendant retirement.
 Interrupt acknowledgment confirms signal delivery; preparation remains pending until native retirement completes.
 The broker accepts a result only after successful native launcher exit; workload JSON is never evidence of cleanup.
+Forced termination and diagnostic collection remain bounded when a runner cannot retire.
+A forced exit never confirms descendant retirement.
 Unconfirmed retirement blocks further preparation and replacement.
 For explicit direct execution, existing process-group cleanup limits still apply.
 
 The server resolves and inspects the entire candidate before retiring an existing worker.
 Preparation failure retains the accepted manifest, objects, and queued input and does not dispatch same-call stdin or code.
 Live R/Python activation retains its existing worker-confirmed commit boundary.
-Python-only managed sessions prepare before first use or with restart, and record only accepted Python declarations in the Quarto package list.
+Python-only managed sessions also support compatible live additions under the [live preparation contract](REQUIREMENTS.md#live-python-preparation), and record only accepted Python declarations in the Quarto package list.
