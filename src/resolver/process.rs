@@ -1,14 +1,23 @@
+//! Shared resolver control and result collection over native process mechanics.
+
+#[cfg(unix)]
+mod unix;
 #[cfg(windows)]
-pub(super) use crate::windows::resolver::Child;
+mod windows;
+#[cfg(unix)]
+use unix as native;
+#[cfg(windows)]
+use windows as native;
+
+pub(super) use native::Child;
+use native::{interrupt_resolver, stop_resolver};
+pub(crate) use native::{resolver_command, spawn_resolver};
+
 use std::io;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt as _;
 use std::path::Path;
-#[cfg(unix)]
-pub(super) use std::process::Child;
 use std::process::ChildStdin;
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -273,31 +282,6 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
     receiver
 }
 
-#[cfg(unix)]
-pub(crate) fn resolver_command(program: &Path) -> Command {
-    let mut command = Command::new(program);
-    command.process_group(0);
-    // SAFETY: the closure calls only libc signal functions after fork and
-    // before exec. Resolver programs must not inherit an ignored or blocked
-    // SIGINT from the MCP host.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
-                return Err(io::Error::last_os_error());
-            }
-            let mut signals = std::mem::zeroed();
-            if libc::sigemptyset(&mut signals) != 0
-                || libc::sigaddset(&mut signals, libc::SIGINT) != 0
-                || libc::sigprocmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    command
-}
-
 fn receive_result<T>(
     receiver: Receiver<io::Result<T>>,
     name: &str,
@@ -389,66 +373,6 @@ fn wait_for_resolver(
     })
 }
 
-#[cfg(unix)]
-fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
-    let pid = child.id();
-    // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
-    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
-        return Ok(ResolverInterrupt::Signaled);
-    }
-    let error = io::Error::last_os_error();
-    if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH)) {
-        // Keep an exited leader unreaped so its watcher remains authoritative
-        // and this resolver PID cannot be reused before normal cleanup.
-        if crate::process_exit::direct_child_has_exited(pid)? {
-            return Ok(ResolverInterrupt::AlreadyExited);
-        }
-    }
-    Err(error)
-}
-
-#[cfg(unix)]
-fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-    exit: Option<&mut ChildExitWaiter>,
-) -> Result<ExitStatus, String> {
-    // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
-    let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
-    if result < 0 {
-        let kill_error = io::Error::last_os_error();
-        match crate::process_exit::direct_child_has_exited(child.id()) {
-            // macOS reports EPERM when only the unreaped group leader remains.
-            // ESRCH likewise means there is no remaining group to stop.
-            Ok(true)
-                if matches!(
-                    kill_error.raw_os_error(),
-                    Some(libc::EPERM) | Some(libc::ESRCH)
-                ) => {}
-            Ok(_) => {
-                return Err(format!(
-                    "failed to stop {kind} resolver `{}`: {kill_error}",
-                    program.display()
-                ));
-            }
-            Err(wait_error) => {
-                return Err(format!(
-                    "failed to stop {kind} resolver `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
-                    program.display()
-                ));
-            }
-        }
-    }
-    settle_observation(exit);
-    child.wait().map_err(|error| {
-        format!(
-            "failed to reap {kind} resolver `{}`: {error}",
-            program.display()
-        )
-    })
-}
-
 fn settle_observation(exit: Option<&mut ChildExitWaiter>) {
     if let Some(exit) = exit {
         // Exit/error is delivered through ResolverEvent::Exited. Cancellation
@@ -456,58 +380,4 @@ fn settle_observation(exit: Option<&mut ChildExitWaiter>) {
         // native observation and its event before reaping releases identity.
         let _ = exit.finish();
     }
-}
-
-#[cfg(windows)]
-pub(crate) fn resolver_command(program: &Path) -> Command {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new(program);
-    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    command
-}
-#[cfg(windows)]
-fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
-    if child.try_wait()?.is_some() {
-        return Ok(ResolverInterrupt::AlreadyExited);
-    }
-    child.terminate()?;
-    Ok(ResolverInterrupt::Signaled)
-}
-#[cfg(windows)]
-fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-    exit: Option<&mut ChildExitWaiter>,
-) -> Result<ExitStatus, String> {
-    child
-        .retire(|remaining| {
-            if let Some(exit) = exit {
-                // A native observation error is settled, but delayed process
-                // termination must not extend the owner's retirement deadline.
-                if matches!(exit.wait(remaining), Ok(false)) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "resolver exit observation did not settle",
-                    ));
-                }
-                settle_observation(Some(exit));
-            }
-            Ok(())
-        })
-        .map_err(|error| {
-            format!(
-                "failed to retire {kind} resolver `{}`: {error}",
-                program.display()
-            )
-        })
-}
-
-#[cfg(unix)]
-pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
-    command.spawn()
-}
-#[cfg(windows)]
-pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
-    crate::windows::resolver::spawn(command)
 }

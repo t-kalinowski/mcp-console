@@ -336,4 +336,3 @@ pub(crate) fn inherit(handle: RawHandle, inherit: bool) -> io::Result<()> {
 }
 
 mod pipe_security;
-pub(crate) mod resolver;
