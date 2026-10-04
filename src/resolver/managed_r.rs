@@ -4,8 +4,7 @@ use std::process::{Command, Stdio};
 
 use super::ManagedR;
 use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command,
+    ResolverInvocation, ResolverOutput, ResolverProcess, ResolverStopHandle, resolver_command,
 };
 
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
@@ -131,7 +130,7 @@ impl ManagedRResolverConfiguration {
             .stderr(Stdio::piped());
         managed_r.configure_worker(&mut command)?;
         configuration.configure_uv_bootstrap(&mut command);
-        let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+        let invocation = resolver.spawn(&mut command, None).map_err(|error| {
             format!(
                 "failed to resolve `uv` with `{}`: {error}",
                 self.rscript.display()
@@ -139,7 +138,7 @@ impl ManagedRResolverConfiguration {
         })?;
         let output = collect_resolver_output(
             &resolver,
-            &mut child,
+            invocation,
             &mut on_started,
             &self.rscript,
             "`uv`",
@@ -252,14 +251,14 @@ fn discover_rscript(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to discover the worker R home with `{}`: {error}",
             program.display()
         )
     })?;
     let output =
-        collect_resolver_output(resolver, &mut child, on_started, program, "worker R home")?;
+        collect_resolver_output(resolver, invocation, on_started, program, "worker R home")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -336,7 +335,7 @@ fn run_uv_program(
         command.arg("--probe");
     }
     configuration.configure_uv_bootstrap(&mut command);
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to inspect ambient reticulate with `{}`: {error}",
             rscript.display()
@@ -344,7 +343,7 @@ fn run_uv_program(
     })?;
     collect_resolver_output(
         resolver,
-        &mut child,
+        invocation,
         on_started,
         rscript,
         "ambient reticulate `uv`",
@@ -430,7 +429,7 @@ fn resolve_r_with_process(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to run R package resolver with `{}`: {error}",
             configuration.ir.label()
@@ -438,7 +437,7 @@ fn resolve_r_with_process(
     })?;
     let output = collect_resolver_output(
         resolver,
-        &mut child,
+        invocation,
         on_started,
         configuration.ir.display_program(),
         "R package",
@@ -492,7 +491,7 @@ fn validate_ir_version(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to check R package resolver version with `{}`: {error}",
             ir.label()
@@ -500,7 +499,7 @@ fn validate_ir_version(
     })?;
     let output = collect_resolver_output(
         resolver,
-        &mut child,
+        invocation,
         on_started,
         ir.display_program(),
         "R package",
@@ -540,21 +539,15 @@ fn validate_ir_version(
 
 fn collect_resolver_output(
     resolver: &ResolverProcess,
-    child: &mut super::process::Child,
+    invocation: ResolverInvocation,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
     program: &Path,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    resolver.watch_exit(child.id());
-    if let Some(on_started) = on_started.take()
-        && let Err(error) = on_started(resolver.stop_handle())
-    {
-        resolver
-            .abort(child, program, kind)
-            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
-        return Err(error);
-    }
-    resolver.wait(child, completed_write(), stdout, stderr, program, kind)
+    resolver.collect(invocation, program, kind, |handle| {
+        match on_started.take() {
+            Some(started) => started(handle),
+            None => Ok(()),
+        }
+    })
 }

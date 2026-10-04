@@ -1,4 +1,10 @@
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+pub(super) type Cancel = io::PipeWriter;
+pub(super) fn cancellation() -> Result<(io::PipeReader, Cancel), String> {
+    io::pipe().map_err(|error| error.to_string())
+}
 
 const CHILD_EXITED: libc::c_int = 1;
 const CHILD_KILLED: libc::c_int = 2;
@@ -18,6 +24,76 @@ impl Observer {
     pub(super) fn wait(self) -> Result<(), String> {
         super::wait_for_direct_child_exit(self.0)
     }
+
+    pub(super) fn wait_cancellable(self, cancelled: io::PipeReader) -> Result<bool, String> {
+        let result = (|| {
+            if observe_direct_child(self.0, false)? {
+                return Ok(true);
+            }
+            let Some(descriptor) = exit_notification(self.0)? else {
+                return Ok(true);
+            };
+            let ready = crate::readiness::wait_for_io(
+                descriptor.as_raw_fd(),
+                libc::POLLIN,
+                Some(&cancelled),
+            )?;
+            if ready.cancelled {
+                return Ok(false);
+            }
+            // The native exit event is non-reaping; waitid validates its result
+            // while the owner still holds the child's identity unreaped.
+            observe_direct_child(self.0, false).and_then(|exited| {
+                if exited {
+                    Ok(true)
+                } else {
+                    Err(io::Error::other("child exit event without exit"))
+                }
+            })
+        })();
+        result.map_err(|error| format!("failed to observe child process {} exit: {error}", self.0))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn exit_notification(pid: libc::pid_t) -> io::Result<Option<OwnedFd>> {
+    // SAFETY: the unreaped direct child pins pid; pidfd_open creates an owned
+    // close-on-exec descriptor without signalling or reaping it.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Some(unsafe { OwnedFd::from_raw_fd(fd as _) }))
+}
+
+#[cfg(target_os = "macos")]
+fn exit_notification(pid: libc::pid_t) -> io::Result<Option<OwnedFd>> {
+    let fd = unsafe { libc::kqueue() };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let queue = unsafe { OwnedFd::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let change = libc::kevent {
+        ident: pid as _,
+        filter: libc::EVFILT_PROC,
+        flags: libc::EV_ADD | libc::EV_ONESHOT,
+        fflags: libc::NOTE_EXIT,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    // XNU rejects NOTE_EXIT registration after exit, even for an unreaped
+    // child. Confirm that race through waitid while identity is still pinned.
+    if unsafe { libc::kevent(fd, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) } < 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) && observe_direct_child(pid, false)? {
+            return Ok(None);
+        }
+        return Err(error);
+    }
+    Ok(Some(queue))
 }
 
 pub(crate) fn direct_child_has_exited(process_id: u32) -> io::Result<bool> {

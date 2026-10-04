@@ -157,6 +157,7 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
             "PATH": str(root),
             LOADER_VARIABLE: str(build_interposer(root, "child_exit_observation")),
             "MCP_CONSOLE_TEST_OBSERVER_ENTERED": str(root / "entered"),
+            "MCP_CONSOLE_TEST_OBSERVER_CANCELLABLE": "1",
             "MCP_CONSOLE_TEST_OBSERVER_PID": str(resolver_pid),
             "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(root / "release"),
             "MCP_CONSOLE_TEST_CHILD_KILLED": str(root / "killed"),

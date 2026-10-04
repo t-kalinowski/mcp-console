@@ -13,6 +13,7 @@
 static atomic_int observed_pid;
 static atomic_bool settled;
 static atomic_bool interrupted;
+static _Thread_local bool observer_thread;
 
 __attribute__((constructor)) static void initialize(void) {
     // Interpose only the relay or preparation owner, never its child.
@@ -32,8 +33,16 @@ static void checkpoint(const char *name, int flags) {
 
 static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
     bool observing = type == P_PID && (options & WNOWAIT);
-    bool blocking = observing && !(options & WNOHANG);
-    if (blocking && atomic_load(&observed_pid) == 0) {
+    // The cancellable resolver observer probes waitid before its native event
+    // wait. Gate that observer thread, without gating owner-side status probes.
+    if (observing && atomic_load(&observed_pid) == 0 &&
+        getenv("MCP_CONSOLE_TEST_OBSERVER_CANCELLABLE") != NULL) {
+        observer_thread = true;
+    }
+    bool blocking = observing && (!(options & WNOHANG) || observer_thread);
+    bool first = blocking && atomic_load(&observed_pid) == 0;
+    bool stale_probe = getenv("MCP_CONSOLE_TEST_OBSERVER_STALE_PROBE") != NULL;
+    if (first) {
         atomic_store(&observed_pid, (int)id);
         const char *pid_path = getenv("MCP_CONSOLE_TEST_OBSERVER_PID");
         if (pid_path != NULL) {
@@ -41,8 +50,10 @@ static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
             if (file == NULL) _exit(123);
             if (fprintf(file, "%d\n", (int)id) < 0 || fclose(file) != 0) _exit(124);
         }
-        checkpoint("MCP_CONSOLE_TEST_OBSERVER_ENTERED", O_WRONLY);
-        checkpoint("MCP_CONSOLE_TEST_OBSERVER_RELEASE", O_RDONLY);
+        if (!stale_probe) {
+            checkpoint("MCP_CONSOLE_TEST_OBSERVER_ENTERED", O_WRONLY);
+            checkpoint("MCP_CONSOLE_TEST_OBSERVER_RELEASE", O_RDONLY);
+        }
     }
     if (blocking && getenv("MCP_CONSOLE_TEST_OBSERVER_FAIL") != NULL) {
         atomic_store(&settled, true);
@@ -65,6 +76,12 @@ static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
         type, id, info, options);
 #endif
     int saved_errno = errno;
+    if (first && stale_probe) {
+        // Retain the live-child probe result until the fixture has confirmed
+        // exit and delivered an interrupt. Native event registration follows.
+        checkpoint("MCP_CONSOLE_TEST_OBSERVER_ENTERED", O_WRONLY);
+        checkpoint("MCP_CONSOLE_TEST_OBSERVER_RELEASE", O_RDONLY);
+    }
     if (blocking && result == 0 &&
         (info->si_code == CLD_EXITED || info->si_code == CLD_KILLED || info->si_code == CLD_DUMPED)) {
         atomic_store(&settled, true);
@@ -89,6 +106,12 @@ static pid_t observe_reap(pid_t pid, int *status, int options) {
 }
 
 static int observe_kill(pid_t pid, int signal) {
+    if (signal == SIGKILL && -pid == atomic_load(&observed_pid) &&
+        getenv("MCP_CONSOLE_TEST_CLEANUP_FAIL") != NULL) {
+        checkpoint("MCP_CONSOLE_TEST_CHILD_KILLED", O_WRONLY);
+        errno = EACCES;
+        return -1;
+    }
 #ifdef __APPLE__
     int result = kill(pid, signal);
 #else
