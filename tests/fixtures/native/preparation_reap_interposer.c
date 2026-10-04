@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,22 @@ static bool resolver(pid_t pid) {
     ssize_t count = read(marker, text, sizeof(text) - 1);
     close(marker);
     return count > 0 && strtol(text, NULL, 10) == pid;
+}
+
+static int deny_termination(pid_t pid, int signal) {
+    const char *denied = getenv("MCP_CONSOLE_TEST_REAP_DENY_KILL");
+    if (signal == SIGKILL && denied != NULL && resolver(pid)) {
+        int marker = open(denied, O_WRONLY | O_CREAT, 0600);
+        if (marker < 0) _exit(124);
+        close(marker);
+        errno = EPERM;
+        return -1;
+    }
+#ifdef __APPLE__
+    return kill(pid, signal);
+#else
+    return ((int (*)(pid_t, int))dlsym(RTLD_NEXT, "kill"))(pid, signal);
+#endif
 }
 
 static bool joined(void) {
@@ -113,10 +130,12 @@ static int observe_join(pthread_t thread, void **value) {
         (const void *)replacement, (const void *)original \
     };
 INTERPOSE(observe_write, write)
+INTERPOSE(deny_termination, kill)
 INTERPOSE(gated_waitpid, waitpid)
 INTERPOSE(observe_join, pthread_join)
 #else
 ssize_t write(int fd, const void *bytes, size_t count) { return observe_write(fd, bytes, count); }
+int kill(pid_t pid, int signal) { return deny_termination(pid, signal); }
 pid_t waitpid(pid_t pid, int *status, int options) { return gated_waitpid(pid, status, options); }
 int pthread_join(pthread_t thread, void **value) { return observe_join(thread, value); }
 #endif

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 #[cfg(unix)]
-use std::io;
+use std::io::{self, Write};
 use std::io::{BufReader, Read};
 use std::process::Stdio;
 use std::sync::{
@@ -243,7 +243,12 @@ impl Preparation {
         #[cfg(unix)]
         let stdin = child.stdin.take().expect("preparation stdin");
         #[cfg(unix)]
-        let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
+        let (diagnostic_exit, mut notify_diagnostic_exit) =
+            io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let mut diagnostic_abort = notify_diagnostic_exit
+            .try_clone()
+            .map_err(|e| e.to_string())?;
         #[cfg(unix)]
         let diagnostic_reader = {
             let stderr = child.stderr.take().expect("preparation stderr");
@@ -316,7 +321,7 @@ impl Preparation {
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
                 #[cfg(unix)]
-                drop(notify_diagnostic_exit);
+                let _ = notify_diagnostic_exit.write_all(&[1]);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
@@ -334,36 +339,59 @@ impl Preparation {
             drop(abort);
             // Retire before joining I/O and reaping. Native cleanup needs a
             // bounded SIGTERM allowance; direct execution can stop immediately.
-            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
-                #[cfg(unix)]
-                if local && native {
-                    // Let the native supervisor retire the resolver tree before
-                    // escalation. Killing the supervisor bypasses its cleanup.
-                    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-                    if !exit.wait(Duration::from_secs(2)).unwrap_or(false) {
-                        let _ = child.kill();
+            let reaped = (|| {
+                if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+                    #[cfg(unix)]
+                    let force = if local && native {
+                        // Let the native supervisor retire the resolver tree before
+                        // escalation. Killing the supervisor bypasses its cleanup.
+                        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+                        !exit.wait(Duration::from_secs(2)).unwrap_or(false)
+                    } else {
+                        true
+                    };
+                    #[cfg(windows)]
+                    let force = true;
+                    if force {
+                        child.kill().map_err(|error| {
+                            format!(
+                                "cannot terminate {}: {error}; retirement unconfirmed",
+                                label(local)
+                            )
+                        })?;
+                        if !exit.wait(Duration::from_secs(2))? {
+                            return Err(format!(
+                                "{} did not exit after forced termination; retirement unconfirmed",
+                                label(local)
+                            ));
+                        }
                     }
-                } else {
-                    let _ = child.kill();
                 }
-                #[cfg(windows)]
-                let _ = child.kill();
-            }
+                exit.finish()?;
+                let status = child
+                    .try_wait()
+                    .map_err(|error| format!("cannot reap {}: {error}", label(local)))?
+                    .ok_or_else(|| format!("{} retirement unconfirmed", label(local)))?;
+                if native && !status.success() {
+                    Err(format!("{} sandbox exited with {status}", label(local)))
+                } else {
+                    Ok(())
+                }
+            })();
+            #[cfg(unix)]
+            let _ = diagnostic_abort.write_all(&[1]);
             let _ = writer.join();
             let _ = reader.join();
-            let reaped = child
-                .wait()
-                .map_err(|error| format!("cannot reap {}: {error}", label(local)))
-                .and_then(|status| {
-                    if native && !status.success() {
-                        Err(format!("{} sandbox exited with {status}", label(local)))
-                    } else {
-                        Ok(())
-                    }
-                });
             #[cfg(unix)]
             let _ = diagnostic_reader.join();
-            result.and(reaped)
+            let result = match (result, reaped) {
+                (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+                (result, cleanup) => result.and(cleanup),
+            };
+            if let Err(error) = &result {
+                *owner_blocked.lock().expect("preparation session lock") = Some(error.clone());
+            }
+            result
         });
         let connection = Self(Arc::new(Connection {
             events: events.clone(),

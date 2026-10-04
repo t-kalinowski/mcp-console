@@ -76,6 +76,17 @@ def test_connection_closure_joins_preparation_owner(binary: Path) -> Transcript:
 def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
     binary: Path,
 ) -> Transcript:
+    return closes_stalled_preparation(binary, deny_kill=False)
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_connection_closure_reports_failed_preparation_termination(
+    binary: Path,
+) -> Transcript:
+    return closes_stalled_preparation(binary, deny_kill=True)
+
+
+def closes_stalled_preparation(binary: Path, *, deny_kill: bool) -> Transcript:
     with (
         tempfile.TemporaryDirectory() as temporary,
         ExitStack() as resources,
@@ -98,6 +109,8 @@ def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
                 "MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE": str(blocked.path),
             }
         )
+        if deny_kill:
+            environment["MCP_CONSOLE_TEST_REAP_DENY_KILL"] = str(root / "denied-kill")
         identity = None
         with McpClient(binary, DIRECT.serve(), environment, root) as client:
             try:
@@ -109,16 +122,23 @@ def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
                     int((root / "resolver-pid").read_text())
                 )
                 _, errors = client.finish_with_standard_error(expected_exit_status=1)
-                assert (
-                    errors == "local resolver setup or retirement deadline exceeded\n"
-                )
-                assert (root / "reaped").exists(), "preparation was not reaped"
-                assert not live_processes([identity]), (
-                    "preparation survived server exit"
-                )
+                expected = "local resolver setup or retirement deadline exceeded"
+                if deny_kill:
+                    expected += "; cannot terminate local resolver: Operation not permitted (os error 1); retirement unconfirmed"
+                    assert (root / "denied-kill").exists()
+                    assert not (root / "reaped").exists()
+                    assert live_processes([identity]), (
+                        "fixture did not keep preparation alive"
+                    )
+                else:
+                    assert (root / "reaped").exists(), "preparation was not reaped"
+                    assert not live_processes([identity]), (
+                        "preparation survived server exit"
+                    )
+                assert errors == expected + "\n", errors
                 return [
                     {
-                        "stalled_preparation_reaped_before_server_exit": True,
+                        "stalled_preparation_reaped_before_server_exit": not deny_kill,
                         "stderr": errors,
                     }
                 ]
