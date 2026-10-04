@@ -111,10 +111,24 @@ impl<T: AsRawFd + Read> Read for Io<T> {
 impl<T: AsRawFd + Write> Write for Io<T> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         loop {
-            // Check owner cancellation before every partial write, including
-            // when a continuously writable descriptor never backpressures.
-            if self.cancelled.is_some() {
-                self.wait(libc::POLLOUT)?;
+            // Check cancellation between partial writes without waiting for
+            // output readiness. A full pipe still takes the write/EAGAIN path.
+            if let Some(cancelled) = &self.cancelled {
+                let mut event = libc::pollfd {
+                    fd: cancelled.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut event, 1, 0) } < 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() == io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(error);
+                }
+                if event.revents != 0 {
+                    return Err(io::Error::other("target transfer cancelled"));
+                }
             }
             match self.inner.write(buffer) {
                 Err(e)
