@@ -61,6 +61,7 @@ resolver:
 Include every host that serves the mirror's artifacts or redirects, plus the R and DuckDB sources needed by the session.
 The proxy's native host matching and local-network checks apply.
 Resolver environment values configure preparation; worker environment values do not.
+R availability is discovered inside the resolver after its environment policy applies.
 Configuration is captured once and retained across preparation calls and worker restarts.
 The `resolver` mapping applies only to local sandboxed preparation.
 
@@ -159,6 +160,7 @@ macOS additionally permits uv's legacy `$HOME/Library/Caches/uv` and `$HOME/Libr
 Existing uv and reticulate cache selection remains unchanged.
 For uv grants, relative `XDG_CACHE_HOME` and `XDG_DATA_HOME` values are ignored in favor of the defaults beneath `HOME`.
 An absolute `HOME` is needed for resolver sandbox setup.
+Selected cache paths must be UTF-8, as required by the native policy protocol.
 Host cache selection lives in [`src/resolver/cache.rs`](../src/resolver/cache.rs), shared by resolver grants and captured DuckDB runtime paths.
 
 ## Trust boundary

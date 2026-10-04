@@ -9,7 +9,11 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text, wait_for_evaluation_output
+from support.assertions import (
+    last_result_text,
+    last_tool_text,
+    wait_for_evaluation_output,
+)
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
@@ -96,6 +100,101 @@ def test_default_resolver_permissions(binary: Path) -> Transcript:
 @requires(SANDBOX)
 def test_retains_tailored_resolver_policy(binary: Path) -> Transcript:
     return permissions(binary, tailored=True)
+
+
+@requires(SANDBOX, R, command("ir"))
+def test_discovers_r_from_resolver_environment(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        tools = root / "bin"
+        tools.mkdir()
+        (tools / "uv").symlink_to(shutil.which("uv"))
+        env = dict(environment(tools), MCP_CONSOLE_LANGUAGES="r")
+        r_env, _ = r_test_environment()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "sandbox": {"environment": {"PATH": r_env["PATH"]}},
+                    "resolver": {
+                        "environment": {
+                            "R_HOME": r_env["R_HOME"],
+                            "PATH": r_env["PATH"],
+                        }
+                    },
+                }
+            )
+        )
+        with McpClient(binary, ("serve",), env, root) as client:
+            client.initialize_and_list_tools()
+            client.expect("resolver R selected\n", r='cat("resolver R selected\\n")')
+            client.finish()
+        return [{"configured_resolver_r_available": True}]
+
+
+@requires(SANDBOX, R)
+def test_omits_r_removed_by_resolver_environment(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        tools = root / "bin"
+        tools.mkdir()
+        (tools / "uv").symlink_to(shutil.which("uv"))
+        without_r = environment(tools)
+        env, _ = r_test_environment()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "resolver": {
+                        "inherit_environment": False,
+                        "environment": {
+                            "HOME": env["HOME"],
+                            "PATH": without_r["PATH"],
+                            "UV_CACHE_DIR": str(root / "uv-cache"),
+                        },
+                    }
+                }
+            )
+        )
+        with McpClient(binary, ("serve",), env, root) as client:
+            client.initialize_and_list_tools()
+            client.expect("prepared\n", python="print('prepared')")
+            failure = client.send(r="1 + 1")
+            assert failure.get("isError"), failure
+            assert (
+                last_result_text(client)
+                == "R cells are unavailable in Python sessions without R"
+            )
+            client.finish()
+        return [{"ambient_r_removed": True, "python_prepared": True}]
+
+
+@requires(SANDBOX)
+def test_rejects_non_utf8_cache_paths(binary: Path) -> Transcript:
+    for name in ("UV_CACHE_DIR", "HOME"):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            tools = root / "bin"
+            tools.mkdir()
+            (tools / "uv").symlink_to(shutil.which("uv"))
+            invalid = root / os.fsdecode(b"cache-\xff")
+            env = dict(environment(tools), **{name: str(invalid)})
+            with McpClient(binary, ("serve",), env, root) as client:
+                client.initialize_and_list_tools()
+                failure = client.send(requirements={"action": "get"})
+                assert failure.get("isError"), failure
+                diagnostic = "resolver policy paths must be UTF-8"
+                assert last_result_text(client) == diagnostic, failure
+                assert not invalid.exists()
+                assert client.send(requirements={"action": "get"}) == failure
+                client.request("ping")
+                _, errors = client.finish_with_standard_error(expected_exit_status=1)
+                assert errors == diagnostic + "\n", errors
+    return [
+        {"invalid_cache_paths": ["UV_CACHE_DIR", "HOME"], "cache_not_created": True}
+    ]
 
 
 @requires(SANDBOX)
