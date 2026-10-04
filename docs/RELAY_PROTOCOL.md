@@ -18,6 +18,9 @@ The relay need not be a sandbox root or process-group leader.
 It owns the worker's standard streams, sideband pipes, direct-child signals and reaping, not dependency resolution, environment commits, or descendants outside that direct-child contract.
 
 Relay stdin/stdout carry protocol traffic and have a single writer per direction.
+The server's generation-owned writer serializes both target bootstrap and relay commands.
+Forced retirement aborts that writer independently of its queue and stdout, closes command admission, and joins it before replacement.
+An aborted partial frame ends that transport; Shutdown and Interrupt are never inserted into it.
 Stderr is inherited and reserved for infrastructure diagnostics; when available, a framed `fatal` event is authoritative over best-effort stderr.
 Unrelated descriptors are closed before launch.
 The [worker protocol](WORKER_PROTOCOL.md) owns the inherited fd and worker-message contract; [sandbox integration](SANDBOX.md) owns native enforcement.
@@ -150,6 +153,8 @@ Failure retirement instead uses zero worker grace and the same bounded relay all
 The relay concurrently closes stdin and sends worker `shutdown`.
 At the worker deadline it sends SIGKILL if needed, reaps the direct child, and retires transports.
 Clean relay-input EOF performs shutdown with a fresh one-second grace but no `shutdown_started`; partial-command EOF is failure.
+After the server aborts its command writer during retirement, the resulting partial-command EOF describes the abandoned transport and does not itself block replacement.
+Other fatal failures, owned task joins, and confirmed launcher/provider cleanup still determine whether replacement is permitted.
 
 The server's ordered retirement marker separates old-generation event ownership from replacement.
 It is not a wire frame.

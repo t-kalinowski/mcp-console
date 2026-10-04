@@ -20,6 +20,31 @@ def frame(tag: int, value: object) -> None:
 mode = os.environ["CONSOLE_SSH_PEER"]
 log = Path(os.environ["CONSOLE_SSH_PEER_LOG"])
 length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
+if mode == "blocked-command-bootstrap" and length > 512 * 1024:
+    # This is the target launch, after the ordinary preparation handshake.
+    # Keep only stdin open without consuming the oversized bootstrap body.
+    with (log.parent / "bootstrap-partial").open("wb", buffering=0) as signal:
+        assert signal.write(b"1") == 1
+    admitted, notify = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(admitted)
+        os.close(1)
+        os.close(2)
+        os.write(notify, b"1")
+        os.close(notify)
+        with (log.parent / "bootstrap-holder").open("rb", buffering=0) as gate:
+            assert gate.read(1) == b"1"
+        os._exit(0)
+    os.close(notify)
+    (log.parent / "bootstrap-holder-pid").write_text(str(pid))
+    assert os.read(admitted, 1) == b"1"
+    os.close(admitted)
+    with (log.parent / "bootstrap-held").open("wb", buffering=0) as signal:
+        assert signal.write(b"1") == 1
+    with (log.parent / "bootstrap-exit").open("rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    os._exit(0)
 bootstrap = json.loads(sys.stdin.buffer.read(length))
 if "Open" in bootstrap:
 
@@ -126,7 +151,8 @@ frame(
         "build": bootstrap["build"],
     },
 )
-if mode == "incompatible":
+if mode in {"incompatible", "prior-bootstrap-protocol"}:
+    # Rejected handshakes cannot publish Ready on the closed event transport.
     sys.exit(0)
 frame(2, {"kind": "ready"})
 if mode == "startup-recording-failure":

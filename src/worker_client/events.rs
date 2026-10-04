@@ -9,7 +9,7 @@ use operation::{Route, RuntimeRCallbackAdmission};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::relay_protocol::{RelayCommand, RelayEvent};
+use crate::relay_protocol::{PARTIAL_COMMAND_EOF, RelayCommand, RelayEvent};
 
 use super::lifecycle::OldGenerationCommitDisposition;
 use super::{OutputTape, WorkerCallbacks, WorkerProcessOutcome};
@@ -262,7 +262,19 @@ fn dispatch_worker_events(
                         } else {
                             relay_fatal = true;
                             if retiring {
-                                retirement_failure.get_or_insert(message);
+                                // Aborting the sole writer can leave a partial
+                                // command. Its EOF failure describes transport,
+                                // not cleanup. Other Fatal messages and the
+                                // launcher's/provider's retirement still gate replacement.
+                                let aborted_frame = commands.is_aborted()
+                                    && (message == PARTIAL_COMMAND_EOF
+                                        || message
+                                            == format!(
+                                                "relay stdin frame is invalid: {PARTIAL_COMMAND_EOF}"
+                                            ));
+                                if !aborted_frame {
+                                    retirement_failure.get_or_insert(message);
+                                }
                             } else {
                                 fail_dispatch(&operation, &mut startup, &interrupts, message);
                                 semantic_failure = true;
@@ -321,6 +333,7 @@ fn dispatch_worker_events(
                 }
             }
             WorkerEvent::TransportFailure(error) => {
+                commands.abort(error.clone());
                 if !retiring {
                     candidates.clear();
                     fail_dispatch(&operation, &mut startup, &interrupts, error);
@@ -357,6 +370,9 @@ fn dispatch_worker_events(
                     fail_relay_exit(&operation, &mut startup, &interrupts, error.to_string());
                     semantic_failure = true;
                 }
+                // Record the exit cause before rejected command admission can
+                // let a racing evaluator publish an ordinary transport failure.
+                commands.abort("worker relay command transport closed".to_string());
                 if retiring || semantic_failure || !intentional_shutdown {
                     break;
                 }

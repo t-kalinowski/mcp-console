@@ -9,6 +9,8 @@ use crate::worker_protocol::{
     PythonVersionResolveRequest, RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
 };
 
+pub(crate) const PARTIAL_COMMAND_EOF: &str = "relay stdin closed midway through a frame";
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(transparent)]
 pub(crate) struct EncodedBytes(String);

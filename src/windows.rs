@@ -73,7 +73,7 @@ pub(crate) fn notification() -> io::Result<(Event, Notify)> {
 
 pub(crate) fn command_pipes(
     command: &mut std::process::Command,
-    exited: Event,
+    cancelled: Event,
 ) -> io::Result<(Pipe, Pipe)> {
     use std::os::windows::process::CommandExt;
     let (input, writer) = pipe(false, true)?;
@@ -82,7 +82,10 @@ pub(crate) fn command_pipes(
         .stdin(std::process::Stdio::from(input))
         .stdout(std::process::Stdio::from(output))
         .creation_flags(CREATE_NO_WINDOW);
-    Ok((Pipe::from(writer).with_cancel(exited), Pipe::from(reader)))
+    Ok((
+        Pipe::from(writer).with_cancel(cancelled),
+        Pipe::from(reader),
+    ))
 }
 
 pub(crate) trait ExitStatusExt {
@@ -143,9 +146,6 @@ impl Pipe {
     }
     pub(crate) fn clear_cancel(&mut self) {
         self.cancel = None;
-    }
-    pub(crate) fn duplicate(&self) -> io::Result<OwnedHandle> {
-        self.handle.try_clone()
     }
     pub(crate) fn available(&self) -> io::Result<usize> {
         available(self.as_raw_handle())

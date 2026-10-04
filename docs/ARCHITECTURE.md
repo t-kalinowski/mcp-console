@@ -154,6 +154,13 @@ The relay bounds shutdown and reaps its direct worker.
 Its stream draining must not wait forever for descendants retaining descriptors or for a blocked output consumer.
 It does not infer process-tree membership from a process group.
 
+The server's sole command writer owns bootstrap and JSONL serialization for one generation.
+Normal retirement queues ordered Shutdown and allows the relay its grace period.
+Forced transport retirement closes command admission and independently aborts pending writes or an idle queue wait, then joins the writer.
+It does not use stdout closure to decide whether stdin can be retired, and it never inserts a control into a partial frame.
+Retirement settles outstanding control receipts; cancelling a call's observation does not redirect its queued interrupt.
+Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm provider cleanup.
+
 The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
 SSH and compute generations carry explicit retirement receipts: transport exit alone does not prove remote processes, containers, or microVMs are gone.
 Unconfirmed retirement blocks replacement.

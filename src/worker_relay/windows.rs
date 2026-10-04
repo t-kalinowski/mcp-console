@@ -89,7 +89,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 Ok(0) => break,
                 Ok(_) if frame.last() != Some(&b'\n') => Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    "relay stdin closed midway through a frame",
+                    crate::relay_protocol::PARTIAL_COMMAND_EOF,
                 )),
                 Ok(_) => serde_json::from_slice(&frame).map_err(io::Error::other),
                 Err(error) => Err(error),
