@@ -9,8 +9,7 @@ result:
   content:
     - type: text
       text: >-
-        failed to interrupt dependency resolver
-        `/Users/tomasz/.codex/worktrees/728c/mcp-console/target/release/mcp-console`:
+        failed to interrupt dependency resolver `<console-executable>`:
         Operation not permitted (os error 1)
   isError: true
 ---
@@ -21,8 +20,7 @@ result:
   content:
     - type: text
       text: >-
-        [failed to interrupt dependency resolver
-        `/Users/tomasz/.codex/worktrees/728c/mcp-console/target/release/mcp-console`:
+        [failed to interrupt dependency resolver `<console-executable>`:
         Operation not permitted (os error 1)]
   isError: true
 ---

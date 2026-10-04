@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import select
 import signal
@@ -304,7 +305,9 @@ def test_reports_resolver_interrupt_permission_error(
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client.finish()
             passed = True
-            return transcript
+            return json.loads(
+                json.dumps(transcript).replace(str(binary), "<console-executable>")
+            )
         finally:
             if not passed:
                 stop_process_group(resolver_group)
@@ -403,7 +406,9 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client.finish()
             passed = True
-            return transcript
+            return json.loads(
+                json.dumps(transcript).replace(str(binary), "<console-executable>")
+            )
         finally:
             if not passed:
                 stop_process_group(resolver_group)
