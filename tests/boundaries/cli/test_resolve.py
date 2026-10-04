@@ -28,7 +28,7 @@ case "$1 $2" in
     ;;
   'tool run')
     for last in "$@"; do :; done
-    printf '%s' /usr/bin/true > "$last"
+    printf '%s' "$MCP_CONSOLE_TEST_PYTHON" > "$last"
     ;;
   *) exit 90 ;;
 esac
@@ -41,7 +41,11 @@ esac
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env={**os.environ, "PATH": str(uv.parent)},
+            env={
+                **os.environ,
+                "PATH": str(uv.parent),
+                "MCP_CONSOLE_TEST_PYTHON": sys.executable,
+            },
         )
         assert process.stdin is not None
         assert process.stdout is not None
@@ -96,9 +100,10 @@ esac
                 }
             )
             prepared = receive()
-            assert prepared["Completed"]["result"] == {
-                "Ok": {"python": "/usr/bin/true", "requirements": manifest}
-            }, prepared
+            result = prepared["Completed"]["result"]["Ok"]
+            assert result["python"] == sys.executable, result
+            assert result["requirements"] == manifest, result
+            assert result["native"]["embedding"]["python"] == sys.executable, result
             assert prepared["Completed"]["confirmed"] is True, prepared
             send("Close")
             assert receive() == "Closed"

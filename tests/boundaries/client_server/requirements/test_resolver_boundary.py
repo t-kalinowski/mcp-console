@@ -87,6 +87,21 @@ def managed_python_environment(root: Path) -> dict[str, str]:
 
 
 @requires(SANDBOX)
+def test_empty_xdg_cache_uses_home(binary: Path) -> Transcript:
+    # Keep HOME and the caller's tool environment intact. The owned namespace
+    # must match the documented fallback when XDG_CACHE_HOME is empty.
+    environment = dict(os.environ, XDG_CACHE_HOME="")
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, ("serve", "--worker", str(worker)), environment) as client:
+        client.initialize_and_list_tools()
+        client.send(r="echo empty XDG cache uses HOME")
+        assert last_result_text(client) == "zod: empty XDG cache uses HOME\n", (
+            client.transcript[-1]
+        )
+        return client.finish()
+
+
+@requires(SANDBOX)
 def test_selected_python_startup_hook_is_confined(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory).resolve()
