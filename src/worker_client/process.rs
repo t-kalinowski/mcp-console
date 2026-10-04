@@ -1,9 +1,7 @@
 #[cfg(windows)]
 use crate::windows::ExitStatusExt as _;
 #[cfg(windows)]
-use crate::windows::{
-    Event as PipeReader, Notify as PipeWriter, Pipe as ChildStdin, Pipe as ChildStdout,
-};
+use crate::windows::{Event as PipeReader, Notify as PipeWriter, Pipe as ChildStdout};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
