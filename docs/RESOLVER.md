@@ -17,6 +17,7 @@ It does not import packages, load returned native libraries, or execute returned
 The complete executable preparation graph runs in the resolver workload: runtime discovery, version probes, ir/reticulate bootstrap, Python selection and embedding inspection, Matplotlib warming, and DuckDB extension preparation.
 R-present and Python-only sessions use the same implementation.
 On SSH, the preparation transport starts this broker on the execution host.
+Custom workers acquire storage protection at startup and launch preparation only when requirements are requested.
 Docker and Docker Sandbox continue to use prepared images with dynamic preparation disabled.
 Windows retains host preparation with Job-owned descendants; the native resolver policy and owned payload described here are not available there.
 See [Windows support](WINDOWS.md).

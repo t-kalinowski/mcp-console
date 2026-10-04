@@ -24,6 +24,8 @@ extern "C" fn interrupt(_: libc::c_int) {
 #[serde(deny_unknown_fields)]
 pub(super) struct Request {
     pub(super) version: u32,
+    #[serde(default)]
+    pub(super) custom_worker: bool,
     pub(super) context: Option<Context>,
     pub(super) operation: Operation,
 }
@@ -77,6 +79,9 @@ pub(crate) fn run() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     let mut context = request.context;
+    if context.is_none() && request.custom_worker {
+        context = Some(Context::discover(Mode::Custom, true, &|_| Ok(()))?.0);
+    }
     let result = if let Operation::Discover { mode, local } = request.operation {
         Context::discover(mode, local, &|_| Ok(())).and_then(|(selected, discovery)| {
             context = Some(selected);

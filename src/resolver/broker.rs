@@ -50,7 +50,25 @@ impl Context {
         local: bool,
         started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Discovery, String> {
-        let value = self.execute(Operation::Discover { mode, local }, started)?;
+        self.launch.custom_worker = matches!(mode, super::preparation::Mode::Custom);
+        let value = if self.launch.custom_worker {
+            // A custom worker has no runtime to discover. Acquire protection
+            // now; start its preparation workload only for actual requirements.
+            serde_json::to_value(Discovery {
+                managed: false,
+                selections: Default::default(),
+                local_r_home_bytes: None,
+                local_has_uv: None,
+                native: None,
+                protected: Vec::new(),
+                lease: None,
+                extension_directory: None,
+                matplotlib_cache: None,
+            })
+            .map_err(|e| e.to_string())?
+        } else {
+            self.execute(Operation::Discover { mode, local }, started)?
+        };
         let mut discovery: Discovery = serde_json::from_value(value)
             .map_err(|e| format!("invalid resolver discovery: {e}"))?;
         discovery.protected.clear();
@@ -82,6 +100,7 @@ impl Context {
     ) -> Result<serde_json::Value, String> {
         let request = super::workload::Request {
             version: VERSION,
+            custom_worker: self.launch.custom_worker,
             context: self.context.clone(),
             operation,
         };
