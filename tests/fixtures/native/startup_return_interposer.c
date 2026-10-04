@@ -35,9 +35,11 @@ __attribute__((constructor)) static void initialize(void) {
         setenv("MCP_CONSOLE_TEST_COMPLETION_SERVER", pid, 1);
     } else {
         server_pid = (pid_t)strtol(owner, NULL, 10);
-        unsetenv("DYLD_INSERT_LIBRARIES");
-        unsetenv("LD_PRELOAD");
     }
+    // Only the server's startup completion belongs to this fixture. Remove
+    // the loader before the server captures its resolver launch environment.
+    unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
 #ifdef __linux__
     native_socketpair = dlsym(RTLD_NEXT, "socketpair");
     native_close = dlsym(RTLD_NEXT, "close");
