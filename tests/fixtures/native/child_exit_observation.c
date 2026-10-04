@@ -5,6 +5,7 @@
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -34,6 +35,12 @@ static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
     bool blocking = observing && !(options & WNOHANG);
     if (blocking && atomic_load(&observed_pid) == 0) {
         atomic_store(&observed_pid, (int)id);
+        const char *pid_path = getenv("MCP_CONSOLE_TEST_OBSERVER_PID");
+        if (pid_path != NULL) {
+            FILE *file = fopen(pid_path, "w");
+            if (file == NULL) _exit(123);
+            if (fprintf(file, "%d\n", (int)id) < 0 || fclose(file) != 0) _exit(124);
+        }
         checkpoint("MCP_CONSOLE_TEST_OBSERVER_ENTERED", O_WRONLY);
         checkpoint("MCP_CONSOLE_TEST_OBSERVER_RELEASE", O_RDONLY);
     }

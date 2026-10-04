@@ -15,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from support.records import Transcript
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
+from support.processes import stop_process_group
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
@@ -142,6 +144,7 @@ def test_observation_failure_retires_resolver(binary: Path) -> Transcript:
 def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory)
+        resolver_pid = root / "resolver-pid"
         checkpoints = {
             name: FifoCheckpoint.create(root / name)
             for name in ("entered", "release", "killed")
@@ -154,6 +157,7 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
             "PATH": str(root),
             LOADER_VARIABLE: str(build_interposer(root, "child_exit_observation")),
             "MCP_CONSOLE_TEST_OBSERVER_ENTERED": str(root / "entered"),
+            "MCP_CONSOLE_TEST_OBSERVER_PID": str(resolver_pid),
             "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(root / "release"),
             "MCP_CONSOLE_TEST_CHILD_KILLED": str(root / "killed"),
             "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
@@ -258,11 +262,26 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
             }, completed
             return [{"messages": messages}]
         finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=10)
-            for checkpoint in checkpoints.values():
-                checkpoint.close()
+            try:
+                # The resolver leads its own group, outside the resolve owner.
+                if resolver_pid.exists():
+                    group = int(resolver_pid.read_text())
+                    with Events() as exits:
+                        try:
+                            exits.watch_process(group)
+                        except ProcessLookupError:
+                            pass
+                        else:
+                            stop_process_group(group)
+                            assert exits.wait(10) == {group}, (
+                                "resolver outlived fixture cleanup"
+                            )
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=10)
+                for checkpoint in checkpoints.values():
+                    checkpoint.close()
 
 
 if __name__ == "__main__":
