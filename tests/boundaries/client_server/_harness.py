@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
-from support.checkpoints import release_fixture_checkpoint, wait_for_checkpoint
+from support.checkpoints import wait_for_checkpoint
 from support.client import McpClient, TextReader
 from support.execution import SANDBOXED, Execution
 from support.processes import (

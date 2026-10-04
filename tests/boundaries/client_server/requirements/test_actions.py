@@ -26,6 +26,7 @@ from support.resolvers import (
     uv_python_row,
     write_uv_python_inventories,
 )
+from support.checkpoints import FifoCheckpoint
 from boundaries.client_server.requirements.test_r_automatic import (
     recording_fixture_r_environment,
 )
@@ -296,6 +297,15 @@ def test_interrupted_replacement_preserves_worker(
     with resolver_fixture_directory(binary, execution) as directory:
         temporary = Path(directory)
         environment, started, release = checkpoint_uv_environment(temporary, "six")
+        interrupt_checkpoints = []
+        if execution == DIRECT:
+            interrupted = FifoCheckpoint.create(temporary / "interrupted")
+            interrupt_release = FifoCheckpoint.create(temporary / "interrupt-release")
+            interrupt_checkpoints = [interrupted, interrupt_release]
+            environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(interrupted.path)
+            environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
+                interrupt_release.path
+            )
         client = McpClient(
             binary,
             execution.serve(*resolver_fixture_arguments(environment)),
@@ -316,10 +326,10 @@ def test_interrupted_replacement_preserves_worker(
             started.wait("replacement resolver")
             assert inspect(client) == old
             interrupt = client.start_send(control="interrupt")
-            # Signal handling is a checkpoint, not a scheduling benchmark.
-            interrupted.wait("interrupted replacement resolver", timeout=30)
-            assert inspect(client) == old
-            interrupt_release.release()
+            if execution == DIRECT:
+                interrupted.wait("interrupted replacement resolver", timeout=30)
+                assert inspect(client) == old
+                interrupt_release.release()
             client.receive(pending)
             client.receive(interrupt)
             assert pending["result"].get("isError"), pending
@@ -334,7 +344,7 @@ def test_interrupted_replacement_preserves_worker(
             return client.finish()
         finally:
             stop_client(client)
-            for checkpoint in (started, release):
+            for checkpoint in (started, release, *interrupt_checkpoints):
                 checkpoint.close()
 
 

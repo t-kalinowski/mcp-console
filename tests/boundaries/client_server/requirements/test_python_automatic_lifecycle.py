@@ -14,7 +14,13 @@ from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code, normalize_python_traceback_paths
+from support.normalization import (
+    code,
+    normalize_python_traceback_paths,
+    normalize_python_resolution_error,
+)
+from support.processes import capture_process_identity, child_process_identities
+from support.resolvers import local_resolver_owner
 from support.records import Transcript
 from support.requirements import PROCESS_EVENTS, R, requires
 from boundaries.client_server.python.test_peer_runtime import without_r
@@ -269,7 +275,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
         environment.pop("RETICULATE_PYTHON", None)
         if not with_r:
             uv = environment["RETICULATE_UV"]
-            without_r(environment, directory)
+            without_r(environment, resolver_fixtures)
             environment["RETICULATE_UV"] = uv
             commands = Path(environment["PATH"])
             wrapper = commands / "uv"

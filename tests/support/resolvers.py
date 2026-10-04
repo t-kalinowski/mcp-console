@@ -12,6 +12,8 @@ from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import Execution
+from support.native import LOADER_VARIABLE, build_interposer
+from support.processes import ProcessIdentity, child_process_identities
 from support.normalization import code
 from support.r import r_test_environment
 from support.requirements import R
@@ -523,4 +525,76 @@ def send_and_collect_runtime_python_resolution(
         expected_error=None,
         completion_timeout_seconds=client.response_timeout,
         **arguments,
+    )
+
+
+def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
+    owners = [
+        child
+        for child in child_process_identities(server)
+        if subprocess.run(
+            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        == f"{binary} resolve"
+    ]
+    assert len(owners) == 1, owners
+    return owners[0]
+
+
+def resolver_interrupt_permission_environment(
+    temporary_path: Path,
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path, Path]:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    fake_bin = temporary_path / "bin"
+    fake_bin.mkdir()
+    fake_ir = fake_bin / "ir"
+    fake_ir.write_text(
+        code(r"""
+            #!/bin/sh
+
+            set -eu
+            if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
+              printf 'ir 0.4.0\n'
+              exit 0
+            fi
+            exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
+            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
+            printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
+            IFS= read -r _ <&3
+            """),
+        encoding="utf-8",
+    )
+    fake_ir.chmod(0o755)
+
+    path = environment.get("PATH")
+    assert path is not None, "PATH is required"
+    environment["PATH"] = os.pathsep.join((str(fake_bin), path))
+    environment["TMPDIR"] = str(temporary_path)
+    denied_interrupt = temporary_path / "resolver-sigint-denied"
+    resolver_watches = temporary_path / "resolver-watches"
+    resolver_watches.mkdir()
+    resolver_group = temporary_path / "resolver-group"
+    resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
+    resolver_lifetime = FifoCheckpoint.create(temporary_path / "resolver-lifetime")
+    environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
+    environment["MCP_CONSOLE_TEST_RESOLVER_WATCHES"] = str(resolver_watches)
+    environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
+    environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
+    environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
+    # The server passes the interposer to its direct resolver owner. That child
+    # removes the loader variable before launching ir or the worker.
+    environment[LOADER_VARIABLE] = str(
+        build_interposer(temporary_path, "killpg_denial_interposer")
+    )
+    return (
+        environment,
+        resolver_started,
+        resolver_lifetime,
+        resolver_group,
+        denied_interrupt,
+        resolver_watches,
     )

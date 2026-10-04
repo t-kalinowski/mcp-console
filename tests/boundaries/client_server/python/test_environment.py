@@ -22,10 +22,8 @@ from support.records import Transcript
 from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
 from support.resolvers import resolver_fixture_arguments, resolver_fixture_directory
 from support.requirements import (
-    OLD_PYTHON,
     OLD_PYTHON_EXECUTABLE,
     PROCESS_EVENTS,
-    requires,
 )
 from support.requirements import R
 from support.suites import run_this_suite

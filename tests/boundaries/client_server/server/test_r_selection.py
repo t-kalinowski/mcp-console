@@ -143,12 +143,15 @@ def test_retains_r_absence_across_generations(
 def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
+        storage = None
         with McpClient(binary, DIRECT.serve(), no_r_environment(root), root) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
                 if restart:
                     client.send(control="restart")
-                    assert not storage.exists(), "SQL storage survived restart"
+                    assert storage is not None and not storage.exists(), (
+                        "SQL storage survived restart"
+                    )
                 # fmt: python
                 python = code("""
                     import json

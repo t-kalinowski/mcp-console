@@ -159,7 +159,7 @@ def _snapshot_survives_replacement(
                         "initially_configured": configured,
                         "validation_launches": 0,
                         "identical_worker_launches": len(payloads),
-                        "writable_roots": expected_roots,
+                        "writable_roots": ["workspace"] if configured else [],
                         "network": payload["network"],
                         "proxy": payload.get("proxy"),
                     }

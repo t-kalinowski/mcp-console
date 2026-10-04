@@ -23,8 +23,6 @@ from support.resolvers import recording_uv_environment, uv_tool_run_requirements
 from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
 from support.resolvers import (
     checkpoint_uv_environment,
-    recording_uv_environment,
-    uv_tool_run_requirements,
 )
 from support.suites import run_this_suite
 
