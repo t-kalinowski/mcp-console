@@ -382,7 +382,8 @@ class WindowsConsole(unittest.TestCase):
             self.assertIn("KeyboardInterrupt", output)
             self.assertIn("New input: ", output)
             self.assertIn("waiting for stdin", output)
-            result = session.send(stdin="delivered to new cell\n")
+            # Queuing stdin does not confirm consumption or cell completion.
+            result = session.expect("[done]", stdin="delivered to new cell\n")
             self.assertNotIn("waiting for stdin", json.dumps(result))
             expected = ["old", "new", "delivered to new cell"] * (1 + initialize_r)
             result = session.send(python="print(history)")
