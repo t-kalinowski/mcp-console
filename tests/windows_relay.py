@@ -13,6 +13,13 @@ from threading import Thread
 from textwrap import dedent
 import unittest
 
+from support.relay_commands import (
+    SHUTDOWN,
+    WORKER_COMMANDS,
+    assert_forwarding,
+    command_batch,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
     os.environ.get("MCP_CONSOLE_TEST_BINARY", ROOT / "target/debug/mcp-console.exe")
@@ -393,6 +400,17 @@ class WindowsRelay(unittest.TestCase):
                     events,
                 )
                 self.assertFalse(marker.exists(), "unterminated command was dispatched")
+
+    def test_forwards_worker_commands_and_keeps_controls_local(self):
+        process, _, _, marker = self.start("forwarding")
+        events, reader = self.framing_reader(process)
+        process.stdin.write(command_batch())
+        process.stdin.flush()
+        receipts = [events.get(timeout=10) for _ in range(len(WORKER_COMMANDS) + 1)]
+        process.stdin.write(json.dumps(SHUTDOWN).encode() + b"\n")
+        process.stdin.flush()
+        tail = self.framing_finish(process, events, reader)
+        assert_forwarding(marker, receipts, tail)
 
     def test_fatal_precedes_sideband_closure(self):
         process, _, _, _ = self.start("invalid_sideband")
