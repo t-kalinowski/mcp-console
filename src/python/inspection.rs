@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::resolver::ResolverStopHandle;
-use crate::resolver::process::{ResolverProcess, completed_write, resolver_command};
+use crate::resolver::process::{ResolverProcess, completed_write, read_output, resolver_command};
 
 use super::startup::SelectedPython;
 
@@ -58,8 +58,8 @@ struct NumpyMetadata {
 }
 
 /// Describe a selected executable without changing the calling process or
-/// selecting a replacement. Inspection executes untrusted startup code and must
-/// run inside the selected execution boundary. Returned metadata is data only.
+/// selecting a replacement. The selected installation is trusted and must
+/// remain stable through initialization; concurrent replacement is unsupported.
 pub(crate) fn inspect_native(
     executable: &Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -78,8 +78,7 @@ pub(crate) fn inspect_native(
     let mut command = resolver_command(executable);
     command
         // Inspect the selected installation without executing workspace,
-        // PYTHONPATH, or user-site code. The native resolver sandbox, rather
-        // than Python's isolated mode, enforces the preparation boundary.
+        // PYTHONPATH, or user-site code with the host resolver's permissions.
         .arg("-I")
         .arg("-c")
         .arg(INSPECTION_SOURCE)
@@ -87,9 +86,12 @@ pub(crate) fn inspect_native(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let (mut child, stdout, stderr) = resolver.spawn(&mut command).map_err(|error| {
+    let mut child = crate::resolver::process::spawn_resolver(&mut command).map_err(|error| {
         format!("failed to inspect selected Python executable `{selected}`: {error}")
     })?;
+    let stdout = read_output(child.stdout.take().expect("inspection stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("inspection stderr is piped"));
+    resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
         resolver
             .abort(&mut child, executable, "Python inspection")

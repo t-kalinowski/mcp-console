@@ -74,13 +74,10 @@ def package_version() -> str:
     raise ReleaseError("Cargo.toml package version is missing")
 
 
-def terminate(process: subprocess.Popen[bytes], diagnostics=None) -> str:
+def terminate(process: subprocess.Popen[bytes]) -> str:
     if process.poll() is None:
         process.kill()
     process.wait(timeout=5)
-    if diagnostics is not None:
-        diagnostics.seek(0)
-        return diagnostics.read().decode(errors="replace").strip()
     assert process.stderr is not None
     return process.stderr.read().decode(errors="replace").strip()
 
@@ -119,120 +116,117 @@ def smoke_mcp(
     response_timeout: float,
     r_available: bool,
 ) -> None:
-    with tempfile.TemporaryFile() as diagnostics:
-        process = subprocess.Popen(
-            [str(executable), "serve"],
-            env=env,
-            cwd=workspace,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=diagnostics,
-        )
+    process = subprocess.Popen(
+        [str(executable), "serve"],
+        env=env,
+        cwd=workspace,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert process.stdin is not None
+    buffer = bytearray()
+
+    def send(message: dict[str, Any]) -> None:
         assert process.stdin is not None
-        buffer = bytearray()
+        process.stdin.write((json.dumps(message) + "\n").encode())
+        process.stdin.flush()
 
-        def send(message: dict[str, Any]) -> None:
-            assert process.stdin is not None
-            process.stdin.write((json.dumps(message) + "\n").encode())
-            process.stdin.flush()
-
-        try:
-            send(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": "wheel-smoke-test",
-                            "version": "1.0.0",
-                        },
+    try:
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "wheel-smoke-test",
+                        "version": "1.0.0",
                     },
-                }
-            )
-            initialization = receive(process, buffer, startup_timeout)
-            require(initialization.get("id") == 1, "unexpected initialize response ID")
-            require(
-                initialization.get("result", {}).get("serverInfo")
-                == {"name": "mcp-console", "version": version},
-                "unexpected initialize serverInfo",
-            )
+                },
+            }
+        )
+        initialization = receive(process, buffer, startup_timeout)
+        require(initialization.get("id") == 1, "unexpected initialize response ID")
+        require(
+            initialization.get("result", {}).get("serverInfo")
+            == {"name": "mcp-console", "version": version},
+            "unexpected initialize serverInfo",
+        )
 
-            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-            # Observe eager worker readiness before the language smoke evaluations.
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        # Observe eager worker readiness before the language smoke evaluations.
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "send",
+                    "arguments": {"timeout_ms": int(startup_timeout * 1_000)},
+                },
+            }
+        )
+        startup = receive(process, buffer, startup_timeout)
+        require(startup.get("id") == 2, "unexpected startup response ID")
+        require(
+            startup.get("result")
+            == {
+                "content": [{"type": "text", "text": "\n[idle]"}],
+                "isError": False,
+            },
+            f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
+        )
+
+        evaluations = [("python", "42\n")]
+        if r_available:
+            evaluations.append(("r", "[1] 42\n"))
+        for identifier, (language, output) in enumerate(evaluations, start=3):
             send(
                 {
                     "jsonrpc": "2.0",
-                    "id": 2,
+                    "id": identifier,
                     "method": "tools/call",
                     "params": {
                         "name": "send",
-                        "arguments": {"timeout_ms": int(startup_timeout * 1_000)},
+                        "arguments": {language: "6 * 7"},
                     },
                 }
             )
-            startup = receive(process, buffer, startup_timeout)
-            require(startup.get("id") == 2, "unexpected startup response ID")
+            evaluation = receive(process, buffer, response_timeout)
             require(
-                startup.get("result")
+                evaluation.get("id") == identifier, "unexpected evaluation response ID"
+            )
+            require(
+                evaluation.get("result")
                 == {
-                    "content": [{"type": "text", "text": "\n[idle]"}],
+                    "content": [{"type": "text", "text": output}],
                     "isError": False,
                 },
-                f"unexpected runtime startup response: {json.dumps(startup, ensure_ascii=False)}",
+                f"unexpected {language} evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
             )
+    except Exception as error:
+        standard_error = terminate(process)
+        if standard_error:
+            raise ReleaseError(f"{error}: {standard_error}") from error
+        raise
 
-            evaluations = [("python", "42\n")]
-            if r_available:
-                evaluations.append(("r", "[1] 42\n"))
-            for identifier, (language, output) in enumerate(evaluations, start=3):
-                send(
-                    {
-                        "jsonrpc": "2.0",
-                        "id": identifier,
-                        "method": "tools/call",
-                        "params": {
-                            "name": "send",
-                            "arguments": {language: "6 * 7"},
-                        },
-                    }
-                )
-                evaluation = receive(process, buffer, response_timeout)
-                require(
-                    evaluation.get("id") == identifier,
-                    "unexpected evaluation response ID",
-                )
-                require(
-                    evaluation.get("result")
-                    == {
-                        "content": [{"type": "text", "text": output}],
-                        "isError": False,
-                    },
-                    f"unexpected {language} evaluation response: {json.dumps(evaluation, ensure_ascii=False)}",
-                )
-        except Exception as error:
-            standard_error = terminate(process, diagnostics)
-            if standard_error:
-                raise ReleaseError(f"{error}: {standard_error}") from error
-            raise
+    process.stdin.close()
+    try:
+        returncode = process.wait(timeout=response_timeout)
+    except subprocess.TimeoutExpired as error:
+        standard_error = terminate(process)
+        detail = f": {standard_error}" if standard_error else ""
+        raise ReleaseError(f"MCP server did not shut down{detail}") from error
 
-        process.stdin.close()
-        try:
-            returncode = process.wait(timeout=response_timeout)
-        except subprocess.TimeoutExpired as error:
-            standard_error = terminate(process, diagnostics)
-            detail = f": {standard_error}" if standard_error else ""
-            raise ReleaseError(f"MCP server did not shut down{detail}") from error
-
-        diagnostics.seek(0)
-        standard_error = diagnostics.read().decode(errors="replace").strip()
-        require(
-            returncode == 0,
-            f"MCP server exited with status {returncode}: {standard_error}",
-        )
-        require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
+    assert process.stderr is not None
+    standard_error = process.stderr.read().decode(errors="replace").strip()
+    require(
+        returncode == 0, f"MCP server exited with status {returncode}: {standard_error}"
+    )
+    require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
 def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:

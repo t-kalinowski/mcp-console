@@ -39,7 +39,7 @@ pub(super) struct SendArguments {
     /// that cell. With `control = "restart"`, they are part of the restart transaction, with or
     /// without a cell. Only add can accompany interrupt, and only when a cell follows; Python-only
     /// sessions reject requirements with interrupt before signaling or queuing input.
-    /// Preparation does not attach dependencies in the worker. On a code-bearing call without
+    /// Preparation does not import, attach, or load dependencies. On a code-bearing call without
     /// control, preparation completes before same-call nonempty stdin is queued. Standalone
     /// preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
     /// unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
@@ -50,8 +50,8 @@ pub(super) struct SendArguments {
     /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
     /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
     /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-    /// further changes require restart. Preparation may download packages and execute installation,
-    /// build, import, and inspection code in the resolver's execution environment, described above.
+    /// further changes require restart. Resolution uses the execution host's resolver policy and may download
+    /// packages or extensions or execute installation or build code. Use only trusted requirements.
     pub(super) requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
     /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
@@ -113,9 +113,9 @@ pub(super) struct Requirements {
     /// DuckDB extension names for the managed DuckDB backend, for standalone preparation,
     /// preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
     /// JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
-    /// letter and contain only lowercase ASCII letters, digits, and underscores. The resolver
+    /// letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
     /// uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
-    /// the resolver's extension cache. Preparation does not load extension code; `LOAD` and automatic loading happen
+    /// native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
     /// later inside the worker.
     #[serde(default, deserialize_with = "supplied_list")]
     #[schemars(with = "Vec<String>", inner(length(min = 1, max = 64)))]
@@ -125,7 +125,7 @@ pub(super) struct Requirements {
     /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
     /// Automatic R discovery accepts only plain package names. An idle worker that implements R
     /// preparation can add requirements without losing live state. Local package sources are
-    /// rejected; use registry or supported remote references.
+    /// rejected by the managed resolution contract.
     #[serde(default, deserialize_with = "supplied_list")]
     #[schemars(with = "Vec<String>", inner(length(min = 1)))]
     pub(super) r: Option<Vec<String>>,
@@ -135,7 +135,7 @@ pub(super) struct Requirements {
     /// inference needs a different distribution, a version, an extra, or an environment marker, or
     /// when the distribution should be prepared before the cell. Automatic imports infer bare
     /// distribution names only. Paths, file URLs, editable requirements, direct references, local
-    /// archives, and local projects are rejected. Preparation can import packages for inspection. An idle
+    /// archives, and local projects are rejected. Preparation does not import the package. An idle
     /// server-managed worker may activate compatible additions without losing state. A nonempty
     /// user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
     /// requirements.

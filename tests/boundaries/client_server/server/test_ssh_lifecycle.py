@@ -12,30 +12,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.checkpoints import FifoCheckpoint
 from support.assertions import last_result_text
 from support.client import McpClient
-from support.execution import SANDBOXED
 from support.normalization import code
 from support.processes import capture_process_identity, host_process_id, live_processes
 from support.records import Transcript
 from support.requirements import SANDBOX, WORKER, requires
-from support.resolvers import resolver_fixture_directory
 from support.ssh import SSH, configure, localhost, remote_command
 from support.suites import run_this_suite
 
 
 @requires(SSH, WORKER, SANDBOX)
 def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Transcript:
-    with (
-        TemporaryDirectory() as temporary,
-        resolver_fixture_directory(binary, SANDBOXED) as payload,
-    ):
+    with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "local", root / "remote"
         local.mkdir()
         remote.mkdir()
-        checkpoint = FifoCheckpoint.create(payload / "reached")
-        gate = payload / "hold"
+        checkpoint = FifoCheckpoint.create(remote / "reached")
+        gate = remote / "hold"
         os.mkfifo(gate)
-        state = payload / "state"
+        state = remote / "state"
         r = remote / "R"
         r.write_text(
             code(r"""
@@ -52,16 +47,7 @@ def test_startup_cancellation_preserves_shared_connection(binary: Path) -> Trans
         configure(
             local,
             remote,
-            remote_command(
-                remote,
-                binary,
-                {
-                    "PATH": str(remote),
-                    "XDG_CACHE_HOME": os.environ.get(
-                        "XDG_CACHE_HOME", str(Path.home() / ".cache")
-                    ),
-                },
-            ),
+            remote_command(remote, binary, {"PATH": str(remote)}),
         )
         with localhost(root / "sshd") as environment:
             ssh = root / "sshd/ssh"

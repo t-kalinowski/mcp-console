@@ -104,12 +104,11 @@ def test_default_command_launches_remote_worker(
             code(r"""
                 #!/bin/sh
                 printf '%s\n' "$@" >> LOG
-                exec /usr/bin/env -i PATH=/usr/bin:/bin XDG_CACHE_HOME=CACHE_ROOT R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
+                exec /usr/bin/env -i PATH=/usr/bin:/bin R_HOME=RHOME R_LIBS_USER=/unavailable R_LIBS_SITE=/unavailable EXECUTABLE "$@"
                 """)
             .replace("LOG", shlex.quote(str(log)))
             .replace("RHOME", shlex.quote(remote_environment["R_HOME"]))
             .replace("EXECUTABLE", shlex.quote(str(binary)))
-            .replace("CACHE_ROOT", shlex.quote(str(root / "remote-cache")))
         )
         installed.chmod(0o755)
         uvx = commands / "uvx"

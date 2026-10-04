@@ -1,14 +1,23 @@
+//! Shared resolver control and result collection over native process mechanics.
+
+#[cfg(unix)]
+mod unix;
 #[cfg(windows)]
-pub(super) use crate::windows::resolver::Child;
+mod windows;
+#[cfg(unix)]
+use unix as native;
+#[cfg(windows)]
+use windows as native;
+
+pub(super) use native::Child;
+use native::{interrupt_resolver, stop_resolver};
+pub(crate) use native::{resolver_command, spawn_resolver};
+
 use std::io;
-use std::io::{Read, Write};
-#[cfg(unix)]
-use std::os::unix::process::CommandExt as _;
+use std::io::Write;
 use std::path::Path;
-#[cfg(unix)]
-pub(super) use std::process::Child;
 use std::process::ChildStdin;
-use std::process::{Command, ExitStatus};
+use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -77,7 +86,6 @@ pub(crate) struct ResolverOutput {
 }
 
 pub(crate) struct ResolverProcess {
-    native: bool,
     exit: Mutex<Option<ChildExitWaiter>>,
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
@@ -86,14 +94,10 @@ pub(crate) struct ResolverProcess {
     waiting: Arc<Mutex<bool>>,
 }
 
-type OutputReader = Receiver<io::Result<Vec<u8>>>;
-const OUTPUT_LIMIT: usize = 1024 * 1024;
-
 impl ResolverProcess {
     pub(crate) fn new() -> Self {
         let (events, event_receiver) = mpsc::channel();
         Self {
-            native: false,
             exit: Mutex::new(None),
             events,
             event_receiver,
@@ -101,50 +105,6 @@ impl ResolverProcess {
             cleanup: Arc::new(AtomicBool::new(false)),
             waiting: Arc::new(Mutex::new(false)),
         }
-    }
-
-    #[cfg(unix)]
-    pub(crate) fn native() -> Self {
-        Self {
-            native: true,
-            ..Self::new()
-        }
-    }
-
-    pub(crate) fn spawn(
-        &self,
-        command: &mut Command,
-    ) -> io::Result<(Child, OutputReader, OutputReader)> {
-        #[cfg(unix)]
-        if super::workload::interrupted() {
-            return Err(io::ErrorKind::Interrupted.into());
-        }
-        #[cfg(unix)]
-        {
-            let (stdout_exit, stdout_done) = io::pipe()?;
-            let (stderr_exit, stderr_done) = io::pipe()?;
-            let mut child = spawn_resolver(command)?;
-            let stdout = read_bounded_output(crate::process_output::RelayOutput::new(
-                child.stdout.take().expect("resolver stdout"),
-                stdout_exit,
-            ));
-            let stderr = read_diagnostics(crate::process_output::RelayOutput::new(
-                child.stderr.take().expect("resolver stderr"),
-                stderr_exit,
-            ));
-            self.watch_exit(child.id(), vec![stdout_done, stderr_done]);
-            Ok((child, stdout, stderr))
-        }
-        #[cfg(windows)]
-        let mut child = spawn_resolver(command)?;
-        #[cfg(windows)]
-        let stdout = read_bounded_output(child.stdout.take().expect("resolver stdout"));
-        #[cfg(windows)]
-        let stderr = read_diagnostics(child.stderr.take().expect("resolver stderr"));
-        #[cfg(windows)]
-        self.watch_exit(child.id());
-        #[cfg(windows)]
-        Ok((child, stdout, stderr))
     }
 
     pub(crate) fn stop_handle(&self) -> ResolverStopHandle {
@@ -158,13 +118,11 @@ impl ResolverProcess {
 
     // Mark the spawned child active before publishing its stop handle. An
     // interrupt in that gap must wait for the child's actual signal result.
-    pub(crate) fn watch_exit(&self, pid: u32, #[cfg(unix)] notifications: Vec<io::PipeWriter>) {
+    pub(crate) fn watch_exit(&self, pid: u32) {
         self.cleanup.store(false, Ordering::SeqCst);
         *self.waiting.lock().expect("resolver phase lock") = true;
         let events = self.events.clone();
         match ChildExitWaiter::start_observing(pid, move |result| {
-            #[cfg(unix)]
-            drop(notifications);
             let _ = events.send(ResolverEvent::Exited(result));
         }) {
             Ok(exit) => *self.exit.lock().expect("resolver observer lock") = Some(exit),
@@ -219,12 +177,6 @@ impl ResolverProcess {
 
     fn stop(&self, child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
         let mut exit = self.exit.lock().expect("resolver observer lock").take();
-        #[cfg(unix)]
-        if self.native {
-            let result = retire_native(child, None, exit.as_mut());
-            self.cleanup.store(result.is_ok(), Ordering::SeqCst);
-            return result;
-        }
         let result = stop_resolver(child, program, kind, exit.as_mut());
         self.cleanup.store(result.is_ok(), Ordering::SeqCst);
         result
@@ -310,34 +262,13 @@ pub(crate) fn completed_write() -> Receiver<io::Result<()>> {
     receiver
 }
 
-fn read_bounded_output(
+pub(crate) fn read_output(
     mut output: impl io::Read + Send + 'static,
 ) -> Receiver<io::Result<Vec<u8>>> {
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let result = (|| {
-            let mut bytes = Vec::new();
-            output
-                .by_ref()
-                .take((OUTPUT_LIMIT + 1) as u64)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > OUTPUT_LIMIT {
-                io::copy(&mut output, &mut io::sink())?;
-                return Err(io::Error::other("resolver output exceeds 1 MiB"));
-            }
-            Ok(bytes)
-        })();
-        let _ = sender.send(result);
-    });
-    receiver
-}
-
-fn read_diagnostics(output: impl io::Read + Send + 'static) -> Receiver<io::Result<Vec<u8>>> {
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        // Diagnostics are not protocol data. Retain both ends and exact UTF-8
-        // omission accounting while leaving room for the operation's context.
-        let result = crate::text_preview::TextPreview::read(output, 4096).map(String::into_bytes);
+    let _ = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = output.read_to_end(&mut bytes).map(|_| bytes);
         let _ = sender.send(result);
     });
     receiver
@@ -349,38 +280,6 @@ pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io:
         let _ = sender.send(input.write_all(&bytes));
     });
     receiver
-}
-
-#[cfg(unix)]
-pub(crate) fn resolver_command(program: &Path) -> Command {
-    let mut command = Command::new(program);
-    if !super::workload::active() {
-        command.process_group(0);
-    }
-    // SAFETY: the closure uses only an atomic load and libc signal functions
-    // after fork and before exec. Resolver programs must not inherit an ignored
-    // or blocked SIGINT from the MCP host.
-    unsafe {
-        command.pre_exec(|| {
-            if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
-                return Err(io::Error::last_os_error());
-            }
-            // An interrupt between admission and fork must also prevent exec.
-            // After restoring SIG_DFL, a new signal cannot be lost in this check.
-            if super::workload::interrupted() {
-                return Err(io::ErrorKind::Interrupted.into());
-            }
-            let mut signals = std::mem::zeroed();
-            if libc::sigemptyset(&mut signals) != 0
-                || libc::sigaddset(&mut signals, libc::SIGINT) != 0
-                || libc::sigprocmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    command
 }
 
 fn receive_result<T>(
@@ -410,48 +309,27 @@ fn wait_for_resolver_exit(
             Ok(ResolverEvent::Interrupt {
                 reply,
                 clear_marker,
-            }) => {
-                #[cfg(unix)]
-                if resolver.native {
-                    let mut exit = resolver.exit.lock().expect("resolver observer lock").take();
-                    let result = retire_native(child, Some(reply), exit.as_mut());
-                    resolver.cleanup.store(result.is_ok(), Ordering::SeqCst);
-                    return result.and_then(|_| Err(format!("{kind} resolution interrupted")));
+            }) => match interrupt_resolver(child) {
+                Ok(ResolverInterrupt::Signaled) => {
+                    let _ = reply.send(Ok(()));
                 }
-                match interrupt_resolver(child) {
-                    Ok(ResolverInterrupt::Signaled) => {
-                        let _ = reply.send(Ok(()));
-                    }
-                    Ok(ResolverInterrupt::AlreadyExited) => {
-                        let _ = reply.send(Ok(()));
-                    }
-                    Err(error) => {
-                        if let Some(control) = clear_marker {
-                            clear_control(control.as_ref(), CONTROL_INTERRUPTED, true);
-                        }
-                        let message = format!(
-                            "failed to interrupt {kind} resolver `{}`: {error}",
-                            program.display()
-                        );
-                        let _ = reply.send(Err(message.clone()));
-                        let _ = stop(child);
-                        return Err(message);
-                    }
+                Ok(ResolverInterrupt::AlreadyExited) => {
+                    let _ = reply.send(Ok(()));
                 }
-            }
+                Err(error) => {
+                    if let Some(control) = clear_marker {
+                        clear_control(control.as_ref(), CONTROL_INTERRUPTED, true);
+                    }
+                    let message = format!(
+                        "failed to interrupt {kind} resolver `{}`: {error}",
+                        program.display()
+                    );
+                    let _ = reply.send(Err(message.clone()));
+                    let _ = stop(child);
+                    return Err(message);
+                }
+            },
             Ok(ResolverEvent::Exited(Ok(()))) => {
-                if resolver.native {
-                    let mut exit = resolver.exit.lock().expect("resolver observer lock").take();
-                    settle_observation(exit.as_mut());
-                    let status = child.wait().map_err(|e| e.to_string())?;
-                    resolver.cleanup.store(status.success(), Ordering::SeqCst);
-                    if !status.success() {
-                        return Err(format!(
-                            "native resolver retirement is unconfirmed ({status})"
-                        ));
-                    }
-                    return Ok(status);
-                }
                 return stop(child);
             }
             Ok(ResolverEvent::Exited(Err(error))) => {
@@ -480,32 +358,6 @@ fn wait_for_resolver(
 ) -> Result<ResolverOutput, String> {
     let status = wait_for_resolver_exit(child, &resolver.event_receiver, program, kind, resolver);
     let phase_result = resolver.finish_wait(kind);
-    if resolver.native
-        && let Err(error) = status
-    {
-        // Unconfirmed retirement may leave the runner holding stderr open.
-        // Diagnostics must not turn a bounded cleanup failure into another wait.
-        let stderr = match stderr.recv_timeout(std::time::Duration::from_secs(1)) {
-            Ok(Ok(stderr)) => stderr,
-            Ok(Err(read_error)) => {
-                return Err(format!(
-                    "{error}; failed to read resolver stderr: {read_error}"
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                return Err(format!(
-                    "{error}; timed out collecting resolver diagnostics"
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(error),
-        };
-        let diagnostic = String::from_utf8_lossy(&stderr);
-        return Err(if diagnostic.is_empty() {
-            error
-        } else {
-            format!("{error}: {}", diagnostic.trim_end())
-        });
-    }
     let status = status?;
     phase_result?;
     let write_result = receive_result(input, "stdin writer", kind)?;
@@ -521,132 +373,6 @@ fn wait_for_resolver(
     })
 }
 
-#[cfg(unix)]
-fn retire_native(
-    child: &mut Child,
-    acknowledged: Option<Sender<Result<(), String>>>,
-    exit: Option<&mut ChildExitWaiter>,
-) -> Result<ExitStatus, String> {
-    let exit = exit.ok_or("native resolver exit observation is unavailable")?;
-    // The runner owns descendants and turns retirement SIGTERM into exit 0.
-    let signaled = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-    if let Some(reply) = acknowledged {
-        let error = io::Error::last_os_error();
-        let result = if signaled == 0 || error.raw_os_error() == Some(libc::ESRCH) {
-            Ok(())
-        } else {
-            Err(format!("failed to interrupt native resolver: {error}"))
-        };
-        // Signal delivery is distinct from the later cleanup barrier.
-        let _ = reply.send(result);
-    }
-    if !exit.wait(std::time::Duration::from_secs(6))? {
-        let message = "native resolver required forced termination; retirement is unconfirmed";
-        child
-            .kill()
-            .map_err(|error| format!("{message}; failed to force-stop runner: {error}"))?;
-        // Even a successful SIGKILL does not guarantee prompt exit. Keep the
-        // observer bounded and never infer descendant cleanup from a forced exit.
-        if exit
-            .wait(std::time::Duration::from_secs(1))
-            .map_err(|error| format!("{message}; {error}"))?
-        {
-            exit.finish()?;
-            let _ = child
-                .try_wait()
-                .map_err(|error| format!("{message}; failed to reap runner: {error}"))?;
-        }
-        return Err(message.into());
-    }
-    exit.finish()?;
-    let status = child.wait().map_err(|e| e.to_string())?;
-    if !status.success() {
-        return Err(format!(
-            "native resolver retirement is unconfirmed ({status})"
-        ));
-    }
-    Ok(status)
-}
-
-#[cfg(unix)]
-fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
-    let pid = child.id();
-    // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
-    if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
-        return Ok(ResolverInterrupt::Signaled);
-    }
-    let error = io::Error::last_os_error();
-    if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH)) {
-        // Keep an exited leader unreaped so its watcher remains authoritative
-        // and this resolver PID cannot be reused before normal cleanup.
-        if crate::process_exit::direct_child_has_exited(pid)? {
-            return Ok(ResolverInterrupt::AlreadyExited);
-        }
-        // A dying macOS child can disappear from process-group lookup before
-        // waitid(WNOHANG) reports its exit. The unreaped direct child still owns
-        // this PID; wait for its exit event instead of rejecting the interrupt.
-        if unsafe { libc::getpgid(pid as libc::pid_t) } == -1
-            && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-        {
-            crate::process_exit::wait_for_direct_child_exit(pid as libc::pid_t)
-                .map_err(io::Error::other)?;
-            return Ok(ResolverInterrupt::AlreadyExited);
-        }
-    }
-    Err(error)
-}
-
-#[cfg(unix)]
-fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-    exit: Option<&mut ChildExitWaiter>,
-) -> Result<ExitStatus, String> {
-    // Workload children share the enclosing lifetime's group. The existing
-    // runner (or explicit direct-mode group) retires remaining descendants.
-    if super::workload::active() {
-        if !crate::process_exit::direct_child_has_exited(child.id()).map_err(|e| e.to_string())? {
-            child.kill().map_err(|e| e.to_string())?;
-        }
-        settle_observation(exit);
-        return child.wait().map_err(|e| e.to_string());
-    }
-    // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
-    let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
-    if result < 0 {
-        let kill_error = io::Error::last_os_error();
-        match crate::process_exit::direct_child_has_exited(child.id()) {
-            // macOS reports EPERM when only the unreaped group leader remains.
-            // ESRCH likewise means there is no remaining group to stop.
-            Ok(true)
-                if matches!(
-                    kill_error.raw_os_error(),
-                    Some(libc::EPERM) | Some(libc::ESRCH)
-                ) => {}
-            Ok(_) => {
-                return Err(format!(
-                    "failed to stop {kind} resolver `{}`: {kill_error}",
-                    program.display()
-                ));
-            }
-            Err(wait_error) => {
-                return Err(format!(
-                    "failed to stop {kind} resolver `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
-                    program.display()
-                ));
-            }
-        }
-    }
-    settle_observation(exit);
-    child.wait().map_err(|error| {
-        format!(
-            "failed to reap {kind} resolver `{}`: {error}",
-            program.display()
-        )
-    })
-}
-
 fn settle_observation(exit: Option<&mut ChildExitWaiter>) {
     if let Some(exit) = exit {
         // Exit/error is delivered through ResolverEvent::Exited. Cancellation
@@ -654,58 +380,4 @@ fn settle_observation(exit: Option<&mut ChildExitWaiter>) {
         // native observation and its event before reaping releases identity.
         let _ = exit.finish();
     }
-}
-
-#[cfg(windows)]
-pub(crate) fn resolver_command(program: &Path) -> Command {
-    use std::os::windows::process::CommandExt;
-    let mut command = Command::new(program);
-    command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-    command
-}
-#[cfg(windows)]
-fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
-    if child.try_wait()?.is_some() {
-        return Ok(ResolverInterrupt::AlreadyExited);
-    }
-    child.terminate()?;
-    Ok(ResolverInterrupt::Signaled)
-}
-#[cfg(windows)]
-fn stop_resolver(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-    exit: Option<&mut ChildExitWaiter>,
-) -> Result<ExitStatus, String> {
-    child
-        .retire(|remaining| {
-            if let Some(exit) = exit {
-                // A native observation error is settled, but delayed process
-                // termination must not extend the owner's retirement deadline.
-                if matches!(exit.wait(remaining), Ok(false)) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "resolver exit observation did not settle",
-                    ));
-                }
-                settle_observation(Some(exit));
-            }
-            Ok(())
-        })
-        .map_err(|error| {
-            format!(
-                "failed to retire {kind} resolver `{}`: {error}",
-                program.display()
-            )
-        })
-}
-
-#[cfg(unix)]
-pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
-    command.spawn()
-}
-#[cfg(windows)]
-pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
-    crate::windows::resolver::spawn(command)
 }

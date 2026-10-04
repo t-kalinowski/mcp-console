@@ -4,43 +4,29 @@ yaml: >-
   "enableSocks5Udp": false, "allowUpstreamProxy": false,
   "dangerouslyAllowAllUnixSockets": false, "mode": "full",
   "allowLocalBinding": false, enabled: !!bool true}}
-standalone_with_writable_root: true
 initialized: true
-server_with_writable_root_rejected: true
 ---
 yaml: "{}"
-standalone_with_writable_root: true
 initialized: true
-server_with_writable_root_rejected: true
 ---
 yaml: "sandbox: {}"
-standalone_with_writable_root: true
 initialized: true
-server_with_writable_root_rejected: true
 ---
 yaml: "sandbox: {proxy: null}"
-standalone_with_writable_root: true
 initialized: true
-server_with_writable_root_rejected: true
 ---
 yaml: "sandbox: {filesystem: {kind: {restricted: null}}}"
-standalone_with_writable_root: true
-initialized: false
-server_with_writable_root_rejected: true
+initialized: true
 ---
 yaml: >-
   sandbox: {filesystem: {entries: [{path: {type: path, path: ./out},
   access: {write: null}}]}}
-standalone_with_writable_root: true
-initialized: false
-server_with_writable_root_rejected: true
+initialized: true
 ---
 yaml: >-
   sandbox: {filesystem: {entries: [{path: {type: path, path: './future
   café 雪'}, access: write}]}}
-standalone_with_writable_root: true
-initialized: false
-server_with_writable_root_rejected: true
+initialized: true
 ---
 yaml: >-
   {"sandbox": {"network": "enabled", "proxy": {"enabled": true,
@@ -48,6 +34,4 @@ yaml: >-
   true, "dangerouslyAllowAllUnixSockets": false, "mode": "limited",
   "allowLocalBinding": true, "domains": {"*.example.com": "allow",
   "blocked.example.com": "deny", "ignored.example.com": "none"}}}}
-standalone_with_writable_root: true
 initialized: true
-server_with_writable_root_rejected: true

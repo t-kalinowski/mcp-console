@@ -1260,10 +1260,6 @@ runner: different
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("__pycache__"),
         )
-        shutil.copy2(
-            RUNNER.parent / "client_server" / "_harness.py",
-            self.boundaries / "client_server" / "_harness.py",
-        )
         selectors = {
             "recording/test_markdown::emits_yamark_formatted_documents": ("yamark",),
             "lifecycle/test_startup": ("ir", "uv"),

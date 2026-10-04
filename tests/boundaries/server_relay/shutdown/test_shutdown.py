@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -29,7 +30,6 @@ from support.previews import compact_previews, assert_preview, normalize_preview
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
-from support.resolvers import resolver_fixture_directory
 from support.suites import run_this_suite
 
 
@@ -47,7 +47,8 @@ def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript
 def test_shutdown_precedes_blocked_resolver_cancellation(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         library = root / "blocked-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -92,7 +93,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(
             result = preparation["result"]
             assert result.get("isError") is True, result
             assert result["content"] == [
-                {"type": "text", "text": "dependency resolution cancelled"}
+                {"type": "text", "text": "R package resolution cancelled"}
             ], result
             retirement_release.release()
             client.client.finish()

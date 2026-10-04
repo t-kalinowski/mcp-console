@@ -57,9 +57,7 @@ def startup_client(
 
 
 @contextmanager
-def deferred_selection_client(
-    binary: Path, serve: tuple[str, ...], workspace: Path | None = None
-):
+def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
     """Arrange the public retryable, uninitialized state for selection tests."""
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
@@ -82,9 +80,7 @@ def deferred_selection_client(
                 """),
         )
         environment = bare_runtime_environment(environment, library)
-        with McpClient(
-            binary, serve, environment, directory if workspace is None else workspace
-        ) as client:
+        with McpClient(binary, serve, environment, directory) as client:
             client.initialize_and_list_tools()
             initialized = client.transcript.copy()
             wait_for_evaluation_output(
@@ -123,13 +119,11 @@ def test_preserves_queued_inspection_interrupt(
             Path(temporary_directory), "queued_inspection_interrupt"
         )
         serve = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", temporary_directory)
             if execution == SANDBOXED
             else execution.serve()
         )
-        with deferred_selection_client(
-            binary, serve, Path(temporary_directory)
-        ) as client:
+        with deferred_selection_client(binary, serve) as client:
             client.send(
                 # fmt: r
                 r=code(f"""
@@ -167,7 +161,7 @@ def test_preserves_queued_inspection_interrupt(
                     """)
             )
             assert last_result_text(client) == "43\n", client.transcript[-1]
-            records = client.finish()[3:]
+            records = client.finish()
             for record in records:
                 if "send" in record and "r" in record["send"]:
                     record["send"]["r"] = record["send"]["r"].replace(
@@ -209,13 +203,11 @@ def test_cancels_native_inspection_and_retries(
         pid = None
         try:
             serve = (
-                execution.serve("-c", "extends=:workspace")
+                execution.serve("--writable-root", temporary_directory)
                 if execution == SANDBOXED
                 else execution.serve()
             )
-            with deferred_selection_client(
-                binary, serve, Path(temporary_directory)
-            ) as client:
+            with deferred_selection_client(binary, serve) as client:
                 client.expect(
                     # fmt: r
                     r=code(f"""
@@ -273,7 +265,7 @@ def test_cancels_native_inspection_and_retries(
                 )
                 assert last_result_text(client) == "44\n", client.transcript[-1]
                 assert (site / "inspection-count").read_text() == "1\n1\n"
-                records = client.finish()[3:]
+                records = client.finish()
                 for record in records:
                     if "send" in record and "r" in record["send"]:
                         record["send"]["r"] = record["send"]["r"].replace(
@@ -389,13 +381,11 @@ def test_console_configures_selected_python(
                 capture_output=True,
             )
             serve = (
-                execution.serve("-c", "extends=:workspace")
+                execution.serve("--writable-root", temporary_directory)
                 if execution == SANDBOXED
                 else execution.serve()
             )
-            with deferred_selection_client(
-                binary, serve, Path(temporary_directory)
-            ) as client:
+            with deferred_selection_client(binary, serve) as client:
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -453,7 +443,7 @@ def test_console_configures_selected_python(
                         """)
                 )
                 assert last_result_text(client) == "43\n", client.transcript[-1]
-                records = client.finish()[3:]
+                records = client.finish()
                 for record in records:
                     if "send" in record and "r" in record["send"]:
                         record["send"]["r"] = record["send"]["r"].replace(
@@ -472,13 +462,11 @@ def test_python_first_initializes_before_reticulate_attaches(
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
         serve = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", temporary_directory)
             if execution == SANDBOXED
             else execution.serve()
         )
-        with deferred_selection_client(
-            binary, serve, Path(temporary_directory)
-        ) as client:
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -550,7 +538,7 @@ def test_python_first_initializes_before_reticulate_attaches(
                     """)
             )
             assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -562,13 +550,11 @@ def test_r_first_initializes_before_reticulate_attaches(
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
         serve = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", temporary_directory)
             if execution == SANDBOXED
             else execution.serve()
         )
-        with deferred_selection_client(
-            binary, serve, Path(temporary_directory)
-        ) as client:
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -607,7 +593,7 @@ def test_r_first_initializes_before_reticulate_attaches(
             )
             client.send(python="startup_value + 1")
             assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -645,13 +631,11 @@ def test_retries_attachment_without_reinitializing_python(
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
         serve = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", temporary_directory)
             if execution == SANDBOXED
             else execution.serve()
         )
-        with deferred_selection_client(
-            binary, serve, Path(temporary_directory)
-        ) as client:
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -705,7 +689,7 @@ def test_retries_attachment_without_reinitializing_python(
             )
             client.send(python="startup_value + 1")
             assert last_result_text(client) == "42\n", client.transcript[-1]
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)

@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -18,28 +17,10 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.processes import host_process_id, process_exists
 from support.r import r_test_environment
-from support.resolvers import (
-    resolve_managed_python,
-    resolver_fixture_arguments,
-    resolver_fixture_directory,
-)
 from support.suites import run_this_suite
 
 
-@contextmanager
-def activation_fixture(binary: Path, execution: Execution):
-    with (
-        TemporaryDirectory() as temporary,
-        resolver_fixture_directory(binary, execution) as root,
-    ):
-        workspace = Path(temporary).resolve()
-        python = resolve_managed_python(binary, execution, workspace)
-        yield root, workspace, python
-
-
-def managed_environments(
-    root: Path, python: Path, *, interrupt_site: bool = False
-) -> dict[str, str]:
+def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[str, str]:
     for name in ("initial", "candidate"):
         environment = root / name
         subprocess.run(
@@ -48,7 +29,7 @@ def managed_environments(
                 "venv",
                 "--no-project",
                 "--python",
-                str(python),
+                sys.executable,
                 str(environment),
             ],
             check=True,
@@ -128,7 +109,7 @@ def managed_environments(
         uv = {real_uv!r}
         os.execv(uv, [uv, *sys.argv[1:]])
         """)
-    uv.write_text(f"#!{Path(sys.executable).resolve()}\n" + source)
+    uv.write_text(f"#!{sys.executable}\n" + source)
     uv.chmod(0o755)
     environment, _ = r_test_environment()
     environment.pop("RETICULATE_PYTHON", None)
@@ -166,14 +147,10 @@ def write_distribution(root: Path, name: str, module: str, version: str) -> None
 def test_removes_previous_environment_pth_paths(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -209,14 +186,10 @@ def test_removes_previous_environment_pth_paths(
 def test_site_hooks_observe_candidate_identity(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -249,14 +222,10 @@ def test_site_hooks_observe_candidate_identity(
 def test_rolls_back_interrupted_python_site_activation(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python, interrupt_site=True)
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root, interrupt_site=True)
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -310,14 +279,10 @@ def test_rolls_back_interrupted_python_site_activation(
 def test_preserves_r_interrupt_during_python_site_activation(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python, interrupt_site=True)
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root, interrupt_site=True)
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: r
@@ -389,14 +354,10 @@ def test_preserves_r_interrupt_during_python_site_activation(
 def test_interrupts_publication_after_committing_python(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -444,14 +405,10 @@ def test_interrupts_publication_after_committing_python(
 def test_preserves_suspended_r_interrupt_during_publication(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -501,18 +458,14 @@ def test_preserves_suspended_r_interrupt_during_publication(
 def test_rejects_replacement_of_loaded_distribution(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
         for name, version in (("initial", "1.0"), ("candidate", "2.0")):
             write_distribution(
                 root / f"{name}-external", "console-loaded", "console_loaded", version
             )
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -568,8 +521,9 @@ def test_rejects_replacement_of_loaded_distribution(
 def test_allows_changes_to_unloaded_namespace_distributions(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
         for name, version in (("initial", "1.0"), ("candidate", "2.0")):
             extra = root / f"{name}-external"
             write_distribution(extra, "console-auth", "console_namespace.auth", "1.0")
@@ -582,12 +536,7 @@ def test_allows_changes_to_unloaded_namespace_distributions(
             "console_namespace.storage",
             "1.0",
         )
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(
                 # fmt: python
@@ -623,17 +572,13 @@ def test_allows_changes_to_unloaded_namespace_distributions(
 def cancelled_candidate_probe(
     binary: Path, execution: Execution, control: str, *, r_transition: bool = False
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
-        environment["TMPDIR"] = str(workspace)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
+        environment["TMPDIR"] = str(root)
         checkpoints = []
         try:
-            with McpClient(
-                binary,
-                execution.serve(*resolver_fixture_arguments(environment)),
-                environment,
-                workspace,
-            ) as client:
+            with McpClient(binary, execution.serve(), environment, root) as client:
                 initialize_managed_client(client)
                 client.send(
                     # fmt: r
@@ -773,16 +718,12 @@ def test_preserves_r_interrupt_during_candidate_probe(
 def test_retains_previous_candidate_after_lazy_projection_failure(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
         # R-only bootstrap leaves Python selection lazy for R interoperability.
         environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            workspace,
-        ) as client:
+        with McpClient(binary, execution.serve(), environment, root) as client:
             initialize_managed_client(client)
             client.send(requirements={"python": ["console-initial-fixture"]})
             assert last_result_text(client) == "[prepared]", last_result_text(client)
@@ -838,8 +779,9 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
 def test_retries_interrupted_startup_with_prepared_candidate_without_r(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
         for name in ("initial", "candidate"):
             subprocess.run(
                 [
@@ -857,15 +799,12 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
         environment["PATH"] = str(root)
         for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
             environment.pop(name, None)
-        arguments = ("-c", "extends=:workspace") if execution == SANDBOXED else ()
-        ready = FifoCheckpoint.create(workspace / "ready")
-        release = FifoCheckpoint.create(workspace / "release")
+        arguments = ("--writable-root", str(root)) if execution == SANDBOXED else ()
+        ready = FifoCheckpoint.create(root / "ready")
+        release = FifoCheckpoint.create(root / "release")
         try:
             with McpClient(
-                binary,
-                execution.serve(*resolver_fixture_arguments(environment), *arguments),
-                environment,
-                workspace,
+                binary, execution.serve(*arguments), environment, root
             ) as client:
                 initialize_managed_client(client)
                 client.send(requirements={"python": ["console-activation-fixture"]})
@@ -886,13 +825,13 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                         from pathlib import Path
 
                         if sys.flags.no_site:
-                            Path({str(workspace / "probe-pid")!r}).write_text(str(os.getpid()))
+                            Path({str(root / "probe-pid")!r}).write_text(str(os.getpid()))
                             with open({str(ready.path)!r}, "wb", buffering=0) as ready:
                                 ready.write(b"1")
                             with open({str(release.path)!r}, "rb", buffering=0) as release:
                                 assert release.read(1) == b"1"
                         else:
-                            Path({str(workspace / "worker-pid")!r}).write_text(str(os.getpid()))
+                            Path({str(root / "worker-pid")!r}).write_text(str(os.getpid()))
                         """)
                 )
                 evaluation = client.start_send(
@@ -900,7 +839,7 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                 )
                 ready.wait("prepared environment startup probe")
                 child_pid = host_process_id(
-                    int((workspace / "probe-pid").read_text()), client.process.pid
+                    int((root / "probe-pid").read_text()), client.process.pid
                 )
                 client.receive(evaluation)
                 assert (
@@ -934,7 +873,7 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                 assert last_result_text(client) == "candidate\n", last_result_text(
                     client
                 )
-                return client.finish()[3:]
+                return client.finish()
         finally:
             ready.close()
             release.close()
@@ -944,18 +883,14 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
 def test_retries_interrupted_startup_probe_with_live_r_and_sql(
     binary: Path, execution: Execution
 ) -> list:
-    with activation_fixture(binary, execution) as (root, workspace, python):
-        environment = managed_environments(root, python)
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = managed_environments(root)
         environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
-        environment["TMPDIR"] = str(workspace)
+        environment["TMPDIR"] = str(root)
         checkpoints = []
         try:
-            with McpClient(
-                binary,
-                execution.serve(*resolver_fixture_arguments(environment)),
-                environment,
-                workspace,
-            ) as client:
+            with McpClient(binary, execution.serve(), environment, root) as client:
                 initialize_managed_client(client)
                 client.send(
                     # fmt: r

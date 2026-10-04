@@ -45,7 +45,7 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
         target: Option<(crate::settings::Target, Vec<PathBuf>)>,
         python: Option<PathBuf>,
-        resolver: crate::resolver::policy::Settings,
+        resolver: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
@@ -82,7 +82,6 @@ impl ConsoleServer {
                         no_sandbox,
                         sandbox_settings,
                         python,
-                        resolver,
                         diagnostics,
                         started,
                     )?
@@ -92,16 +91,14 @@ impl ConsoleServer {
                         relay,
                         no_sandbox,
                         sandbox_settings,
-                        resolver,
-                        diagnostics,
-                        started,
-                    )?
+                    )
+                    .with_resolver_settings(resolver.clone())?
                 } else {
                     crate::worker_client::ClientConfiguration::builtin(
                         no_sandbox,
                         sandbox_settings,
                         python,
-                        resolver,
+                        resolver.clone(),
                         diagnostics,
                         started,
                     )?
@@ -457,7 +454,7 @@ pub async fn run(
     sandbox_settings: crate::settings::SandboxSettings,
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
-    resolver: crate::resolver::policy::Settings,
+    resolver: crate::settings::SandboxSettings,
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));

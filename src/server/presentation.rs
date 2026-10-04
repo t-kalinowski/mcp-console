@@ -290,14 +290,9 @@ fn description_for_launch(
         }
         _ => "has network access governed by the launcher's sandbox settings",
     };
-    let workspace_protection = if cfg!(unix) && matches!(kind, None | Some("host")) {
-        "The workspace's .git, .agents, .codex, and .claude paths, resolver storage, and Console's installation are protected from writes"
-    } else {
-        "The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
-    };
     let sandbox_access = match filesystem {
         Some("restricted") if profile == Some(":workspace") => format!(
-            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. {workspace_protection}"
+            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
         ),
         Some("restricted") if profile == Some(":read-only") => format!(
             "uses the native \":read-only\" profile: it can read {files} subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
@@ -317,8 +312,8 @@ fn description_for_launch(
         Some("docker_sandbox") => "Evaluated code runs inside a Console-owned Docker Sandbox microVM, enforced by Docker Sandboxes and its current inherited machine/organization policy and host integrations. Both relay and worker run in the VM. Native filesystem, network, proxy, and metadata defaults do not apply. Writable shares can expose .git, .agents, and controller records. Provider rules can change during the session. --no-sandbox retains the microVM and cannot bypass Docker policy.".to_string(),
         Some("docker") if no_sandbox => "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.".to_string(),
         _ if no_sandbox => format!("Evaluated code runs without a sandbox, with {} permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.", if remote { "the remote account's" } else { "the server's" }),
-        _ if cfg!(unix) && matches!(kind, None | Some("host")) => format!("Evaluated code {sandbox_access}. Dependency preparation, when available, runs in a separate native resolver sandbox. Package code can write only to Console-owned resolver storage. Package downloads use a managed proxy restricted to trusted destinations; installer coordination permits loopback sockets (including host loopback services and DNS on macOS). Prepared artifacts remain untrusted and are read-only to the worker."),
-        _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."),
+        _ if remote => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the worker sandbox with the remote account's host permissions and may execute installation or build code; use only trusted dependencies."),
+        _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."),
     };
     if let Some(target) = target {
         // Only explicit placement fields belong in presentation, never discovered identities
@@ -343,7 +338,7 @@ fn description_for_launch(
                     description.push_str(" Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode.");
                 }
             }
-            _ if remote => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared by the remote resolver under the permissions described above; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
+            _ if remote => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
             _ => {},
         }
     }

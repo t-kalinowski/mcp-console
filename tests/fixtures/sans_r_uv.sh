@@ -1,8 +1,6 @@
 #!/bin/sh
 # Public resolver fixture: failures and causal interruption checkpoints.
 root=$(/usr/bin/dirname "$0")
-# Fault injection must not modify the shared resolver's cached environments.
-export UV_CACHE_DIR="$root"
 replace_output() {
     /bin/rm "$1"
     /bin/ln -s "$root/unrelated" "$1"

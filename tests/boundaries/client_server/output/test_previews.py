@@ -133,7 +133,7 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
             with startup_r_package(root, source) as environment:
                 environment["RETICULATE_PYTHON"] = sys.executable
                 args = (
-                    execution.serve("-c", "extends=:workspace")
+                    execution.serve("--writable-root", str(root))
                     if execution == SANDBOXED
                     else execution.serve()
                 )

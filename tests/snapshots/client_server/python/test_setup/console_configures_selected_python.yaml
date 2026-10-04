@@ -1,4 +1,6 @@
 ---
+!same-as MCP initialization for this execution mode
+---
 send:
   r: |
     selected_python <- "<selected python>"
@@ -57,6 +59,8 @@ result:
       text: |
         43
   isError: false
+---
+!same-as MCP initialization for this execution mode
 ---
 send:
   r: |

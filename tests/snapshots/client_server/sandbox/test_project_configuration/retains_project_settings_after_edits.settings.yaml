@@ -3,7 +3,8 @@ initially_configured: true
 validation_launches: 0
 identical_worker_launches: 4
 writable_roots:
-  - workspace
+  - output café 雪
+  - CLI cache
 network: restricted
 proxy:
   enabled: true

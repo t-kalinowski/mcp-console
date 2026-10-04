@@ -1,4 +1,6 @@
 ---
+!same-as MCP initialization for this execution mode
+---
 send:
   r: |
     startup_probe <- dyn.load("<test python probe>")

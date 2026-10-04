@@ -389,7 +389,6 @@ impl Client {
                     .is_some_and(|environment| !environment.custom_worker),
                 languages: self.0.languages,
                 target: self.0.target.as_ref(),
-                resolver_lease: self.0.resolver_lease.as_deref(),
                 local_runtime: environment
                     .as_ref()
                     .and_then(|environment| environment.local_runtime.as_ref()),
@@ -398,6 +397,7 @@ impl Client {
                 relay: self.0.relay.as_deref(),
                 no_sandbox: self.0.no_sandbox,
                 sandbox_settings: &self.0.sandbox_settings,
+                duckdb_extension_directory: self.0.duckdb_extension_directory.as_deref(),
                 python,
                 managed_r,
                 dynamic_resolution: self.0.dynamic_resolution,

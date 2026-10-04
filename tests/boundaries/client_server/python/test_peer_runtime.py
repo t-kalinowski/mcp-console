@@ -29,8 +29,6 @@ from support.native import build_interposer
 from support.records import ToolResult, Transcript
 from support.resolvers import (
     checkpoint_uv_environment,
-    resolver_fixture_arguments,
-    resolver_fixture_directory,
     send_and_collect_runtime_python_resolution,
 )
 from support.requirements import NATIVE_FIXTURES, R, command, requires
@@ -281,7 +279,7 @@ def test_external_peer_initialization_order(binary: Path) -> Transcript:
         trap = poison_controller(local, environment)
         for execution in (DIRECT, SANDBOXED):
             serve = (
-                execution.serve("-c", "extends=:workspace")
+                execution.serve("--writable-root", "cli")
                 if execution == SANDBOXED
                 else execution.serve()
             )
@@ -408,7 +406,7 @@ def test_interrupt_wakes_input_before_and_after_attachment(
             RETICULATE_PYTHONPATH=str(modules),
         )
         serve = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", str(root))
             if execution == SANDBOXED
             else execution.serve()
         )
@@ -539,28 +537,26 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
 def test_idle_preparation_keeps_r_uninitialized(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as directory,
-        resolver_fixture_directory(binary, execution) as resolver,
-    ):
+    with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         modules = root / "modules"
         modules.mkdir()
         (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
         environment = dict(os.environ, RETICULATE_PYTHONPATH=str(modules))
         environment.pop("RETICULATE_PYTHON", None)
-        arguments = resolver / "uv-arguments"
+        arguments = root / "uv-arguments"
         environment.update(
             RETICULATE_UV=str(
                 Path(__file__).parents[3] / "fixtures/record_uv_environment"
             ),
             MCP_CONSOLE_TEST_REAL_UV=shutil.which("uv"),
-            MCP_CONSOLE_TEST_UV_RECORD=str(resolver / "uv-environment"),
+            MCP_CONSOLE_TEST_UV_RECORD=str(root / "uv-environment"),
             MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD=str(arguments),
         )
-        serve = execution.serve(
-            *resolver_fixture_arguments(environment, readable_roots=(root,)),
-            *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if execution == SANDBOXED
+            else execution.serve()
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
@@ -1051,11 +1047,7 @@ def test_r_does_not_initialize_python(binary: Path, execution: Execution) -> Tra
 def test_remote_managed_identity_survives_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as directory,
-        ExitStack() as resources,
-        resolver_fixture_directory(binary, execution) as resolver,
-    ):
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory).resolve()
         local, remote = root / "controller", root / "remote"
         local.mkdir()
@@ -1078,7 +1070,7 @@ def test_remote_managed_identity_survives_restart(
             }
         }
         resolver_environment, started, release = checkpoint_uv_environment(
-            resolver, "numpy"
+            remote, "numpy"
         )
         resources.callback(started.close)
         resources.callback(release.close)
@@ -1086,9 +1078,6 @@ def test_remote_managed_identity_survives_restart(
             (name, value)
             for name, value in resolver_environment.items()
             if name == "RETICULATE_UV" or name.startswith("MCP_CONSOLE_TEST_")
-        )
-        resolver_arguments = resolver_fixture_arguments(
-            environment, readable_roots=(remote,)
         )
         configure(local, remote, remote_command(remote, binary, environment))
         with localhost(root / "sshd") as controller:
@@ -1105,7 +1094,7 @@ def test_remote_managed_identity_survives_restart(
                     return result
 
             with ReleaseResolverAfterPoll(
-                binary, execution.serve(*resolver_arguments), controller, local
+                binary, execution.serve(), controller, local
             ) as client:
                 client.initialize_and_list_tools()
                 client.expect(
@@ -1252,14 +1241,7 @@ def test_r_commands_follow_managed_python_activation(
             os.environ, UV_INDEX=index.as_uri(), UV_INDEX_STRATEGY="first-index"
         )
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(
-            binary,
-            execution.serve(
-                *resolver_fixture_arguments(environment, readable_roots=(root,))
-            ),
-            environment,
-            root,
-        ) as client:
+        with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
             client.expect(
                 "[prepared]", requirements={"python": ["mcp-console-test-cli"]}
@@ -1439,7 +1421,7 @@ def unusable_numpy_metadata(
             if configured_path:
                 environment["PYTHONPATH"] = str(modules)
             arguments = execution.serve(
-                *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
             )
             with McpClient(binary, arguments, environment, root) as client:
                 client.initialize_and_list_tools()
@@ -1523,7 +1505,7 @@ def test_conversion_metadata_matches_configured_import_paths(
             environment[variable] = str(modules)
             arguments = execution.serve(
                 *(("--worker", str(worker)) if lazy else ()),
-                *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             )
             with McpClient(binary, arguments, environment, root) as client:
                 client.initialize_and_list_tools()
@@ -1597,7 +1579,7 @@ def test_conversion_metadata_does_not_import_shadowed_numpy(
                 RETICULATE_CHECK_REQUIRED_PACKAGES="false",
             )
             arguments = execution.serve(
-                *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
             )
             with McpClient(binary, arguments, environment, root) as client:
                 client.initialize_and_list_tools()
@@ -1750,7 +1732,7 @@ def r_startup_with_python(
             (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
             environment["RETICULATE_PYTHONPATH"] = str(modules)
         serve = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", str(root))
             if system_default_packages and execution == SANDBOXED
             else execution.serve()
         )

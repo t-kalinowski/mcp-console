@@ -84,21 +84,8 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             "TEST_OUTSIDE": str(outside),
         }
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(
-            binary,
-            (
-                "serve",
-                "-c",
-                "resolver.environment=" + json.dumps({LOADER_VARIABLE: ""}),
-            ),
-            environment,
-            host,
-        ) as client:
+        with McpClient(binary, ("serve",), environment, host) as client:
             client.initialize_and_list_tools()
-            # The interposer observes worker policy only. Resolver helpers have
-            # their own empty launch environment and independent native policy.
-            preflights = capture.read_text().splitlines()
-            assert len(preflights) == 1, preflights
             description = client.transcript[-1]["result"]["tools"][0]["description"]
             for name in (
                 ":workspace",
@@ -106,7 +93,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
                 ".agents",
                 ".codex",
                 ".claude",
-                "resolver storage",
+                "default",
             ):
                 assert name in description, description
             # The trusted launch snapshot precedes even the first worker.
@@ -152,27 +139,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
                         "value": {"kind": "project_roots", "subpath": ".claude"},
                     },
                     "access": "read",
-                },
-                {
-                    "path": {"type": "path", "path": str(binary.resolve().parents[1])},
-                    "access": "read",
-                },
-                {
-                    "path": {
-                        "type": "path",
-                        "path": str(
-                            (
-                                Path(
-                                    environment.get(
-                                        "XDG_CACHE_HOME", Path.home() / ".cache"
-                                    )
-                                )
-                                / "mcp-console/resolver"
-                            ).resolve()
-                        ),
-                    },
-                    "access": "read",
-                },
+                }
             ],
         }, policy
         return TranscriptWithCompanions(

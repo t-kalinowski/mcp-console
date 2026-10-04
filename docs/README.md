@@ -12,7 +12,7 @@ Source and public acceptance tests take precedence over prose; [`design-sketches
 | How do I configure a session?                        | [Configuration](CONFIGURATION.md)                                       |
 | How do cells, input, plots, and languages work?      | [Built-in runtime](BUILTIN_RUNTIME.md)                                  |
 | What happens when a call combines actions?           | [`send` operations](SEND_OPERATIONS.md)                                 |
-| How are dependencies selected and changed?           | [Requirements](REQUIREMENTS.md)                                         |
+| How are dependencies selected and changed?           | [Requirements](REQUIREMENTS.md), [resolver policy](RESOLVER.md)         |
 | Where are transcripts, retained output, and exports? | [Recordings](RECORDING.md)                                              |
 | How do I connect from Python or R?                   | [Python](PYTHON.md), [ellmer](../r/README.md)                           |
 | How do I run elsewhere?                              | [SSH](SSH.md), [Docker](DOCKER.md), [Docker Sandbox](DOCKER_SANDBOX.md) |
@@ -23,7 +23,6 @@ Source and public acceptance tests take precedence over prose; [`design-sketches
 
 | Question                                | Guide                                                                          |
 | --------------------------------------- | ------------------------------------------------------------------------------ |
-| How is dependency preparation isolated? | [Resolver boundary](RESOLVER.md)                                               |
 | Who owns state, processes, and cleanup? | [Architecture](ARCHITECTURE.md)                                                |
 | What crosses the internal transports?   | [Relay protocol](RELAY_PROTOCOL.md), [worker protocol](WORKER_PROTOCOL.md)     |
 | How should MCP tool prose be written?   | [Tool descriptions](TOOL_DESCRIPTIONS.md)                                      |

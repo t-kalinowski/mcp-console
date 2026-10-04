@@ -17,14 +17,22 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 4147
+        text_bytes: 8192
         concat:
           - "[R package resolution failed with exit status: 1: "
           - repeat: "compile: α\t\"error\"\\source "
-            count: 74
-          - "compile: α\t\"error\"\\[… omitted 1212492 rendered UTF-8 bytes; not retained …]rce "
+            count: 127
+          - |
+            compile: α	"error"\source
           - repeat: "compile: α\t\"error\"\\source "
-            count: 73
+            count: 20
+          - "compile: α\t\"error\"\\[… omitted 1208447 rendered UTF-8 bytes; not retained …]ompile: α\t\"error\"\\source "
+          - repeat: "compile: α\t\"error\"\\source "
+            count: 20
+          - |
+            compile: α	"error"\source
+          - repeat: "compile: α\t\"error\"\\source "
+            count: 127
           - |-
             compile: α	"error"\source
             final diagnostic]

@@ -9,15 +9,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.execution import DIRECT, Execution, executions
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
-# Native preparation bootstraps into its own namespace; it never imports the
-# ordinary host package cache. The cold resolver boundary case covers that path.
-@executions(DIRECT)
+@executions(DIRECT, SANDBOXED)
 def test_probes_ambient_reticulate_before_first_use_bootstrap(
     binary: Path,
     execution: Execution,

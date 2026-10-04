@@ -1,23 +1,16 @@
-#[cfg(windows)]
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufReader};
-#[cfg(windows)]
 use std::path::PathBuf;
 use std::sync::{Mutex, mpsc};
 use std::thread;
 #[cfg(unix)]
 use std::time::Instant;
 
-#[cfg(windows)]
-use super::{Discovery, NativeDiscovery, Operation, Selections};
-use super::{Input, Mode, Output};
-#[cfg(windows)]
-use crate::resolver;
-use crate::resolver::{ResolverControlOutcome, ResolverStopHandle};
+use super::{Discovery, Input, Mode, NativeDiscovery, Operation, Output, Selections};
+use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 #[cfg(unix)]
 use crate::target_launch::transfer::{Io, duplicate};
 
-#[cfg(windows)]
 struct Context {
     local: bool,
     mode: Mode,
@@ -28,7 +21,6 @@ struct Context {
     managed_python: bool,
 }
 
-#[cfg(windows)]
 impl Context {
     fn discover(
         mode: Mode,
@@ -83,10 +75,6 @@ impl Context {
                         python: configured_python,
                         native_python: None,
                     },
-                    protected: Vec::new(),
-                    lease: None,
-                    extension_directory: None,
-                    matplotlib_cache: None,
                     local_r_home_bytes: None,
                     local_has_uv: local.then_some(has_uv),
                     native,
@@ -121,10 +109,6 @@ impl Context {
             local_r_home_bytes: None,
             local_has_uv: local.then(|| python.has_uv()),
             native: None,
-            protected: Vec::new(),
-            lease: None,
-            extension_directory: None,
-            matplotlib_cache: None,
         };
         Ok((
             Self {
@@ -146,9 +130,6 @@ impl Context {
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
         match operation {
-            Operation::Discover { .. } => {
-                Err("discovery is only valid when opening a resolver".into())
-            }
             Operation::Bootstrap => {
                 let bootstrap = self
                     .bootstrap
@@ -331,10 +312,6 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         workspace,
         mut selections,
         mode,
-        #[cfg(unix)]
-        launch,
-        no_sandbox,
-        mut settings,
     } = first
     else {
         return Err("expected SSH preparation open".into());
@@ -356,6 +333,8 @@ pub(super) fn run(local: bool) -> Result<(), String> {
                 .to_string();
             selections.python = Some(selection);
         }
+        // Only these runtime selections cross the workload boundary. This is the
+        // single-threaded entry point; later worker environment changes cannot reach it.
         for (name, value) in [
             ("R_HOME", selections.r_home),
             ("RETICULATE_PYTHON", selections.python),
@@ -364,19 +343,12 @@ pub(super) fn run(local: bool) -> Result<(), String> {
                 if value.contains('\0') {
                     return Err(format!("remote {name} selection must not contain NUL"));
                 }
-                settings.environment.insert(name.into(), value);
+                unsafe { std::env::set_var(name, value) };
             }
         }
     }
-    #[cfg(unix)]
-    let launch = match launch {
-        Some(launch) => *launch,
-        None => crate::resolver::broker::Launch::capture(no_sandbox, settings)?,
-    };
-    #[cfg(unix)]
-    let mut broker = crate::resolver::broker::Context::new(launch)?;
     #[cfg(windows)]
-    let _ = (workspace, &mut selections, no_sandbox, &mut settings);
+    let _ = (workspace, &mut selections);
     let (events, received) = mpsc::channel();
     let (outgoing, output) = mpsc::channel::<Output>();
     #[cfg(unix)]
@@ -431,17 +403,6 @@ pub(super) fn run(local: bool) -> Result<(), String> {
     let (jobs, work) = mpsc::channel();
     let job_events = events.clone();
     let worker = thread::spawn(move || {
-        #[cfg(unix)]
-        let mut context = {
-            let _ = perform(
-                0,
-                &job_events,
-                |started| broker.discover(mode, local, started),
-                |discovery| serde_json::to_value(discovery).expect("discovery serializes"),
-            );
-            broker
-        };
-        #[cfg(windows)]
         let mut context = perform(
             0,
             &job_events,
@@ -457,7 +418,7 @@ pub(super) fn run(local: bool) -> Result<(), String> {
                 Clone::clone,
             );
         }
-        Ok::<_, String>(context)
+        Ok::<(), String>(())
     });
     let mut active = Some(0);
     let mut last_id = 0;
@@ -540,17 +501,9 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         }
     }
     drop(jobs);
-    let context = worker
+    let _ = worker
         .join()
-        .map_err(|_| "remote preparation executor panicked")??;
-    #[cfg(unix)]
-    if confirmed {
-        context.release()?;
-    } else {
-        context.quarantine()?;
-    }
-    #[cfg(windows)]
-    let _ = context;
+        .map_err(|_| "remote preparation executor panicked")?;
     #[cfg(unix)]
     {
         drop(input_cancel);

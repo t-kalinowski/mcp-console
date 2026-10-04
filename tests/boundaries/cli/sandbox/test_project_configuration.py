@@ -62,21 +62,7 @@ def invoke(binary: Path, host: Path, *arguments: str):
         input="",
         capture_output=True,
         text=True,
-        timeout=30,
     )
-
-
-def rejected_worker_policy(binary: Path, host: Path, *arguments: str) -> None:
-    with McpClient(
-        binary,
-        arguments or ("serve", "--worker", "unused-worker"),
-        current_directory=host,
-        record_in_project=False,
-    ) as client:
-        error = client.startup_error()
-        assert "managed resolver storage requires" in error, error
-        _, stderr = client.finish_with_standard_error(expected_exit_status=1)
-        assert "without custom filesystem rules" in stderr, stderr
 
 
 @requires(SANDBOX)
@@ -370,37 +356,18 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
         config.parent.mkdir(parents=True)
         for yaml in cases:
             config.write_text(yaml, encoding="utf-8")
-            standalone = invoke(
+            accepted(
                 binary,
                 host,
-                "sandbox",
+                "serve",
+                "--worker",
+                "unused-worker",
                 "--writable-root",
                 "future CLI",
-                "--",
-                "/bin/echo",
-                "workload started",
-            )
-            assert standalone.returncode == 0, standalone
-            assert standalone.stdout == "workload started\n", standalone
-            if "filesystem" in yaml:
-                rejected_worker_policy(binary, host)
-                initialized = False
-            else:
-                accepted(binary, host)
-                initialized = True
-            rejected_worker_policy(
-                binary, host, "serve", "--writable-root", "future CLI"
             )
             assert not (host / "future café 雪").exists()
             assert not (host / "future CLI").exists()
-            transcript.append(
-                {
-                    "yaml": yaml,
-                    "standalone_with_writable_root": True,
-                    "initialized": initialized,
-                    "server_with_writable_root_rejected": True,
-                }
-            )
+            transcript.append({"yaml": yaml, "initialized": True})
     return transcript
 
 

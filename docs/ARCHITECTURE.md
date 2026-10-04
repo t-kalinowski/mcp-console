@@ -18,7 +18,7 @@ Default local execution:
 MCP client
   │ MCP over stdio
   ▼
-server ───── resolve ───── dependency resolvers       trusted host
+server ───── native runner → resolve → dependencies   resolver sandbox
   │
   ▼
 sandbox frontend → private native runner            same PID on Unix
@@ -130,7 +130,9 @@ Explicit and failure-driven replacement both respect retirement barriers.
 
 ## Preparation and activation
 
-Dependency resolution runs outside the worker sandbox, on the execution host.
+Local dependency resolution runs in a separate native resolver sandbox on macOS and Linux.
+Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
+SSH preparation retains execution-host permissions.
 Local sessions use the hidden `resolve` command; SSH has a remote preparation connection.
 Prepared Docker/SBX targets use preinstalled environments and never invoke controller or target dependency resolvers.
 
@@ -144,10 +146,8 @@ Unsafe partial activation can require restart.
 Explicit preparation and worker-originated requests share environment-change ownership, preventing a stale preparation result from overwriting a newer manifest.
 Automatic R loads and Python imports request packages only when execution reaches them; cells are not scanned or rerun.
 
-On macOS and Linux, a data-only [resolver broker](RESOLVER.md) owns policy, protected storage, leases, result validation, and native launches.
-Discovery, inspection, imports, installers, and builds execute inside its separate native sandbox.
-Explicit `--no-sandbox` uses host permissions and ordinary host caches.
-Windows retains its Job-owned host resolver.
+Transactions protect accepted environments; the resolver sandbox bounds preparation permissions.
+Its default host reads and shared writable caches still require trusted dependencies and inputs.
 [Requirements](REQUIREMENTS.md) defines supported changes and the trust boundary.
 
 ## Retirement and cancellation
@@ -162,6 +162,8 @@ Forced transport retirement closes command admission and independently aborts pe
 It does not use stdout closure to decide whether stdin can be retired, and it never inserts a control into a partial frame.
 Retirement settles outstanding control receipts; cancelling a call's observation does not redirect its queued interrupt.
 Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm provider cleanup.
+Worker-client native adapters own endpoint setup and separate output wakeup from command cancellation.
+The shared process and generation owners retain exit observation, I/O joins, and retirement decisions.
 
 The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
 SSH and compute generations carry explicit retirement receipts: transport exit alone does not prove remote processes, containers, or microVMs are gone.

@@ -4,18 +4,16 @@ pub(crate) enum ResolverControlOutcome {
     Cancelled,
 }
 
-#[cfg(unix)]
-pub(crate) mod broker;
-pub(crate) mod data;
 mod environment;
 pub(crate) use environment::{ManagedPython, ManagedR};
+pub(crate) mod cache;
 pub(crate) mod execution;
-pub(crate) mod policy;
 pub(crate) mod preparation;
-#[cfg(unix)]
-mod storage;
-#[cfg(unix)]
-pub(crate) mod workload;
+pub(crate) mod sandbox;
+
+pub(crate) fn run() -> Result<(), String> {
+    preparation::run_local()
+}
 
 #[cfg(any(unix, windows))]
 mod managed_duckdb;
@@ -66,6 +64,8 @@ pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
 #[cfg(any(unix, windows))]
 pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
+#[cfg(all(test, unix))]
+use managed_python::resolve_python_manifest;
 #[cfg(any(unix, windows))]
 pub(crate) use managed_python::{
     resolve_python_manifest_for_remote, resolve_python_version, resolve_python_version_for_remote,
@@ -82,3 +82,130 @@ pub(crate) use unsupported::{
     resolve_duckdb_extensions, resolve_python, resolve_python_manifest, resolve_python_version,
     resolve_r, resolve_r_with,
 };
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::Command;
+
+    use super::{
+        ManagedPythonResolverConfiguration, resolve_python_manifest, resolve_python_version,
+    };
+    use crate::worker_protocol::PythonRequirementManifest;
+
+    #[test]
+    fn local_python_resolution_without_r() {
+        let Some(mode) = std::env::var_os("MCP_CONSOLE_TEST_LOCAL_PYTHON_MODE") else {
+            let directory = std::env::temp_dir().join(format!(
+                "mcp-console-local-python-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&directory).unwrap();
+            let uv = directory.join("uv");
+            fs::write(
+                &uv,
+                r#"#!/bin/sh
+printf '%s\n' "$0 $*" >> "$MCP_CONSOLE_TEST_LOCAL_PYTHON_RECORD"
+case "$1 $2" in
+  'python list') printf '%s\n' '[{"version":"3.12.7","version_parts":{"major":3,"minor":12,"patch":7},"symlink":null,"variant":"default","implementation":"cpython"}]' ;;
+  'tool run') for last in "$@"; do :; done; printf '/usr/bin/true' > "$last" ;;
+  *) exit 90 ;;
+esac
+"#,
+            )
+            .unwrap();
+            fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
+            let explicit_uv = directory.join("explicit-uv");
+            fs::copy(&uv, &explicit_uv).unwrap();
+            let empty_path = directory.join("empty");
+            fs::create_dir(&empty_path).unwrap();
+            let record = directory.join("uv.log");
+            for mode in ["path", "explicit", "missing", "invalid", "managed"] {
+                fs::write(&record, "").unwrap();
+                let mut command = Command::new(std::env::current_exe().unwrap());
+                command
+                    .args([
+                        "--exact",
+                        "resolver::tests::local_python_resolution_without_r",
+                    ])
+                    .env("MCP_CONSOLE_TEST_LOCAL_PYTHON_MODE", mode)
+                    .env("MCP_CONSOLE_TEST_LOCAL_PYTHON_RECORD", &record)
+                    .env(
+                        "PATH",
+                        if mode == "missing" {
+                            &empty_path
+                        } else {
+                            &directory
+                        },
+                    )
+                    .env_remove("R_HOME")
+                    .env_remove("R_LIBS")
+                    .env_remove("RETICULATE_UV");
+                if mode == "explicit" {
+                    command.env("RETICULATE_UV", &explicit_uv);
+                } else if mode == "invalid" {
+                    command.env("RETICULATE_UV", directory.join("missing-uv"));
+                } else if mode == "managed" {
+                    command.env("RETICULATE_UV", "managed");
+                }
+                let output = command.output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{mode}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let invocations = fs::read_to_string(&record).unwrap();
+                assert_eq!(
+                    invocations.is_empty(),
+                    matches!(mode, "missing" | "invalid" | "managed")
+                );
+                if mode == "explicit" {
+                    assert!(invocations.starts_with(explicit_uv.to_str().unwrap()));
+                } else if mode == "path" {
+                    assert!(invocations.starts_with(uv.to_str().unwrap()));
+                }
+                if matches!(mode, "path" | "explicit") {
+                    assert!(invocations.contains("python list --all-versions"));
+                    assert!(invocations.contains("tool run --isolated --python 3.12.7 --exclude-newer 2026-01-01 --with six>=1"));
+                }
+            }
+            fs::remove_dir_all(directory).unwrap();
+            return;
+        };
+
+        assert!(std::env::var_os("R_LIBS").is_none());
+        for executable in ["R", "Rscript", "ir"] {
+            assert!(super::find_path_entry(executable).is_none());
+        }
+        let configuration = ManagedPythonResolverConfiguration::capture();
+        if matches!(mode.to_str(), Some("missing" | "managed")) {
+            assert!(!configuration.has_uv());
+            assert!(resolve_python_version(vec![], &configuration, |_| Ok(())).is_err());
+            return;
+        }
+        if mode == "invalid" {
+            let error = resolve_python_version(vec![], &configuration, |_| Ok(())).unwrap_err();
+            assert!(error.contains("missing-uv"), "{error}");
+            return;
+        }
+        assert!(configuration.has_uv());
+        let version =
+            resolve_python_version(vec![">=3.12".into()], &configuration, |_| Ok(())).unwrap();
+        assert_eq!(version, "3.12.7");
+        let manifest = PythonRequirementManifest {
+            packages: vec!["six>=1".into()],
+            python_version: vec![">=3.12".into()],
+            exclude_newer: Some("2026-01-01".into()),
+        };
+        let resolved = resolve_python_manifest(manifest, &configuration, |_| Ok(())).unwrap();
+        assert_eq!(resolved.python(), Path::new("/usr/bin/true"));
+        assert_eq!(resolved.requirements().packages, ["six>=1"]);
+    }
+}

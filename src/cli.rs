@@ -77,14 +77,9 @@ pub enum Command {
         bootstrap_runtimes: bool,
     },
 
-    /// Private resolver broker; requests and results use the preparation protocol
+    /// Run the internal host resolver
     #[command(hide = true)]
     Resolve,
-
-    /// Resolver workload, launched only after native enforcement
-    #[command(hide = true)]
-    #[cfg(unix)]
-    ResolverWorkload,
 
     #[command(hide = true)]
     DockerOwner,

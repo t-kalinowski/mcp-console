@@ -5,7 +5,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -13,33 +12,6 @@
 #ifdef __linux__
 #include <dlfcn.h>
 #endif
-
-static int server_process;
-static char *loader;
-static const char *names[] = {
-    "MCP_CONSOLE_TEST_PERMISSION_SERVER", "MCP_CONSOLE_TEST_DENIED_SIGINT",
-    "MCP_CONSOLE_TEST_RESOLVER_WATCHES"
-};
-static char *values[3];
-
-/* The production broker deliberately clears its environment. This test-only
- * exec hook loads the syscall fault into that trusted owner, while the actual
- * preparation workload still follows the captured launch environment. */
-static int load_broker(const char *path, char *const args[]) {
-    if (server_process && args[1] && strcmp(args[1], "resolve") == 0) {
-        for (size_t i = 0; i < 3; i++) if (values[i]) setenv(names[i], values[i], 1);
-#ifdef __APPLE__
-        if (loader) setenv("DYLD_INSERT_LIBRARIES", loader, 1);
-#else
-        if (loader) setenv("LD_PRELOAD", loader, 1);
-#endif
-    }
-#ifdef __APPLE__
-    return execvp(path, args);
-#else
-    return ((int (*)(const char *, char *const[]))dlsym(RTLD_NEXT, "execvp"))(path, args);
-#endif
-}
 
 static void write_pid_marker(const char *name, pid_t process_id) {
     const char *marker = getenv(name);
@@ -90,20 +62,9 @@ __attribute__((constructor))
 static void remove_interposer_from_child_environment(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_PERMISSION_SERVER");
     if (server == NULL) {
-        server_process = 1;
         char pid[32];
         snprintf(pid, sizeof(pid), "%ld", (long)getpid());
         setenv("MCP_CONSOLE_TEST_PERMISSION_SERVER", pid, 1);
-#ifdef __APPLE__
-        const char *value = getenv("DYLD_INSERT_LIBRARIES");
-#else
-        const char *value = getenv("LD_PRELOAD");
-#endif
-        if (value) loader = strdup(value);
-        for (size_t i = 0; i < 3; i++) {
-            value = getenv(names[i]);
-            if (value) values[i] = strdup(value);
-        }
     } else {
         // The server's direct children include the resolver owner. Their
         // children, including ir and the worker, must not inherit the hook.
@@ -120,12 +81,10 @@ static struct {
 } interposers[] __attribute__((section("__DATA,__interpose"))) = {
     {(const void *)&deny_killpg, (const void *)&killpg},
     {(const void *)&observe_waitid, (const void *)&waitid},
-    {(const void *)&load_broker, (const void *)&execvp},
 };
 
 #else
 int killpg(pid_t process_group, int signal) { return deny_killpg(process_group, signal); }
-int execvp(const char *path, char *const args[]) { return load_broker(path, args); }
 int waitid(idtype_t type, id_t id, siginfo_t *info, int options) {
     return observe_waitid(type, id, info, options);
 }

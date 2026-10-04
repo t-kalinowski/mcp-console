@@ -2,7 +2,9 @@ use std::process::Stdio;
 
 use serde::Serialize;
 
-use super::process::{ResolverProcess, ResolverStopHandle, resolver_command, write_input};
+use super::process::{
+    ResolverProcess, ResolverStopHandle, read_output, resolver_command, write_input,
+};
 
 const MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE: &str = include_str!("programs/duckdb_extensions.R");
 
@@ -29,16 +31,19 @@ pub(crate) fn resolve_duckdb_extensions(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     managed_r.configure_worker(&mut command)?;
-    // DuckDB performs extension installation inside the resolver sandbox.
+    // DuckDB installs under the preparation process's cache and network policy.
     // Names are JSON input, never R or SQL source.
-    let resolver = ResolverProcess::new();
-    let (mut child, stdout, stderr) = resolver.spawn(&mut command).map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",
             rscript.display()
         )
     })?;
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
     let stdin = child.stdin.take().expect("resolver stdin is piped");
+    let resolver = ResolverProcess::new();
+    resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
         resolver
             .abort(&mut child, rscript, "DuckDB extension")

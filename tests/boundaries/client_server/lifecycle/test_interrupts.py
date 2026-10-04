@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import json
 import os
 import select
 import signal
@@ -123,7 +122,6 @@ def test_supervises_stopped_and_continued_workers(
                 workers,
                 client,
                 execution,
-                binary,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)
@@ -165,7 +163,6 @@ def test_supervises_stopped_and_continued_workers(
                     workers,
                     client,
                     execution,
-                    binary,
                 )
             )
             assert replacement_pid != worker_pid, (
@@ -210,8 +207,7 @@ def test_supervises_stopped_and_continued_workers(
                 stop_process(client.process)
 
 
-# Native launcher retirement faults are exercised by cli/test_resolver_validation.
-@executions(DIRECT)
+@executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_reports_resolver_interrupt_permission_error(
     binary: Path, execution: Execution
@@ -282,7 +278,7 @@ def test_reports_resolver_interrupt_permission_error(
                     {
                         "type": "text",
                         "text": (
-                            f"failed to interrupt dependency resolver `{binary}`: "
+                            "failed to interrupt R package resolver `ir`: "
                             "Operation not permitted (os error 1)"
                         ),
                     }
@@ -305,9 +301,7 @@ def test_reports_resolver_interrupt_permission_error(
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client.finish()
             passed = True
-            return json.loads(
-                json.dumps(transcript).replace(str(binary), "<console-executable>")
-            )
+            return transcript
         finally:
             if not passed:
                 stop_process_group(resolver_group)
@@ -316,7 +310,7 @@ def test_reports_resolver_interrupt_permission_error(
             resolver_lifetime.close()
 
 
-@executions(DIRECT)
+@executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_reports_runtime_r_resolver_interrupt_permission_error(
     binary: Path,
@@ -385,7 +379,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             )
 
             message = (
-                f"failed to interrupt dependency resolver `{binary}`: "
+                "failed to interrupt R package resolver `ir`: "
                 "Operation not permitted (os error 1)"
             )
             assert evaluation["result"] == {
@@ -406,9 +400,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             assert last_tool_text(client) == "zod: echo\n"
             transcript = client.finish()
             passed = True
-            return json.loads(
-                json.dumps(transcript).replace(str(binary), "<console-executable>")
-            )
+            return transcript
         finally:
             if not passed:
                 stop_process_group(resolver_group)

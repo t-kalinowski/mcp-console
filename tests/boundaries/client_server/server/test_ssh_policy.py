@@ -43,16 +43,21 @@ EXERCISE = code(r"""
     suppressWarnings(stopifnot(
       writable("results/value"),
       writable("cli/value"),
-      writable("workspace-value"),
-      !writable("../outside-workspace")
+      !writable("denied/value"),
+      !writable("workspace-value")
     ))
-    cat("remote workspace grant verified\n")
+    cat("remote relative and CLI grants verified\n")
     """)
 
 
 def policy(environment: dict[str, str]) -> dict:
     return {
         "environment": environment,
+        "filesystem": {
+            "entries": [
+                {"path": {"type": "path", "path": "results"}, "access": "write"},
+            ]
+        },
     }
 
 
@@ -71,7 +76,7 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
         ):
             directory.mkdir()
         selected = policy({"R_HOME": r_environment["R_HOME"]})
-        configure(local, remote, [str(binary)], extends=":workspace", sandbox=selected)
+        config = configure(local, remote, [str(binary)], sandbox=selected)
         configure(
             remote,
             remote,
@@ -79,16 +84,18 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
             sandbox={"filesystem": {"kind": "unrestricted"}, "network": "enabled"},
         )
         with localhost(root / "sshd") as environment:
-            with McpClient(binary, ("serve",), environment, local) as client:
+            with McpClient(
+                binary, ("serve", "--writable-root", "cli"), environment, local
+            ) as client:
                 client.initialize_and_list_tools()
                 send_and_collect_runtime_python_resolution(client, r=EXERCISE)
                 assert (
-                    last_result_text(client) == "remote workspace grant verified\n"
+                    last_result_text(client)
+                    == "remote relative and CLI grants verified\n"
                 ), last_result_text(client)
                 transcript = client.finish()[3:]
             assert (remote / "results/value").read_text() == "remote value\n"
             assert not (local / "results").exists()
-            assert not (root / "outside-workspace").exists()
             selected["network"] = "invalid-native-mode"
             configure(local, remote, [str(binary)], sandbox=selected)
             with McpClient(binary, ("serve",), environment, local) as client:
@@ -141,7 +148,6 @@ def test_invalid_environment_reaches_remote_native_validation(
             binary,
             {
                 "PATH": "/usr/bin:/bin",
-                "HOME": str(root / "resolver-home"),
                 "R_HOME": r_environment["R_HOME"],
                 "R_LIBS_USER": "/unavailable",
                 "R_LIBS_SITE": "/unavailable",
@@ -232,7 +238,6 @@ def test_external_execution_host_policy(binary: Path) -> Transcript:
             json.dumps(
                 {
                     "target": external["target"],
-                    "extends": ":workspace",
                     "sandbox": policy(
                         {
                             **external["environment"],
@@ -246,7 +251,9 @@ def test_external_execution_host_policy(binary: Path) -> Transcript:
             local, config=external.get("ssh_config"), remote_path=external.get("path")
         )
         trap = poison_controller(local, environment)
-        with McpClient(binary, ("serve",), environment, local) as client:
+        with McpClient(
+            binary, ("serve", "--writable-root", "cli"), environment, local
+        ) as client:
             client.initialize_and_list_tools()
             send_and_collect_runtime_python_resolution(
                 client,
@@ -258,9 +265,9 @@ def test_external_execution_host_policy(binary: Path) -> Transcript:
                     """)
                 + EXERCISE,
             )
-            assert last_result_text(client) == "remote workspace grant verified\n", (
-                last_result_text(client)
-            )
+            assert (
+                last_result_text(client) == "remote relative and CLI grants verified\n"
+            ), last_result_text(client)
             transcript = client.finish()[3:]
         assert not trap.exists(), "controller discovered an execution runtime"
         return transcript

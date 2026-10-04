@@ -86,11 +86,6 @@ fn launch(
             std::path::Path::new(&bootstrap.workspace),
         )?
     };
-    if native && let Some(environment) = &bootstrap.environment {
-        environment
-            .discovery
-            .protect_worker(&mut policy, std::path::Path::new(&bootstrap.workspace))?;
-    }
     let mut command = Command::new(&executable);
     if !native {
         super::WorkloadEnvironment::from_policy(&policy)
@@ -154,7 +149,6 @@ fn launch(
             Some(deadline),
             confirmed,
             protocol,
-            None,
         )?;
     }
     let hello = serde_json::to_vec(&Hello {
@@ -202,10 +196,6 @@ fn launch(
         operation_deadline,
         confirmed,
         protocol,
-        bootstrap
-            .environment
-            .as_ref()
-            .and_then(|environment| environment.discovery.lease.as_deref()),
     );
     let cleanup = temporary
         .as_mut()
@@ -285,7 +275,6 @@ fn supervise(
     deadline: Option<Instant>,
     confirmed: &mut bool,
     protocol: super::Protocol,
-    lease: Option<&std::path::Path>,
 ) -> Result<(), String> {
     let label = protocol.0;
     command
@@ -293,9 +282,6 @@ fn supervise(
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
     crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
-    if sandbox && let Some(lease) = lease {
-        crate::resolver::broker::inherit_lease(&mut command, lease)?;
-    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("cannot launch remote runtime: {error}"))?;

@@ -2,7 +2,6 @@
 
 use super::preview::Source;
 use super::*;
-use crate::text_preview::complete_utf8_prefix;
 use std::collections::VecDeque;
 
 #[derive(Default)]
@@ -412,5 +411,18 @@ impl OutputTapeState {
             output.extend(self.sealed.pop_front().expect("checked sealed interval").1);
         }
         output
+    }
+}
+
+fn complete_utf8_prefix(bytes: &[u8]) -> usize {
+    let mut offset = 0;
+    loop {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(_) => return bytes.len(),
+            Err(error) => match error.error_len() {
+                Some(length) => offset += error.valid_up_to() + length,
+                None => return offset + error.valid_up_to(),
+            },
+        }
     }
 }

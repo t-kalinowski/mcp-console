@@ -103,22 +103,20 @@ def gated_session(binary: Path, *, probe=False, handoff=False, prewarmed=False):
         if prewarmed:
             (remote / "claimed").touch()
         if handoff:
-            environment["RETICULATE_UV"] = "managed"
-            environment["MCP_CONSOLE_TEST_STARTUP_PHASE"] = "none"
-            handoff_settings = {
-                "environment": {
+            environment.update(
+                {
                     LOADER_VARIABLE: str(
                         build_interposer(remote, "resolver_spawn_interposer")
                     ),
-                    "MCP_CONSOLE_TEST_SPAWN_WORKLOAD": "1",
+                    "RETICULATE_UV": "managed",
+                    "MCP_CONSOLE_TEST_STARTUP_PHASE": "none",
                     "MCP_CONSOLE_TEST_SPAWN_ARMED": str(remote / "armed"),
-                    # Pause between interpreter inventory and environment creation.
-                    "MCP_CONSOLE_TEST_SPAWN_ORDINAL": "2",
+                    # Version check, R library, DuckDB, uv bootstrap, then Python.
+                    "MCP_CONSOLE_TEST_SPAWN_ORDINAL": "5",
                     "MCP_CONSOLE_TEST_SPAWN_STARTED": str(started.path),
                     "MCP_CONSOLE_TEST_SPAWN_RELEASE": str(release.path),
-                    "MCP_CONSOLE_TEST_SPAWN_EXECUTED": str(remote / "executed"),
                 }
-            }
+            )
         prefix = remote_command(remote, binary, environment)
         launcher = Path(prefix[0])
         launcher.write_text(
@@ -214,9 +212,10 @@ def test_lazy_preparation_remains_pollable_and_interruptible(binary):
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
         client.send(control="interrupt")
         retired(exits, identities)
-        assert last_result_text(client) == "[dependency resolution interrupted]", (
+        assert (
             last_result_text(client)
-        )
+            == "[failed to check R package resolver version with exit status: 130: ]"
+        ), last_result_text(client)
         client.response_timeout = 180
         send_and_collect_runtime_python_resolution(client, r="42L")
         assert last_tool_text(client).endswith("[1] 42\n"), last_tool_text(client)
@@ -262,9 +261,7 @@ def test_preparation_outlives_the_setup_deadline(binary):
         client.request("ping")
         client.send(control="interrupt")
         retired(exits, identities)
-        assert "dependency resolution interrupted" in last_result_text(client), (
-            last_result_text(client)
-        )
+        assert "exit status: 130" in last_result_text(client), last_result_text(client)
         return client.finish()[3:]
 
 
@@ -285,9 +282,7 @@ def test_explicit_preparation_waits_and_accepts_concurrent_control(binary):
         interrupt = client.start_send(control="interrupt")
         client.receive_many([preparation, interrupt])
         retired(exits, identities)
-        assert "dependency resolution interrupted" in json.dumps(preparation), (
-            preparation
-        )
+        assert "exit status: 130" in json.dumps(preparation), preparation
         return client.finish()[3:]
 
 
@@ -305,9 +300,10 @@ def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
         assert last_tool_text(client) == "\n[running; poll with an empty send]"
         started.wait("uv bootstrap finished before Python resolver spawn", timeout=180)
         client.request("ping")
-        interrupt = client.start_send(control="interrupt", timeout_ms=0)
-        client.receive(interrupt)
-        assert not interrupt["result"].get("isError"), interrupt
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]", (
+            last_result_text(client)
+        )
         release.release()
         preparation = client.send(timeout_ms=180_000)
         assert preparation["isError"], preparation
@@ -435,9 +431,6 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
                             "build": version,
                             "workspace": str(remote),
                             "selections": {"r_home": None, "python": None},
-                            "launch": None,
-                            "no_sandbox": True,
-                            "settings": {},
                         }
                     }
                 )
@@ -471,7 +464,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
             process.stdin = None
             _, errors = process.communicate(timeout=12)
             assert process.returncode != 0
-            assert b"truncated resolver frame" in errors, errors
+            assert b"truncated SSH frame" in errors, errors
             client.finish()
             return [
                 {

@@ -36,7 +36,7 @@ case "$1 $2" in
     ;;
   'tool run')
     for last in "$@"; do :; done
-    printf '%s' "$MCP_CONSOLE_TEST_PYTHON" > "$last"
+    printf '%s' /usr/bin/true > "$last"
     ;;
   *) exit 90 ;;
 esac
@@ -49,11 +49,7 @@ esac
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env={
-                **os.environ,
-                "PATH": str(uv.parent),
-                "MCP_CONSOLE_TEST_PYTHON": sys.executable,
-            },
+            env={**os.environ, "PATH": str(uv.parent)},
         )
         assert process.stdin is not None
         assert process.stdout is not None
@@ -74,7 +70,6 @@ esac
                         "workspace": "",
                         "selections": {"r_home": None, "python": None},
                         "mode": "PythonOnly",
-                        "no_sandbox": True,
                     }
                 }
             )
@@ -108,10 +103,9 @@ esac
                 }
             )
             prepared = receive()
-            result = prepared["Completed"]["result"]["Ok"]
-            assert result["python"] == sys.executable, result
-            assert result["requirements"] == manifest, result
-            assert result["native"]["embedding"]["python"] == sys.executable, result
+            assert prepared["Completed"]["result"] == {
+                "Ok": {"python": "/usr/bin/true", "requirements": manifest}
+            }, prepared
             assert prepared["Completed"]["confirmed"] is True, prepared
             send("Close")
             assert receive() == "Closed"
@@ -191,8 +185,7 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                             "build": build,
                             "workspace": "",
                             "selections": {"r_home": None, "python": None},
-                            "mode": "Custom",
-                            "no_sandbox": True,
+                            "mode": "PythonOnly",
                         }
                     }
                 )
@@ -253,14 +246,14 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                 message["Completed"] for message in messages if "Completed" in message
             )
             assert completed["id"] == 1 and completed["confirmed"] is True, completed
-            error = "dependency resolution cancelled"
+            error = "managed Python version resolution cancelled"
             if fail:
                 completed["result"]["Err"] = re.sub(
                     r"child process \d+",
                     "child process PID",
-                    completed["result"]["Err"].replace(str(binary), "CONSOLE"),
+                    completed["result"]["Err"].replace(str(uv), "UV"),
                 )
-                error = "failed to wait for dependency resolver `CONSOLE`: failed to observe child process PID exit: Input/output error (os error 5)"
+                error = "failed to wait for managed Python version resolver `UV`: failed to observe child process PID exit: Input/output error (os error 5)"
             assert completed == {
                 "id": 1,
                 "result": {"Err": error},

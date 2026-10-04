@@ -2,13 +2,13 @@
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
-  requirements:
-    python:
-      - matplotlib
+  r: |
+    reticulate::py_require("matplotlib")
+    invisible(reticulate::py_config())
 result:
   content:
     - type: text
-      text: "[prepared]"
+      text: "[done]"
   isError: false
 ---
 send:

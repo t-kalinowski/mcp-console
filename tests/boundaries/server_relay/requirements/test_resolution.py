@@ -39,7 +39,6 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
-from support.resolvers import resolver_fixture_directory
 from support.suites import run_this_suite
 
 
@@ -48,7 +47,8 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         library = root / "initial-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -257,7 +257,8 @@ def test_restart_consumes_late_r_preparation_retirement_events(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         libraries = [root / "candidate-one", root / "candidate-two"]
         for library in libraries:
             library.mkdir()
@@ -368,7 +369,8 @@ def test_restart_discards_pre_marker_r_preparation_result(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         libraries = [
             root / "candidate-one",
             root / "candidate-two",
@@ -514,7 +516,8 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         library = root / "failed-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -579,7 +582,8 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         libraries = [root / "explicit-candidate", root / "nested-candidate"]
         for library in libraries:
             library.mkdir()
@@ -652,7 +656,8 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         libraries = [root / "automatic-candidate", root / "stale-explicit-candidate"]
         for library in libraries:
             library.mkdir()
@@ -740,7 +745,8 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         library = root / "explicit-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -852,7 +858,8 @@ def test_rejects_completion_before_runtime_r_activation(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         library = root / "automatic-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])

@@ -13,7 +13,7 @@ mod docker;
 mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod jsonl;
 mod local_runtime;
 #[cfg(unix)]
@@ -21,7 +21,6 @@ mod process_descriptors;
 #[cfg(any(unix, windows))]
 mod process_exit;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "process_output/windows.rs")]
 mod process_output;
 #[cfg(any(unix, windows))]
 mod python;
@@ -42,14 +41,12 @@ mod server;
 mod server_transport;
 mod settings;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "sideband/windows.rs")]
 mod sideband;
 #[cfg(any(unix, windows))]
 mod sql;
 mod ssh;
 mod target_launch;
 mod target_session;
-mod text_preview;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -87,12 +84,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::Resolve => match resolver::preparation::run_local() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        #[cfg(unix)]
-        cli::Command::ResolverWorkload => match resolver::workload::run() {
+        cli::Command::Resolve => match resolver::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -138,7 +130,7 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::SshPrepare => match resolver::preparation::run() {
+        cli::Command::SshPrepare => match ssh::preparation::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -178,10 +170,10 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
-        resolver,
         python,
         source: _,
         policy,
+        resolver,
         target,
         provider,
     } = settings::discover(overrides)?;

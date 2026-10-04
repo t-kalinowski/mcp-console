@@ -103,7 +103,7 @@ def startup_input(binary: Path, execution: Execution, hook: str) -> list:
                 timeout_ms=0,
             )
             return json.loads(
-                json.dumps(client.finish()[3:]).replace(str(site), "<site-packages>")
+                json.dumps(client.finish()).replace(str(site), "<site-packages>")
             )
 
 
@@ -135,7 +135,7 @@ def test_embeds_framework_python(binary: Path, execution: Execution) -> list:
                     """)
             )
             assert last_result_text(client) == "42\n", last_result_text(client)
-            return client.finish()[3:]
+            return client.finish()
 
 
 @requires(R)
@@ -196,7 +196,7 @@ def test_processes_initial_site_directories_once(
         with McpClient(
             binary,
             execution.serve(
-                *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
             ),
             selected_python(root, python),
             root,
@@ -215,7 +215,7 @@ def test_processes_initial_site_directories_once(
             assert last_result_text(client) == "True\n", last_result_text(client)
             client.send(python=f"builtins.console_startups == {expected}")
             assert last_result_text(client) == "True\n"
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -264,7 +264,7 @@ def test_retries_after_sql_runtime_installation_interrupt(
             )
             assert last_result_text(client) == "42\n", last_result_text(client)
             return json.loads(
-                json.dumps(client.finish()[3:]).replace(str(site), "<site-packages>")
+                json.dumps(client.finish()).replace(str(site), "<site-packages>")
             )
 
 
@@ -336,7 +336,7 @@ def interrupted_initialization(
         with McpClient(
             binary,
             execution.serve(
-                *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
             ),
             environment,
             root,
@@ -382,7 +382,7 @@ def interrupted_initialization(
             if r_first:
                 client.send(r="startup_state + 1L")
                 assert last_result_text(client) == "[1] 42\n", last_result_text(client)
-            transcript = json.dumps(client.finish()[3:])
+            transcript = json.dumps(client.finish())
             transcript = transcript.replace(str(site), "<site-packages>")
             transcript = transcript.replace(str(root), "<workspace>")
             return json.loads(transcript)

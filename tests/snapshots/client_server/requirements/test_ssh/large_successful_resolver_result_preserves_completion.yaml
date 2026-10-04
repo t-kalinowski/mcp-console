@@ -19,11 +19,23 @@ send:
 result:
   content:
     - type: text
-      text: "[prepared]"
-  isError: false
+      text: SSH preparation message exceeds 1 MiB
+  isError: true
 ---
 send:
   r: stopifnot(Sys.getpid() == worker); sentinel
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  requirements:
+    r:
+      - praise
+  r: sentinel
 result:
   content:
     - type: text

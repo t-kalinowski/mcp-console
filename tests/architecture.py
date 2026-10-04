@@ -105,16 +105,10 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         host_sources = [
             path
             for path in rust_sources(SOURCE_ROOT)
-            # Native launch owners materialize policy. The resolver broker is
-            # a distinct process; server, relay and worker remain independent.
+            # The target CLI launch helper also materializes application policy.
             if path.relative_to(SOURCE_ROOT).parts[0]
             not in {"main.rs", "cli.rs", "sandbox.rs", "sandbox"}
-            and path.relative_to(SOURCE_ROOT).as_posix()
-            not in {
-                "target_launch/launch.rs",
-                "resolver/broker.rs",
-                "resolver/policy.rs",
-            }
+            and path.relative_to(SOURCE_ROOT).as_posix() != "target_launch/launch.rs"
         ]
         self.assertTrue(host_sources, "no Rust source files found")
         violations = matching_lines(

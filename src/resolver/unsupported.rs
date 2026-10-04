@@ -80,6 +80,7 @@ impl ManagedR {
 pub(crate) fn resolve_r(
     _requirements: Vec<String>,
     _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    _on_configured: impl FnOnce(ManagedRResolverConfiguration),
 ) -> Result<ManagedR, String> {
     Err("managed R libraries are supported only on macOS".to_string())
 }

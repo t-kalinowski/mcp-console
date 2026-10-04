@@ -36,11 +36,8 @@ def _snapshot_survives_replacement(
         assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
         assert (os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") == "1") == configured
         _ = (Path(os.environ["TMPDIR"]) / "private").write_text("private storage")
-        for name, allowed in (
-            ("output café 雪", configured),
-            ("cache", configured),
-            ("../neighbor", False),
-        ):
+        _ = (host / "CLI cache" / "persistent").write_text("CLI grant")
+        for name, allowed in (("output café 雪", configured), ("neighbor", False)):
             try:
                 _ = (host / name / "created").write_text("project grant")
             except OSError as error:
@@ -60,22 +57,23 @@ def _snapshot_survives_replacement(
             pass
         else:
             raise AssertionError("direct network unexpectedly allowed")
-        os.chdir(host / "cache")
+        os.chdir(host / "CLI cache")
         print("captured grants, proxy selection, and restricted network verified")
         """)
     with TemporaryDirectory() as directory, host_tcp_ports() as ports:
-        host = Path(directory).resolve() / "workspace"
-        host.mkdir()
-        for name in ("output café 雪", "cache", "../neighbor"):
+        host = Path(directory).resolve()
+        for name in ("output café 雪", "CLI cache", "neighbor"):
             (host / name).mkdir()
         config = host / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         if configured:
             config.write_text(
                 code("""
-                extends: ":workspace"
                 sandbox:
-                  network: restricted
+                  filesystem:
+                    entries:
+                      - path: {type: path, path: ./output café 雪}
+                        access: write
                   proxy: PROXY_CONFIGURATION
                 """).replace(
                     "PROXY_CONFIGURATION",
@@ -96,14 +94,7 @@ def _snapshot_survives_replacement(
         environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
         expected = "captured grants, proxy selection, and restricted network verified\n"
         with McpClient(
-            binary,
-            (
-                "serve",
-                "-c",
-                "resolver.environment=" + json.dumps({LOADER_VARIABLE: ""}),
-            ),
-            environment,
-            host,
+            binary, ("serve", "--writable-root", "CLI cache"), environment, host
         ) as client:
             client.initialize_and_list_tools()
             # Even the first worker uses the snapshot taken before MCP readiness.
@@ -136,21 +127,27 @@ def _snapshot_survives_replacement(
             transcript = client.finish()
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(payloads) == 4, len(payloads)
+        assert len(payloads) == 5, len(payloads)
+        resolver = payloads.pop(0)
+        assert resolver["proxy"]["enabled"] is True
+        assert resolver["proxy"]["domains"]["pypi.org"] == "allow"
         assert all(payload == payloads[0] for payload in payloads), payloads
         payload = payloads[0]
         assert payload["network"] == "restricted"
         assert (payload.get("proxy") is not None) == configured
-        assert payload.get("extends") == (":workspace" if configured else None), payload
-        assert all(
-            entry["access"] == "read" for entry in payload["filesystem"]["entries"]
-        ), payload
+        expected_roots = (
+            ["output café 雪", "CLI cache"] if configured else ["CLI cache"]
+        )
+        assert payload["filesystem"]["entries"][1:] == [
+            {"path": {"type": "path", "path": str(host / name)}, "access": "write"}
+            for name in expected_roots
+        ], payload
         assert payload["lifecycle"] == {
             "parent_pid": client.process.pid,
             "sigterm": "retire",
             "private_tmp": {"environment": ["TMPDIR"]},
         }, payload
-        assert not (host.parent / "neighbor/created").exists()
+        assert not (host / "neighbor/created").exists()
         return TranscriptWithCompanions(
             transcript,
             {
@@ -159,7 +156,7 @@ def _snapshot_survives_replacement(
                         "initially_configured": configured,
                         "validation_launches": 0,
                         "identical_worker_launches": len(payloads),
-                        "writable_roots": ["workspace"] if configured else [],
+                        "writable_roots": expected_roots,
                         "network": payload["network"],
                         "proxy": payload.get("proxy"),
                     }

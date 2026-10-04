@@ -33,7 +33,6 @@ from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.r import r_test_environment
 from support.python import runtime_source_line, write_test_wheel
-from support.resolvers import resolver_fixture_directory
 
 
 def environment(path: Path) -> dict[str, str]:
@@ -56,6 +55,37 @@ def selected_environment(path: Path) -> dict[str, str]:
 
 def preparation_directory():
     return tempfile.TemporaryDirectory(prefix="console-preparation-test-")
+
+
+def grant_resolver_cache(workspace: Path, cache: Path) -> None:
+    # uv config files select the cache; Console YAML supplies its permissions.
+    cache.mkdir()
+    config = workspace / ".agents/console/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "resolver": {
+                    "filesystem": {
+                        "entries": [
+                            {
+                                "path": {"type": "special", "value": {"kind": "root"}},
+                                "access": "read",
+                            },
+                            {
+                                "path": {"type": "path", "path": str(cache)},
+                                "access": "write",
+                            },
+                        ]
+                    },
+                    "environment": {
+                        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache / "duckdb"),
+                        "MPLCONFIGDIR": str(cache / "matplotlib"),
+                    },
+                }
+            }
+        )
+    )
 
 
 @contextmanager
@@ -141,7 +171,7 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
                 text,
             )
             text = re.sub(
-                r"(?:<preparation>|[^\"\n]*/mcp-console/resolver/payload/uv/cache)/archive-v0/[^/\"\n]+/bin/activate_this.py",
+                r"<preparation>/archive-v0/[^/\"\n]+/bin/activate_this.py",
                 "<preparation>/archive-v0/<environment>/bin/activate_this.py",
                 text,
             )
@@ -396,6 +426,8 @@ exec "{shutil.which("uv")}" "$@"
         (workspace / "uv.toml").write_text(
             'index-url = "https://invalid.example/project"\n'
         )
+        if execution is SANDBOXED:
+            grant_resolver_cache(workspace, cache)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             client.expect(
@@ -447,6 +479,8 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
                 env["UV_CACHE_DIR"] = "../shared-uv"
             else:
                 env.pop("UV_CACHE_DIR", None)
+                if execution is SANDBOXED:
+                    grant_resolver_cache(workspace, root / "shared-uv")
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 client.expect(
@@ -485,10 +519,29 @@ def non_utf8_environment_preparation(binary: Path, execution: Execution) -> Tran
         env = environment(root)
         env["UNRELATED_STARTUP_VALUE"] = os.fsdecode(b"non-utf8-\xff")
         env[os.fsdecode(b"UNRELATED_STARTUP_NAME_\xff")] = "unused"
-        with McpClient(binary, execution.serve(), env) as client:
+        if execution is SANDBOXED:
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "resolver": {
+                            "inherit_environment": False,
+                            "environment": {
+                                "HOME": env["HOME"],
+                                "PATH": env["PATH"],
+                                "UV_CACHE_DIR": str(root / "uv-cache"),
+                                "UV_NO_CONFIG": "1",
+                            },
+                        }
+                    }
+                )
+            )
+        with McpClient(binary, execution.serve(), env, root) as client:
             client.initialize_and_list_tools()
-            # Preparation accepts unrelated non-UTF-8 values. Eager native
-            # launch still enforces its existing UTF-8 environment requirement.
+            # Host preparation accepts unrelated non-UTF-8 values. The explicit
+            # resolver environment keeps native preparation usable while the
+            # worker retains its UTF-8 environment requirement.
             startup = client.send(requirements={"action": "get"})
             assert startup["isError"] == (execution == SANDBOXED), startup
             if execution == SANDBOXED:
@@ -1066,7 +1119,7 @@ def test_automatic_resolution_failure_and_cancel_keep_accepted_state(
 def automatic_resolution_failure_and_cancel_keep_accepted_state(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with preparation_directory() as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         started = FifoCheckpoint.create(root / "started")
@@ -1136,7 +1189,7 @@ def test_automatic_activation_failure_requires_restart(
 def automatic_activation_failure_requires_restart(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with preparation_directory() as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
@@ -1420,7 +1473,7 @@ def test_live_python_rejects_incompatible_library_before_activation(
 def live_python_rejects_incompatible_library_before_activation(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with preparation_directory() as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         with McpClient(installed_console(binary), execution.serve(), env) as client:
@@ -1481,7 +1534,7 @@ def test_live_python_activation_failure_requires_restart(
 def live_python_activation_failure_requires_restart(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with preparation_directory() as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
@@ -2179,7 +2232,7 @@ def test_cleans_temporary_storage_after_startup_failure(
             """)
         (site / "sitecustomize.py").write_text(hook)
         arguments = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", str(root))
             if execution == SANDBOXED
             else execution.serve()
         )
@@ -2461,7 +2514,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             """)
         (site / "sitecustomize.py").write_text(hook)
         arguments = (
-            execution.serve("-c", "extends=:workspace")
+            execution.serve("--writable-root", str(workspace))
             if execution == SANDBOXED
             else execution.serve()
         )
@@ -2473,7 +2526,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
                 python="raise AssertionError('failed startup ran cell')"
             )
             assert result["isError"], result
-            records = client.finish()[3:]
+            records = client.finish()
             temporary = Path((workspace / "startup-temporary").read_text())
             assert not temporary.exists(), "failed worker storage remains"
             assert selected.exists(), "failed startup removed selected environment"
@@ -2784,22 +2837,7 @@ def test_excludes_executable_directory_from_imports(
             "raise RuntimeError('imported executable directory')\n"
         )
         (venv / "bin/selected_package.py").write_text("value = -1\n")
-        # A copied executable has no symlink to its base installation. Supply
-        # that trusted read root explicitly; pyvenv.cfg cannot grant host reads.
-        config = workspace / ".agents/console/config.yaml"
-        config.parent.mkdir(parents=True)
-        config.write_text(
-            json.dumps(
-                {
-                    "resolver": {
-                        "readable_roots": [
-                            str(Path(sys.executable).resolve().parent.parent)
-                        ]
-                    }
-                }
-            )
-        )
-        env = environment(venv / "bin")
+        env = selected_environment(venv / "bin")
         env.pop("PYTHONPATH", None)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()

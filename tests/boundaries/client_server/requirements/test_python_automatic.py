@@ -27,7 +27,6 @@ from support.resolvers import (
     send_and_collect_runtime_python_resolution,
     uv_tool_run_requirements,
 )
-from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
 from support.suites import run_this_suite
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
@@ -174,16 +173,13 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
     execution: Execution,
 ) -> Transcript:
     module = "mcp_console_activated_finder"
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
         environment, record = recording_uv_environment(
-            resolver_fixtures,
+            directory,
             substitute_requirement=(module, "pydash"),
         )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -248,13 +244,10 @@ def test_infers_python_distributions_for_normal_import_forms(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
-        environment, record = recording_uv_environment(resolver_fixtures)
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(directory)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -299,10 +292,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as temporary,
-        resolver_fixture_directory(binary, execution) as resolver_fixtures,
-    ):
+    with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         (directory / "mcp_console_local_module.py").write_text(
             "answer = 42\n",
@@ -312,10 +302,10 @@ def test_does_not_resolve_unreached_or_available_python_imports(
             "import pydash\nanswer = pydash.get({'answer': 42}, 'answer')\n",
             encoding="utf-8",
         )
-        environment, record = recording_uv_environment(resolver_fixtures)
+        environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
+            execution.serve(),
             environment,
             current_directory=directory,
         )
@@ -385,16 +375,13 @@ def test_does_not_resolve_missing_python_imports_from_sql(
     execution: Execution,
 ) -> Transcript:
     prefix = "mcp_console_sql_missing_"
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
         environment, record = recording_uv_environment(
-            resolver_fixtures,
+            directory,
             fail_requirement=prefix,
         )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
         client.expect(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
@@ -523,13 +510,10 @@ def test_does_not_reenter_automatic_python_resolution(
     binary: Path, execution: Execution
 ) -> Transcript:
     nested = "mcp_console_nested_resolution_missing"
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
-        environment, record = recording_uv_environment(resolver_fixtures)
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(directory)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -580,13 +564,10 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
-        environment, record = recording_uv_environment(resolver_fixtures)
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(directory)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -620,16 +601,13 @@ def test_reports_automatic_python_resolution_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
     requirement = "scikit-learn"
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
         environment, record = recording_uv_environment(
-            resolver_fixtures,
+            directory,
             fail_requirement=requirement,
         )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -671,16 +649,13 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
     execution: Execution,
 ) -> Transcript:
     inferred = "mcp_console_distribution_without_module"
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
         environment, record = recording_uv_environment(
-            resolver_fixtures,
+            directory,
             substitute_requirement=(inferred, "py-yaml12"),
         )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -723,13 +698,10 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
-        environment, record = recording_uv_environment(resolver_fixtures)
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(directory)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -749,10 +721,7 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as temporary,
-        resolver_fixture_directory(binary, execution) as resolver_fixtures,
-    ):
+    with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         package = directory / "mcp_console_available_root"
         package.mkdir()
@@ -771,10 +740,10 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
                 """),
             encoding="utf-8",
         )
-        environment, record = recording_uv_environment(resolver_fixtures)
+        environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
+            execution.serve(),
             environment,
             current_directory=directory,
         )
@@ -830,13 +799,10 @@ def test_reports_unavailable_standard_library_module_without_resolution(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
-        environment, record = recording_uv_environment(resolver_fixtures)
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, record = recording_uv_environment(directory)
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -868,20 +834,13 @@ def test_disables_automatic_resolution_for_user_selected_python(
     execution: Execution,
 ) -> Transcript:
     missing = "mcp_console_user_selected_missing"
-    with (
-        tempfile.TemporaryDirectory() as temporary,
-        resolver_fixture_directory(binary, execution) as resolver_fixtures,
-    ):
+    with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         managed_python = resolve_managed_python(binary, execution, directory)
-        environment, record = recording_uv_environment(resolver_fixtures)
+        environment, record = recording_uv_environment(directory)
         environment["RETICULATE_PYTHON"] = str(managed_python)
         environment["PYTHONNODEBUGRANGES"] = "1"
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 

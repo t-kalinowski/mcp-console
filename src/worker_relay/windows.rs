@@ -1,6 +1,6 @@
 //! Windows direct-worker owner. Process and pipe events wake blocking waits.
 use std::ffi::OsString;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
+use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
 use crate::windows::{Event, Pipe};
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
@@ -82,17 +83,27 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     // exits while its caller still owns stdin. It never outlives a generation.
     thread::spawn(move || {
         let mut input = io::stdin().lock();
-        let mut frame = Vec::new();
+        let mut buffer = JsonlBuffer::default();
         loop {
-            frame.clear();
-            let message = match input.read_until(b'\n', &mut frame) {
-                Ok(0) => break,
-                Ok(_) if frame.last() != Some(&b'\n') => Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    crate::relay_protocol::PARTIAL_COMMAND_EOF,
-                )),
-                Ok(_) => serde_json::from_slice(&frame).map_err(io::Error::other),
-                Err(error) => Err(error),
+            let message = match buffer.next_line() {
+                Ok(Some(command)) => Ok(command),
+                Err(error) => Err(io::Error::other(error)),
+                Ok(None) => {
+                    let mut chunk = [0; 8192];
+                    match input.read(&mut chunk) {
+                        Ok(0) if !buffer.has_buffered_data() => break,
+                        Ok(0) => Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            crate::relay_protocol::PARTIAL_COMMAND_EOF,
+                        )),
+                        Ok(length) => {
+                            buffer.append(&chunk[..length]);
+                            continue;
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) => Err(error),
+                    }
+                }
             };
             match message {
                 Ok(command) => {

@@ -19,10 +19,10 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.resolvers import recording_uv_environment, uv_tool_run_requirements
-from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
 from support.resolvers import (
     checkpoint_uv_environment,
+    recording_uv_environment,
+    uv_tool_run_requirements,
 )
 from support.suites import run_this_suite
 
@@ -115,15 +115,13 @@ def test_owns_managed_python_transitions(
 def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as directory,
-        resolver_fixture_directory(binary, execution) as resolver,
-    ):
+    with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        environment, record = recording_uv_environment(resolver)
-        serve = execution.serve(
-            *resolver_fixture_arguments(environment),
-            *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
+        environment, record = recording_uv_environment(root)
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if execution == SANDBOXED
+            else execution.serve()
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
@@ -161,23 +159,20 @@ def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
                 python="import yaml12; (id(identity) == identity_id, sys.executable != initial_executable, yaml12.__name__)"
             )
             assert last_tool_text(client) == "(True, True, 'yaml12')\n"
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
 def test_preserves_preparation_restoration_and_live_noops(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
         environment, record = recording_uv_environment(
-            resolver_fixtures, fail_requirement="py-yaml12"
+            directory, fail_requirement="py-yaml12"
         )
         environment["MCP_CONSOLE_LANGUAGES"] = "r"
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        ) as client:
+        with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
@@ -415,25 +410,16 @@ def test_rejects_incompatible_live_libpython_before_activation(
 def test_idle_activation_failure_retains_worker_until_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as temporary,
-        ExitStack() as cleanup,
-        resolver_fixture_directory(binary, execution) as resolver,
-    ):
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as cleanup:
         root = Path(temporary)
         environment, resolver_started, resolver_release = checkpoint_uv_environment(
-            resolver, "py-yaml12", reuse_resolved_python_for=("py-yaml12",)
+            root, "py-yaml12", reuse_resolved_python_for=("py-yaml12",)
         )
         environment.pop("RETICULATE_PYTHON", None)
         cleanup.callback(resolver_started.close)
         cleanup.callback(resolver_release.close)
         client = cleanup.enter_context(
-            McpClient(
-                binary,
-                execution.serve(*resolver_fixture_arguments(environment)),
-                environment,
-                root,
-            )
+            McpClient(binary, execution.serve(), environment, root)
         )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["later"]})

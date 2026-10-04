@@ -123,8 +123,7 @@ polling or stdin-only calls."#;
 pub(super) const CONTROL_START: &str = r#"Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
 "#;
 
-pub(super) const UNIX_INTERRUPT: &str =
-    "interruption of active preparation or SIGINT from the live worker";
+pub(super) const UNIX_INTERRUPT: &str = "SIGINT from the active host resolver or live worker";
 
 pub(super) const WINDOWS_INTERRUPT: &str =
     "termination of the active host resolver or a cooperative interrupt from the live worker";

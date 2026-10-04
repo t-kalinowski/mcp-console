@@ -13,7 +13,6 @@ import unittest
 from pathlib import Path
 
 from support.native import build_interposer
-from support.client import McpClient
 
 
 @unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
@@ -70,21 +69,6 @@ class SandboxInstallationTests(unittest.TestCase):
         result = self.run_sandbox(link)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((result.stdout, result.stderr), (b"", b""))
-
-    def test_resolver_runs_from_relocated_bundle(self) -> None:
-        environment = self.environment | {
-            "RETICULATE_PYTHON": str(Path(sys.executable).resolve()),
-            "XDG_CACHE_HOME": str(self.root / "cache"),
-        }
-        environment.pop("R_HOME", None)
-        with McpClient(self.binary, ("serve",), environment) as client:
-            client.initialize()
-            result = client.send(python="print(42)")
-            self.assertEqual(
-                result,
-                {"content": [{"type": "text", "text": "42\n"}], "isError": False},
-            )
-            client.finish()
 
     def test_setup_is_one_shot_with_idle_stdin(self) -> None:
         result = self.run_sandbox()

@@ -117,8 +117,6 @@ if "Open" in bootstrap:
                     "Ok": {
                         "managed": False,
                         "selections": {"r_home": None, "python": None},
-                        "protected": [],
-                        "extension_directory": None,
                     }
                 },
                 "control": None,

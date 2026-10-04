@@ -16,7 +16,7 @@ mcp-console -c extends=:workspace serve -c sandbox.network=enabled
 mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analysis.R
 ```
 
-See [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
+See [resolver settings](RESOLVER.md), [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
 
 ## Console home
 
@@ -83,11 +83,3 @@ Execution hosts consume that captured input without rediscovering YAML.
 Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides.
 
 The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).
-
-## Resolver settings
-
-`resolver` configures macOS and Linux dependency preparation independently of `sandbox`, which configures the worker.
-Resolver settings are trusted launch data; submitted requirements cannot override them.
-`resolver.environment` configures package sources, `resolver.allowed_hosts` permits native proxy host patterns, and `resolver.readable_roots` supplies additional read-only runtime inputs.
-The top-level `python` selection also applies to preparation.
-See [resolver policy and storage](RESOLVER.md#native-policy-and-storage).

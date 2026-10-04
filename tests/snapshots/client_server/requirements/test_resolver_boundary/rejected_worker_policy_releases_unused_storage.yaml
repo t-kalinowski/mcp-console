@@ -1,5 +1,0 @@
----
-stderr: >
-  managed resolver storage requires the default, :workspace, or :read-only
-  worker filesystem policy without custom filesystem rules or native
-  extensions

@@ -17,6 +17,10 @@ from support.suites import run_this_suite
 
 
 LANGUAGES = ("r,python,sql", "r", "python", "sql", "r,python", "r,sql", "python,sql")
+MISSING_UV = (
+    "Python sessions without R require `uv` on PATH; "
+    "set python in .agents/console/config.yaml to use an existing environment"
+)
 
 
 def test_builtin_configured_language_matrix(binary: Path) -> Transcript:
@@ -114,14 +118,20 @@ def _configured_language_matrix(binary: Path, source: str | None = None) -> Tran
                 records.append(
                     {"languages": enabled, "language_guidance": paragraphs[1]}
                 )
-                if source is not None:
-                    result = client.send(timeout_ms=10_000)
-                    assert result["isError"] is True, result
+                # Observe completed preparation before closing. Discovery stays
+                # responsive even when eager startup cannot prepare a runtime.
+                result = client.send(timeout_ms=10_000)
+                assert result["isError"] is True, result
                 assert client.request("tools/list")["result"]["tools"] == [tool]
+                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
                 if source is None:
-                    client.finish()
-                else:
-                    client.finish_with_standard_error(expected_exit_status=1)
+                    assert result == {
+                        "content": [{"type": "text", "text": MISSING_UV}],
+                        "isError": True,
+                    }, result
+                    assert stderr == MISSING_UV + "\n", stderr
+                    if enabled == LANGUAGES[0]:
+                        records[-1].update(preparation_error=result, stderr=stderr)
     return records
 
 

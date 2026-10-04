@@ -260,7 +260,7 @@ class McpClient:
 
         self.send_message(message)
 
-    def initialize(self) -> None:
+    def initialize_and_list_tools(self) -> None:
         self.request(
             "initialize",
             protocolVersion="2025-11-25",
@@ -271,9 +271,6 @@ class McpClient:
             },
         )
         self.notify("notifications/initialized")
-
-    def initialize_and_list_tools(self) -> None:
-        self.initialize()
         self.request("tools/list")
 
     def startup_error(self) -> str:

@@ -1,7 +1,8 @@
 ---
 initially_configured: false
-validation_launches: 1
+validation_launches: 0
 identical_worker_launches: 4
-writable_roots: []
+writable_roots:
+  - CLI cache
 network: restricted
 proxy: ~

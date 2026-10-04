@@ -37,7 +37,49 @@ class WindowsRelay(unittest.TestCase):
             check=True,
         )
 
-    def start(self, scenario):
+    def command_pipe(self):
+        """Give the test a named pipe server writer with a consumption barrier."""
+        import msvcrt
+        import uuid
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateNamedPipeW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+        ]
+        kernel.CreateNamedPipeW.restype = wintypes.HANDLE
+        kernel.CreateFileW.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        ]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        name = rf"\\.\pipe\console-framing-{uuid.uuid4().hex}"
+        writer = kernel.CreateNamedPipeW(name, 2, 0, 1, 65536, 65536, 0, None)
+        self.assertNotEqual(writer, ctypes.c_void_p(-1).value, ctypes.get_last_error())
+        writer = os.fdopen(
+            msvcrt.open_osfhandle(writer, os.O_WRONLY | os.O_BINARY), "wb"
+        )
+        self.addCleanup(writer.close)
+        reader = kernel.CreateFileW(name, 0x80000000, 0, None, 3, 0, None)
+        self.assertNotEqual(reader, ctypes.c_void_p(-1).value, ctypes.get_last_error())
+        reader = os.fdopen(
+            msvcrt.open_osfhandle(reader, os.O_RDONLY | os.O_BINARY), "rb"
+        )
+        self.addCleanup(reader.close)
+        return reader, writer
+
+    def start(self, scenario: str, *, command_pipe: bool = False):
         listener = socket.socket()
         self.addCleanup(listener.close)
         listener.bind(("127.0.0.1", 0))
@@ -46,6 +88,9 @@ class WindowsRelay(unittest.TestCase):
         directory = tempfile.TemporaryDirectory(prefix="console relay records ")
         self.addCleanup(directory.cleanup)
         marker = Path(directory.name) / "dispatched"
+        command_reader, command_writer = (
+            self.command_pipe() if command_pipe else (subprocess.PIPE, None)
+        )
         process = subprocess.Popen(
             [str(BINARY), "worker-relay", str(self.worker)],
             env=dict(
@@ -53,11 +98,17 @@ class WindowsRelay(unittest.TestCase):
                 TEST_WORKER_SCENARIO=scenario,
                 TEST_WORKER_READY=f"127.0.0.1:{listener.getsockname()[1]}",
                 TEST_DISPATCHED=str(marker),
+                TEST_CONSOLE_BINARY=str(BINARY),
+                TMPDIR=directory.name,
+                MCP_CONSOLE_HOME=directory.name,
             ),
-            stdin=subprocess.PIPE,
+            stdin=command_reader,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
+        if command_pipe:
+            command_reader.close()
+            process.stdin = command_writer
         self.addCleanup(self.stop, process)
         try:
             ready = listener.accept()[0]
@@ -69,10 +120,17 @@ class WindowsRelay(unittest.TestCase):
                     f"{output.decode(errors='replace')}{errors.decode(errors='replace')}"
                 )
             raise
-        with ready:
-            ready.settimeout(10)
-            with ready.makefile("rb") as stream:
-                pid = int(stream.readline())
+        ready.settimeout(10)
+        stream = ready.makefile("rb")
+        pid = int(stream.readline())
+        if scenario.startswith("framing_"):
+            self.framing_control = ready
+            self.framing_stream = stream
+            self.addCleanup(ready.close)
+            self.addCleanup(stream.close)
+        else:
+            stream.close()
+            ready.close()
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel.OpenProcess.restype = wintypes.HANDLE
@@ -84,6 +142,232 @@ class WindowsRelay(unittest.TestCase):
         self.addCleanup(kernel.CloseHandle, owned_worker)
         self.assertEqual(json.loads(process.stdout.readline()), {"kind": "ready"})
         return process, kernel, owned_worker, marker
+
+    def framing_reader(self, process: subprocess.Popen[bytes]):
+        events = Queue()
+
+        def read():
+            for line in process.stdout:
+                events.put(json.loads(line))
+            events.put(None)
+
+        reader = Thread(target=read, daemon=True)
+        reader.start()
+        return events, reader
+
+    def framing_finish(
+        self, process: subprocess.Popen[bytes], events: Queue, reader: Thread
+    ) -> list[dict]:
+        process.stdin.close()
+        process.wait(timeout=10)
+        reader.join(timeout=5)
+        self.assertFalse(reader.is_alive())
+        self.assertEqual(process.returncode, 0, process.stderr.read().decode())
+        tail = []
+        while (event := events.get(timeout=5)) is not None:
+            tail.append(event)
+        return tail
+
+    def owned_descendant(self, kernel):
+        pid = int(self.framing_stream.readline())
+        handle = kernel.OpenProcess(0x100001, False, pid)
+        self.assertTrue(handle, ctypes.get_last_error())
+        kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel.TerminateProcess.restype = wintypes.BOOL
+
+        def retire():
+            kernel.TerminateProcess(handle, 1)
+            kernel.WaitForSingleObject(handle, 10000)
+            kernel.CloseHandle(handle)
+
+        self.addCleanup(retire)
+        return handle
+
+    def test_framing_fragmented_semantics_and_retiring_tail(self) -> None:
+        process, kernel, worker, _ = self.start("framing_fragmented")
+        events, reader = self.framing_reader(process)
+        process.stdin.write(b'{"kind":"evaluate","language":"r","source":"42"}\n')
+        process.stdin.flush()
+        self.assertEqual(self.framing_stream.readline(), b"prefix consumed\n")
+        self.assertTrue(events.empty(), "incomplete semantic frame was forwarded")
+        self.framing_control.sendall(b"1")
+        self.assertEqual(
+            events.get(timeout=10), {"kind": "console_output", "data": "fragmented 🦀"}
+        )
+        self.assertEqual(events.get(timeout=10), {"kind": "completed"})
+        holder = self.owned_descendant(kernel)
+        self.framing_control.sendall(b"1")
+        self.assertEqual(kernel.WaitForSingleObject(worker, 10000), 0)
+        # Keep stdin and the inherited writer live until retirement completes.
+        self.assertEqual(process.wait(timeout=10), 0)
+        self.assertEqual(kernel.WaitForSingleObject(holder, 0), 258)
+        # The holder also inherits the relay's outer stdout handle, so relay
+        # exit alone cannot produce EOF for the test's stdout reader.
+        self.assertTrue(kernel.TerminateProcess(holder, 1), ctypes.get_last_error())
+        self.assertEqual(kernel.WaitForSingleObject(holder, 10000), 0)
+        tail = self.framing_finish(process, events, reader)
+        self.assertEqual(
+            tail,
+            [
+                {"kind": "stdout_closed"},
+                {"kind": "stderr_closed"},
+                {"kind": "worker_sideband_closed"},
+                {"kind": "worker_exited", "code": 0},
+            ],
+        )
+
+    def test_framing_fragmented_commands_and_batch_tail(self) -> None:
+        import msvcrt
+
+        process, kernel, _, marker = self.start("framing_echo", command_pipe=True)
+        events, reader = self.framing_reader(process)
+        source = "command 🦀" + "x" * (128 * 1024)
+        frame = json.dumps(
+            {"kind": "evaluate", "language": "r", "source": source}, ensure_ascii=False
+        ).encode()
+        split = frame.index("🦀".encode()) + 1
+        process.stdin.write(frame[:split])
+        process.stdin.flush()
+        kernel.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+        kernel.FlushFileBuffers.restype = wintypes.BOOL
+        consumed = Queue()
+
+        def flush():
+            consumed.put(
+                kernel.FlushFileBuffers(msvcrt.get_osfhandle(process.stdin.fileno()))
+            )
+
+        barrier = Thread(target=flush, daemon=True)
+        barrier.start()
+        self.assertTrue(consumed.get(timeout=10), ctypes.get_last_error())
+        barrier.join(timeout=5)
+        self.assertFalse(marker.exists(), "partial command was dispatched")
+        process.stdin.write(frame[split:] + b'\r\n{"kind":')
+        process.stdin.flush()
+        self.assertEqual(events.get(timeout=10), {"kind": "completed"})
+        self.assertEqual(json.loads(marker.read_bytes())["source"], source)
+        tail = self.framing_finish(process, events, reader)
+        self.assertIn(
+            {
+                "kind": "fatal",
+                "message": "relay stdin frame is invalid: relay stdin closed midway through a frame",
+            },
+            tail,
+        )
+
+    def test_framing_inherited_writer_cannot_extend_retirement(self) -> None:
+        process, kernel, worker, _ = self.start("framing_refill")
+        events, reader = self.framing_reader(process)
+        process.stdin.write(b'{"kind":"evaluate","language":"r","source":"42"}\n')
+        process.stdin.flush()
+        holder = self.owned_descendant(kernel)
+        self.framing_control.sendall(b"1")
+        self.assertEqual(kernel.WaitForSingleObject(worker, 10000), 0)
+        self.assertEqual(process.wait(timeout=10), 0)
+        self.assertEqual(kernel.WaitForSingleObject(holder, 0), 258)
+        # The holder also inherits the relay's outer stdout handle, so relay
+        # exit alone cannot produce EOF for the test's stdout reader.
+        self.assertTrue(kernel.TerminateProcess(holder, 1), ctypes.get_last_error())
+        self.assertEqual(kernel.WaitForSingleObject(holder, 10000), 0)
+        tail = self.framing_finish(process, events, reader)
+        outputs = [event for event in tail if event["kind"] == "console_output"]
+        self.assertTrue(outputs)
+        self.assertTrue(
+            all(
+                event == {"kind": "console_output", "data": "inherited writer"}
+                for event in outputs
+            )
+        )
+        self.assertEqual(
+            tail,
+            outputs
+            + [
+                {"kind": "stdout_closed"},
+                {"kind": "stderr_closed"},
+                {"kind": "worker_sideband_closed"},
+                {"kind": "worker_exited", "code": 0},
+            ],
+        )
+
+    def test_framing_malformed_empty_and_partial_eof_diagnostics(self) -> None:
+        for scenario, diagnostic in (
+            ("framing_malformed", "EOF while parsing a value at line 2 column 0"),
+            ("framing_empty", "EOF while parsing a value at line 2 column 0"),
+            ("framing_partial", "worker sideband closed midway through a frame"),
+        ):
+            with self.subTest(scenario=scenario):
+                process, _, _, _ = self.start(scenario)
+                process.stdin.write(
+                    b'{"kind":"evaluate","language":"r","source":"42"}\n'
+                )
+                process.stdin.flush()
+                process.wait(timeout=10)
+                events = self.finish(process)
+                self.assertIn(
+                    {
+                        "kind": "fatal",
+                        "message": f"worker sideband read failed: {diagnostic}",
+                    },
+                    events,
+                )
+
+    def test_framing_malformed_complete_commands_keep_diagnostics(self) -> None:
+        for frame in (b'{"kind":\n', b"\r\n"):
+            with self.subTest(frame=frame):
+                process, _, _, marker = self.start("commands")
+                process.stdin.write(frame)
+                process.stdin.flush()
+                events = self.finish(process)
+                self.assertIn(
+                    {
+                        "kind": "fatal",
+                        "message": "relay stdin frame is invalid: EOF while parsing a value at line 2 column 0",
+                    },
+                    events,
+                )
+                self.assertFalse(marker.exists())
+
+    def test_framing_builtin_retains_partial_command_across_interrupt(self) -> None:
+        process, kernel, _, _ = self.start("framing_interrupt")
+        self.owned_descendant(kernel)
+        events, reader = self.framing_reader(process)
+        process.stdin.write(
+            b'{"kind":"evaluate","language":"r","source":"retained <- 0L"}\n'
+        )
+        process.stdin.flush()
+        self.assertEqual(events.get(timeout=15), {"kind": "completed"})
+        command = {
+            "kind": "evaluate",
+            "language": "r",
+            "source": 'retained <- retained + 1L; cat("🦀", retained)',
+        }
+        process.stdin.write(json.dumps(command, ensure_ascii=False).encode() + b"\r\n")
+        process.stdin.flush()
+        self.assertEqual(self.framing_stream.readline(), b"prefix consumed\n")
+        # This output proves the real worker returned from its incomplete read
+        # and handled the idle interrupt before we release the UTF-8 suffix.
+        self.assertEqual(
+            events.get(timeout=15), {"kind": "console_diagnostic", "data": "\n"}
+        )
+        self.framing_control.sendall(b"1")
+        output = []
+        while (event := events.get(timeout=15))["kind"] != "completed":
+            self.assertEqual(event["kind"], "console_output", event)
+            output.append(event["data"])
+        self.assertEqual("".join(output), "🦀 1")
+        process.stdin.write(b'{"kind":"shutdown","grace_millis":1000}\n')
+        process.stdin.flush()
+        tail = self.framing_finish(process, events, reader)
+        self.assertEqual(
+            tail,
+            [
+                {"kind": "shutdown_started"},
+                {"kind": "stdout_closed"},
+                {"kind": "stderr_closed"},
+                {"kind": "worker_sideband_closed"},
+                {"kind": "worker_exited", "code": 0},
+            ],
+        )
 
     @staticmethod
     def stop(process):

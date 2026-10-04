@@ -84,19 +84,19 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
-    resolver: crate::resolver::policy::Settings,
     python: Option<std::path::PathBuf>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
+    resolver: Map<String, Value>,
     target: Option<Target>,
 }
 
 #[derive(Default)]
 pub(crate) struct Captured {
-    pub resolver: crate::resolver::policy::Settings,
     pub python: Option<std::path::PathBuf>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
+    pub resolver: SandboxSettings,
     pub target: Option<Target>,
     pub provider: Provider,
 }
@@ -158,6 +158,9 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
         if project.sandbox.contains_key(field) {
             return Err(format!("{name}: sandbox.{field} is managed by Console"));
         }
+        if project.resolver.contains_key(field) {
+            return Err(format!("{name}: resolver.{field} is managed by Console"));
+        }
     }
     if let Some(profile) = project.extends {
         project.sandbox.insert("extends".into(), profile.into());
@@ -170,7 +173,6 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     let target = project.target.filter(|target| !target.is_local_host());
     let remote_python = target.is_some();
     Ok(Captured {
-        resolver: project.resolver,
         python: project
             .python
             .map(|path| {
@@ -204,6 +206,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .transpose()?,
         source: Some(name),
         policy: project.sandbox,
+        resolver: project.resolver,
         target,
         provider,
     })

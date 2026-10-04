@@ -17,7 +17,7 @@ pub(crate) struct Session {
     languages: crate::cell::Languages,
     pub(crate) blocked: Arc<Mutex<Option<String>>>,
     pub preparation: Option<preparation::Preparation>,
-    discovery: Option<Box<preparation::Discovery>>,
+    discovery: Option<preparation::Discovery>,
 }
 
 impl Session {
@@ -97,7 +97,7 @@ impl Session {
                 .discovery
                 .clone()
                 .map(|discovery| preparation::WorkerEnvironment {
-                    discovery: *discovery,
+                    discovery,
                     r: managed_r.cloned(),
                     python: python.cloned(),
                     native: native.cloned(),
@@ -110,26 +110,18 @@ impl Session {
         &mut self,
         policy: &crate::settings::SandboxSettings,
         python: Option<&std::path::Path>,
-        no_sandbox: bool,
-        settings: crate::resolver::policy::Settings,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<preparation::Discovery, String> {
         let selections = preparation::Selections::from_policy(policy, python)?;
-        let (preparation, discovery) = preparation::Preparation::open(
-            self,
-            selections,
-            no_sandbox,
-            settings,
-            diagnostics,
-            on_started,
-        )?;
+        let (preparation, discovery) =
+            preparation::Preparation::open(self, selections, diagnostics, on_started)?;
         self.preparation = Some(preparation);
         // The session environment owns the current native selection after discovery.
-        self.discovery = Some(Box::new(preparation::Discovery {
+        self.discovery = Some(preparation::Discovery {
             native: None,
             ..discovery.clone()
-        }));
+        });
         Ok(discovery)
     }
 

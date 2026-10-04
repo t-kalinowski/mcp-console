@@ -19,7 +19,24 @@ impl JsonlBuffer {
         self.consumed < self.bytes.len()
     }
 
+    #[cfg(any(unix, test))]
     pub(crate) fn next<T: DeserializeOwned>(&mut self) -> Result<Option<T>, serde_json::Error> {
+        self.decode_next(false)
+    }
+
+    // Windows readers historically decode the delimiter too. Retaining it
+    // preserves serde's line/column diagnostics for malformed or empty frames.
+    #[cfg(windows)]
+    pub(crate) fn next_line<T: DeserializeOwned>(
+        &mut self,
+    ) -> Result<Option<T>, serde_json::Error> {
+        self.decode_next(true)
+    }
+
+    fn decode_next<T: DeserializeOwned>(
+        &mut self,
+        keep_delimiter: bool,
+    ) -> Result<Option<T>, serde_json::Error> {
         let Some(newline) = self.bytes[self.scanned..]
             .iter()
             .position(|byte| *byte == b'\n')
@@ -36,11 +53,16 @@ impl JsonlBuffer {
             }
             return Ok(None);
         };
-        let frame = &self.bytes[self.consumed..newline];
+        let frame = if keep_delimiter {
+            &self.bytes[self.consumed..=newline]
+        } else {
+            let frame = &self.bytes[self.consumed..newline];
+            frame.strip_suffix(b"\r").unwrap_or(frame)
+        };
         // A complete malformed frame is consumed too; preserve its JSON error.
         self.consumed = newline + 1;
         self.scanned = self.consumed;
-        serde_json::from_slice(frame.strip_suffix(b"\r").unwrap_or(frame)).map(Some)
+        serde_json::from_slice(frame).map(Some)
     }
 }
 

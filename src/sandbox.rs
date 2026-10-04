@@ -13,13 +13,6 @@ mod unsupported;
 
 const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
-pub(crate) fn resolver_runner() -> Result<(PathBuf, u32), String> {
-    Ok((
-        installation::private_runner()?,
-        installation::PROTOCOL_VERSION,
-    ))
-}
-
 pub fn capture_settings(
     roots: Vec<PathBuf>,
     overrides: &[String],

@@ -8,18 +8,9 @@ use std::process::Command;
 pub(crate) struct ManagedPython {
     pub(super) python: PathBuf,
     pub(super) requirements: crate::worker_protocol::PythonRequirementManifest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) native: Option<Box<crate::python::NativePython>>,
 }
 
 impl ManagedPython {
-    pub(crate) fn native(&self) -> Option<&crate::python::NativePython> {
-        self.native.as_deref()
-    }
-    pub(crate) fn set_native(&mut self, native: crate::python::NativePython) {
-        self.native = Some(Box::new(native));
-    }
-
     pub(crate) fn configure_worker(&self, command: &mut Command) {
         command.env("RETICULATE_PYTHON", "managed");
         command.env(
@@ -56,8 +47,6 @@ pub(crate) struct ManagedR {
     #[serde(skip)]
     pub(super) rscript: PathBuf,
     pub(super) requirements: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) extension_directory: Option<PathBuf>,
 }
 impl ManagedR {
     #[cfg(any(unix, windows))]
@@ -72,28 +61,7 @@ impl ManagedR {
                 self.library.display()
             ));
         }
-        // Keep the accepted library first and preserve ambient worker-library
-        // precedence before resolver bootstrap libraries.
-        let mut libraries = vec![self.library.clone()];
-        if let Some(inherited) = std::env::var_os("R_LIBS") {
-            for path in std::env::split_paths(&inherited) {
-                if !path.as_os_str().is_empty() && !libraries.contains(&path) {
-                    libraries.push(path);
-                }
-            }
-        }
-        for path in self.library_paths() {
-            if !libraries.contains(&path) {
-                libraries.push(path);
-            }
-        }
-        command.env(
-            "R_LIBS",
-            std::env::join_paths(libraries).map_err(|e| e.to_string())?,
-        );
-        if let Some(directory) = &self.extension_directory {
-            command.env("MCP_CONSOLE_EXTENSION_DIRECTORY", directory);
-        }
+        command.env("R_LIBS", &self.r_libs);
         Ok(())
     }
 
@@ -110,12 +78,6 @@ impl ManagedR {
         &self.library
     }
 
-    pub(crate) fn library_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        std::env::split_paths(&self.r_libs)
-    }
-    pub(crate) fn extension_directory(&self) -> Option<&Path> {
-        self.extension_directory.as_deref()
-    }
     #[cfg(any(unix, windows))]
     pub(crate) fn rscript(&self) -> &Path {
         &self.rscript

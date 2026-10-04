@@ -16,12 +16,12 @@ send:
 result:
   content:
     - type: text
-      text: dependency resolution interrupted
+      text: managed Python cache warmup interrupted
   isError: true
 ---
 send:
   control: interrupt
-  timeout_ms: 0
+  timeout_ms: 30000
 result:
   content:
     - type: text

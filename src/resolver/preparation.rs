@@ -71,37 +71,6 @@ pub(crate) struct Discovery {
     pub local_has_uv: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<NativeDiscovery>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub protected: Vec<std::path::PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lease: Option<std::path::PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extension_directory: Option<std::path::PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matplotlib_cache: Option<std::path::PathBuf>,
-}
-
-#[cfg(unix)]
-impl Discovery {
-    pub(crate) fn protect_worker(
-        &self,
-        policy: &mut crate::settings::SandboxSettings,
-        workspace: &std::path::Path,
-    ) -> Result<(), String> {
-        crate::resolver::broker::protect_worker(policy, workspace, &self.protected)?;
-        if let Some(cache) = &self.matplotlib_cache
-            && let Some(environment) = policy
-                .entry("environment")
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-        {
-            environment.insert(
-                "MCP_CONSOLE_MATPLOTLIB_CACHE".into(),
-                serde_json::json!(cache),
-            );
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -114,10 +83,6 @@ pub(crate) struct NativeDiscovery {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Operation {
-    Discover {
-        mode: Mode,
-        local: bool,
-    },
     Bootstrap,
     ResolveRStandalone {
         requirements: Vec<String>,
@@ -178,13 +143,6 @@ enum Input {
         selections: Selections,
         #[serde(default, skip_serializing_if = "Mode::is_r")]
         mode: Mode,
-        #[cfg(unix)]
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        launch: Option<Box<crate::resolver::broker::Launch>>,
-        #[serde(default)]
-        no_sandbox: bool,
-        #[serde(default)]
-        settings: crate::resolver::policy::Settings,
     },
     Run {
         id: u64,

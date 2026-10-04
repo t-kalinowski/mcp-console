@@ -3,7 +3,7 @@ messages:
   - Completed:
       id: 1
       result:
-        Err: dependency resolution cancelled
+        Err: managed Python version resolution cancelled
       control: Cancelled
       confirmed: true
   - Closed

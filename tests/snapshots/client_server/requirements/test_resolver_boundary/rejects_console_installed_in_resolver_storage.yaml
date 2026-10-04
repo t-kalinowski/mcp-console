@@ -1,4 +1,0 @@
----
-error: |-
-  Console and its native runner must be installed outside resolver storage
-  local resolver retirement is unconfirmed: resolver input closed; resolver input closed

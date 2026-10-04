@@ -19,17 +19,15 @@ from support.suites import run_this_suite
 from support.requirements import command, requires
 from support.resolvers import (
     checkpoint_uv_environment,
-    resolver_fixture_directory,
-    resolver_fixture_arguments,
     ir_run_records,
     recording_uv_environment,
     uv_python_row,
     write_uv_python_inventories,
 )
-from support.checkpoints import FifoCheckpoint
 from boundaries.client_server.requirements.test_r_automatic import (
     recording_fixture_r_environment,
 )
+from support.checkpoints import FifoCheckpoint
 
 
 def inspect(client: McpClient) -> dict:
@@ -244,15 +242,11 @@ def test_inspection_validation(binary: Path, execution: Execution) -> Transcript
 def test_inspection_during_input_and_replacement_resolution(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with tempfile.TemporaryDirectory() as directory:
         environment, started, release = checkpoint_uv_environment(
             Path(directory), "six"
         )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         try:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"})
@@ -294,23 +288,16 @@ def test_inspection_during_input_and_replacement_resolution(
 def test_interrupted_replacement_preserves_worker(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with tempfile.TemporaryDirectory() as directory:
         temporary = Path(directory)
         environment, started, release = checkpoint_uv_environment(temporary, "six")
-        interrupt_checkpoints = []
-        if execution == DIRECT:
-            interrupted = FifoCheckpoint.create(temporary / "interrupted")
-            interrupt_release = FifoCheckpoint.create(temporary / "interrupt-release")
-            interrupt_checkpoints = [interrupted, interrupt_release]
-            environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(interrupted.path)
-            environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
-                interrupt_release.path
-            )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
+        interrupted = FifoCheckpoint.create(temporary / "interrupted")
+        interrupt_release = FifoCheckpoint.create(temporary / "interrupt-release")
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(interrupted.path)
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
+            interrupt_release.path
         )
+        client = McpClient(binary, execution.serve(), environment)
         try:
             client.initialize_and_list_tools()
             client.expect(
@@ -326,16 +313,18 @@ def test_interrupted_replacement_preserves_worker(
             started.wait("replacement resolver")
             assert inspect(client) == old
             interrupt = client.start_send(control="interrupt")
-            if execution == DIRECT:
-                interrupted.wait("interrupted replacement resolver", timeout=30)
-                assert inspect(client) == old
-                interrupt_release.release()
+            # Signal handling is a checkpoint, not a scheduling benchmark.
+            interrupted.wait("interrupted replacement resolver", timeout=30)
+            assert inspect(client) == old
+            interrupt_release.release()
             client.receive(pending)
             client.receive(interrupt)
             assert pending["result"].get("isError"), pending
-            assert pending["result"]["content"][0]["text"] == (
-                "[dependency resolution interrupted]"
-            ), pending
+            error = pending["result"]["content"][0]["text"]
+            assert "managed Python resolution failed" in error, pending
+            pending["result"]["content"][0]["text"] = normalize_python_resolution_error(
+                error
+            )
             assert inspect(client) == old
             client.send(python="marker, os.getpid() == pid")
             assert last_tool_text(client) == "(42, True)\n"
@@ -344,7 +333,7 @@ def test_interrupted_replacement_preserves_worker(
             return client.finish()
         finally:
             stop_client(client)
-            for checkpoint in (started, release, *interrupt_checkpoints):
+            for checkpoint in (started, release, interrupted, interrupt_release):
                 checkpoint.close()
 
 
@@ -353,7 +342,7 @@ def test_interrupted_replacement_preserves_worker(
 def test_r_duckdb_replacement_failure_and_reset(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as directory:
+    with tempfile.TemporaryDirectory() as directory:
         environment, record = recording_fixture_r_environment(
             Path(directory), ("mcpcleared",)
         )
@@ -386,11 +375,7 @@ def test_r_duckdb_replacement_failure_and_reset(
         rscript.write_text(f"#!{sys.executable}\n{capture}")
         rscript.chmod(0o755)
         environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = "missing.fixture"
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        ) as client:
+        with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             startup = inspect(client)
             assert startup["prepared"] is True
@@ -507,19 +492,13 @@ def test_large_manifest_round_trip(binary: Path, execution: Execution) -> Transc
 def test_records_requirement_boundaries(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as directory,
-        resolver_fixture_directory(binary, execution) as fixtures,
-    ):
+    with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
-        environment, _ = recording_uv_environment(fixtures)
-        inventories = fixtures / "uv-python-inventories.json"
+        environment, _ = recording_uv_environment(workspace)
+        inventories = workspace / "uv-python-inventories.json"
         environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
         with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-            current_directory=workspace,
+            binary, execution.serve(), environment, current_directory=workspace
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"}, python="first_environment = 1")

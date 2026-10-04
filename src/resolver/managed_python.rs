@@ -7,7 +7,8 @@ use serde::Serialize;
 use super::ManagedPython;
 
 use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, resolver_command,
+    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
+    resolver_command,
 };
 
 const PYTHON_PATH_SOURCE: &str = r#"
@@ -25,6 +26,15 @@ struct ResolverInput<'a> {
     python_version: Vec<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     exclude_newer: Option<&'a str>,
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn resolve_python_manifest(
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+    configuration: &super::ManagedPythonResolverConfiguration,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<ManagedPython, String> {
+    resolve_python_manifest_with_r(requirements, configuration, None, None, on_started)
 }
 
 pub(crate) fn resolve_python_manifest_for_remote(
@@ -128,7 +138,6 @@ uv output:
     warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,
-        native: None,
         requirements,
     })
 }
@@ -416,12 +425,15 @@ fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let (mut child, stdout, stderr) = resolver.spawn(&mut command).map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()
         )
     })?;
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
+    resolver.watch_exit(child.id());
     if let Some(on_started) = on_started.take()
         && let Err(error) = on_started(resolver.stop_handle())
     {

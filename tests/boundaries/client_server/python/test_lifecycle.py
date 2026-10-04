@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -22,7 +23,6 @@ from support.python import runtime_source_line
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
-from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
 from support.suites import run_this_suite
 
 
@@ -31,21 +31,19 @@ def test_rejects_python_preparation_while_evaluation_is_running(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as temporary:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
         uv_record = temporary / "uv-record.jsonl"
         environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
         # fmt: python
         python = code("""
@@ -55,7 +53,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         client.send(python=python)
         assert last_result_text(client) == (
             '[input requested: "preparation gate> "]\n[waiting for stdin]'
-        ), client.transcript[-1]
+        )
         uv_record.write_text("", encoding="utf-8")
 
         preparation_returned = threading.Event()
@@ -675,23 +673,27 @@ def test_dispatch_does_not_mutate_python_globals(
 def test_interrupts_live_python_resolver(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
         environment, uv_started, uv_release = checkpoint_uv_environment(
-            resolver_fixtures, "mcp-console-blocked-live-preparation"
+            temporary, "mcp-console-blocked-live-preparation"
+        )
+        uv_interrupted = FifoCheckpoint.create(temporary / "uv-interrupted")
+        uv_interrupt_release = FifoCheckpoint.create(temporary / "uv-interrupt-release")
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPTED"] = str(uv_interrupted.path)
+        environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
+            uv_interrupt_release.path
         )
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(
-                binary,
-                execution.serve(*resolver_fixture_arguments(environment)),
-                environment,
-            )
+            client = McpClient(binary, execution.serve(), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         passed = False
+        interrupt_released = False
         try:
             client.initialize_and_list_tools()
             client.send(r="resolver_interrupt_state <- 41L")
@@ -703,18 +705,32 @@ def test_interrupts_live_python_resolver(
             )
             uv_started.wait("live Python preparation")
 
-            interrupt = client.start_send(control="interrupt")
-            client.receive_many([preparation, interrupt])
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
+            uv_interrupted.wait("live Python resolver interrupt")
+            readable, _, _ = select.select([client.stdout], [], [], 10)
+            assert client.stdout in readable, (
+                "control-only interrupt waited for Python preparation to settle"
+            )
+            client.receive(interrupt)
             assert interrupt["result"] == {
-                "content": [{"type": "text", "text": "\n[idle]"}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "\n[running; poll with an empty send]",
+                    }
+                ],
                 "isError": False,
             }, interrupt
-            assert preparation["result"] == {
-                "content": [
-                    {"type": "text", "text": "dependency resolution interrupted"}
-                ],
-                "isError": True,
-            }, preparation
+
+            uv_interrupt_release.release()
+            interrupt_released = True
+            client.receive(preparation)
+            assert preparation["result"]["isError"] is True, preparation
+            error = preparation["result"]["content"][0]["text"]
+            assert "managed Python resolution" in error, error
+            preparation["result"]["content"][0]["text"] = (
+                "managed Python resolution cancelled by interrupt"
+            )
 
             client.send()
             assert last_result_text(client) == "\n[idle]"
@@ -730,9 +746,13 @@ def test_interrupts_live_python_resolver(
             passed = True
             return transcript
         finally:
+            if not interrupt_released:
+                uv_interrupt_release.release()
             uv_release.release()
             uv_started.close()
             uv_release.close()
+            uv_interrupted.close()
+            uv_interrupt_release.close()
             if not passed:
                 stop_client(client)
 
@@ -741,15 +761,12 @@ def test_interrupts_live_python_resolver(
 def test_restart_cancels_live_python_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as resolver_fixtures:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
         environment, uv_started, uv_release = checkpoint_uv_environment(
-            resolver_fixtures, "mcp-console-blocked-live-preparation"
+            temporary, "mcp-console-blocked-live-preparation"
         )
-        client = McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        )
+        client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()

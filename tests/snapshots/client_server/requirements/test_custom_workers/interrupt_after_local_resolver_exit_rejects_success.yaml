@@ -8,7 +8,7 @@ send:
 result:
   content:
     - type: text
-      text: dependency resolution interrupted
+      text: local resolver interrupted
   isError: true
 ---
 send:

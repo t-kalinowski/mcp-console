@@ -471,14 +471,7 @@ def test_inherits_explicit_matplotlib_config(
         transcript = client.finish()
         assert explicit_rc.read_text(encoding="utf-8") == "lines.linewidth: 8.25\n"
         assert not list(explicit.glob("fontlist-v*.json"))
-        cache = (
-            temporary / "host-cache/mcp-console/resolver/payload/matplotlib"
-            if execution == SANDBOXED
-            else inherited
-        )
-        if execution == SANDBOXED:
-            assert not list(inherited.glob("fontlist-v*.json"))
-        caches = list(cache.glob("fontlist-v*.json"))
+        caches = list(inherited.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(
@@ -588,14 +581,7 @@ def inherits_matplotlib_config(
         assert output == "(True, 9.25)\n", repr(output)
         transcript = client.finish()
         assert matplotlibrc.read_text(encoding="utf-8") == "lines.linewidth: 9.25\n"
-        cache = (
-            cache_root / "mcp-console/resolver/payload/matplotlib"
-            if execution == SANDBOXED
-            else font_cache
-        )
-        if execution == SANDBOXED:
-            assert not list(font_cache.glob("fontlist-v*.json"))
-        caches = list(cache.glob("fontlist-v*.json"))
+        caches = list(font_cache.glob("fontlist-v*.json"))
         assert len(caches) == 1, caches
         assert not list(
             (temporary / "host-cache" / "mcp-console" / "matplotlib").glob(

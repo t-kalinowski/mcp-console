@@ -19,11 +19,11 @@ from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import OLD_PYTHON, SYSTEM_PYTHON, requires
-from support.resolvers import resolver_fixture_arguments, resolver_fixture_directory
 from support.requirements import (
+    OLD_PYTHON,
     OLD_PYTHON_EXECUTABLE,
     PROCESS_EVENTS,
+    requires,
 )
 from support.requirements import R
 from support.suites import run_this_suite
@@ -397,7 +397,7 @@ def test_compacts_native_duckdb_progress_bar(
             McpClient(
                 binary,
                 execution.serve(
-                    *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
                 ),
                 no_r_environment(root),
                 current_directory=root,
@@ -455,7 +455,7 @@ def test_compacts_native_duckdb_progress_bar(
                 "elapsed": "omitted",
                 "trailing_progress_padding": "omitted",
             }
-            return client.finish()[3:]
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -525,18 +525,16 @@ def test_uses_200_column_default_after_r_initializes_python(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_prints_requirements_with_captured_resolver_configuration(
+@requires(R)
+def test_prints_requirements_with_host_uv_cache(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with (
-        tempfile.TemporaryDirectory() as temporary_directory,
-        resolver_fixture_directory(binary, execution) as resolver_directory,
-    ):
+    with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         environment = os.environ.copy()
         trusted_cache = temporary / "trusted-uv-cache"
         worker_cache = temporary / "worker-uv-cache"
-        uv_record = resolver_directory / "uv-environment.jsonl"
+        uv_record = temporary / "uv-environment.jsonl"
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
         environment["RETICULATE_UV"] = str(
@@ -550,7 +548,7 @@ def test_prints_requirements_with_captured_resolver_configuration(
         environment["UV_OFFLINE"] = "1"
         client = McpClient(
             binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
+            execution.serve(),
             environment,
             current_directory=temporary,
         )
@@ -582,11 +580,7 @@ def test_prints_requirements_with_captured_resolver_configuration(
         ]
         assert records, "runtime managed resolution did not invoke uv"
         expected = {
-            "UV_CACHE_DIR": str(
-                resolver_directory.parent / "uv/cache"
-                if execution == SANDBOXED
-                else trusted_cache
-            ),
+            "UV_CACHE_DIR": str(trusted_cache),
             "UV_DEFAULT_INDEX": "https://pypi.org/simple",
             "UV_OFFLINE": None,
         }

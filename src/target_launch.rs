@@ -1,6 +1,6 @@
 #![cfg_attr(not(unix), allow(dead_code))]
 //! Versioned target bootstrap and envelope around unchanged relay JSONL.
-use crate::resolver::preparation;
+use crate::ssh::preparation;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::path::PathBuf;

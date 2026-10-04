@@ -3,7 +3,9 @@ use std::process::Stdio;
 
 use serde::Serialize;
 
-use super::process::{ResolverProcess, ResolverStopHandle, resolver_command, write_input};
+use super::process::{
+    ResolverProcess, ResolverStopHandle, read_output, resolver_command, write_input,
+};
 
 const SOURCE: &str = include_str!("programs/duckdb_extensions.py");
 
@@ -32,14 +34,17 @@ pub(crate) fn resolve_python_duckdb_extensions(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let resolver = ResolverProcess::new();
-    let (mut child, stdout, stderr) = resolver.spawn(&mut command).map_err(|error| {
+    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",
             python.display()
         )
     })?;
+    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
+    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
     let stdin = child.stdin.take().expect("resolver stdin is piped");
+    let resolver = ResolverProcess::new();
+    resolver.watch_exit(child.id());
     if let Err(error) = on_started(resolver.stop_handle()) {
         resolver
             .abort(&mut child, python, "DuckDB extension")

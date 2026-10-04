@@ -16,6 +16,9 @@ mod send;
 mod events;
 
 #[cfg(any(unix, windows))]
+mod transport;
+
+#[cfg(any(unix, windows))]
 #[path = "worker_client/process.rs"]
 mod platform;
 
@@ -146,13 +149,13 @@ struct WorkerSpec<'a> {
     relay: Option<&'a std::path::Path>,
     no_sandbox: bool,
     sandbox_settings: &'a crate::settings::SandboxSettings,
+    duckdb_extension_directory: Option<&'a std::path::Path>,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
     local_runtime: Option<&'a crate::local_runtime::Selection>,
     target: Option<&'a crate::target_session::Session>,
-    resolver_lease: Option<&'a std::path::Path>,
 }
 
 struct IdleResponseSnapshot {
