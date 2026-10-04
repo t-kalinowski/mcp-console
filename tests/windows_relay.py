@@ -253,6 +253,22 @@ class WindowsRelay(unittest.TestCase):
                     events,
                 )
 
+    def test_framing_malformed_complete_commands_keep_diagnostics(self):
+        for frame in (b'{"kind":\n', b"\r\n"):
+            with self.subTest(frame=frame):
+                process, _, _, marker = self.start("commands")
+                process.stdin.write(frame)
+                process.stdin.flush()
+                events = self.finish(process)
+                self.assertIn(
+                    {
+                        "kind": "fatal",
+                        "message": "relay stdin frame is invalid: EOF while parsing a value at line 2 column 0",
+                    },
+                    events,
+                )
+                self.assertFalse(marker.exists())
+
     def test_framing_builtin_retains_partial_command_across_interrupt(self):
         process, _, _, _ = self.start("framing_interrupt")
         events, reader = self.framing_reader(process)
@@ -283,7 +299,16 @@ class WindowsRelay(unittest.TestCase):
         process.stdin.write(b'{"kind":"shutdown","grace_millis":1000}\n')
         process.stdin.flush()
         tail = self.framing_finish(process, events, reader)
-        self.assertNotIn("fatal", [event["kind"] for event in tail])
+        self.assertEqual(
+            tail,
+            [
+                {"kind": "shutdown_started"},
+                {"kind": "stdout_closed"},
+                {"kind": "stderr_closed"},
+                {"kind": "worker_sideband_closed"},
+                {"kind": "worker_exited", "code": 0},
+            ],
+        )
 
     @staticmethod
     def stop(process):

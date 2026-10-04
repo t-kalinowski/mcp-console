@@ -162,6 +162,24 @@ def test_unterminated_commands_are_never_dispatched(binary: Path) -> Transcript:
 
 
 @requires(WORKER)
+def test_malformed_complete_commands_keep_diagnostics(binary: Path) -> Transcript:
+    transcript: Transcript = []
+    for frame, diagnostic in (
+        (b'{"kind":\n', "EOF while parsing a value at line 1 column 8"),
+        (b"\r\n", "EOF while parsing a value at line 1 column 0"),
+    ):
+        with framing_relay(binary, "commands") as (process, root, _):
+            events = finish(process, frame)
+            assert {
+                "kind": "fatal",
+                "message": f"relay stdin frame is invalid: {diagnostic}",
+            } in events, events
+            assert not (root / "dispatched").exists()
+            transcript.append({"frame": frame.decode(), "events": events})
+    return transcript
+
+
+@requires(WORKER)
 def test_malformed_complete_frames_keep_diagnostics(binary: Path) -> Transcript:
     transcript: Transcript = []
     for mode, diagnostic in (
