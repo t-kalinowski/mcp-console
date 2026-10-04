@@ -2,6 +2,7 @@
 
 import os
 import json
+import re
 import shutil
 import functools
 import http.server
@@ -411,6 +412,16 @@ def test_cold_r_python_and_duckdb_storage(binary: Path) -> Transcript:
             assert progress.startswith(prefix) and "Resolving" in progress, error
             assert "Could not solve package dependencies" in diagnostic, error
             assert "mcpconsolenosuchpackage" in diagnostic, error
+            requirements_input = re.search(
+                r"(?m)^\* deps::(.+): Can't install dependency mcpconsolenosuchpackage$",
+                diagnostic,
+            )
+            assert requirements_input is not None, diagnostic
+            requirements_path = Path(requirements_input[1])
+            assert requirements_path.is_relative_to(payload), requirements_path
+            diagnostic = diagnostic.replace(
+                str(requirements_path), "<resolver-requirements>"
+            )
             # ir forces pak's progress display on. Its cache messages, elapsed
             # times and animation ticks vary; preserve the complete error below.
             client.transcript[-1]["result"]["content"][0]["text"] = (
@@ -422,7 +433,8 @@ def test_cold_r_python_and_duckdb_storage(binary: Path) -> Transcript:
             client.transcript[-1]["transcript_normalization"] = {
                 "target": "result.content[0].text",
                 "replacements": {
-                    "cache_dependent_installer_progress": "<cache-dependent installer progress>"
+                    "cache_dependent_installer_progress": "<cache-dependent installer progress>",
+                    "resolver_requirements_input": "<resolver-requirements>",
                 },
             }
             client.send(python="assert id(retained) == retained_id; print('preserved')")

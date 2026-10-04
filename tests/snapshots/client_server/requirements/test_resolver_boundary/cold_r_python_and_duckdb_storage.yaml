@@ -62,7 +62,7 @@ result:
         ! error in pak subprocess
         Caused by error: 
         ! Could not solve package dependencies:
-        * deps::/private/var/folders/bg/pzsh15_96957bg6ylzt60tyc0000gp/T/tmp5atetzg_/cache/mcp-console/resolver/payload/sandbox-J6jLca/data/Rtmp5rJOJZ/ir-requirements-17e786a3bfc8e: Can't install dependency mcpconsolenosuchpackage
+        * deps::<resolver-requirements>: Can't install dependency mcpconsolenosuchpackage
         * mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.
         ---
         Backtrace:
@@ -89,6 +89,7 @@ transcript_normalization:
   target: result.content[0].text
   replacements:
     cache_dependent_installer_progress: <cache-dependent installer progress>
+    resolver_requirements_input: <resolver-requirements>
 ---
 send:
   python: assert id(retained) == retained_id; print('preserved')
