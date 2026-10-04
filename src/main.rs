@@ -13,7 +13,7 @@ mod docker;
 mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod jsonl;
 mod local_runtime;
 #[cfg(unix)]
@@ -42,7 +42,6 @@ mod server;
 mod server_transport;
 mod settings;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "sideband/windows.rs")]
 mod sideband;
 #[cfg(any(unix, windows))]
 mod sql;
