@@ -191,7 +191,9 @@ class WindowsResolver(unittest.TestCase):
         )
         self.assertIn("fixture resolver failure", result["result"]["Err"])
 
-    def blocked_resolver(self, mode="blocked"):
+    def blocked_resolver(
+        self, mode: str = "blocked"
+    ) -> tuple[Resolver, dict[int, int]]:
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -215,30 +217,39 @@ class WindowsResolver(unittest.TestCase):
         connection, _ = listener.accept()
         with connection, connection.makefile() as input:
             pids = [int(pid) for pid in input.readline().split()]
-        return resolver, pids
+            self.assertEqual(len(pids), 2)
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = [
+                ctypes.c_uint32,
+                ctypes.c_int,
+                ctypes.c_uint32,
+            ]
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            processes: dict[int, int] = {}
+            for pid in pids:
+                handle = kernel.OpenProcess(0x100000, 0, pid)
+                self.assertTrue(handle, ctypes.get_last_error())
+                self.addCleanup(kernel.CloseHandle, handle)
+                processes[pid] = handle
+            # Pin both identities before permitting normal exit or sending a
+            # control. Reopening PIDs after retirement can observe their reuse.
+            connection.sendall(b"\x01")
+        return resolver, processes
 
-    def assert_retired(self, pids):
+    def assert_retired(self, processes: dict[int, int]) -> None:
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        kernel.OpenProcess.restype = ctypes.c_void_p
         kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-        for pid in pids:
-            handle = kernel.OpenProcess(0x100000, 0, pid)
-            if handle:
-                try:
-                    self.assertEqual(
-                        kernel.WaitForSingleObject(handle, 0),
-                        0,
-                        f"resolver process {pid} survived completion",
-                    )
-                finally:
-                    kernel.CloseHandle(handle)
-            else:
-                self.assertEqual(ctypes.get_last_error(), 87)
+        kernel.WaitForSingleObject.restype = ctypes.c_uint32
+        for pid, handle in processes.items():
+            self.assertEqual(
+                kernel.WaitForSingleObject(handle, 0),
+                0,
+                f"resolver process {pid} survived completion",
+            )
 
     def test_interrupt_confirms_descendant_retirement(self):
-        resolver, pids = self.blocked_resolver()
+        resolver, processes = self.blocked_resolver()
         resolver.send({"Control": {"id": 1, "control": "Interrupted"}})
         self.assertEqual(
             resolver.receive(), {"Controlled": {"id": 1, "result": {"Ok": True}}}
@@ -247,7 +258,7 @@ class WindowsResolver(unittest.TestCase):
         self.assertTrue(completed["confirmed"], completed)
         self.assertEqual(completed["control"], "Interrupted")
         self.assertIn("Err", completed["result"])
-        self.assert_retired(pids)
+        self.assert_retired(processes)
         # A settled interrupt belongs to the old operation; a later call works.
         self.assertEqual(
             resolver.run(2, {"PythonVersion": {"constraints": []}})["result"],
@@ -255,10 +266,10 @@ class WindowsResolver(unittest.TestCase):
         )
 
     def test_eof_cancels_resolver_and_descendants(self):
-        resolver, pids = self.blocked_resolver()
+        resolver, processes = self.blocked_resolver()
         resolver.process.stdin.close()
         resolver.process.wait(timeout=10)
-        self.assert_retired(pids)
+        self.assert_retired(processes)
 
     def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
         # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
@@ -298,8 +309,6 @@ class WindowsResolver(unittest.TestCase):
             ctypes.c_uint32,
         ]
         kernel.ContinueDebugEvent.argtypes = [ctypes.c_uint32] * 3
-        kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        kernel.OpenProcess.restype = ctypes.c_void_p
         kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         kernel.CloseHandle.argtypes = [ctypes.c_void_p]
 
@@ -319,11 +328,8 @@ class WindowsResolver(unittest.TestCase):
 
         for action in ("Cancelled", "Close"):
             with self.subTest(action=action):
-                resolver, pids = self.blocked_resolver()
-                pid = pids[0]
-                handle = kernel.OpenProcess(0x100000, 0, pid)
-                checked(handle)
-                self.addCleanup(kernel.CloseHandle, handle)
+                resolver, processes = self.blocked_resolver()
+                pid, handle = next(iter(processes.items()))
                 checked(kernel.DebugActiveProcess(pid))
                 held = None
                 try:
@@ -367,14 +373,14 @@ class WindowsResolver(unittest.TestCase):
                     else:
                         checked(kernel.DebugActiveProcessStop(pid))
                 self.assertEqual(kernel.WaitForSingleObject(handle, 10000), 0)
-                self.assert_retired(pids)
+                self.assert_retired(processes)
 
     def test_success_retires_descendant_holding_output(self):
-        resolver, pids = self.blocked_resolver("exited")
+        resolver, processes = self.blocked_resolver("exited")
         completed = resolver.receive()["Completed"]
         self.assertTrue(completed["confirmed"], completed)
         self.assertIn("Ok", completed["result"])
-        self.assert_retired(pids)
+        self.assert_retired(processes)
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows materialization")

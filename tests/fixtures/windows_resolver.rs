@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::Command;
 
@@ -24,6 +24,11 @@ fn main() {
             let child = Command::new(&program).arg("--descendant").spawn().unwrap();
             let mut gate = TcpStream::connect(gate).unwrap();
             writeln!(gate, "{} {}", std::process::id(), child.id()).unwrap();
+            // The acceptance owner pins both process handles before allowing
+            // this resolver to exit or sending it a control.
+            let mut ready = [0];
+            gate.read_exact(&mut ready).unwrap();
+            assert_eq!(ready, [1]);
             if std::env::var("TEST_RESOLVER_MODE").unwrap() == "blocked" {
                 std::thread::park();
             }
