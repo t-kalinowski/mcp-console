@@ -127,6 +127,9 @@ def test_initializes_and_lists_tools(
         companions["workspace.yaml"] = _initializes_and_lists_tools(
             binary, execution, workspace_profile=True
         )
+        companions["python-workspace.yaml"] = _initializes_and_lists_tools(
+            binary, execution, python_only=True, workspace_profile=True
+        )
     companions["ssh.yaml"] = _initializes_and_lists_tools(
         binary, execution, bare=True, workspace_profile=True, ssh=True
     )
@@ -242,6 +245,14 @@ def _initializes_and_lists_tools(
                 assert "separate native resolver sandbox" in description, description
                 assert "read-only to the worker" in description, description
                 assert "runs outside the sandbox" not in description, description
+                if workspace_profile:
+                    assert "resolver storage, and Console's installation" in description
+                    assert "Explicit native rules can override" not in description
+                if ssh:
+                    assert "remote resolver" in description, description
+                    assert (
+                        "remote account's trusted setup permissions" not in description
+                    )
             control = send["inputSchema"]["properties"]["control"]
             assert control["type"] == "string", control
             assert control["enum"] == ["interrupt", "restart"], control
@@ -260,6 +271,11 @@ def _initializes_and_lists_tools(
             send_requirements = send["inputSchema"]["properties"]["requirements"]
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
+            assert (
+                "resolver's execution environment, described above"
+                in (send_requirements["description"])
+            )
+            assert "server permissions" not in send_requirements["description"]
             requirement_properties = send_requirements["properties"]
             assert requirement_properties.keys() == {
                 "action",
@@ -283,6 +299,17 @@ def _initializes_and_lists_tools(
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
+            assert (
+                "resolver's extension cache"
+                in requirement_properties["duckdb"]["description"]
+            )
+            assert (
+                "server permissions" not in requirement_properties["r"]["description"]
+            )
+            assert (
+                "can import packages for inspection"
+                in requirement_properties["python"]["description"]
+            )
             # Inspection does not wait for preparation; it must leave the
             # configured schema unchanged. Keep the handshake-only snapshot.
             transcript = list(client.transcript)

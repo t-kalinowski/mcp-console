@@ -35,14 +35,13 @@ description: >-
   Evaluated code uses the native ":workspace" profile: it can edit files beneath
   the fixed launch workspace, write in the worker's private temporary directory
   and to explicitly allowed paths, and cannot directly access the network. The
-  workspace's .git, .agents, .codex, and .claude paths are readable and
-  protected from writes by default. Explicit native rules can override these
-  defaults or restrict reads. Dependency preparation, when available, runs in a
-  separate native resolver sandbox. Package code can write only to Console-owned
-  resolver storage. Package downloads use a managed proxy restricted to trusted
-  destinations; installer coordination permits loopback sockets (including host
-  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
-  are read-only to the worker.
+  workspace's .git, .agents, .codex, and .claude paths, resolver storage, and
+  Console's installation are protected from writes. Dependency preparation, when
+  available, runs in a separate native resolver sandbox. Package code can write
+  only to Console-owned resolver storage. Package downloads use a managed proxy
+  restricted to trusted destinations; installer coordination permits loopback
+  sockets (including host loopback services and DNS on macOS). Prepared
+  artifacts remain untrusted and are read-only to the worker.
 ---
 configuration: :workspace restricted (mapping)
 description: >-
@@ -80,14 +79,13 @@ description: >-
   Evaluated code uses the native ":workspace" profile: it can edit files beneath
   the fixed launch workspace, write in the worker's private temporary directory
   and to explicitly allowed paths, and cannot directly access the network. The
-  workspace's .git, .agents, .codex, and .claude paths are readable and
-  protected from writes by default. Explicit native rules can override these
-  defaults or restrict reads. Dependency preparation, when available, runs in a
-  separate native resolver sandbox. Package code can write only to Console-owned
-  resolver storage. Package downloads use a managed proxy restricted to trusted
-  destinations; installer coordination permits loopback sockets (including host
-  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
-  are read-only to the worker.
+  workspace's .git, .agents, .codex, and .claude paths, resolver storage, and
+  Console's installation are protected from writes. Dependency preparation, when
+  available, runs in a separate native resolver sandbox. Package code can write
+  only to Console-owned resolver storage. Package downloads use a managed proxy
+  restricted to trusted destinations; installer coordination permits loopback
+  sockets (including host loopback services and DNS on macOS). Prepared
+  artifacts remain untrusted and are read-only to the worker.
 ---
 configuration: :workspace enabled (string)
 description: >-
@@ -125,14 +123,13 @@ description: >-
   Evaluated code uses the native ":workspace" profile: it can edit files beneath
   the fixed launch workspace, write in the worker's private temporary directory
   and to explicitly allowed paths, and can directly access the network. The
-  workspace's .git, .agents, .codex, and .claude paths are readable and
-  protected from writes by default. Explicit native rules can override these
-  defaults or restrict reads. Dependency preparation, when available, runs in a
-  separate native resolver sandbox. Package code can write only to Console-owned
-  resolver storage. Package downloads use a managed proxy restricted to trusted
-  destinations; installer coordination permits loopback sockets (including host
-  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
-  are read-only to the worker.
+  workspace's .git, .agents, .codex, and .claude paths, resolver storage, and
+  Console's installation are protected from writes. Dependency preparation, when
+  available, runs in a separate native resolver sandbox. Package code can write
+  only to Console-owned resolver storage. Package downloads use a managed proxy
+  restricted to trusted destinations; installer coordination permits loopback
+  sockets (including host loopback services and DNS on macOS). Prepared
+  artifacts remain untrusted and are read-only to the worker.
 ---
 configuration: :workspace enabled (mapping)
 description: >-
@@ -170,14 +167,13 @@ description: >-
   Evaluated code uses the native ":workspace" profile: it can edit files beneath
   the fixed launch workspace, write in the worker's private temporary directory
   and to explicitly allowed paths, and can directly access the network. The
-  workspace's .git, .agents, .codex, and .claude paths are readable and
-  protected from writes by default. Explicit native rules can override these
-  defaults or restrict reads. Dependency preparation, when available, runs in a
-  separate native resolver sandbox. Package code can write only to Console-owned
-  resolver storage. Package downloads use a managed proxy restricted to trusted
-  destinations; installer coordination permits loopback sockets (including host
-  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
-  are read-only to the worker.
+  workspace's .git, .agents, .codex, and .claude paths, resolver storage, and
+  Console's installation are protected from writes. Dependency preparation, when
+  available, runs in a separate native resolver sandbox. Package code can write
+  only to Console-owned resolver storage. Package downloads use a managed proxy
+  restricted to trusted destinations; installer coordination permits loopback
+  sockets (including host loopback services and DNS on macOS). Prepared
+  artifacts remain untrusted and are read-only to the worker.
 ---
 configuration: :read-only restricted (string)
 description: >-

@@ -295,9 +295,14 @@ fn description(policy: &SandboxSettings, no_sandbox: bool, target: Option<&Targe
         }
         _ => "has network access governed by the launcher's sandbox settings",
     };
+    let workspace_protection = if cfg!(unix) && matches!(kind, None | Some("host")) {
+        "The workspace's .git, .agents, .codex, and .claude paths, resolver storage, and Console's installation are protected from writes"
+    } else {
+        "The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
+    };
     let sandbox_access = match filesystem {
         Some("restricted") if profile == Some(":workspace") => format!(
-            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
+            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. {workspace_protection}"
         ),
         Some("restricted") if profile == Some(":read-only") => format!(
             "uses the native \":read-only\" profile: it can read {files} subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
@@ -343,7 +348,7 @@ fn description(policy: &SandboxSettings, no_sandbox: bool, target: Option<&Targe
                     description.push_str(" Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode.");
                 }
             }
-            _ if remote => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
+            _ if remote => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared by the remote resolver under the permissions described above; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
             _ => {},
         }
     }
