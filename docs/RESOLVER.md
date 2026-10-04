@@ -62,6 +62,7 @@ Apple tool shims may report denied attempts to use their host lookup cache; thos
 It does not receive the worker's host-readable profile, workspace grants, home credentials, or host package caches.
 Its HOME and XDG directories, uv caches and installations, ir libraries, R/renv caches, Matplotlib cache, and native private temporary directory are beneath payload.
 Ordinary host caches are neither seeded nor mounted for reuse.
+Managed Python preparation uses uv's managed interpreters so that the base installation also lives beneath payload.
 Supported installers must respect this filesystem boundary; a cache environment variable alone is not enforcement.
 Managed uv bootstrap downloads and unpacks the platform release archive inside the workload.
 The upstream shell installer uses macOS temporary-file APIs that ignore `TMPDIR`, so it cannot run with the resolver's private temporary storage.

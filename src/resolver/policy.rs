@@ -108,6 +108,7 @@ impl Launch {
                         | "SDKROOT"
                         | "DEVELOPER_DIR"
                         | "TOOLCHAINS"
+                        | "RHOME"
                 )
             {
                 environment.insert(name.into(), value.into());
@@ -284,6 +285,11 @@ impl Launch {
         environment.insert("UV_NO_CONFIG".into(), "1".into());
         environment.insert("UV_NO_ENV_FILE".into(), "1".into());
         environment.insert("UV_NO_CACHE".into(), "0".into());
+        // Managed artifacts must include their base interpreter in payload.
+        // A system interpreter would produce a virtualenv with a host base.
+        environment.insert("UV_PYTHON_PREFERENCE".into(), "only-managed".into());
+        environment.remove("UV_NO_MANAGED_PYTHON");
+        environment.remove("UV_MANAGED_PYTHON");
         // xcrun's lookup cache is outside TMPDIR. Native permissions also deny
         // cache attempts by Apple tool shims which ignore this xcrun setting.
         #[cfg(target_os = "macos")]
