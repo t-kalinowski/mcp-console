@@ -1,4 +1,8 @@
 #[cfg(any(unix, windows))]
+mod activity;
+#[cfg(any(unix, windows))]
+mod bootstrap;
+#[cfg(any(unix, windows))]
 mod coordinator;
 #[cfg(any(unix, windows))]
 mod core;
@@ -13,7 +17,8 @@ mod r_integration;
 
 // Keep the rest of the crate dependent on the worker facade. The core owns
 // runtime-neutral sideband state and host callbacks. The coordinator owns
-// language dispatch; the R backend owns its interpreter and native events.
+// language dispatch; activity and bootstrap own native command waiting and
+// process setup. The R backend owns its interpreter and native R events.
 #[cfg(any(unix, windows))]
 pub(crate) use coordinator::run;
 #[cfg(unix)]
