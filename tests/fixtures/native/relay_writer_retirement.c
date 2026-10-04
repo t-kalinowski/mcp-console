@@ -22,10 +22,15 @@ static struct writer writers[16];
 static int count;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static const char *root;
+static pid_t server_pid;
 
 __attribute__((constructor)) static void initialize(void) {
+    server_pid = getpid();
     root = getenv("MCP_CONSOLE_TEST_WRITER_ROOT");
     // Observe this server only, including sandboxed relay launches.
+    // Unsetting the loader variable prevents injection after exec, but a forked
+    // child still has this shim and may inherit a locked observer mutex. Each
+    // hook must check the original PID before touching observation state.
 #ifdef __APPLE__
     unsetenv("DYLD_INSERT_LIBRARIES");
 #else
@@ -49,7 +54,7 @@ static ssize_t observe_write(int descriptor, const void *bytes, size_t length) {
     int bootstrap = large && frame[4] == '{' &&
         (((uint32_t)frame[0] << 24) | ((uint32_t)frame[1] << 16) |
          ((uint32_t)frame[2] << 8) | frame[3]) == length - 4;
-    if (root != NULL && (probe || large)) {
+    if (getpid() == server_pid && root != NULL && (probe || large)) {
         pthread_mutex_lock(&lock);
         for (int i = 0; i < count; i++) {
             if (!writers[i].joined && writers[i].descriptor == descriptor &&
@@ -74,15 +79,17 @@ static ssize_t observe_write(int descriptor, const void *bytes, size_t length) {
 
 static int observe_close(int descriptor) {
     int index = -1;
-    pthread_mutex_lock(&lock);
-    for (int i = 0; i < count; i++) {
-        if (writers[i].descriptor == descriptor) {
-            index = i;
-            writers[i].descriptor = -1;
-            break;
+    if (getpid() == server_pid) {
+        pthread_mutex_lock(&lock);
+        for (int i = 0; i < count; i++) {
+            if (writers[i].descriptor == descriptor) {
+                index = i;
+                writers[i].descriptor = -1;
+                break;
+            }
         }
+        pthread_mutex_unlock(&lock);
     }
-    pthread_mutex_unlock(&lock);
 #ifdef __APPLE__
     int result = close(descriptor);
 #else
@@ -96,11 +103,13 @@ static int observe_close(int descriptor) {
 
 static int observe_join(pthread_t thread, void **value) {
     int index = -1;
-    pthread_mutex_lock(&lock);
-    for (int i = 0; i < count; i++) {
-        if (!writers[i].joined && pthread_equal(writers[i].thread, thread)) index = i;
+    if (getpid() == server_pid) {
+        pthread_mutex_lock(&lock);
+        for (int i = 0; i < count; i++) {
+            if (!writers[i].joined && pthread_equal(writers[i].thread, thread)) index = i;
+        }
+        pthread_mutex_unlock(&lock);
     }
-    pthread_mutex_unlock(&lock);
 #ifdef __APPLE__
     int result = pthread_join(thread, value);
 #else
@@ -116,7 +125,7 @@ static int observe_join(pthread_t thread, void **value) {
 }
 
 static int gate_retirement_signal(pid_t pid, int number) {
-    const char *mode = getenv("MCP_CONSOLE_TEST_WRITER_MODE");
+    const char *mode = getpid() == server_pid ? getenv("MCP_CONSOLE_TEST_WRITER_MODE") : NULL;
     if (root != NULL && mode != NULL && strcmp(mode, "interrupt_after_eof") == 0 && number == SIGTERM) {
         char path[4096];
         snprintf(path, sizeof(path), "%s/kill-reached-1", root);
