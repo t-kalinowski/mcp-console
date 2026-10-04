@@ -201,6 +201,10 @@ class WindowsRelay(unittest.TestCase):
         # Keep stdin and the inherited writer live until retirement completes.
         self.assertEqual(process.wait(timeout=10), 0)
         self.assertEqual(kernel.WaitForSingleObject(holder, 0), 258)
+        # The holder also inherits the relay's outer stdout handle, so relay
+        # exit alone cannot produce EOF for the test's stdout reader.
+        self.assertTrue(kernel.TerminateProcess(holder, 1), ctypes.get_last_error())
+        self.assertEqual(kernel.WaitForSingleObject(holder, 10000), 0)
         tail = self.framing_finish(process, events, reader)
         self.assertEqual(
             tail,
@@ -261,6 +265,10 @@ class WindowsRelay(unittest.TestCase):
         self.assertEqual(kernel.WaitForSingleObject(worker, 10000), 0)
         self.assertEqual(process.wait(timeout=10), 0)
         self.assertEqual(kernel.WaitForSingleObject(holder, 0), 258)
+        # The holder also inherits the relay's outer stdout handle, so relay
+        # exit alone cannot produce EOF for the test's stdout reader.
+        self.assertTrue(kernel.TerminateProcess(holder, 1), ctypes.get_last_error())
+        self.assertEqual(kernel.WaitForSingleObject(holder, 10000), 0)
         tail = self.framing_finish(process, events, reader)
         outputs = [event for event in tail if event["kind"] == "console_output"]
         self.assertTrue(outputs)
@@ -339,7 +347,7 @@ class WindowsRelay(unittest.TestCase):
         # This output proves the real worker returned from its incomplete read
         # and handled the idle interrupt before we release the UTF-8 suffix.
         self.assertEqual(
-            events.get(timeout=15), {"kind": "console_output", "data": "\n"}
+            events.get(timeout=15), {"kind": "console_diagnostic", "data": "\n"}
         )
         self.framing_control.sendall(b"1")
         output = []
