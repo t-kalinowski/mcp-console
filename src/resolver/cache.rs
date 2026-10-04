@@ -1,8 +1,119 @@
-//! Host cache selection shared by resolver grants and retained runtime paths.
+//! Cache selection shared by preparation, worker launch, and sandbox grants.
 
-use crate::settings::SandboxSettings;
-use serde_json::Value;
+use crate::settings::{Cache, SandboxSettings};
+use serde_json::{Value, json};
 use std::path::PathBuf;
+
+pub(crate) fn configure(
+    selection: Option<Cache>,
+    no_sandbox: bool,
+    resolver: &mut SandboxSettings,
+    worker: &mut SandboxSettings,
+) -> Result<(), String> {
+    let selection = selection.unwrap_or(if no_sandbox {
+        Cache::Host
+    } else {
+        Cache::Console
+    });
+    if matches!(selection, Cache::Host) {
+        return Ok(());
+    }
+    // Console cache contents may have been produced by sandboxed code. Never
+    // reuse them in a local session that removes native enforcement.
+    if no_sandbox {
+        return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
+    }
+    let root = console_root(resolver)?;
+    let path = |relative: &str| -> Result<Value, String> {
+        root.join(relative)
+            .to_str()
+            .map(|path| Value::String(path.into()))
+            .ok_or_else(|| "Console cache paths must be UTF-8".into())
+    };
+    let environment = [
+        ("XDG_CACHE_HOME", ""),
+        ("XDG_DATA_HOME", "data"),
+        ("UV_CACHE_DIR", "uv/cache"),
+        ("UV_PYTHON_INSTALL_DIR", "uv/python"),
+        ("UV_PYTHON_BIN_DIR", "uv/bin"),
+        ("UV_TOOL_DIR", "uv/tools"),
+        ("UV_TOOL_BIN_DIR", "uv/bin"),
+        ("IR_CACHE_DIR", "ir"),
+        ("IR_LIBRARY_ROOT", "ir/libraries"),
+        ("R_USER_CACHE_DIR", ""),
+        ("R_USER_DATA_DIR", "data"),
+        ("RENV_PATHS_ROOT", "renv"),
+        ("RENV_PATHS_CACHE", "renv/cache"),
+        ("RENV_PATHS_SOURCE", "renv/source"),
+        ("RENV_PATHS_BINARY", "renv/binary"),
+        ("PKG_CACHE_DIR", "R/pkgcache"),
+        ("R_PKG_CACHE_DIR", ""),
+        (
+            crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY,
+            "duckdb/extensions",
+        ),
+        ("MPLCONFIGDIR", "matplotlib"),
+        ("PYTHONPYCACHEPREFIX", "python/bytecode"),
+        ("PYTHONUSERBASE", "python/user"),
+    ]
+    .into_iter()
+    .map(|(name, relative)| Ok((name.to_owned(), path(relative)?)))
+    .collect::<Result<SandboxSettings, String>>()?;
+    for settings in [&mut *resolver, worker] {
+        let values = settings.entry("environment").or_insert_with(|| json!({}));
+        if let Value::Object(values) = values {
+            // Preserve malformed native values for the runner's validation.
+            for (name, path) in &environment {
+                if values.get(name).is_none_or(Value::is_string) {
+                    values.insert(name.clone(), path.clone());
+                }
+            }
+        }
+    }
+    let filesystem = resolver.entry("filesystem").or_insert_with(|| json!({}));
+    if let Value::Object(filesystem) = filesystem
+        && !filesystem.contains_key("entries")
+    {
+        std::fs::create_dir_all(&root).map_err(|error| {
+            format!("cannot create Console cache '{}': {error}", root.display())
+        })?;
+        filesystem.insert(
+            "entries".into(),
+            json!([
+                {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"},
+                {"path": {"type": "path", "path": path("")?}, "access": "write"},
+            ]),
+        );
+    }
+    Ok(())
+}
+
+fn console_root(settings: &SandboxSettings) -> Result<PathBuf, String> {
+    if let Some(cache) =
+        environment_path(settings, "XDG_CACHE_HOME").filter(|path| path.is_absolute())
+    {
+        return Ok(cache.join("mcp-console"));
+    }
+    #[cfg(windows)]
+    if let Some(cache) =
+        environment_path(settings, "LOCALAPPDATA").filter(|path| path.is_absolute())
+    {
+        return Ok(cache.join("mcp-console/cache"));
+    }
+    let home = environment_path(settings, "HOME");
+    #[cfg(windows)]
+    let home = home.or_else(|| environment_path(settings, "USERPROFILE"));
+    let home = home
+        .filter(|path| path.is_absolute())
+        .ok_or("Console cache selection requires an absolute HOME")?;
+    Ok(home.join(if cfg!(windows) {
+        "AppData/Local/mcp-console/cache"
+    } else if cfg!(target_os = "macos") {
+        "Library/Caches/mcp-console"
+    } else {
+        ".cache/mcp-console"
+    }))
+}
 
 fn environment_path(settings: &SandboxSettings, name: &str) -> Option<PathBuf> {
     let inherit = settings.get("inherit_environment") != Some(&Value::Bool(false));
@@ -89,6 +200,10 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         "RENV_PATHS_BINARY",
         "R_PKG_CACHE_DIR",
         "PKG_CACHE_DIR",
+        "UV_PYTHON_BIN_DIR",
+        "UV_TOOL_BIN_DIR",
+        "PYTHONPYCACHEPREFIX",
+        "PYTHONUSERBASE",
     ] {
         if let Some(path) = env(name) {
             caches.push(path);

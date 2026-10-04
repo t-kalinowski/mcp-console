@@ -62,7 +62,9 @@ def test_custom_worker_captures_duckdb_cache_before_live_r(binary: Path) -> Tran
                 resolver_env["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(cache)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps({"resolver": {"environment": resolver_env}}))
+            config.write_text(
+                json.dumps({"cache": "host", "resolver": {"environment": resolver_env}})
+            )
             with McpClient(
                 binary,
                 ("serve", "--writable-root", str(root), "--worker", str(zod)),
@@ -121,7 +123,9 @@ def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
                 resolver_env["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(cache)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps({"resolver": {"environment": resolver_env}}))
+            config.write_text(
+                json.dumps({"cache": "host", "resolver": {"environment": resolver_env}})
+            )
             with McpClient(binary, ("serve",), env, root) as client:
                 client.initialize_and_list_tools()
                 result = client.send(
@@ -309,7 +313,7 @@ def test_rejects_non_utf8_cache_paths(binary: Path) -> Transcript:
             (tools / "uv").symlink_to(shutil.which("uv"))
             invalid = root / os.fsdecode(b"cache-\xff")
             env = dict(environment(tools), **{name: str(invalid)})
-            with McpClient(binary, ("serve",), env, root) as client:
+            with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
                 client.initialize_and_list_tools()
                 failure = client.send(requirements={"action": "get"})
                 assert failure.get("isError"), failure
@@ -347,13 +351,14 @@ def test_ignores_relative_uv_xdg_directories(binary: Path) -> Transcript:
         config.write_text(
             json.dumps(
                 {
+                    "cache": "host",
                     "resolver": {
                         "environment": {
                             "HOME": str(home),
                             "XDG_CACHE_HOME": "relative-cache",
                             "XDG_DATA_HOME": "relative-data",
                         }
-                    }
+                    },
                 }
             )
         )
@@ -380,8 +385,10 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
         root = Path(directory).resolve()
         env, _ = r_test_environment()
         env.update(
-            IR_CACHE_DIR=str(root / "ir"),
-            R_USER_CACHE_DIR=str(root / "r-cache"),
+            XDG_CACHE_HOME=str(root / "cache-base"),
+            IR_CACHE_DIR=str(root / "host-ir"),
+            R_USER_CACHE_DIR=str(root / "host-r-cache"),
+            RENV_PATHS_CACHE=str(root / "host-renv"),
             MCP_CONSOLE_LANGUAGES="r",
         )
         with McpClient(binary, ("serve",), env, root) as client:
@@ -392,10 +399,21 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
                 "cold R preparation and evaluation",
                 completion_timeout_seconds=client.response_timeout,
                 requirements={"action": "set", "r": ["utf8"]},
-                r='cat(utf8::utf8_valid("resolved"), "\\n", sep = "")',
+                # fmt: r
+                r=code(r"""
+                    root <- paste0(normalizePath(Sys.getenv("R_USER_CACHE_DIR")), "/")
+                    stopifnot(startsWith(normalizePath(find.package("utf8")), root))
+                    cat(utf8::utf8_valid("resolved"), "\n", sep = "")
+                    """),
             )
             client.finish()
-        assert list((root / "ir").rglob("utf8/DESCRIPTION"))
+        cache = root / "cache-base/mcp-console"
+        descriptions = list((cache / "ir").rglob("utf8/DESCRIPTION"))
+        assert descriptions
+        assert all(path.resolve().is_relative_to(cache) for path in descriptions)
+        assert not (root / "host-ir").exists()
+        assert not (root / "host-r-cache").exists()
+        assert not (root / "host-renv").exists()
         return [{"cold_ir_cache": True, "resolved_r_package": "utf8"}]
 
 
@@ -564,7 +582,7 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
                     "environment": {"HOME": "/local-only"},
                 },
             )
-        with McpClient(binary, ("serve",), env, root) as client:
+        with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
             client.initialize_and_list_tools()
             if tailored:
                 config.write_text(

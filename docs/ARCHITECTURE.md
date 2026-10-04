@@ -147,7 +147,7 @@ Explicit preparation and worker-originated requests share environment-change own
 Automatic R loads and Python imports request packages only when execution reaches them; cells are not scanned or rerun.
 
 Transactions protect accepted environments; the resolver sandbox bounds preparation permissions.
-Its default host reads and shared writable caches still require trusted dependencies and inputs.
+Its default host reads and Console-specific writable caches still require trusted dependencies and inputs.
 [Requirements](REQUIREMENTS.md) defines supported changes and the trust boundary.
 
 ## Retirement and cancellation

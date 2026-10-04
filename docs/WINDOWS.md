@@ -42,6 +42,9 @@ Python selection is inspected at startup, and enabled interpreters initialize in
 
 The server waits for an MCP client on standard input; it does not open an interactive terminal.
 Configure clients with command `mcp-console` and arguments `["serve"]`; use `["serve", "--no-sandbox"]` to explicitly run with host permissions.
+Local sandboxed sessions redirect resolver and worker caches to `%LOCALAPPDATA%/mcp-console/cache`, or `<XDG_CACHE_HOME>/mcp-console` when selected.
+`cache: host` retains host caches, as does `--no-sandbox` by default.
+Cache redirection does not sandbox Windows dependency preparation; it retains host permissions and its owned Job lifecycle.
 There is no automatic fallback from sandboxed execution.
 Keep embedded R sources checked out with LF line endings as specified by `.gitattributes`.
 R startup selects the first nonempty `R_USER` or `HOME`, then the Windows user profile directory.

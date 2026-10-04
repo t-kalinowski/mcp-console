@@ -170,13 +170,19 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        cache,
         python,
         source: _,
-        policy,
-        resolver,
+        mut policy,
+        mut resolver,
         target,
         provider,
     } = settings::discover(overrides)?;
+    if target.is_none() {
+        resolver::cache::configure(cache, no_sandbox, &mut resolver, &mut policy)?;
+    } else if matches!(cache, Some(settings::Cache::Console)) {
+        return Err("cache: console requires a local execution target".into());
+    }
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
     }
