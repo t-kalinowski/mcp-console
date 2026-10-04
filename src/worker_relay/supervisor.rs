@@ -2,23 +2,17 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use super::commands::WORKER_SHUTDOWN_GRACE;
 use super::commands::{CommandReader, SidebandWrite, SidebandWriter, StdinWrite, StdinWriter};
 use super::event_writer::{self, EventSender, EventWriter};
 use super::streams::{OutputReader, OutputStream, SidebandReader, drain_unstarted_output};
+use crate::process_exit::ChildExitWaiter;
 use crate::relay_protocol::RelayEvent;
 use crate::worker_protocol::ServerMessage;
 
 const RETIREMENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
-const CHILD_EXITED: libc::c_int = 1;
-const CHILD_KILLED: libc::c_int = 2;
-const CHILD_DUMPED: libc::c_int = 3;
-const CHILD_STOPPED: libc::c_int = 5;
-const CHILD_CONTINUED: libc::c_int = 6;
-
 pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
     let (program, arguments) = command_line
         .split_first()
@@ -62,10 +56,11 @@ pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
     drop(child_endpoints);
 
     let mut worker = WorkerLifecycle::new(child, sideband_reader);
-    let setup = worker.start_io(sideband_writer, &events, &failures, &controls, &stopping);
+    let setup = worker
+        .start_io(sideband_writer, &events, &failures, &controls, &stopping)
+        .and_then(|()| worker.start_exit_watcher(controls.clone()));
     let (status, retirement_error) = match setup {
         Ok(()) => {
-            worker.start_exit_watcher(controls.clone());
             let worker_sideband = worker
                 .sideband_writer
                 .as_ref()
@@ -78,6 +73,10 @@ pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
                 .sender();
             let result = supervise_worker(
                 &mut worker.child,
+                worker
+                    .exit_watcher
+                    .as_mut()
+                    .expect("worker exit observer should be running"),
                 &control_receiver,
                 &events,
                 &stopping,
@@ -90,7 +89,7 @@ pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
         Err(error) => {
             failures.report(error.clone());
             stopping.store(true, Ordering::SeqCst);
-            let result = force_stop_worker(&mut worker.child, error);
+            let result = force_stop_worker(&mut worker.child, worker.exit_watcher.as_mut(), error);
             worker.retired = true;
             result
         }
@@ -161,6 +160,7 @@ fn report_startup_failure(
 
 fn supervise_worker(
     child: &mut Child,
+    exit: &mut ChildExitWaiter,
     controls: &mpsc::Receiver<Control>,
     events: &EventSender,
     stopping: &AtomicBool,
@@ -174,11 +174,12 @@ fn supervise_worker(
                 match controls.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
                     Ok(control) => control,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
-                        return force_stop_worker(child, String::new());
+                        return force_stop_worker(child, Some(exit), String::new());
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         return force_stop_worker(
                             child,
+                            Some(exit),
                             "relay control channel stopped".to_string(),
                         );
                     }
@@ -187,7 +188,11 @@ fn supervise_worker(
             None => match controls.recv() {
                 Ok(control) => control,
                 Err(_) => {
-                    return force_stop_worker(child, "relay control channel stopped".to_string());
+                    return force_stop_worker(
+                        child,
+                        Some(exit),
+                        "relay control channel stopped".to_string(),
+                    );
                 }
             },
         };
@@ -195,7 +200,7 @@ fn supervise_worker(
             Control::Interrupt { request_id } => {
                 let error = interrupt_worker(child).err();
                 if !events.send_supervisor(RelayEvent::InterruptResult { request_id, error }) {
-                    return force_stop_worker(child, String::new());
+                    return force_stop_worker(child, Some(exit), String::new());
                 }
             }
             Control::Shutdown {
@@ -203,7 +208,7 @@ fn supervise_worker(
                 report_acceptance,
             } => {
                 if report_acceptance && !events.send_supervisor(RelayEvent::ShutdownStarted) {
-                    return force_stop_worker(child, String::new());
+                    return force_stop_worker(child, Some(exit), String::new());
                 }
                 stopping.store(true, Ordering::SeqCst);
                 let _ = stdin.send(StdinWrite::Close);
@@ -212,7 +217,7 @@ fn supervise_worker(
             }
             Control::Stop { message } => {
                 stopping.store(true, Ordering::SeqCst);
-                return force_stop_worker(child, message);
+                return force_stop_worker(child, Some(exit), message);
             }
             Control::SidebandClosed => {
                 stopping.store(true, Ordering::SeqCst);
@@ -221,131 +226,21 @@ fn supervise_worker(
             Control::WorkerExited(result) => {
                 stopping.store(true, Ordering::SeqCst);
                 return match result {
-                    Ok(()) => finish_exited_worker(child),
-                    Err(error) => force_stop_worker(child, error),
+                    Ok(()) => finish_exited_worker(child, exit),
+                    Err(error) => force_stop_worker(child, Some(exit), error),
                 };
             }
         }
     }
 }
 
-fn start_worker_exit_watcher(
-    process_id: u32,
-    controls: mpsc::Sender<Control>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let process_id = process_id as libc::pid_t;
-        let wait_id = process_id as libc::id_t;
-        let result = loop {
-            let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-            // SAFETY: `information` points to writable storage and
-            // `process_id` names the direct child. WNOWAIT preserves its
-            // exit status for the relay supervisor, which remains the sole
-            // reaper.
-            let result = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    wait_id,
-                    information.as_mut_ptr(),
-                    libc::WEXITED | libc::WNOWAIT,
-                )
-            };
-            if result == 0 {
-                // SAFETY: successful `waitid` initialized the supplied
-                // `siginfo_t`.
-                let information = unsafe { information.assume_init() };
-                // SAFETY: waitid populated the child-status variant of siginfo_t.
-                let observed_pid = unsafe { information.si_pid() };
-                if observed_pid != process_id {
-                    break Err(format!(
-                        "waitid returned process {} while waiting for worker {process_id}",
-                        observed_pid
-                    ));
-                }
-                match information.si_code {
-                    CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => break Ok(()),
-                    CHILD_STOPPED | CHILD_CONTINUED => {
-                        // Darwin may return a pending stop or continue
-                        // notification even though the call requested only
-                        // `WEXITED`. Consume just that notification, leaving
-                        // the eventual exit status waitable for supervision.
-                        if let Err(error) =
-                            consume_worker_non_exit_notification(wait_id, process_id)
-                        {
-                            if error.kind() == std::io::ErrorKind::Interrupted {
-                                continue;
-                            }
-                            break Err(format!(
-                                "failed to consume worker status notification: {error}"
-                            ));
-                        }
-                    }
-                    code => {
-                        break Err(format!(
-                            "waitid returned unexpected worker status code {code}"
-                        ));
-                    }
-                }
-                continue;
-            }
-            let error = std::io::Error::last_os_error();
-            if error.kind() != std::io::ErrorKind::Interrupted {
-                break Err(format!("failed to observe worker exit: {error}"));
-            }
-        };
-        let _ = controls.send(Control::WorkerExited(result));
-    })
-}
-
-fn consume_worker_non_exit_notification(
-    wait_id: libc::id_t,
-    process_id: libc::pid_t,
-) -> std::io::Result<()> {
-    let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: `information` points to writable storage and `process_id`
-    // names the direct child. Omitting `WEXITED` and `WNOWAIT` consumes only
-    // a pending stop or continue notification, never the exit status.
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            wait_id,
-            information.as_mut_ptr(),
-            libc::WSTOPPED | libc::WCONTINUED | libc::WNOHANG,
-        )
-    };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error());
+fn finish_exited_worker(
+    child: &mut Child,
+    exit: &mut ChildExitWaiter,
+) -> (Option<ExitStatus>, Option<String>) {
+    if let Err(error) = exit.finish() {
+        return force_stop_worker(child, Some(exit), error);
     }
-
-    // SAFETY: successful `waitid` initialized the supplied `siginfo_t`.
-    let information = unsafe { information.assume_init() };
-    // SAFETY: waitid populated the child-status variant of siginfo_t.
-    let observed_pid = unsafe { information.si_pid() };
-    if observed_pid == 0 {
-        return Ok(());
-    }
-    if observed_pid != process_id {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "waitid returned process {} while consuming a notification for worker {process_id}",
-                observed_pid
-            ),
-        ));
-    }
-    if !matches!(information.si_code, CHILD_STOPPED | CHILD_CONTINUED) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!(
-                "waitid consumed unexpected worker status code {}",
-                information.si_code
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn finish_exited_worker(child: &mut Child) -> (Option<ExitStatus>, Option<String>) {
     match child.wait() {
         Ok(status) => (Some(status), None),
         Err(error) => (
@@ -370,18 +265,21 @@ fn interrupt_worker(child: &mut Child) -> Result<(), String> {
 
 fn force_stop_worker(
     child: &mut Child,
+    exit: Option<&mut ChildExitWaiter>,
     prior_error: String,
 ) -> (Option<ExitStatus>, Option<String>) {
     let mut errors = Vec::new();
     if !prior_error.is_empty() {
         errors.push(prior_error);
     }
-    let (mut status, should_kill_direct_worker) = match child.try_wait() {
-        Ok(status @ Some(_)) => (status, false),
-        Ok(None) => (None, true),
+    // A try_wait can reap. Keep the child identity pinned while observation
+    // is in flight, including when shutdown has to terminate it.
+    let mut status = None;
+    let should_kill_direct_worker = match crate::process_exit::direct_child_has_exited(child.id()) {
+        Ok(exited) => !exited,
         Err(error) => {
             errors.push(format!("failed to read direct worker status: {error}"));
-            (None, false)
+            false
         }
     };
     if should_kill_direct_worker
@@ -390,12 +288,16 @@ fn force_stop_worker(
     {
         errors.push(format!("failed to stop the direct worker: {error}"));
     }
-    if status.is_none() {
-        match child.wait() {
-            Ok(exit_status) => status = Some(exit_status),
-            Err(error) => {
-                errors.push(format!("failed to reap the direct worker: {error}"));
-            }
+    if let Some(exit) = exit
+        && let Err(error) = exit.finish()
+        && !errors.contains(&error)
+    {
+        errors.push(error);
+    }
+    match child.wait() {
+        Ok(exit_status) => status = Some(exit_status),
+        Err(error) => {
+            errors.push(format!("failed to reap the direct worker: {error}"));
         }
     }
     let error = (!errors.is_empty()).then(|| errors.join("; "));
@@ -444,7 +346,7 @@ struct WorkerLifecycle {
     stderr: ReaderState<ChildStderr, OutputReader>,
     sideband_reader: ReaderState<crate::sideband::Reader, SidebandReader>,
     command_reader: Option<CommandReader>,
-    exit_watcher: Option<thread::JoinHandle<()>>,
+    exit_watcher: Option<ChildExitWaiter>,
 }
 
 impl WorkerLifecycle {
@@ -542,8 +444,14 @@ impl WorkerLifecycle {
         })
     }
 
-    fn start_exit_watcher(&mut self, controls: mpsc::Sender<Control>) {
-        self.exit_watcher = Some(start_worker_exit_watcher(self.child.id(), controls));
+    fn start_exit_watcher(&mut self, controls: mpsc::Sender<Control>) -> Result<(), String> {
+        self.exit_watcher = Some(ChildExitWaiter::start_observing(
+            self.child.id(),
+            move |result| {
+                let _ = controls.send(Control::WorkerExited(result));
+            },
+        )?);
+        Ok(())
     }
 
     fn cancel_and_join(&mut self, events: &EventSender) -> Option<String> {
@@ -592,16 +500,6 @@ impl WorkerLifecycle {
             ),
             ReaderState::Retired => {}
         }
-        if self
-            .exit_watcher
-            .take()
-            .is_some_and(|watcher| watcher.join().is_err())
-        {
-            collect_error(
-                &mut error,
-                Err("worker exit watcher task failed".to_string()),
-            );
-        }
         error
     }
 }
@@ -611,6 +509,7 @@ impl Drop for WorkerLifecycle {
         if !self.retired {
             let _ = force_stop_worker(
                 &mut self.child,
+                self.exit_watcher.as_mut(),
                 "relay failed while starting worker I/O".to_string(),
             );
         }

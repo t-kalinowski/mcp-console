@@ -1,19 +1,29 @@
-//! Direct-child exit observation shared by ordinary process owners.
+//! Non-reaping direct-child observation, independent of process retirement.
+//!
+//! Completion reports confirmed exit or an observation error. Owners retain
+//! the unreaped child (Unix) or its process handle (Windows) and settle their
+//! observer before reaping. Termination and descendant cleanup stay with them.
 
-use std::io;
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+mod windows;
+#[cfg(unix)]
+use unix as native;
+#[cfg(windows)]
+use windows as native;
+
+#[cfg(unix)]
+pub(crate) use unix::{direct_child_has_exited, wait_for_direct_child_exit};
+
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
-
-const CHILD_EXITED: libc::c_int = 1;
-const CHILD_KILLED: libc::c_int = 2;
-const CHILD_DUMPED: libc::c_int = 3;
-const CHILD_STOPPED: libc::c_int = 5;
-const CHILD_CONTINUED: libc::c_int = 6;
 
 pub(crate) struct ChildExitWaiter {
     completion: Receiver<Result<(), String>>,
     result: Option<Result<(), String>>,
+    task: Option<JoinHandle<()>>,
 }
 
 impl ChildExitWaiter {
@@ -21,23 +31,33 @@ impl ChildExitWaiter {
         Self::start_notifying(process_id, || {})
     }
 
+    /// Wake-only compatibility adapter. Invocation means observation settled;
+    /// the owner must retrieve its exit/error result through `wait` or `finish`.
     pub(crate) fn start_notifying(
         process_id: u32,
         notify: impl FnOnce() + Send + 'static,
     ) -> Result<Self, String> {
-        let process_id =
-            valid_process_id(process_id).map_err(|_| "child process ID is invalid".to_string())?;
+        Self::start_observing(process_id, move |_| notify())
+    }
+
+    pub(crate) fn start_observing(
+        process_id: u32,
+        notify: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) -> Result<Self, String> {
+        let observer = native::Observer::new(process_id)?;
         let (sender, completion) = mpsc::sync_channel(1);
-        thread::Builder::new()
-            .name("worker launcher exit".to_string())
+        let task = thread::Builder::new()
+            .name("child exit observer".to_string())
             .spawn(move || {
-                let _ = sender.send(wait_for_direct_child_exit(process_id));
-                notify();
+                let result = observer.wait();
+                let _ = sender.send(result.clone());
+                notify(result);
             })
             .map_err(|error| format!("failed to start child exit observer: {error}"))?;
         Ok(Self {
             completion,
             result: None,
+            task: Some(task),
         })
     }
 
@@ -55,118 +75,19 @@ impl ChildExitWaiter {
         self.result = Some(result.clone());
         result.map(|()| true)
     }
-}
 
-fn wait_for_direct_child_exit(process_id: libc::pid_t) -> Result<(), String> {
-    loop {
-        match observe_direct_child(process_id) {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => {
-                return Err(format!(
-                    "failed to observe child process {process_id} exit: {error}"
-                ));
-            }
+    /// Settle observation and its notification before the owner reaps. The
+    /// owner must first terminate a child that is not expected to exit itself.
+    pub(crate) fn finish(&mut self) -> Result<(), String> {
+        let result = self.result.get_or_insert_with(|| {
+            self.completion
+                .recv()
+                .unwrap_or_else(|_| Err("child exit observer stopped without a result".to_string()))
+        });
+        if let Some(task) = self.task.take() {
+            task.join()
+                .map_err(|_| "child exit observer task failed".to_string())?;
         }
+        result.clone()
     }
-}
-
-fn observe_direct_child(process_id: libc::pid_t) -> io::Result<bool> {
-    let wait_id = process_id as libc::id_t;
-    let options = libc::WEXITED | libc::WNOWAIT;
-
-    loop {
-        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-        // SAFETY: `information` points to writable storage and `process_id`
-        // identifies the direct child. WNOWAIT preserves its exit status for
-        // the child owner, which remains the sole reaper.
-        let result =
-            unsafe { libc::waitid(libc::P_PID, wait_id, information.as_mut_ptr(), options) };
-        if result < 0 {
-            return Err(io::Error::last_os_error());
-        }
-
-        // SAFETY: successful `waitid` initialized the zeroed structure.
-        let information = unsafe { information.assume_init() };
-        // SAFETY: waitid populated the child-status variant of siginfo_t.
-        let observed_pid = unsafe { information.si_pid() };
-        if observed_pid == 0 {
-            return Ok(false);
-        }
-        if observed_pid != process_id {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "waitid returned process {} while waiting for child process {process_id}",
-                    observed_pid
-                ),
-            ));
-        }
-        match information.si_code {
-            CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => return Ok(true),
-            CHILD_STOPPED | CHILD_CONTINUED => {
-                consume_non_exit_notification(wait_id, process_id)?;
-            }
-            code => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "waitid returned unexpected status code {code} for child process {process_id}"
-                    ),
-                ));
-            }
-        }
-    }
-}
-
-fn consume_non_exit_notification(wait_id: libc::id_t, process_id: libc::pid_t) -> io::Result<()> {
-    let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: `information` points to writable storage. Omitting WEXITED and
-    // WNOWAIT consumes only a pending stop or continue notification.
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            wait_id,
-            information.as_mut_ptr(),
-            libc::WSTOPPED | libc::WCONTINUED | libc::WNOHANG,
-        )
-    };
-    if result < 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    // SAFETY: successful `waitid` initialized the zeroed structure.
-    let information = unsafe { information.assume_init() };
-    // SAFETY: waitid populated the child-status variant of siginfo_t.
-    let observed_pid = unsafe { information.si_pid() };
-    if observed_pid == 0 {
-        return Ok(());
-    }
-    if observed_pid != process_id {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "waitid returned process {} while consuming a notification for child process {process_id}",
-                observed_pid
-            ),
-        ));
-    }
-    if !matches!(information.si_code, CHILD_STOPPED | CHILD_CONTINUED) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "waitid consumed unexpected status code {} for child process {process_id}",
-                information.si_code
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn valid_process_id(process_id: u32) -> io::Result<libc::pid_t> {
-    libc::pid_t::try_from(process_id)
-        .ok()
-        .filter(|process_id| *process_id > 0)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid process ID"))
 }
