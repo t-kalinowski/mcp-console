@@ -33,6 +33,67 @@ def test_r_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
     return duckdb_cache(binary, r=True)
 
 
+@requires(SANDBOX, R, command("ir"))
+def test_custom_worker_captures_duckdb_cache_before_live_r(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    for explicit in (False, True):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            env, _ = r_test_environment()
+            env.pop("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", None)
+            env["MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"] = str(root / "cells.jsonl")
+            home = root / "resolver-home"
+            cache = root / "extensions" if explicit else home / ".duckdb/extensions"
+            resolver_env = {
+                "HOME": str(home),
+                "IR_CACHE_DIR": env.get(
+                    "IR_CACHE_DIR",
+                    str(
+                        Path(env["HOME"])
+                        / (
+                            "Library/Caches/org.R-project.R/R/ir"
+                            if sys.platform == "darwin"
+                            else ".cache/R/ir"
+                        )
+                    ),
+                ),
+            }
+            if explicit:
+                resolver_env["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(cache)
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps({"resolver": {"environment": resolver_env}}))
+            with McpClient(
+                binary,
+                ("serve", "--writable-root", str(root), "--worker", str(zod)),
+                env,
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                # Launch precedes the first managed-R layer. All later checks
+                # use the same cache selection captured at Console startup.
+                for phase in ("launch", "live R", "restart"):
+                    if phase == "live R":
+                        prepared = client.send(
+                            requirements={"r": ["praise"], "duckdb": ["sqlite"]}
+                        )
+                        assert not prepared.get("isError"), prepared
+                        assert list(cache.glob("v*/**/sqlite_scanner.duckdb_extension"))
+                    elif phase == "restart":
+                        client.send(control="restart")
+                    client.expect(
+                        str(cache) + "\n",
+                        # fmt: python
+                        python=code("""
+                            import os
+
+                            print(os.environ.get("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"))
+                            """),
+                    )
+                client.finish()
+    return [{"custom_cache_captured_at_launch": True, "live_r_cache_matches": True}]
+
+
 def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
     for explicit in (False, True):
         with TemporaryDirectory() as directory:

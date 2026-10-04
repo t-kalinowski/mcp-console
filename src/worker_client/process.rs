@@ -234,8 +234,9 @@ impl WorkerRuntime {
                 managed_r.configure_worker(&mut command)?;
             }
             // Managed Python carries its prepared cache in the runtime selection.
-            // Only managed R needs this additional launch assignment.
-            if managed_r.is_some()
+            // Managed R and custom workers need the startup-captured cache;
+            // a custom worker may accept its first R layer after launch.
+            if (!builtin || managed_r.is_some())
                 && let Some(directory) = duckdb_extension_directory
             {
                 command.env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);

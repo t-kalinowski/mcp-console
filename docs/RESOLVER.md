@@ -64,7 +64,8 @@ Resolver environment values configure preparation; worker environment values do 
 R availability is discovered inside the resolver after its environment policy applies.
 Resolver and worker policies preserve the server's Python selection: `python` in Console YAML, otherwise the server's `RETICULATE_PYTHON`.
 Omit both to use managed Python.
-Configuration is captured once and retained across preparation calls and worker restarts.
+Configuration and host cache paths are captured at Console startup and retained across preparation calls and worker restarts.
+Changes to a running worker's environment do not reconfigure the resolver.
 The `resolver` mapping applies only to local sandboxed preparation.
 
 For a shared DuckDB cache at a different path:
@@ -77,6 +78,7 @@ resolver:
 
 Console captures this path for installation and the managed R/Python SQL connections.
 Without this override, both use `.duckdb/extensions` beneath the resolver's effective `HOME`, even when it differs from the server or worker `HOME`.
+Custom workers receive the same captured path at launch, before accepting their first managed R layer.
 User-selected Python retains DuckDB's own cache settings and preinstalled extensions.
 An explicit `filesystem.entries` must grant writes to the selected directory.
 
