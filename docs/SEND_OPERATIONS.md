@@ -3,6 +3,8 @@
 `send` operates on one implicit session and accepts at most one complete `r`, `python`, or `sql` cell.
 Submit cells sequentially and collect unfinished results before another cell.
 A control-only interrupt may overlap pending work; `requirements.action="get"` may inspect the last commit during evaluation or resolution without consuming output.
+If another send owns evaluation polling or response delivery, the interrupt returns `[running; poll with an empty send]` without consuming that send's output.
+Otherwise, it observes and collects the interrupted evaluation normally.
 
 [Runtime behavior](BUILTIN_RUNTIME.md) and [requirements](REQUIREMENTS.md) explain the operations themselves.
 This page defines their order and partial effects.

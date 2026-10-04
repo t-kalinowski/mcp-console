@@ -197,12 +197,20 @@ impl Client {
         evaluation: Arc<Evaluation>,
         cell_not_run: bool,
     ) -> ControlledEvaluation {
-        match evaluation.claim() {
-            Ok(wait_claim) => ControlledEvaluation::Observe {
+        let claim = if cell_not_run {
+            evaluation.claim().map(Some)
+        } else {
+            evaluation.claim_for_interrupt()
+        };
+        match claim {
+            Ok(Some(wait_claim)) => ControlledEvaluation::Observe {
                 evaluation,
                 wait_claim,
                 cell_not_run,
             },
+            Ok(None) => ControlledEvaluation::Returned(output::render_response(
+                SendResponse::Running(Response::default()),
+            )),
             Err(error) => {
                 let mut response = Response::default();
                 if cell_not_run {
@@ -466,11 +474,12 @@ impl Client {
             return Err("session restarted before the interrupted evaluation settled".to_string());
         }
         let evaluation = current.evaluation.clone();
-        let reservation = if cell_follows {
-            evaluation.reserve_completed_for_handoff()?
-        } else {
-            evaluation.reserve_completed_for_delivery()?
-        };
+        // A code-free interrupt observes through a wait claim, including after
+        // completion. It must not retire another send's evaluation or delivery.
+        if !cell_follows {
+            return Ok(PriorEvaluation::Active(evaluation));
+        }
+        let reservation = evaluation.reserve_completed_for_handoff()?;
         let Some(reservation) = reservation else {
             return Ok(PriorEvaluation::Active(evaluation));
         };
