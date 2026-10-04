@@ -56,11 +56,13 @@ impl Selection {
     pub(crate) fn python(
         configured: Option<OsString>,
         resolver: &crate::resolver::execution::PythonConfiguration,
+        extension_directory: Option<PathBuf>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Option<ManagedPython>), String> {
         Self::python_with(
             configured,
             resolver.has_uv(),
+            extension_directory,
             |started| {
                 crate::resolver::execution::resolve_python_manifest(
                     crate::worker_protocol::default_native_python_requirement_manifest(),
@@ -86,6 +88,7 @@ impl Selection {
         let (mut selection, managed) = Self::python_with(
             configured,
             resolver.has_uv(),
+            crate::resolver::cache::duckdb_extension_directory(&Default::default())?,
             |started| {
                 crate::resolver::resolve_python_manifest_for_remote(
                     crate::worker_protocol::default_native_python_requirement_manifest(),
@@ -112,6 +115,7 @@ impl Selection {
     fn python_with(
         configured: Option<OsString>,
         has_uv: bool,
+        extension_directory: Option<PathBuf>,
         resolve: impl FnOnce(
             &dyn Fn(ResolverStopHandle) -> Result<(), String>,
         ) -> Result<ManagedPython, String>,
@@ -138,14 +142,7 @@ impl Selection {
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
         let selected = inspect(&executable, on_started)?;
         // Default and requested extensions share the host cache across generations.
-        let duckdb_extension_directory = managed.as_ref().and_then(|_| {
-            let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
-            #[cfg(windows)]
-            let home = home.or_else(|| std::env::var_os("USERPROFILE"));
-            home.map(PathBuf::from)
-                .filter(|home| home.is_absolute())
-                .map(|home| home.join(".duckdb/extensions"))
-        });
+        let duckdb_extension_directory = managed.as_ref().and(extension_directory);
         let selection = Self {
             r_home: None,
             python: Some(Python {

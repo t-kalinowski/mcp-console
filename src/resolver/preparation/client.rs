@@ -170,11 +170,27 @@ impl Preparation {
 
     pub(crate) fn open_local(
         mode: Mode,
+        resolver: Option<crate::settings::SandboxSettings>,
+        python: Option<&std::ffi::OsStr>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut command =
-            std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
+        let mut command = if let Some(mut settings) = resolver {
+            // Preparation and the retained worker must agree on whether Python
+            // is managed, including with an isolated resolver environment.
+            crate::settings::preserve_environment(
+                &mut settings,
+                [("RETICULATE_PYTHON".as_ref(), python)],
+            )?;
+            crate::resolver::sandbox::command(settings, std::process::id())?
+        } else {
+            std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
+        };
+        if let Some(python) = python {
+            command.env("RETICULATE_PYTHON", python);
+        } else {
+            command.env_remove("RETICULATE_PYTHON");
+        }
         command.arg("resolve");
         let open = Input::Open {
             version: super::VERSION,
@@ -194,6 +210,7 @@ impl Preparation {
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        let native = command.get_args().next() == Some("sandbox".as_ref());
         #[cfg(unix)]
         command
             .stdin(Stdio::piped())
@@ -315,17 +332,35 @@ impl Preparation {
             let result = run(received, &outgoing, pending, open, &owner_blocked, local);
             drop(outgoing);
             drop(abort);
-            // Do not extend failed protocol retirement with a second exit wait.
-            // Kill before joining I/O and reaping.
+            // Retire before joining I/O and reaping. Native cleanup needs a
+            // bounded SIGTERM allowance; direct execution can stop immediately.
             if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+                #[cfg(unix)]
+                if local && native {
+                    // Let the native supervisor retire the resolver tree before
+                    // escalation. Killing the supervisor bypasses its cleanup.
+                    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+                    if !exit.wait(Duration::from_secs(2)).unwrap_or(false) {
+                        let _ = child.kill();
+                    }
+                } else {
+                    let _ = child.kill();
+                }
+                #[cfg(windows)]
                 let _ = child.kill();
             }
             let _ = writer.join();
             let _ = reader.join();
             let reaped = child
                 .wait()
-                .map(|_| ())
-                .map_err(|error| format!("cannot reap {}: {error}", label(local)));
+                .map_err(|error| format!("cannot reap {}: {error}", label(local)))
+                .and_then(|status| {
+                    if native && !status.success() {
+                        Err(format!("{} sandbox exited with {status}", label(local)))
+                    } else {
+                        Ok(())
+                    }
+                });
             #[cfg(unix)]
             let _ = diagnostic_reader.join();
             result.and(reaped)

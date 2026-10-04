@@ -327,6 +327,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         wrapper.chmod(0o755)
 
         environment = os.environ.copy()
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment.pop("RETICULATE_PYTHON", None)
         environment.pop("R_LIBS", None)
         environment["RETICULATE_UV"] = str(wrapper)

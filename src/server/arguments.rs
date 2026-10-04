@@ -50,7 +50,7 @@ pub(super) struct SendArguments {
     /// resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
     /// a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
     /// and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-    /// further changes require restart. Resolution runs with server permissions and may download
+    /// further changes require restart. Resolution uses the execution host's resolver policy and may download
     /// packages or extensions or execute installation or build code. Use only trusted requirements.
     pub(super) requirements: Option<Requirements>,
     /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
@@ -125,7 +125,7 @@ pub(super) struct Requirements {
     /// to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
     /// Automatic R discovery accepts only plain package names. An idle worker that implements R
     /// preparation can add requirements without losing live state. Local package sources are
-    /// rejected because resolution runs with server permissions.
+    /// rejected by the managed resolution contract.
     #[serde(default, deserialize_with = "supplied_list")]
     #[schemars(with = "Vec<String>", inner(length(min = 1)))]
     pub(super) r: Option<Vec<String>>,

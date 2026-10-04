@@ -92,7 +92,7 @@ def test_sqlite_is_available_by_default(
             return client.finish()[3:]
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_managed_python_requires_home_for_default_extensions(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -101,10 +101,16 @@ def test_managed_python_requires_home_for_default_extensions(
         (root / "uv").symlink_to(shutil.which("uv"))
         env = dict(environment(root), UV_CACHE_DIR=str(root / "uv-cache"))
         env.pop("HOME", None)
-        with sql_client(binary, execution, env, record_in_project=False) as client:
+        with sql_client(
+            binary, execution, env, current_directory=root, record_in_project=False
+        ) as client:
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
-            diagnostic = "DuckDB extension preparation requires an absolute HOME at server startup"
+            diagnostic = (
+                "resolver sandbox requires HOME"
+                if execution is SANDBOXED
+                else "DuckDB extension preparation requires an absolute HOME at server startup"
+            )
             assert last_result_text(client) == diagnostic, failure
             assert client.send(requirements={"action": "get"}) == failure
             client.request("ping")
@@ -115,7 +121,14 @@ def test_managed_python_requires_home_for_default_extensions(
             return transcript[3:] + [{"stderr": errors}]
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
+def test_resolver_requires_home_for_default_extensions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return test_managed_python_requires_home_for_default_extensions(binary, execution)
+
+
+@executions(DIRECT)
 @requires(NATIVE_FIXTURES)
 def test_default_extension_failure_preserves_close_failure(
     binary: Path, execution: Execution
@@ -130,16 +143,59 @@ def test_default_extension_failure_preserves_close_failure(
             MCP_CONSOLE_TEST_CLOSE_MARKER=str(marker),
         )
         env[LOADER_VARIABLE] = str(build_interposer(root, "preparation_close_failure"))
-        # Python selection succeeds, but default extension preparation needs HOME.
+        # Fail extension preparation after Python selection, then inject a Close failure.
         env.pop("HOME", None)
-        with sql_client(binary, execution, env, record_in_project=False) as client:
+        if execution is SANDBOXED:
+            cache = root / "invalid-cache"
+            cache.write_text("not a directory")
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "resolver": {
+                            "environment": {
+                                "HOME": os.environ["HOME"],
+                                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache),
+                                LOADER_VARIABLE: env[LOADER_VARIABLE],
+                            },
+                            "filesystem": {
+                                "entries": [
+                                    {
+                                        "path": {
+                                            "type": "special",
+                                            "value": {"kind": "root"},
+                                        },
+                                        "access": "read",
+                                    },
+                                    {
+                                        "path": {"type": "path", "path": str(root)},
+                                        "access": "write",
+                                    },
+                                ]
+                            },
+                        }
+                    }
+                )
+            )
+        with sql_client(
+            binary, execution, env, current_directory=root, record_in_project=False
+        ) as client:
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
-            diagnostic = (
-                "DuckDB extension preparation requires an absolute HOME at server startup; "
-                "resolver input closed"
-            )
-            assert last_result_text(client) == diagnostic, failure
+            if execution is SANDBOXED:
+                diagnostic = last_result_text(client)
+                assert diagnostic.startswith("DuckDB extension resolution failed"), (
+                    diagnostic
+                )
+                assert "path exists but is not a directory!" in diagnostic, diagnostic
+                assert diagnostic.endswith("; resolver input closed"), diagnostic
+            else:
+                diagnostic = (
+                    "DuckDB extension preparation requires an absolute HOME at server startup; "
+                    "resolver input closed"
+                )
+                assert last_result_text(client) == diagnostic, failure
             assert marker.exists(), ("resolver did not receive Close", diagnostic)
             assert client.send(requirements={"action": "get"}) == failure
             client.request("ping")
@@ -147,7 +203,16 @@ def test_default_extension_failure_preserves_close_failure(
                 expected_exit_status=1
             )
             assert errors == diagnostic + "\n", errors
-            return transcript[3:] + [{"stderr": errors}]
+            records = transcript[3:] + [{"stderr": errors}]
+            return json.loads(json.dumps(records).replace(str(root), "<temporary>"))
+
+
+@executions(SANDBOXED)
+@requires(NATIVE_FIXTURES)
+def test_invalid_extension_cache_preserves_close_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return test_default_extension_failure_preserves_close_failure(binary, execution)
 
 
 @executions(DIRECT, SANDBOXED)
@@ -655,12 +720,14 @@ def test_interrupts_extension_preparation_before_worker_retirement(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        started = FifoCheckpoint.create(root / "started")
-        release = FifoCheckpoint.create(root / "release")
+        checkpoints = root / "uv-cache"
+        checkpoints.mkdir()
+        started = FifoCheckpoint.create(checkpoints / "started")
+        release = FifoCheckpoint.create(checkpoints / "release")
         env = dict(
             env,
-            UV_CACHE_DIR=str(root / "uv-cache"),
-            MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(root),
+            UV_CACHE_DIR=str(checkpoints),
+            MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(checkpoints),
         )
         try:
             with sql_client(binary, execution, env) as client:
@@ -1102,7 +1169,14 @@ def test_selected_environment_uses_preinstalled_duckdb(
         )
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text("python: .venv/bin/python\n")
+        config.write_text(
+            json.dumps(
+                {
+                    "python": ".venv/bin/python",
+                    "resolver": {"environment": {"HOME": str(root / "resolver-home")}},
+                }
+            )
+        )
         bin_dir = root / "bin"
         bin_dir.mkdir()
         uv = bin_dir / "uv"
@@ -1124,6 +1198,9 @@ def test_selected_environment_uses_preinstalled_duckdb(
                 python="sql_connection().execute('SELECT value FROM selected_state').fetchone()"
             )
             assert last_tool_text(client) == "(42,)\n"
+            client.send(control="restart")
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client), last_tool_text(client)
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["python"] == []
             refused = client.send(requirements={"duckdb": ["fts"]})

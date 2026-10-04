@@ -1,6 +1,7 @@
 """Install validated extension names with the selected managed Python DuckDB."""
 
 import json
+import os
 import re
 import sys
 
@@ -20,11 +21,13 @@ except ImportError as error:
         "candidate Python environment; include duckdb in requirements.python"
     ) from error
 
+config = {"extension_directory": request["extension_directory"]}
+if os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") == "1":
+    # Extension INSTALL does not consume the proxy environment itself.
+    config["http_proxy"] = os.environ["HTTP_PROXY"]
 connection = duckdb.connect(
     ":memory:",
-    config={
-        "extension_directory": request["extension_directory"],
-    },
+    config=config,
 )
 connection.execute("SET enable_progress_bar = false")
 try:

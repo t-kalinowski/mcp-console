@@ -409,7 +409,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                     assert (restricted_filesystem in description) == (
                         filesystem_access == restricted_filesystem
                     ), (name, description)
-                    assert "runs outside the sandbox" in description
+                    assert "separate native resolver sandbox" in description
                 config.write_text("invalid: [", encoding="utf-8")
                 listed = client.request("tools/list")
                 assert listed["result"]["tools"][0]["description"] == description

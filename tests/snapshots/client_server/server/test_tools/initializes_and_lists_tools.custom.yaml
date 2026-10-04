@@ -60,8 +60,9 @@ result:
         Evaluated code can read host files, cannot directly access the network,
         and can write in the worker's private temporary directory and to paths
         explicitly allowed by the launcher. Dependency resolution, when
-        available, runs outside the sandbox and may execute installation or
-        build code; use only trusted dependencies.
+        available, uses a separate native resolver sandbox on macOS and Linux
+        with configurable host reads, cache writes, and proxy destinations.
+        Installation or build code may run there; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -129,7 +130,7 @@ result:
               resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
               a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
               and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-              further changes require restart. Resolution runs with server permissions and may download
+              further changes require restart. Resolution uses the execution host's resolver policy and may download
               packages or extensions or execute installation or build code. Use only trusted requirements.
             type:
               - object
@@ -184,7 +185,7 @@ result:
                   to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
                   Automatic R discovery accepts only plain package names. An idle worker that implements R
                   preparation can add requirements without losing live state. Local package sources are
-                  rejected because resolution runs with server permissions.
+                  rejected by the managed resolution contract.
                 type: array
                 items:
                   type: string

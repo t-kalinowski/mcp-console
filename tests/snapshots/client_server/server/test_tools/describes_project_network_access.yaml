@@ -33,8 +33,10 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution, when available, runs outside the sandbox
-  and may execute installation or build code; use only trusted dependencies.
+  the network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: unrestricted restricted (mapping)
 description: >-
@@ -70,8 +72,10 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution, when available, runs outside the sandbox
-  and may execute installation or build code; use only trusted dependencies.
+  the network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: unrestricted enabled (string)
 description: >-
@@ -107,8 +111,10 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution, when available, runs outside the sandbox and
-  may execute installation or build code; use only trusted dependencies.
+  network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: unrestricted enabled (mapping)
 description: >-
@@ -144,8 +150,10 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution, when available, runs outside the sandbox and
-  may execute installation or build code; use only trusted dependencies.
+  network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: restricted restricted (string)
 description: >-
@@ -182,9 +190,10 @@ description: >-
 
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: restricted restricted (mapping)
 description: >-
@@ -221,9 +230,10 @@ description: >-
 
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: restricted enabled (string)
 description: >-
@@ -260,9 +270,10 @@ description: >-
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: restricted enabled (mapping)
 description: >-
@@ -299,9 +310,10 @@ description: >-
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: external-sandbox restricted (string)
 description: >-
@@ -338,8 +350,10 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: external-sandbox restricted (mapping)
 description: >-
@@ -376,8 +390,10 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: external-sandbox enabled (string)
 description: >-
@@ -414,8 +430,10 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: external-sandbox enabled (mapping)
 description: >-
@@ -452,8 +470,10 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: restricted
 description: >-
@@ -490,9 +510,10 @@ description: >-
 
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: enabled
 description: >-
@@ -529,9 +550,10 @@ description: >-
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: proxy
 description: >-
@@ -569,8 +591,9 @@ description: >-
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  resolution, when available, uses a separate native resolver sandbox on macOS
+  and Linux with configurable host reads, cache writes, and proxy destinations.
+  Installation or build code may run there; use only trusted dependencies.
 ---
 configuration: proxy with local binding
 description: >-
@@ -608,8 +631,9 @@ description: >-
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  resolution, when available, uses a separate native resolver sandbox on macOS
+  and Linux with configurable host reads, cache writes, and proxy destinations.
+  Installation or build code may run there; use only trusted dependencies.
 ---
 configuration: proxy with network enabled
 description: >-
@@ -647,8 +671,9 @@ description: >-
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  resolution, when available, uses a separate native resolver sandbox on macOS
+  and Linux with configurable host reads, cache writes, and proxy destinations.
+  Installation or build code may run there; use only trusted dependencies.
 ---
 configuration: native network representation
 description: >-
@@ -685,9 +710,10 @@ description: >-
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: external enforcement
 description: >-
@@ -724,8 +750,10 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: no sandbox
 description: >-

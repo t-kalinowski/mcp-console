@@ -312,7 +312,8 @@ fn description_for_launch(
         Some("docker_sandbox") => "Evaluated code runs inside a Console-owned Docker Sandbox microVM, enforced by Docker Sandboxes and its current inherited machine/organization policy and host integrations. Both relay and worker run in the VM. Native filesystem, network, proxy, and metadata defaults do not apply. Writable shares can expose .git, .agents, and controller records. Provider rules can change during the session. --no-sandbox retains the microVM and cannot bypass Docker policy.".to_string(),
         Some("docker") if no_sandbox => "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.".to_string(),
         _ if no_sandbox => format!("Evaluated code runs without a sandbox, with {} permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.", if remote { "the remote account's" } else { "the server's" }),
-        _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the sandbox and may execute installation or build code; use only trusted dependencies."),
+        _ if remote => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the worker sandbox with the remote account's host permissions and may execute installation or build code; use only trusted dependencies."),
+        _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."),
     };
     if let Some(target) = target {
         // Only explicit placement fields belong in presentation, never discovered identities

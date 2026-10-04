@@ -404,8 +404,8 @@ fn resolve_r_with_process(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<ManagedR, String> {
-    // `ir` resolves and installs remote packages with normal host cache and
-    // network access. Requirement strings are process arguments, never R source.
+    // `ir` uses the preparation process's cache and network permissions.
+    // Requirement strings are process arguments, never R source.
     let mut command = configuration.ir.command();
     command
         .arg("run")
