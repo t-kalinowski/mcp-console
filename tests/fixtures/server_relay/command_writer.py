@@ -54,6 +54,9 @@ if generation <= int(os.environ["MCP_CONSOLE_TEST_WRITER_RESTARTS"]):
         send("interrupt_result", request_id=command["request_id"], error=None)
         if mode == "interrupt_after_eof":
             (root / "late-ack").touch()
+            # Stay alive until the test observes the selected SIGTERM. Exiting
+            # here could let retirement skip the signal and strand its checkpoint.
+            wait("ack-1")
     else:
         if mode != "stdout":
             # Consume only the beginning of the frame, then stop reading. The

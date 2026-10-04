@@ -236,6 +236,7 @@ def interrupt_shutdown_case(
                     "relay emitted interrupt receipt after command EOF",
                     client=client,
                 )
+                ack.release()
                 kill_release.release()
                 client.receive(interrupt)
                 assert interrupt["result"] == {
