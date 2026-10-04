@@ -228,6 +228,7 @@ def test_reports_resolver_interrupt_permission_error(
             binary,
             execution.serve("--worker", str(zod)),
             environment,
+            temporary_path,
         )
         resolver_group = None
         passed = False
@@ -331,6 +332,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             binary,
             execution.serve("--worker", str(zod)),
             environment,
+            temporary_path,
         )
         resolver_group = None
         passed = False
