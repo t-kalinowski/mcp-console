@@ -4,6 +4,8 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
+mod windows_framing;
+
 #[repr(C)]
 struct Overlapped {
     internal: usize,
@@ -19,6 +21,29 @@ unsafe extern "system" {
     fn ReadFile(h: *mut c_void, b: *mut u8, n: u32, count: *mut u32, o: *mut Overlapped) -> i32;
     fn WriteFile(h: *mut c_void, b: *const u8, n: u32, count: *mut u32, o: *mut Overlapped) -> i32;
     fn GetOverlappedResult(h: *mut c_void, o: *mut Overlapped, count: *mut u32, wait: i32) -> i32;
+    fn FlushFileBuffers(handle: *mut c_void) -> i32;
+    fn SetEvent(handle: *mut c_void) -> i32;
+    fn WaitForSingleObject(handle: *mut c_void, timeout: u32) -> u32;
+    fn SetHandleInformation(handle: *mut c_void, mask: u32, flags: u32) -> i32;
+    fn CreateNamedPipeW(
+        name: *const u16,
+        access: u32,
+        mode: u32,
+        instances: u32,
+        output: u32,
+        input: u32,
+        timeout: u32,
+        security: *const c_void,
+    ) -> *mut c_void;
+    fn CreateFileW(
+        name: *const u16,
+        access: u32,
+        sharing: u32,
+        security: *const c_void,
+        creation: u32,
+        flags: u32,
+        template: *mut c_void,
+    ) -> *mut c_void;
 }
 unsafe extern "C" {
     fn _close(fd: i32) -> i32;
@@ -62,7 +87,11 @@ fn transfer(handle: *mut c_void, bytes: &mut [u8], write: bool) -> io::Result<us
 }
 
 fn send(handle: *mut c_void, text: &str) -> io::Result<()> {
-    let mut bytes = text.as_bytes().to_vec();
+    send_bytes(handle, text.as_bytes())
+}
+
+fn send_bytes(handle: *mut c_void, bytes: &[u8]) -> io::Result<()> {
+    let mut bytes = bytes.to_vec();
     let mut offset = 0;
     while offset < bytes.len() {
         offset += transfer(handle, &mut bytes[offset..], true)?;
@@ -75,8 +104,14 @@ fn main() -> io::Result<()> {
     let read = handle("MCP_CONSOLE_SIDEBAND_READ_HANDLE");
     let write = handle("MCP_CONSOLE_SIDEBAND_WRITE_HANDLE");
     let scenario = std::env::var("TEST_WORKER_SCENARIO").unwrap();
+    if scenario == "framing_holder" {
+        return windows_framing::hold(write);
+    }
     let mut ready = TcpStream::connect(std::env::var("TEST_WORKER_READY").unwrap())?;
     writeln!(ready, "{}", std::process::id())?;
+    if scenario.starts_with("framing_") {
+        return windows_framing::run(&scenario, read, write, ready);
+    }
     drop(ready);
     if scenario == "closed_stdin" {
         assert_eq!(unsafe { _close(0) }, 0);
