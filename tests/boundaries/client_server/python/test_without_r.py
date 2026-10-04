@@ -1288,15 +1288,14 @@ def test_limits_live_python_additions_to_new_idle_distributions(
             assert busy["isError"], busy
             assert "already evaluating" in last_result_text(client), busy
             client.expect("[prepared]", requirements={"python": ["numpy"]})
-            client.send(stdin="ready\n")
-            assert "ready" in last_result_text(client)
+            # Enqueuing stdin can return before the cell resumes or completes.
+            client.expect("'ready'\n", stdin="ready\n")
             client.send(python="import pdb; pdb.set_trace(); print('debugger resumed')")
             assert "(Pdb)" in last_result_text(client)
             busy = client.send(requirements={"python": ["py-yaml12"]})
             assert busy["isError"], busy
             assert "already evaluating" in last_result_text(client), busy
-            client.send(stdin="continue\n")
-            assert "debugger resumed" in last_result_text(client)
+            client.expect("debugger resumed\n", stdin="continue\n")
             for requirements in (
                 {"python": ["NumPy==0"]},
                 {"python_version": ["<3"]},

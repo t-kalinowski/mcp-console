@@ -6,52 +6,9 @@ const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SendArguments {
-    /// One complete R cell evaluated in persistent global state. Prefer Console for R execution,
-    /// including tests and package checks. When a fresh session is needed and existing in-memory
-    /// state can be discarded, send `control: "restart"` and `r` together; the code runs in the new
-    /// worker. For background execution, use `timeout_ms: 0`, then poll with an empty `send`.
-    /// Avoid `callr` merely to obtain fresh state or nonblocking execution. Use a subprocess when
-    /// the task requires separate process isolation, preserving the current session while running
-    /// independently, or ordinary R behavior without Console's runtime hooks.
-    ///
-    /// The cell's final visible expression autoprints through R's normal console display; R also
-    /// autoprints earlier visible top-level expressions. Leave the primary result last and print
-    /// only when additional output is needed.
-    /// When dynamic resolution is available, the built-in worker resolves missing plain CRAN
-    /// package names on demand through `library()`, `require()`, `requireNamespace()`,
-    /// `loadNamespace()`, `::`, or `:::`. Use packages directly; do not probe package availability
-    /// or call `install.packages()`. Resolution makes a package available but attaches it only
-    /// through the original `library()` or `require()` call. In a bare runtime, packages must
-    /// already be installed and these operations keep their ordinary R behavior. R source is not
-    /// scanned in advance. When both runtimes and their bridge are available, read Python globals
-    /// through `py$name`. With R-owned managed DuckDB active, R data frames are directly queryable
-    /// by name from later SQL cells. `sql_connection()` returns the R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
-    /// cells with `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
-    /// selected connection before disconnecting it. Default-device plots return as PNG images. Keep
-    /// all drawing operations for one plot in the same cell. Set persistent dimensions with
-    /// `options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`;
-    /// width and height are in inches. Omit this field for polling or stdin-only calls.
+    #[schemars(description = super::presentation::r_description())]
     pub(super) r: Option<String>,
-    /// One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
-    /// autoprints through Python's normal display hook. Leave the primary result last and print only
-    /// when additional output is needed. When dynamic resolution is available and an import is
-    /// missing, the built-in managed worker resolves a PyPI distribution on demand, using a curated mapping for well-known
-    /// import/distribution differences and otherwise assuming the distribution matches the top-level
-    /// module. Python source is not scanned; resolution starts only when execution reaches the import.
-    /// Use `requirements.python` when the distribution differs from the inferred name, exact registry
-    /// metadata is needed, or the package should be prepared before the cell. A user-selected Python
-    /// environment or bare runtime disables both automatic resolution and managed requirements;
-    /// import packages already installed there directly. When both runtimes and their bridge are
-    /// available, read R globals and call R functions through `r.name`. Select a user-owned DB-API
-    /// connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
-    /// before querying them. Without R, `sql_connection()` returns the Python-owned connection;
-    /// register frames explicitly with `sql_connection().register(name, frame)`. At cell end,
-    /// including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG
-    /// image and is closed.
-    /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
-    /// polling or stdin-only calls.
+    #[schemars(description = super::presentation::python_description())]
     pub(super) python: Option<String>,
     /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
     /// used by default when its adapter and packages are available and keeps a persistent catalog.
@@ -69,13 +26,7 @@ pub(super) struct SendArguments {
     /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
     /// or stdin-only calls.
     pub(super) sql: Option<String>,
-    /// Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-    /// interruption of active preparation or SIGINT from the live worker and preserves in-memory state. After
-    /// successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
-    /// earlier evaluation or attempting an optional following cell; the cell is not run if the
-    /// interrupted evaluation remains active. When `requirements` is available, restart resolves
-    /// same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
-    /// and unread-stdin state and sends same-call stdin and code only to the replacement.
+    #[schemars(description = super::presentation::control_description())]
     pub(super) control: Option<SendControl>,
     /// Inspect or manage retained R packages, Python packages, and DuckDB extensions.
     /// action=get returns a read-only snapshot, including Python constraints and separate runtime

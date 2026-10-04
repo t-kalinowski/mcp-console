@@ -1,0 +1,143 @@
+//! Named prose sections; selection belongs to the captured presentation profile.
+
+pub(super) const BUILTIN_SCOPE: &str = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls."#;
+
+pub(super) const SHARING: &str = r#"Language fields describe the configured interface, not installed runtimes. With both runtimes and their bridge available, Python reads R globals through `r.name` and R reads Python globals through `py$name`. "#;
+
+pub(super) const MANAGED_SQL_SHARING: &str = r#"R-owned managed DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+
+pub(super) const PREPARED_SQL_SHARING: &str = r#"R-owned Console-owned DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+
+pub(super) const MANAGED_PREPARATION: &str = r#"Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages."#;
+
+pub(super) const PREPARED_PREPARATION: &str =
+    r#"Dependency preparation is unavailable on this target."#;
+
+pub(super) const SEND_ORDERING: &str = r#" cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain."#;
+
+pub(super) const CELL_FIELDS: &str = "`r`, `python`, or `sql`";
+
+pub(super) const WINDOWS_CELL_FIELDS: &str = "`r` or `python`";
+
+pub(super) const POLLING: &str = r#"Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering."#;
+
+pub(super) const OUTPUT: &str = r#"Each result has at most 8 KiB of UTF-8 text, including notices; oversized output keeps its beginning and latest tail. Images have separate limits. Retained raw-log paths are relative to the server's launch directory for project recordings and absolute for home recordings (both on the controller for remote targets). Full retained text requires filesystem access there through existing tools; Console provides no read/search interface."#;
+
+pub(super) const CUSTOM_SCOPE: &str = r#"Persistent custom-worker workbench. Language fields describe the configured interface; supported languages, evaluation, display, SQL, and cross-language sharing depend on the selected worker. Console does not supply built-in runtime packages, automatic import hooks, or a default SQL connection to custom workers. Managed requirements require execution-host resolver support and compatible worker preparation callbacks; Python requirements are unavailable with a custom worker."#;
+
+pub(super) const CUSTOM_SWITCHING: &str =
+    r#" Switch languages when useful, using capabilities supplied by the worker."#;
+
+pub(super) const WINDOWS_SCOPE: &str = r#"Persistent R and Python workbench for local execution on Windows. State persists across calls. Enabled runtimes initialize in the background and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported."#;
+
+pub(super) const SQL_SELECTION: &str = r#"For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. "#;
+
+pub(super) const R_SELECTION: &str =
+    r#"Use R for vectorized data and string operations, statistics, and plots. "#;
+
+pub(super) const PYTHON_SELECTION: &str =
+    r#"Use Python when its libraries or format-specific parsing simplify the task. "#;
+
+pub(super) const SWITCHING: &str = r#"Switch languages when useful, reusing persistent state."#;
+
+pub(super) const SQL_FILES: &str =
+    r#"DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. "#;
+
+pub(super) const SQL_DEFAULTS: &str = r#"Built-in managed defaults include SQLite when dependency preparation is available; sessions without DuckDB preparation require preinstalled extensions. "#;
+
+pub(super) const SQL_SQLITE: &str = r#"For SQLite, use an available sqlite extension and attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. "#;
+
+pub(super) const SQL_EXTENSIONS: &str = r#"When preparation is supported, prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#;
+
+pub(super) const SQL_RESULTS: &str = r#"SQL results include bounded table previews that abbreviate long text cells; return focused queries and summaries for inspection."#;
+
+pub(super) const CUSTOM_R: &str = r#"One complete R cell, if supported by the custom worker. Evaluation, display, packages, graphics, and bridges are supplied by that worker. Omit for polling or stdin-only calls."#;
+
+pub(super) const CUSTOM_PYTHON: &str = r#"One complete Python cell, if supported by the custom worker. Evaluation, display, packages, graphics, and bridges are supplied by that worker. Omit for polling or stdin-only calls."#;
+
+pub(super) const CUSTOM_SQL: &str = r#"One complete SQL cell, if supported by the custom worker. Its selected connection supplies the dialect, packages, and result display. Console does not create a default database for a custom worker. Omit for polling or stdin-only calls."#;
+
+pub(super) const PREPARED_R: &str = r#"One complete R cell when R is available. Expressions display automatically; R plots return as PNG images. When both runtimes and their bridge are available, read Python globals through py$name. R-owned DuckDB can query R global data frames by name. sql_connection() returns the R-owned connection; console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable. Omit for polling or stdin-only calls."#;
+
+pub(super) const PREPARED_PYTHON: &str = r#"One complete Python cell when Python is available. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When both runtimes and their bridge are available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Without R, sql_connection() returns the active Python-owned connection. Missing imports report ordinary Python errors; automatic package installation is unavailable. Omit for polling or stdin-only calls."#;
+
+pub(super) const PREPARED_CONTROL: &str = r#"Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the 100-millisecond interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable."#;
+
+pub(super) const PREPARED_SQL: &str = r#"One complete SQL cell through the active R DBI or Python DB-API connection, depending on available runtimes and the selected connection. Console opens its in-memory DuckDB catalog during background startup when SQL is enabled and the adapter and DuckDB are preinstalled; first-query work remains deferred. R-owned DuckDB can query R global data frames by name; without R, Python data frames require explicit registration with sql_connection().register(name, frame). console_sql_connection(connection) selects a user-owned connection; console_sql_connection(None) in Python or console_sql_connection(NULL) in R restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Use the selected driver's SQL dialect; DuckDB CLI dot commands are unsupported. Extensions must be preinstalled; Console does not install extensions or resolve packages. Worker replacement resets the catalog. Omit for polling or stdin-only calls."#;
+
+pub(super) const R_RUNTIME: &str = r#"One complete R cell evaluated in persistent global state. Prefer Console for R execution,
+including tests and package checks. When a fresh session is needed and existing in-memory
+state can be discarded, send `control: "restart"` and `r` together; the code runs in the new
+worker. For background execution, use `timeout_ms: 0`, then poll with an empty `send`.
+Avoid `callr` merely to obtain fresh state or nonblocking execution. Use a subprocess when
+the task requires separate process isolation, preserving the current session while running
+independently, or ordinary R behavior without Console's runtime hooks.
+
+The cell's final visible expression autoprints through R's normal console display; R also
+autoprints earlier visible top-level expressions. Leave the primary result last and print
+only when additional output is needed.
+When dynamic resolution is available, the built-in worker resolves missing plain CRAN
+package names on demand through `library()`, `require()`, `requireNamespace()`,
+`loadNamespace()`, `::`, or `:::`. Use packages directly; do not probe package availability
+or call `install.packages()`. Resolution makes a package available but attaches it only
+through the original `library()` or `require()` call. In a bare runtime, packages must
+already be installed and these operations keep their ordinary R behavior. R source is not
+scanned in advance. When both runtimes and their bridge are available, read Python globals
+through `py$name`."#;
+
+pub(super) const R_SQL: &str = r#" With R-owned managed DuckDB active, R data frames are directly queryable
+by name from later SQL cells. `sql_connection()` returns the R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
+cells with `console_sql_connection(connection)` and restore managed DuckDB with
+`console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
+selected connection before disconnecting it."#;
+
+pub(super) const R_PLOTS: &str = r#" Default-device plots return as PNG images. Keep
+all drawing operations for one plot in the same cell. Set persistent dimensions with
+`options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`;
+width and height are in inches. Omit this field for polling or stdin-only calls."#;
+
+pub(super) const PYTHON_RUNTIME: &str = r#"One complete Python cell evaluated in persistent `__main__` state. Its final visible expression
+autoprints through Python's normal display hook. Leave the primary result last and print only
+when additional output is needed. When dynamic resolution is available and an import is
+missing, the built-in managed worker resolves a PyPI distribution on demand, using a curated mapping for well-known
+import/distribution differences and otherwise assuming the distribution matches the top-level
+module. Python source is not scanned; resolution starts only when execution reaches the import.
+Use `requirements.python` when the distribution differs from the inferred name, exact registry
+metadata is needed, or the package should be prepared before the cell. A user-selected Python
+environment or bare runtime disables both automatic resolution and managed requirements;
+import packages already installed there directly. When both runtimes and their bridge are
+available, read R globals and call R functions through `r.name`."#;
+
+pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API
+connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
+`console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
+before querying them. Without R, `sql_connection()` returns the Python-owned connection;
+register frames explicitly with `sql_connection().register(name, frame)`."#;
+
+pub(super) const PYTHON_PLOTS: &str = r#" At cell end,
+including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG
+image and is closed.
+`show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
+polling or stdin-only calls."#;
+
+pub(super) const CONTROL_START: &str = r#"Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
+"#;
+
+pub(super) const UNIX_INTERRUPT: &str =
+    "interruption of active preparation or SIGINT from the live worker";
+
+pub(super) const WINDOWS_INTERRUPT: &str =
+    "termination of the active host resolver or a cooperative interrupt from the live worker";
+
+pub(super) const CONTROL_END: &str = r#" and preserves in-memory state. After
+successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
+earlier evaluation or attempting an optional following cell; the cell is not run if the
+interrupted evaluation remains active. When `requirements` is available, restart resolves
+same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
+and unread-stdin state and sends same-call stdin and code only to the replacement."#;
+
+pub(super) fn prepared_target(source: &str) -> String {
+    format!(
+        "Runtime availability depends on the configured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
+    )
+}

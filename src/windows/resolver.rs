@@ -129,7 +129,10 @@ impl Child {
         Ok(())
     }
 
-    pub(crate) fn retire(&mut self) -> io::Result<ExitStatus> {
+    pub(crate) fn retire(
+        &mut self,
+        settle_observation: impl FnOnce(Duration) -> io::Result<()>,
+    ) -> io::Result<ExitStatus> {
         self.terminate()?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -150,6 +153,10 @@ impl Child {
                 return Err(io::Error::last_os_error());
             }
             if accounting.ActiveProcesses == 0 {
+                // Observation shares this allowance and finishes before the
+                // sole reaper. On failure, its retained handle still pins the
+                // process while asynchronous kernel termination completes.
+                settle_observation(deadline.saturating_duration_since(Instant::now()))?;
                 return self.process.wait();
             }
             let remaining = deadline.saturating_duration_since(Instant::now());

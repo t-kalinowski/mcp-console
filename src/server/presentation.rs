@@ -1,73 +1,63 @@
 //! Tool prose derived only from captured launch configuration.
+mod sections;
+
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
+use serde_json::{Map, Value};
 
 use super::ConsoleServer;
-
 use crate::cell::Languages;
+use crate::settings::{Compute, SandboxSettings, Target};
+
+/// Requested interface and preparation mode, never discovered runtime availability.
+struct Profile {
+    languages: Languages,
+    builtin: bool,
+    prepared: Option<&'static str>,
+}
 
 impl ConsoleServer {
     pub(super) fn configured_tool_router(
         languages: Languages,
         builtin: bool,
-        policy: &crate::settings::SandboxSettings,
+        policy: &SandboxSettings,
         no_sandbox: bool,
-        target: Option<&crate::settings::Target>,
+        target: Option<&Target>,
     ) -> ToolRouter<Self> {
-        let prepared = target.and_then(|target| match &target.compute {
-            crate::settings::Compute::Docker(_) => Some("image"),
-            crate::settings::Compute::DockerSandbox(_) => Some("template"),
-            crate::settings::Compute::Host {} => None,
-        });
+        let profile = Profile {
+            languages,
+            builtin,
+            prepared: target.and_then(|target| match &target.compute {
+                Compute::Docker(_) => Some("image"),
+                Compute::DockerSandbox(_) => Some("template"),
+                Compute::Host {} => None,
+            }),
+        };
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
-        let description = send
-            .attr
-            .description
-            .as_mut()
-            .expect("send tool must have a description")
-            .to_mut();
-        description.push_str("\n\n");
-        description.push_str(&self::description(policy, no_sandbox, target));
+        send.attr.description = Some(profile.description(policy, no_sandbox, target).into());
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
-            .and_then(serde_json::Value::as_object_mut)
+            .and_then(Value::as_object_mut)
             .expect("send schema must have object properties");
         let control = properties
             .get_mut("control")
-            .and_then(serde_json::Value::as_object_mut)
+            .and_then(Value::as_object_mut)
             .expect("send control schema must be an object");
-        control.insert(
-            "type".to_string(),
-            serde_json::Value::String("string".to_string()),
-        );
-        if let Some(values) = control
-            .get_mut("enum")
-            .and_then(serde_json::Value::as_array_mut)
-        {
+        control.insert("type".to_string(), Value::String("string".to_string()));
+        if let Some(values) = control.get_mut("enum").and_then(Value::as_array_mut) {
             values.retain(|value| !value.is_null());
-        }
-        #[cfg(windows)]
-        if let Some(description) = control.get_mut("description") {
-            *description = description
-                .as_str()
-                .unwrap_or_default()
-                .replace(
-                    "interruption of active preparation or SIGINT from the live worker",
-                    "termination of the active host resolver or a cooperative interrupt from the live worker",
-                )
-                .into();
         }
         // Omission carries meaning for get/reset. Do not advertise payload defaults.
         for property in properties
             .get_mut("requirements")
             .and_then(|requirements| requirements.get_mut("properties"))
-            .and_then(serde_json::Value::as_object_mut)
+            .and_then(Value::as_object_mut)
             .expect("requirements schema properties")
             .values_mut()
         {
@@ -76,8 +66,7 @@ impl ConsoleServer {
                 .expect("requirement property schema")
                 .remove("default");
         }
-        // Keep the normal tool prose and nested requirements unchanged; evals
-        // only need to project which direct code fields the client can call.
+        // Configured fields stay visible even when an interpreter is unavailable.
         for (field, enabled) in [
             ("r", languages.r),
             ("python", languages.python),
@@ -87,53 +76,8 @@ impl ConsoleServer {
                 properties.shift_remove(field);
             }
         }
-        let mut guidance = String::new();
-        if languages.sql {
-            guidance.push_str("For databases and structured files, consider DuckDB SQL first for schema inspection, filtering, joins, aggregation, and nested JSON extraction. ");
-        }
-        if languages.r {
-            guidance.push_str(
-                "Use R for vectorized data and string operations, statistics, and plots. ",
-            );
-        }
-        if languages.python {
-            guidance.push_str(
-                "Use Python when its libraries or format-specific parsing simplify the task. ",
-            );
-        }
-        if [languages.r, languages.python, languages.sql]
-            .into_iter()
-            .filter(|enabled| *enabled)
-            .count()
-            > 1
-        {
-            guidance.push_str("Switch languages when useful, reusing persistent state.");
-        }
-        guidance.truncate(guidance.trim_end().len());
-        if languages.sql {
-            guidance.push_str("\n\nDuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is built in. ");
-            if builtin && prepared.is_none() {
-                guidance.push_str("Built-in managed defaults include SQLite when dependency preparation is available; sessions without DuckDB preparation require preinstalled extensions. ");
-            }
-            guidance.push_str(r#"For SQLite, use an available sqlite extension and attach the database read-only with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. When preparation is supported, prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#);
-            guidance.push_str("SQL results include bounded table previews that abbreviate long text cells; return focused queries and summaries for inspection.");
-        }
-        *description = description.replacen(
-            "State persists across calls. ",
-            &format!("State persists across calls.\n\n{guidance}\n\n"),
-            1,
-        );
-        if !builtin {
-            configure_custom(description, properties);
-        }
-        if let Some(source) = prepared {
-            configure_prepared(description, properties, source);
-        }
-        #[cfg(windows)]
-        if builtin {
-            configure_windows(description, properties);
-        }
-        if prepared.is_some() {
+        profile.configure_fields(properties);
+        if profile.prepared.is_some() {
             let requirements = properties
                 .get_mut("requirements")
                 .expect("requirements schema");
@@ -149,112 +93,163 @@ impl ConsoleServer {
     }
 }
 
-use crate::settings::{Compute, SandboxSettings, Target};
-use serde_json::{Map, Value};
+impl Profile {
+    fn multiple_languages(&self) -> bool {
+        [self.languages.r, self.languages.python, self.languages.sql]
+            .into_iter()
+            .filter(|enabled| *enabled)
+            .count()
+            > 1
+    }
 
-#[cfg(windows)]
-fn configure_windows(description: &mut String, properties: &mut Map<String, Value>) {
-    let (_, remaining) = description
-        .split_once("\n\nSend one complete")
-        .expect("send description");
-    *description = format!(
-        "Persistent R and Python workbench for local execution on Windows. State persists across calls. Enabled runtimes initialize in the background and can run without the other installed. With both runtimes and reticulate available, Python reads R globals through r.name and R can use reticulate to access Python. Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported.\n\nSend one complete{remaining}"
-    ).replace("`r`, `python`, or `sql`", "`r` or `python`");
-    // Retain shared runtime and preparation guidance, but omit SQL-only helpers.
-    for (field, start, end) in [
-        (
-            "r",
-            " With R-owned managed DuckDB active,",
-            " Default-device plots",
-        ),
-        ("python", " Select a user-owned DB-API", " At cell end,"),
-    ] {
-        if let Some(property) = properties.get_mut(field) {
-            let text = property["description"]
-                .as_str()
-                .expect("language description");
-            let (before, remaining) = text.split_once(start).expect("SQL guidance");
-            let (_, after) = remaining.split_once(end).expect("plot guidance");
-            property["description"] = format!("{before}{end}{after}").into();
+    fn description(
+        &self,
+        policy: &SandboxSettings,
+        no_sandbox: bool,
+        target: Option<&Target>,
+    ) -> String {
+        let mut description = if !self.builtin {
+            let mut scope = sections::CUSTOM_SCOPE.to_string();
+            if self.multiple_languages() {
+                scope.push_str(sections::CUSTOM_SWITCHING);
+            }
+            scope
+        } else if cfg!(windows) {
+            sections::WINDOWS_SCOPE.to_string()
+        } else {
+            let mut scope = sections::BUILTIN_SCOPE.to_string();
+            scope.push_str("\n\n");
+            scope.push_str(&self.language_guidance());
+            scope.push_str("\n\n");
+            scope.push_str(sections::SHARING);
+            scope.push_str(if self.prepared.is_some() {
+                sections::PREPARED_SQL_SHARING
+            } else {
+                sections::MANAGED_SQL_SHARING
+            });
+            scope.push_str(if self.prepared.is_some() {
+                sections::PREPARED_PREPARATION
+            } else {
+                sections::MANAGED_PREPARATION
+            });
+            scope
+        };
+        description.push_str("\n\nSend one complete ");
+        description.push_str(if self.builtin && cfg!(windows) {
+            sections::WINDOWS_CELL_FIELDS
+        } else {
+            sections::CELL_FIELDS
+        });
+        description.push_str(sections::SEND_ORDERING);
+        description.push_str("\n\n");
+        description.push_str(sections::POLLING);
+        description.push_str("\n\n");
+        description.push_str(sections::OUTPUT);
+        description.push_str("\n\n");
+        description.push_str(&description_for_launch(policy, no_sandbox, target));
+        if let Some(source) = self.prepared {
+            description.push_str("\n\n");
+            description.push_str(&sections::prepared_target(source));
+        }
+        description
+    }
+
+    fn language_guidance(&self) -> String {
+        let mut guidance = String::new();
+        for (enabled, section) in [
+            (self.languages.sql, sections::SQL_SELECTION),
+            (self.languages.r, sections::R_SELECTION),
+            (self.languages.python, sections::PYTHON_SELECTION),
+        ] {
+            if enabled {
+                guidance.push_str(section);
+            }
+        }
+        if self.multiple_languages() {
+            guidance.push_str(sections::SWITCHING);
+        }
+        guidance.truncate(guidance.trim_end().len());
+        if self.languages.sql {
+            guidance.push_str("\n\n");
+            guidance.push_str(sections::SQL_FILES);
+            if self.prepared.is_none() {
+                guidance.push_str(sections::SQL_DEFAULTS);
+            }
+            guidance.push_str(sections::SQL_SQLITE);
+            if self.prepared.is_none() {
+                guidance.push_str(sections::SQL_EXTENSIONS);
+            }
+            guidance.push_str(sections::SQL_RESULTS);
+        }
+        guidance
+    }
+
+    fn configure_fields(&self, properties: &mut Map<String, Value>) {
+        if let Some(source) = self.prepared {
+            for (field, section) in [
+                ("r", sections::PREPARED_R),
+                ("python", sections::PREPARED_PYTHON),
+                ("sql", sections::PREPARED_SQL),
+                ("control", sections::PREPARED_CONTROL),
+            ] {
+                if let Some(property) = properties.get_mut(field) {
+                    property["description"] =
+                        format!("{section} Dependencies must be preinstalled in the {source}.")
+                            .into();
+                }
+            }
+        } else if !self.builtin {
+            for (field, section) in [
+                ("r", sections::CUSTOM_R),
+                ("python", sections::CUSTOM_PYTHON),
+                ("sql", sections::CUSTOM_SQL),
+            ] {
+                if let Some(property) = properties.get_mut(field) {
+                    property["description"] = section.into();
+                }
+            }
         }
     }
 }
 
-fn configure_custom(description: &mut String, properties: &mut Map<String, Value>) {
-    let (_, remaining) = description
-        .split_once("\n\nSend one complete")
-        .expect("send description");
-    let switching = if ["r", "python", "sql"]
-        .into_iter()
-        .filter(|field| properties.contains_key(*field))
-        .count()
-        > 1
-    {
-        " Switch languages when useful, using capabilities supplied by the worker."
+// Schemars uses the same named sections for the ordinary field metadata.
+// SQL-only sections are omitted on Windows at construction, never removed by prose matching.
+pub(super) fn r_description() -> String {
+    let mut description = sections::R_RUNTIME.to_string();
+    if !cfg!(windows) {
+        description.push_str(sections::R_SQL);
+    }
+    description.push_str(sections::R_PLOTS);
+    description
+}
+
+pub(super) fn python_description() -> String {
+    let mut description = sections::PYTHON_RUNTIME.to_string();
+    if !cfg!(windows) {
+        description.push_str(sections::PYTHON_SQL);
+    }
+    description.push_str(sections::PYTHON_PLOTS);
+    description
+}
+
+pub(super) fn control_description() -> String {
+    let interrupt = if cfg!(windows) {
+        sections::WINDOWS_INTERRUPT
     } else {
-        ""
+        sections::UNIX_INTERRUPT
     };
-    *description = format!(
-        "Persistent custom-worker workbench. Language fields describe the configured interface; supported languages, evaluation, display, SQL, and cross-language sharing depend on the selected worker. Console does not supply built-in runtime packages, automatic import hooks, or a default SQL connection to custom workers. Managed requirements require execution-host resolver support and compatible worker preparation callbacks; Python requirements are unavailable with a custom worker.{switching}\n\nSend one complete{remaining}"
-    );
-    for (field, text) in [
-        (
-            "r",
-            "One complete R cell, if supported by the custom worker. Evaluation, display, packages, graphics, and bridges are supplied by that worker. Omit for polling or stdin-only calls.",
-        ),
-        (
-            "python",
-            "One complete Python cell, if supported by the custom worker. Evaluation, display, packages, graphics, and bridges are supplied by that worker. Omit for polling or stdin-only calls.",
-        ),
-        (
-            "sql",
-            "One complete SQL cell, if supported by the custom worker. Its selected connection supplies the dialect, packages, and result display. Console does not create a default database for a custom worker. Omit for polling or stdin-only calls.",
-        ),
-    ] {
-        if let Some(property) = properties.get_mut(field) {
-            property["description"] = text.into();
-        }
-    }
+    format!(
+        "{}{interrupt}{}",
+        sections::CONTROL_START,
+        sections::CONTROL_END
+    )
 }
 
-/// Prepared-target restrictions are known from configuration, independent of the probe.
-fn configure_prepared(description: &mut String, properties: &mut Map<String, Value>, source: &str) {
-    *description = description.replace("managed DuckDB", "Console-owned DuckDB").replace(
-        "Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages.",
-        "Dependency preparation is unavailable on this target.",
-    ).replace(
-        r#"When preparation is supported, prepare additional extensions with `requirements={"action":"add","duckdb":["fts"]}`. "#,
-        "",
-    );
-    description.push_str(&format!(
-        "\n\nRuntime availability depends on the configured {source}. All dependencies and DuckDB extensions must be preinstalled there; Console never invokes dependency resolvers or installs missing imports. Rebuild the {source} and start a new server session to change its runtime or packages. Plain worker restart retains the selected interpreter and creates fresh language state and an empty in-memory SQL catalog."
-    ));
-    for (field, text) in [
-        (
-            "r",
-            "One complete R cell when R is available. Expressions display automatically; R plots return as PNG images. When both runtimes and their bridge are available, read Python globals through py$name. R-owned DuckDB can query R global data frames by name. sql_connection() returns the R-owned connection; console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable. Omit for polling or stdin-only calls.",
-        ),
-        (
-            "python",
-            "One complete Python cell when Python is available. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When both runtimes and their bridge are available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Without R, sql_connection() returns the active Python-owned connection. Missing imports report ordinary Python errors; automatic package installation is unavailable. Omit for polling or stdin-only calls.",
-        ),
-        (
-            "control",
-            "Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the 100-millisecond interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable.",
-        ),
-        (
-            "sql",
-            "One complete SQL cell through the active R DBI or Python DB-API connection, depending on available runtimes and the selected connection. Console opens its in-memory DuckDB catalog during background startup when SQL is enabled and the adapter and DuckDB are preinstalled; first-query work remains deferred. R-owned DuckDB can query R global data frames by name; without R, Python data frames require explicit registration with sql_connection().register(name, frame). console_sql_connection(connection) selects a user-owned connection; console_sql_connection(None) in Python or console_sql_connection(NULL) in R restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Use the selected driver's SQL dialect; DuckDB CLI dot commands are unsupported. Extensions must be preinstalled; Console does not install extensions or resolve packages. Worker replacement resets the catalog. Omit for polling or stdin-only calls.",
-        ),
-    ] {
-        if let Some(property) = properties.get_mut(field) {
-            property["description"] =
-                format!("{text} Dependencies must be preinstalled in the {source}.").into();
-        }
-    }
-}
-
-fn description(policy: &SandboxSettings, no_sandbox: bool, target: Option<&Target>) -> String {
+fn description_for_launch(
+    policy: &SandboxSettings,
+    no_sandbox: bool,
+    target: Option<&Target>,
+) -> String {
     let kind = target.map(|target| match &target.compute {
         Compute::Host {} => "host",
         Compute::Docker(_) => "docker",

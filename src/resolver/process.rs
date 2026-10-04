@@ -3,8 +3,6 @@ pub(super) use crate::windows::resolver::Child;
 use std::io;
 use std::io::{Read, Write};
 #[cfg(unix)]
-use std::mem::MaybeUninit;
-#[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 #[cfg(unix)]
@@ -15,6 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use crate::process_exit::ChildExitWaiter;
 
 #[derive(Clone)]
 pub(crate) struct ResolverStopHandle(Arc<dyn ResolverControl>);
@@ -61,7 +61,7 @@ enum ResolverEvent {
         reply: Sender<Result<(), String>>,
         clear_marker: Option<Arc<AtomicU8>>,
     },
-    Exited(io::Result<()>),
+    Exited(Result<(), String>),
 }
 
 enum ResolverInterrupt {
@@ -78,6 +78,7 @@ pub(crate) struct ResolverOutput {
 
 pub(crate) struct ResolverProcess {
     native: bool,
+    exit: Mutex<Option<ChildExitWaiter>>,
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
@@ -93,6 +94,7 @@ impl ResolverProcess {
         let (events, event_receiver) = mpsc::channel();
         Self {
             native: false,
+            exit: Mutex::new(None),
             events,
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
@@ -130,13 +132,7 @@ impl ResolverProcess {
                 child.stderr.take().expect("resolver stderr"),
                 stderr_exit,
             ));
-            self.cleanup.store(false, Ordering::SeqCst);
-            *self.waiting.lock().expect("resolver phase lock") = true;
-            watch_resolver_exit(
-                child.id(),
-                self.events.clone(),
-                vec![stdout_done, stderr_done],
-            );
+            self.watch_exit(child.id(), vec![stdout_done, stderr_done]);
             Ok((child, stdout, stderr))
         }
         #[cfg(windows)]
@@ -151,14 +147,6 @@ impl ResolverProcess {
         Ok((child, stdout, stderr))
     }
 
-    #[cfg(windows)]
-    pub(crate) fn watch_exit(&self, pid: u32) {
-        self.cleanup.store(false, Ordering::SeqCst);
-        *self.waiting.lock().expect("resolver phase lock") = true;
-        #[cfg(windows)]
-        watch_resolver_exit(pid, self.events.clone());
-    }
-
     pub(crate) fn stop_handle(&self) -> ResolverStopHandle {
         ResolverStopHandle::new(LocalControl {
             events: self.events.clone(),
@@ -166,6 +154,24 @@ impl ResolverProcess {
             cleanup: self.cleanup.clone(),
             waiting: self.waiting.clone(),
         })
+    }
+
+    // Mark the spawned child active before publishing its stop handle. An
+    // interrupt in that gap must wait for the child's actual signal result.
+    pub(crate) fn watch_exit(&self, pid: u32, #[cfg(unix)] notifications: Vec<io::PipeWriter>) {
+        self.cleanup.store(false, Ordering::SeqCst);
+        *self.waiting.lock().expect("resolver phase lock") = true;
+        let events = self.events.clone();
+        match ChildExitWaiter::start_observing(pid, move |result| {
+            #[cfg(unix)]
+            drop(notifications);
+            let _ = events.send(ResolverEvent::Exited(result));
+        }) {
+            Ok(exit) => *self.exit.lock().expect("resolver observer lock") = Some(exit),
+            Err(error) => {
+                let _ = self.events.send(ResolverEvent::Exited(Err(error)));
+            }
+        }
     }
 
     fn finish_wait(&self, kind: &str) -> Result<(), String> {
@@ -206,10 +212,22 @@ impl ResolverProcess {
         program: &Path,
         kind: &str,
     ) -> Result<(), String> {
-        let result = retire_owned(child, program, kind, self.native, None);
-        self.cleanup.store(result.is_ok(), Ordering::SeqCst);
+        let result = self.stop(child, program, kind);
         let _ = self.finish_wait(kind);
         result.map(|_| ())
+    }
+
+    fn stop(&self, child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
+        let mut exit = self.exit.lock().expect("resolver observer lock").take();
+        #[cfg(unix)]
+        if self.native {
+            let result = retire_native(child, None, exit.as_mut());
+            self.cleanup.store(result.is_ok(), Ordering::SeqCst);
+            return result;
+        }
+        let result = stop_resolver(child, program, kind, exit.as_mut());
+        self.cleanup.store(result.is_ok(), Ordering::SeqCst);
+        result
     }
 }
 
@@ -365,20 +383,6 @@ pub(crate) fn resolver_command(program: &Path) -> Command {
     command
 }
 
-#[cfg(unix)]
-fn watch_resolver_exit(
-    pid: u32,
-    events: Sender<ResolverEvent>,
-    notifications: Vec<io::PipeWriter>,
-) {
-    let _ = thread::spawn(move || {
-        let result = crate::process_exit::wait_for_direct_child_exit(pid as libc::pid_t)
-            .map_err(io::Error::other);
-        drop(notifications);
-        let _ = events.send(ResolverEvent::Exited(result));
-    });
-}
-
 fn receive_result<T>(
     receiver: Receiver<io::Result<T>>,
     name: &str,
@@ -394,14 +398,9 @@ fn wait_for_resolver_exit(
     events: &Receiver<ResolverEvent>,
     program: &Path,
     kind: &str,
-    cleanup: &AtomicBool,
-    native: bool,
+    resolver: &ResolverProcess,
 ) -> Result<ExitStatus, String> {
-    let stop = |child: &mut Child| {
-        let result = retire_owned(child, program, kind, native, None);
-        cleanup.store(result.is_ok(), Ordering::SeqCst);
-        result
-    };
+    let stop = |child: &mut Child| resolver.stop(child, program, kind);
     loop {
         match events.recv() {
             Ok(ResolverEvent::Cancel) => {
@@ -413,9 +412,10 @@ fn wait_for_resolver_exit(
                 clear_marker,
             }) => {
                 #[cfg(unix)]
-                if native {
-                    let result = retire_native(child, Some(reply));
-                    cleanup.store(result.is_ok(), Ordering::SeqCst);
+                if resolver.native {
+                    let mut exit = resolver.exit.lock().expect("resolver observer lock").take();
+                    let result = retire_native(child, Some(reply), exit.as_mut());
+                    resolver.cleanup.store(result.is_ok(), Ordering::SeqCst);
                     return result.and_then(|_| Err(format!("{kind} resolution interrupted")));
                 }
                 match interrupt_resolver(child) {
@@ -440,9 +440,11 @@ fn wait_for_resolver_exit(
                 }
             }
             Ok(ResolverEvent::Exited(Ok(()))) => {
-                if native {
+                if resolver.native {
+                    let mut exit = resolver.exit.lock().expect("resolver observer lock").take();
+                    settle_observation(exit.as_mut());
                     let status = child.wait().map_err(|e| e.to_string())?;
-                    cleanup.store(status.success(), Ordering::SeqCst);
+                    resolver.cleanup.store(status.success(), Ordering::SeqCst);
                     if !status.success() {
                         return Err(format!(
                             "native resolver retirement is unconfirmed ({status})"
@@ -476,14 +478,7 @@ fn wait_for_resolver(
     program: &Path,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
-    let status = wait_for_resolver_exit(
-        child,
-        &resolver.event_receiver,
-        program,
-        kind,
-        &resolver.cleanup,
-        resolver.native,
-    );
+    let status = wait_for_resolver_exit(child, &resolver.event_receiver, program, kind, resolver);
     let phase_result = resolver.finish_wait(kind);
     if resolver.native
         && let Err(error) = status
@@ -530,8 +525,9 @@ fn wait_for_resolver(
 fn retire_native(
     child: &mut Child,
     acknowledged: Option<Sender<Result<(), String>>>,
+    exit: Option<&mut ChildExitWaiter>,
 ) -> Result<ExitStatus, String> {
-    let mut exit = crate::process_exit::ChildExitWaiter::start(child.id())?;
+    let exit = exit.ok_or("native resolver exit observation is unavailable")?;
     // The runner owns descendants and turns retirement SIGTERM into exit 0.
     let signaled = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
     if let Some(reply) = acknowledged {
@@ -555,12 +551,14 @@ fn retire_native(
             .wait(std::time::Duration::from_secs(1))
             .map_err(|error| format!("{message}; {error}"))?
         {
+            exit.finish()?;
             let _ = child
                 .try_wait()
                 .map_err(|error| format!("{message}; failed to reap runner: {error}"))?;
         }
         return Err(message.into());
     }
+    exit.finish()?;
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {
         return Err(format!(
@@ -581,7 +579,7 @@ fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH)) {
         // Keep an exited leader unreaped so its watcher remains authoritative
         // and this resolver PID cannot be reused before normal cleanup.
-        if resolver_has_exited(pid)? {
+        if crate::process_exit::direct_child_has_exited(pid)? {
             return Ok(ResolverInterrupt::AlreadyExited);
         }
         // A dying macOS child can disappear from process-group lookup before
@@ -599,70 +597,63 @@ fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
 }
 
 #[cfg(unix)]
-fn resolver_has_exited(pid: u32) -> io::Result<bool> {
-    let mut status = MaybeUninit::<libc::siginfo_t>::zeroed();
-    // SAFETY: `status` points to zeroed writable storage. WNOWAIT observes the
-    // direct child without reaping it, and WNOHANG makes a live child return.
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            pid as libc::id_t,
-            status.as_mut_ptr(),
-            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
-        )
-    };
-    if result != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: waitid initialized the zeroed structure before returning zero.
-    Ok(unsafe { status.assume_init().si_pid() } == pid as libc::pid_t)
-}
-
-#[cfg(unix)]
-fn stop_resolver(child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
-    // Workload children share the enclosing lifetime's group. The outer native
-    // runner (or the explicit direct-mode group) retires all remaining children.
+fn stop_resolver(
+    child: &mut Child,
+    program: &Path,
+    kind: &str,
+    exit: Option<&mut ChildExitWaiter>,
+) -> Result<ExitStatus, String> {
+    // Workload children share the enclosing lifetime's group. The existing
+    // runner (or explicit direct-mode group) retires remaining descendants.
     if super::workload::active() {
-        if !resolver_has_exited(child.id()).map_err(|e| e.to_string())? {
+        if !crate::process_exit::direct_child_has_exited(child.id()).map_err(|e| e.to_string())? {
             child.kill().map_err(|e| e.to_string())?;
         }
+        settle_observation(exit);
         return child.wait().map_err(|e| e.to_string());
     }
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     let result = unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
     if result < 0 {
         let kill_error = io::Error::last_os_error();
-        return match child.try_wait() {
+        match crate::process_exit::direct_child_has_exited(child.id()) {
             // macOS reports EPERM when only the unreaped group leader remains.
             // ESRCH likewise means there is no remaining group to stop.
-            Ok(Some(status))
+            Ok(true)
                 if matches!(
                     kill_error.raw_os_error(),
                     Some(libc::EPERM) | Some(libc::ESRCH)
-                ) =>
-            {
-                Ok(status)
+                ) => {}
+            Ok(_) => {
+                return Err(format!(
+                    "failed to stop {kind} resolver `{}`: {kill_error}",
+                    program.display()
+                ));
             }
-            Ok(Some(_)) => Err(format!(
-                "failed to stop {kind} resolver `{}`: {kill_error}",
-                program.display()
-            )),
-            Ok(None) => Err(format!(
-                "failed to stop {kind} resolver `{}`: {kill_error}",
-                program.display()
-            )),
-            Err(wait_error) => Err(format!(
-                "failed to stop {kind} resolver `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
-                program.display()
-            )),
-        };
+            Err(wait_error) => {
+                return Err(format!(
+                    "failed to stop {kind} resolver `{}`: {kill_error}; additionally failed to read its status: {wait_error}",
+                    program.display()
+                ));
+            }
+        }
     }
+    settle_observation(exit);
     child.wait().map_err(|error| {
         format!(
             "failed to reap {kind} resolver `{}`: {error}",
             program.display()
         )
     })
+}
+
+fn settle_observation(exit: Option<&mut ChildExitWaiter>) {
+    if let Some(exit) = exit {
+        // Exit/error is delivered through ResolverEvent::Exited. Cancellation
+        // still owns termination and cleanup; this barrier only settles the
+        // native observation and its event before reaping releases identity.
+        let _ = exit.finish();
+    }
 }
 
 #[cfg(windows)]
@@ -673,16 +664,6 @@ pub(crate) fn resolver_command(program: &Path) -> Command {
     command
 }
 #[cfg(windows)]
-fn watch_resolver_exit(pid: u32, events: Sender<ResolverEvent>) {
-    use std::os::windows::io::AsRawHandle;
-    let handle = crate::windows::process_handle(pid);
-    thread::spawn(move || {
-        let result = handle
-            .and_then(|handle| crate::windows::wait(handle.as_raw_handle(), None).map(|_| ()));
-        let _ = events.send(ResolverEvent::Exited(result));
-    });
-}
-#[cfg(windows)]
 fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     if child.try_wait()?.is_some() {
         return Ok(ResolverInterrupt::AlreadyExited);
@@ -691,17 +672,33 @@ fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     Ok(ResolverInterrupt::Signaled)
 }
 #[cfg(windows)]
-pub(super) fn stop_resolver(
+fn stop_resolver(
     child: &mut Child,
     program: &Path,
     kind: &str,
+    exit: Option<&mut ChildExitWaiter>,
 ) -> Result<ExitStatus, String> {
-    child.retire().map_err(|error| {
-        format!(
-            "failed to retire {kind} resolver `{}`: {error}",
-            program.display()
-        )
-    })
+    child
+        .retire(|remaining| {
+            if let Some(exit) = exit {
+                // A native observation error is settled, but delayed process
+                // termination must not extend the owner's retirement deadline.
+                if matches!(exit.wait(remaining), Ok(false)) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "resolver exit observation did not settle",
+                    ));
+                }
+                settle_observation(Some(exit));
+            }
+            Ok(())
+        })
+        .map_err(|error| {
+            format!(
+                "failed to retire {kind} resolver `{}`: {error}",
+                program.display()
+            )
+        })
 }
 
 #[cfg(unix)]
@@ -711,20 +708,4 @@ pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
 #[cfg(windows)]
 pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
     crate::windows::resolver::spawn(command)
-}
-
-fn retire_owned(
-    child: &mut Child,
-    program: &Path,
-    kind: &str,
-    native: bool,
-    acknowledged: Option<Sender<Result<(), String>>>,
-) -> Result<ExitStatus, String> {
-    #[cfg(unix)]
-    if native {
-        return retire_native(child, acknowledged);
-    }
-    #[cfg(windows)]
-    let _ = (native, acknowledged);
-    stop_resolver(child, program, kind)
 }

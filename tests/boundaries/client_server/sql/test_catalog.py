@@ -302,8 +302,11 @@ def test_sends_sql_cell_with_initial_requirements(
         FROM duckdb_extensions()
         WHERE extension_name = 'fts' AND loaded
         """)
-    client.send(sql=sql, requirements={"duckdb": ["fts"]})
-    assert last_tool_text(client).splitlines()[-1].split() == ["1", "1"]
+    client.expect(
+        "# A tibble: 1 × 1\n   loaded\n  <int64>\n1       1\n",
+        sql=sql,
+        requirements={"duckdb": ["fts"]},
+    )
     return client.finish()
 
 

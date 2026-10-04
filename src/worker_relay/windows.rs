@@ -62,7 +62,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         cancel,
         input_ready,
         interrupt,
-        _exit,
+        mut exit,
     } = match start_worker(program, arguments, controls.clone()) {
         Ok(worker) => worker,
         Err(message) => {
@@ -314,6 +314,9 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
             },
         }
     }
+    if let Err(message) = exit.finish() {
+        let _ = controls.send(Control::Failed(message));
+    }
     let status = child.wait().map_err(|e| e.to_string())?;
     event_writer.begin_retirement();
     stopping.store(true, Ordering::SeqCst);
@@ -348,7 +351,7 @@ struct StartedWorker {
     cancel: Event,
     input_ready: Event,
     interrupt: Event,
-    _exit: crate::process_exit::ChildExitWaiter,
+    exit: crate::process_exit::ChildExitWaiter,
 }
 
 fn start_worker(
@@ -404,8 +407,12 @@ fn start_worker(
         .map_err(|e| format!("failed to clear worker interrupt event inheritance: {e}"))?;
     crate::windows::inherit(input_ready.as_raw_handle(), false)
         .map_err(|e| format!("failed to clear worker input event inheritance: {e}"))?;
-    let exit = crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
-        let _ = controls.send(Control::Exited);
+    let exit = crate::process_exit::ChildExitWaiter::start_observing(child.id(), move |result| {
+        let control = match result {
+            Ok(()) => Control::Exited,
+            Err(message) => Control::Failed(message),
+        };
+        let _ = controls.send(control);
     })
     .map_err(|e| format!("failed to observe worker exit: {e}"))?;
     Ok(StartedWorker {
@@ -418,7 +425,7 @@ fn start_worker(
         cancel,
         input_ready,
         interrupt,
-        _exit: exit,
+        exit,
     })
 }
 
