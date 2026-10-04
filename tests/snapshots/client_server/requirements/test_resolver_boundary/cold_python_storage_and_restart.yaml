@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-managed.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
   requirements:
@@ -36,20 +36,18 @@ result:
         [managed Python resolution failed:
         resolver input:
         {
-          "python": "3.12.14 (reticulate default)",
+          "python": "3.12.15 (reticulate default)",
           "packages": [
             "numpy",
             "pandas",
+            "duckdb",
             "mcp-console-no-such-resolver-package==0",
             "six"
           ]
         }
         uv output:
-        × No solution found when resolving tool dependencies:
-          ╰─▶ Because mcp-console-no-such-resolver-package was
-              not found in the package registry and you require
-              mcp-console-no-such-resolver-package==0, we can conclude that your
-              requirements are unsatisfiable.]
+        error: No solution found when resolving tool dependencies
+          cause: Because mcp-console-no-such-resolver-package was not found in the package registry and you require mcp-console-no-such-resolver-package==0, we can conclude that your requirements are unsatisfiable.]
   isError: true
 ---
 send:

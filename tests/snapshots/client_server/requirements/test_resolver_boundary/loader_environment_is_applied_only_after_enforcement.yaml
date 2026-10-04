@@ -1,5 +1,39 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.python-only.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
 ---
 send:
   python: print('prepared with confined startup hooks')

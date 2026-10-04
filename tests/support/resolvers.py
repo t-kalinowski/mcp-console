@@ -31,6 +31,8 @@ def resolver_fixture_directory(binary: Path, execution: Execution):
         return
     with McpClient(binary, ("serve", "--worker", str(FIXTURES / "zod"))) as lease:
         lease.initialize_and_list_tools()
+        ready = lease.send(requirements={"action": "get"})
+        assert not ready.get("isError"), ready
         cache = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
         payload = cache / "mcp-console/resolver/payload"
         with tempfile.TemporaryDirectory(prefix="fixture-", dir=payload) as directory:

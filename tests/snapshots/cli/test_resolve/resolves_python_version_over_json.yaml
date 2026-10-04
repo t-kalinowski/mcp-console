@@ -1,8 +1,9 @@
 ---
 hidden_command: resolve
-resolved_python: <selected Python version>
+resolved_python: 3.12.7
 prepared_manifest:
   packages:
     - six>=1
   python_version:
-    - ==<selected Python version>
+    - ">=3.12"
+  exclude_newer: 2026-01-01

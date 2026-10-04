@@ -34,6 +34,7 @@ from support.execution import SANDBOXED
 from support.r import r_test_environment
 from support.resolvers import (
     fake_ir_environment,
+    local_resolver_owner,
     resolver_fixture_arguments,
     resolver_fixture_directory,
 )
@@ -187,6 +188,10 @@ def test_loader_environment_is_applied_only_after_enforcement(
             binary, ("serve",), environment, current_directory=workspace
         ) as client:
             client.initialize_and_list_tools()
+            client.send(requirements={"action": "get"})
+            assert not client.transcript[-1]["result"].get("isError"), (
+                client.transcript[-1]
+            )
             assert inside.read_text().splitlines(), (
                 "resolver workload did not load the startup hook"
             )
@@ -258,6 +263,10 @@ def test_resolver_uses_selected_developer_tools(binary: Path) -> Transcript:
         environment.pop("R_HOME", None)
         with McpClient(binary, ("serve",), environment) as client:
             client.initialize_and_list_tools()
+            client.send(requirements={"action": "get"})
+            assert not client.transcript[-1]["result"].get("isError"), (
+                client.transcript[-1]
+            )
             result = json.loads(
                 (
                     root / "cache/mcp-console/resolver/payload/developer-tools.json"
@@ -362,10 +371,11 @@ def test_cold_r_python_and_duckdb_storage(binary: Path) -> Transcript:
         assert not payload.exists()
         with McpClient(binary, ("serve",), environment) as client:
             client.initialize_and_list_tools()
-            client.send(
-                requirements={"r": ["praise"], "python": ["six"], "duckdb": ["httpfs"]}
+            client.expect(
+                "cold preparation completed\n",
+                requirements={"r": ["praise"], "python": ["six"], "duckdb": ["httpfs"]},
+                r="cat('cold preparation completed\\n')",
             )
-            assert last_result_text(client) == "[prepared]", client.transcript[-1]
             assert list(payload.glob("**/uv/bin/uv")), (
                 "explicit managed uv bootstrap did not run inside resolver storage"
             )
@@ -492,15 +502,12 @@ def test_rejects_console_installed_in_resolver_storage(binary: Path) -> Transcri
         with McpClient(
             relocated, ("serve", "--worker", str(worker)), environment
         ) as client:
-            try:
-                client.initialize_and_list_tools()
-            except AssertionError as error:
-                diagnostic = str(error)
-                assert "outside resolver storage" in diagnostic, diagnostic
-            else:
-                raise AssertionError(
-                    "server accepted a sandbox-writable Console installation"
-                )
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "get"})
+            result = client.transcript[-1]["result"]
+            assert result.get("isError"), result
+            diagnostic = last_result_text(client)
+            assert "outside resolver storage" in diagnostic, diagnostic
         assert relocated.exists(), "cleanup removed the running installation"
         return [{"error": diagnostic}]
 
@@ -520,8 +527,10 @@ def test_rejected_worker_policy_releases_unused_storage(binary: Path) -> Transcr
         with McpClient(
             binary, ("serve", "--writable-root", str(root)), environment
         ) as client:
-            assert client.process.wait(timeout=30) != 0
-            diagnostic = client.stderr.read()
+            client.initialize_and_list_tools()
+            client.send(requirements={"action": "get"})
+            assert client.transcript[-1]["result"].get("isError"), client.transcript[-1]
+            _, diagnostic = client.finish_with_standard_error(expected_exit_status=1)
             assert "without custom filesystem rules" in diagnostic, diagnostic
         metadata = json.loads(
             (root / "cache/mcp-console/resolver/control/metadata.json").read_text()
@@ -891,6 +900,7 @@ def test_weekly_cleanup_waits_for_idle_sessions_and_restart(binary: Path) -> Tra
             metadata_path.write_text(json.dumps(metadata))
             with McpClient(binary, ("serve",), environment) as second:
                 second.initialize_and_list_tools()
+                second.send(requirements={"action": "get"})
                 assert marker.read_text() == "live"
                 assert json.loads(metadata_path.read_text())["leases"] == 2
                 first.send(control="restart", python="print('restarted')")
@@ -935,6 +945,7 @@ def test_weekly_cleanup_waits_for_idle_sessions_and_restart(binary: Path) -> Tra
         (payload / "malicious-link").symlink_to(external, target_is_directory=True)
         with McpClient(binary, ("serve",), environment) as third:
             third.initialize_and_list_tools()
+            third.send(requirements={"action": "get"})
             assert not marker.exists()
             assert not (payload / "malicious-link").exists()
             assert sentinel.read_text() == "must survive"
@@ -961,10 +972,6 @@ def test_weekly_cleanup_after_broker_loss_waits_for_worker(binary: Path) -> Tran
         metadata_path = storage / "control/metadata.json"
         with McpClient(binary, ("serve",), environment) as first:
             first.initialize_and_list_tools()
-            brokers = child_process_identities(
-                capture_process_identity(first.process.pid)
-            )
-            assert len(brokers) == 1, brokers
             # A workload must not inherit the launcher's lock descriptor: an
             # inherited duplicate could unlock that shared open description.
             # fmt: python
@@ -982,14 +989,18 @@ def test_weekly_cleanup_after_broker_loss_waits_for_worker(binary: Path) -> Tran
             assert not first.transcript[-1]["result"].get("isError"), first.transcript[
                 -1
             ]
+            broker = local_resolver_owner(
+                capture_process_identity(first.process.pid), binary
+            )
             marker = storage / "payload/live-environment"
             marker.write_text("live")
             metadata = json.loads(metadata_path.read_text())
             metadata["cleaned_at"] = 1
             metadata_path.write_text(json.dumps(metadata))
-            os.kill(brokers[0][0], signal.SIGKILL)
+            os.kill(broker[0], signal.SIGKILL)
             with McpClient(binary, ("serve",), environment) as second:
                 second.initialize_and_list_tools()
+                second.send(requirements={"action": "get"})
                 assert marker.read_text() == "live", (
                     "cleanup removed a retained environment"
                 )
@@ -999,6 +1010,7 @@ def test_weekly_cleanup_after_broker_loss_waits_for_worker(binary: Path) -> Tran
             first.close()
         with McpClient(binary, ("serve",), environment) as third:
             third.initialize_and_list_tools()
+            third.send(requirements={"action": "get"})
             assert not marker.exists(), "abandoned broker lease prevented idle cleanup"
             assert json.loads(metadata_path.read_text())["cleaned_at"] > 1
             third.finish()

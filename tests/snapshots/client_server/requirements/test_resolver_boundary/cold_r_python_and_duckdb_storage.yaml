@@ -9,10 +9,12 @@ send:
       - six
     duckdb:
       - httpfs
+  r: cat('cold preparation completed\n')
 result:
   content:
     - type: text
-      text: "[prepared]"
+      text: |
+        cold preparation completed
   isError: false
 ---
 send:
@@ -60,23 +62,13 @@ result:
         ! error in pak subprocess
         Caused by error: 
         ! Could not solve package dependencies:
-        * DBI: dependency conflict
-        * arrow: dependency conflict
-        * duckdb: dependency conflict
-        * jsonlite: dependency conflict
+        * deps::/private/var/folders/bg/pzsh15_96957bg6ylzt60tyc0000gp/T/tmp5atetzg_/cache/mcp-console/resolver/payload/sandbox-J6jLca/data/Rtmp5rJOJZ/ir-requirements-17e786a3bfc8e: Can't install dependency mcpconsolenosuchpackage
         * mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.
-        * nanoarrow: dependency conflict
-        * pillar: dependency conflict
-        * praise: dependency conflict
-        * reticulate: dependency conflict
-        * tibble: dependency conflict
-        * tidyverse: dependency conflict
-        * utf8: dependency conflict
         ---
         Backtrace:
         1. global ir_resolve_main()
         2. global ir_resolve_refs(refs_in)
-        3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)
+        3. pak::pkg_deps(c(refs, if (length(source)) paste0(source, "=?source")), …
         4. pak:::remote(function(...) { …
         5. err$throw(res$error)
         ---
