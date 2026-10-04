@@ -15,7 +15,7 @@ from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import capture_process_identity, host_process_id, signal_process
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 from support.ssh import configure, peer_environment
 
@@ -106,7 +106,7 @@ def retirement_case(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_restarts_join_writer_with_retained_stdin(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -114,7 +114,7 @@ def test_restarts_join_writer_with_retained_stdin(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_idle_writer_joins_with_retained_stdout(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -122,14 +122,14 @@ def test_idle_writer_joins_with_retained_stdout(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_forced_retirement_aborts_full_command_pipe(
     binary: Path, execution: Execution
 ) -> Transcript:
     return retirement_case(binary, execution, "forced", 1)
 
 
-@requires(NATIVE_FIXTURES)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_eof_joins_blocked_target_bootstrap(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
         root = Path(temporary)
@@ -277,7 +277,7 @@ def test_shutdown_settles_cancelled_interrupt_without_ack(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(NATIVE_FIXTURES)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_shutdown_ignores_interrupt_ack_after_command_eof(
     binary: Path, execution: Execution
 ) -> Transcript:
