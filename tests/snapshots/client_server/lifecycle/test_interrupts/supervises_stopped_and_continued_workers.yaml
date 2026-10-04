@@ -16,8 +16,10 @@ send:
 result:
   content:
     - type: text
-      text: worker evaluation is already being polled
-  isError: true
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
 ---
 send:
   control: restart
