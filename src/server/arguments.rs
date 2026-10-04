@@ -70,7 +70,7 @@ pub(super) struct SendArguments {
     /// or stdin-only calls.
     pub(super) sql: Option<String>,
     /// Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-    /// SIGINT from the active host resolver or live worker and preserves in-memory state. After
+    /// interruption of active preparation or SIGINT from the live worker and preserves in-memory state. After
     /// successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
     /// earlier evaluation or attempting an optional following cell; the cell is not run if the
     /// interrupted evaluation remains active. When `requirements` is available, restart resolves

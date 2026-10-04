@@ -238,6 +238,10 @@ def _initializes_and_lists_tools(
                     "network subject to the launcher's proxy settings"
                     in send["description"]
                 )
+            if execution == SANDBOXED and sys.platform != "win32":
+                assert "separate native resolver sandbox" in description, description
+                assert "read-only to the worker" in description, description
+                assert "runs outside the sandbox" not in description, description
             control = send["inputSchema"]["properties"]["control"]
             assert control["type"] == "string", control
             assert control["enum"] == ["interrupt", "restart"], control
