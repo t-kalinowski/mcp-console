@@ -126,10 +126,12 @@ fn builtin(read: *mut c_void, write: *mut c_void, mut control: TcpStream) -> io:
         .encode_utf16()
         .chain(Some(0))
         .collect();
-    let input = unsafe {
+    // Use the server write end so FlushFileBuffers is a documented worker
+    // consumption barrier.
+    let output = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
-            1 | 0x40000000,
+            2 | 0x40000000,
             0,
             1,
             65536,
@@ -138,12 +140,12 @@ fn builtin(read: *mut c_void, write: *mut c_void, mut control: TcpStream) -> io:
             std::ptr::null(),
         )
     };
-    assert_ne!(input as isize, -1);
-    let input = unsafe { OwnedHandle::from_raw_handle(input) };
-    let output = unsafe {
+    assert_ne!(output as isize, -1);
+    let output = unsafe { OwnedHandle::from_raw_handle(output) };
+    let input = unsafe {
         CreateFileW(
             name.as_ptr(),
-            0x40000000,
+            0x80000000,
             0,
             std::ptr::null(),
             3,
@@ -151,8 +153,8 @@ fn builtin(read: *mut c_void, write: *mut c_void, mut control: TcpStream) -> io:
             std::ptr::null_mut(),
         )
     };
-    assert_ne!(output as isize, -1);
-    let output = unsafe { OwnedHandle::from_raw_handle(output) };
+    assert_ne!(input as isize, -1);
+    let input = unsafe { OwnedHandle::from_raw_handle(input) };
     let interrupt = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     assert!(!interrupt.is_null());
     let interrupt = unsafe { OwnedHandle::from_raw_handle(interrupt) };
@@ -174,6 +176,7 @@ fn builtin(read: *mut c_void, write: *mut c_void, mut control: TcpStream) -> io:
             (interrupt.as_raw_handle() as usize).to_string(),
         )
         .spawn()?;
+    writeln!(control, "{}", child.id())?;
     drop(input);
     // Initialize R first, then hold a second command inside a UTF-8 scalar.
     send_bytes(output.as_raw_handle(), &command(read)?)?;
