@@ -122,6 +122,7 @@ def test_supervises_stopped_and_continued_workers(
                 workers,
                 client,
                 execution,
+                binary,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)
@@ -163,6 +164,7 @@ def test_supervises_stopped_and_continued_workers(
                     workers,
                     client,
                     execution,
+                    binary,
                 )
             )
             assert replacement_pid != worker_pid, (
@@ -207,7 +209,8 @@ def test_supervises_stopped_and_continued_workers(
                 stop_process(client.process)
 
 
-@executions(DIRECT, SANDBOXED)
+# Native launcher retirement faults are exercised by cli/test_resolver_validation.
+@executions(DIRECT)
 @requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_reports_resolver_interrupt_permission_error(
     binary: Path, execution: Execution
@@ -278,7 +281,7 @@ def test_reports_resolver_interrupt_permission_error(
                     {
                         "type": "text",
                         "text": (
-                            "failed to interrupt R package resolver `ir`: "
+                            f"failed to interrupt dependency resolver `{binary}`: "
                             "Operation not permitted (os error 1)"
                         ),
                     }
@@ -310,7 +313,7 @@ def test_reports_resolver_interrupt_permission_error(
             resolver_lifetime.close()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 @requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_reports_runtime_r_resolver_interrupt_permission_error(
     binary: Path,
@@ -379,7 +382,7 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             )
 
             message = (
-                "failed to interrupt R package resolver `ir`: "
+                f"failed to interrupt dependency resolver `{binary}`: "
                 "Operation not permitted (os error 1)"
             )
             assert evaluation["result"] == {

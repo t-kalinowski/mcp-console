@@ -55,14 +55,16 @@ static ssize_t fault_write(int fd, const void *bytes, size_t count) {
         close(checkpoint);
         for (;;) pause();
     }
-    if (strcmp(role, "manifest") == 0 || strcmp(role, "identity") == 0) {
+    if (strcmp(role, "manifest") == 0 || strcmp(role, "r-manifest") == 0 || strcmp(role, "identity") == 0) {
         char *copy = malloc(count);
         if (!copy) _exit(125);
         memcpy(copy, bytes, count);
-        const char *needle = strcmp(role, "manifest") == 0 ? "\"six>=1\"" : "\"python_home\":\"";
+        const char *needle = strcmp(role, "manifest") == 0 ? "\"six>=1\"" :
+            strcmp(role, "r-manifest") == 0 ? "\"requirements\":[\"cli\"]" : "\"python_home\":\"";
         char *found = memmem(copy, count, needle, strlen(needle));
         if (found) {
             if (strcmp(role, "manifest") == 0) memcpy(found + 1, "ten", 3);
+            else if (strcmp(role, "r-manifest") == 0) found[17] = 'X';
             else found[strlen(needle)] = 'X';
         }
         ssize_t result = real_write(fd, copy, count);

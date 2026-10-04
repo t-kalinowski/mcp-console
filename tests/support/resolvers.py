@@ -564,7 +564,7 @@ def resolver_interrupt_permission_environment(
               exit 0
             fi
             exec 3< "$MCP_CONSOLE_TEST_RESOLVER_LIFETIME"
-            printf '%s\n' "$$" > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
+            ps -o pgid= "$$" | tr -d ' ' > "$MCP_CONSOLE_TEST_RESOLVER_GROUP"
             printf 1 > "$MCP_CONSOLE_TEST_RESOLVER_STARTED"
             IFS= read -r _ <&3
             """),

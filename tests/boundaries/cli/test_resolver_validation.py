@@ -18,7 +18,8 @@ from support.checkpoints import FifoCheckpoint
 from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import capture_process_identity, child_process_identities
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.r import r_test_environment
+from support.requirements import NATIVE_FIXTURES, R, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -54,6 +55,7 @@ def resolver(
     workload_fault: str = "",
     *,
     sandboxed: bool = False,
+    r_home: str | None = None,
 ):
     library = build_interposer(root, "resolver_faults")
     uv = root / "uv"
@@ -70,6 +72,8 @@ def resolver(
     )
     for name in ["RETICULATE_PYTHON", "RETICULATE_UV", "R_HOME"]:
         environment.pop(name, None)
+    if r_home is not None:
+        environment["R_HOME"] = r_home
     environment.update(
         {
             LOADER_VARIABLE: str(library),
@@ -166,6 +170,39 @@ def test_direct_mode_validates_manifest_and_identity(binary: Path) -> Transcript
                 assert client.receive() == "Closed"
                 transcript.append({"fault": fault, "rejected": True})
     return transcript
+
+
+@requires(NATIVE_FIXTURES, R)
+def test_direct_mode_validates_r_manifest(binary: Path) -> Transcript:
+    environment, _ = r_test_environment()
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        library = root / "library"
+        library.mkdir()
+        ir = root / "ir"
+        ir.write_text(
+            f'#!/bin/sh\nif [ "$1" = --version ]; then printf "ir 0.4.0\\n"; else printf "%s" "{library}"; fi\n'
+        )
+        ir.chmod(0o755)
+        with resolver(
+            binary, root, workload_fault="r-manifest", r_home=environment["R_HOME"]
+        ) as (client, _, _):
+            client.send(
+                {
+                    "Run": {
+                        "id": 1,
+                        "operation": {"ResolveRStandalone": {"requirements": ["cli"]}},
+                    }
+                }
+            )
+            result = client.receive()["Completed"]
+            assert result["result"] == {
+                "Err": "resolver changed the accepted R manifest"
+            }, result
+            assert result["confirmed"] is True, result
+            client.send("Close")
+            assert client.receive() == "Closed"
+    return [{"altered_r_manifest": "rejected in direct mode"}]
 
 
 @requires(NATIVE_FIXTURES)
