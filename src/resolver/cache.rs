@@ -147,6 +147,7 @@ pub(crate) fn duckdb_extension_directory(
         .map(|home| home.join(".duckdb/extensions")))
 }
 
+#[cfg(unix)]
 pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>, String> {
     // Cache selection uses the resolver's effective environment, including its
     // own trusted YAML overrides. Worker environment settings do not reach here.
