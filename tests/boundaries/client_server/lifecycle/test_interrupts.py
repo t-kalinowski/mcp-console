@@ -137,10 +137,10 @@ def test_supervises_stopped_and_continued_workers(
                 "content": [
                     {
                         "type": "text",
-                        "text": "worker evaluation is already being polled",
+                        "text": "\n[running; poll with an empty send]",
                     }
                 ],
-                "isError": True,
+                "isError": False,
             }, interrupt
 
             continue_stopped_worker(worker_pid, worker_group)
