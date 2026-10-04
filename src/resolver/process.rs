@@ -480,19 +480,27 @@ fn stop_resolver(
     kind: &str,
     exit: Option<&mut ChildExitWaiter>,
 ) -> Result<ExitStatus, String> {
-    child.terminate().map_err(|error| {
-        format!(
-            "failed to retire {kind} resolver `{}`: {error}",
-            program.display()
-        )
-    })?;
-    settle_observation(exit);
-    child.retire().map_err(|error| {
-        format!(
-            "failed to retire {kind} resolver `{}`: {error}",
-            program.display()
-        )
-    })
+    child
+        .retire(|remaining| {
+            if let Some(exit) = exit {
+                // A native observation error is settled, but delayed process
+                // termination must not extend the owner's retirement deadline.
+                if matches!(exit.wait(remaining), Ok(false)) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "resolver exit observation did not settle",
+                    ));
+                }
+                settle_observation(Some(exit));
+            }
+            Ok(())
+        })
+        .map_err(|error| {
+            format!(
+                "failed to retire {kind} resolver `{}`: {error}",
+                program.display()
+            )
+        })
 }
 
 #[cfg(unix)]

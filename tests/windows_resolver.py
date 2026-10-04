@@ -260,6 +260,115 @@ class WindowsResolver(unittest.TestCase):
         resolver.process.wait(timeout=10)
         self.assert_retired(pids)
 
+    def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
+        # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
+        # handle signaling, without depending on a slow or faulty I/O driver.
+        # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
+        class ExceptionRecord(ctypes.Structure):
+            _fields_ = [
+                ("code", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32),
+                ("record", ctypes.c_void_p),
+                ("address", ctypes.c_void_p),
+                ("count", ctypes.c_uint32),
+                ("parameters", ctypes.c_size_t * 15),
+            ]
+
+        class ExceptionInfo(ctypes.Structure):
+            _fields_ = [("record", ExceptionRecord), ("first", ctypes.c_uint32)]
+
+        class DebugInfo(ctypes.Union):
+            # The exception member determines the union's native size/alignment.
+            # CREATE_PROCESS and LOAD_DLL both begin with an owned file handle.
+            _fields_ = [("exception", ExceptionInfo), ("file", ctypes.c_void_p)]
+
+        class DebugEvent(ctypes.Structure):
+            _fields_ = [
+                ("code", ctypes.c_uint32),
+                ("pid", ctypes.c_uint32),
+                ("tid", ctypes.c_uint32),
+                ("info", DebugInfo),
+            ]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.DebugActiveProcess.argtypes = [ctypes.c_uint32]
+        kernel.DebugActiveProcessStop.argtypes = [ctypes.c_uint32]
+        kernel.WaitForDebugEvent.argtypes = [
+            ctypes.POINTER(DebugEvent),
+            ctypes.c_uint32,
+        ]
+        kernel.ContinueDebugEvent.argtypes = [ctypes.c_uint32] * 3
+        kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+
+        def checked(result: int | None) -> None:
+            if not result:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+        def next_event() -> DebugEvent:
+            event = DebugEvent()
+            checked(kernel.WaitForDebugEvent(ctypes.byref(event), 10000))
+            if event.code in (3, 6) and event.info.file:
+                checked(kernel.CloseHandle(event.info.file))
+            return event
+
+        def resume(event: DebugEvent) -> None:
+            checked(kernel.ContinueDebugEvent(event.pid, event.tid, 0x00010002))
+
+        for action in ("Cancelled", "Close"):
+            with self.subTest(action=action):
+                resolver, pids = self.blocked_resolver()
+                pid = pids[0]
+                handle = kernel.OpenProcess(0x100000, 0, pid)
+                checked(handle)
+                self.addCleanup(kernel.CloseHandle, handle)
+                checked(kernel.DebugActiveProcess(pid))
+                held = None
+                try:
+                    # Consume the attachment events through its breakpoint so
+                    # termination begins with a running, registered resolver.
+                    while True:
+                        event = next_event()
+                        if event.code == 1:
+                            self.assertEqual(
+                                event.info.exception.record.code, 0x80000003
+                            )
+                        resume(event)
+                        if event.code == 1:
+                            break
+                    if action == "Close":
+                        resolver.send("Close")
+                    else:
+                        resolver.send({"Control": {"id": 1, "control": action}})
+                        self.assertEqual(
+                            resolver.receive(),
+                            {"Controlled": {"id": 1, "result": {"Ok": True}}},
+                        )
+                    while True:
+                        event = next_event()
+                        if event.code == 5:
+                            held = event
+                            break
+                        resume(event)
+                    self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
+                    # The five-second allowance must expire while exit remains
+                    # held. An observer join before that allowance hangs here.
+                    self.assertNotEqual(resolver.process.wait(timeout=10), 0)
+                    self.assertIn(
+                        "remote preparation retirement is unconfirmed",
+                        resolver.process.stderr.read().decode(errors="replace"),
+                    )
+                    self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
+                finally:
+                    if held is not None:
+                        resume(held)
+                    else:
+                        checked(kernel.DebugActiveProcessStop(pid))
+                self.assertEqual(kernel.WaitForSingleObject(handle, 10000), 0)
+                self.assert_retired(pids)
+
     def test_success_retires_descendant_holding_output(self):
         resolver, pids = self.blocked_resolver("exited")
         completed = resolver.receive()["Completed"]
