@@ -6,7 +6,7 @@ Windows SQL remains unavailable, and Windows defaults do not prepare DuckDB exte
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
 [Send ordering](SEND_OPERATIONS.md) defines when preparation, control, input, and code run.
-[Host resolution and trust](#host-resolution-and-trust) is essential: installation runs outside the worker sandbox.
+[Host resolution and trust](#host-resolution-and-trust) describes the separate resolver sandbox and shared cache permissions.
 
 ## Retained environments
 
@@ -182,7 +182,8 @@ Successful activation is its own commit boundary: it survives later import/cell 
 
 ### DuckDB extension preparation
 
-The trusted host uses DuckDB's installation API and normal repository/signature checks.
+The resolver uses DuckDB's installation API and normal repository/signature checks.
+Under managed native networking, it explicitly supplies the runner's HTTP proxy to DuckDB.
 Loading happens later in the worker.
 No SQL catalog, user connection, or runtime object is replaced by an extension-only addition.
 
@@ -223,28 +224,33 @@ Interrupt terminates the active resolver Job, preserving the previously accepted
 Custom workers have no built-in defaults and no managed Python.
 Explicit R candidates include DBI, DuckDB, and jsonlite infrastructure and are supplied as `R_LIBS`.
 Live R additions require the [worker preparation contract](WORKER_PROTOCOL.md); optional runtime R callbacks must confirm or reject every candidate.
-Apply the managed library before loading DuckDB and use its normal extension cache.
+Apply the managed library before loading DuckDB.
+When `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY` is set, pass it as DuckDB's `extension_directory`; otherwise use the normal extension cache.
 
 ## Host resolution and trust
 
-Local `mcp-console resolve` and SSH's trusted preparation owner run with execution- host account permissions, **outside the worker sandbox**.
-Installation, builds, Python startup hooks, and cache warming can execute package code there.
+Local `mcp-console resolve` runs in a separate native resolver sandbox on macOS and Linux.
+Installation, builds, Python startup hooks, and cache warming can execute package code with that policy's host reads, cache writes, and proxy destinations.
+See [resolver configuration and expanded defaults](RESOLVER.md).
+SSH, `--no-sandbox`, and Windows preparation retain host permissions.
 Use only trusted requirements, resolvers, configuration, and package sources.
 
 R references become separate `ir` arguments with `IR_NO_LOCAL_SOURCES=1`; Python requirements become validated uv arguments, and DuckDB names are data.
 Submitted cells and `send` stdin are not resolver programs.
 These restrictions reduce input syntax; they do not make remote package code safe.
 
-**Worker-modifiable resolver inputs are an unresolved escape path.** Capturing paths/environment values does not freeze the files they name.
-A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can cause later preparation to execute its code with host permissions.
-Console does not yet isolate those inputs or sandbox resolvers.
-Native worker enforcement is not protection against this route.
+Capturing paths/environment values does not freeze the files they name.
+A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can influence later preparation.
+That code runs under the resolver policy in local sandboxed preparation.
+Shared cache writes can also affect other users of those artifacts; Console does not isolate or protect cache contents.
 
 ### Host resolver uv configuration
 
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
 R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
 Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
+Local resolver write grants cover default cache locations and direct cache environment overrides.
+Custom paths selected by uv configuration files need an explicit [resolver policy](RESOLVER.md#configuration) or a matching `resolver.environment.UV_CACHE_DIR` override.
 
 Managed environment creation removes `UV_NO_CACHE` because uv would otherwise delete the selected environment on exit.
 Worker code starts with `UV_OFFLINE=1`, including under `--no-sandbox`; that variable configures uv, not process-level network enforcement.

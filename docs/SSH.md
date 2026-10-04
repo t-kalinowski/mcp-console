@@ -88,8 +88,8 @@ Launch protocol version 10 distinguishes interrupted bootstrap from other incomp
 Preparation protocol version 6 adds required conversion metadata to inspected Python identities.
 Version 5 peers are rejected during negotiation, even when Console package versions match; update the controller and remote executable together.
 
-Preparation is trusted host execution, not a secure isolation boundary.
-Package builds and startup code can run with the remote account's permissions, independently of the worker's network policy.
+SSH preparation runs with the remote account's host permissions, independently of the worker's network policy.
+The [local resolver policy](RESOLVER.md) is not forwarded to SSH hosts; remote resolver sandboxing is deferred.
 Captured paths do not freeze worker-modifiable files they name.
 
 ## Lifecycle and records

@@ -1,0 +1,24 @@
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: resolver sandbox requires HOME
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: resolver sandbox requires HOME
+  isError: true
+---
+input:
+  method: ping
+result: {}
+---
+stderr: |
+  resolver sandbox requires HOME

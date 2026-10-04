@@ -98,6 +98,12 @@ An empty allowlist allows no destinations.
 A supplied enabled proxy enforces managed routing even with `network: enabled`, subject to explicit local-binding exceptions.
 Proxy endpoints are execution-host addresses, including SSH/Docker.
 
+## Resolver policy
+
+The top-level `resolver` mapping configures dependency preparation independently of `sandbox`.
+See [resolver permissions, cache selection, and expanded defaults](RESOLVER.md).
+Worker profiles and writable roots do not widen resolver permissions.
+
 ## Command and environment
 
 Use `--` before the standalone command.

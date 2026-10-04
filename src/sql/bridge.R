@@ -33,9 +33,11 @@ base::local(
         duckdb::duckdb(
           dbdir = ":memory:",
           config = list(
-            # Suppress DuckDB-R's temporary fallback while leaving DuckDB core
-            # to resolve its native default extension directory.
-            extension_directory = "",
+            # Share the captured cache with preparation, or leave this empty
+            # for DuckDB core's native default when no cache was supplied.
+            extension_directory = Sys.getenv(
+              "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
+            ),
             secret_directory = file.path(storage, "stored-secrets"),
             temp_directory = file.path(storage, "spill")
           ),

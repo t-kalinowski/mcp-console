@@ -12,6 +12,8 @@ pub(crate) struct ClientConfiguration {
     pub(super) relay: Option<PathBuf>,
     pub(super) no_sandbox: bool,
     pub(super) sandbox_settings: crate::settings::SandboxSettings,
+    pub(super) resolver_settings: crate::settings::SandboxSettings,
+    pub(super) duckdb_extension_directory: Option<PathBuf>,
     pub(super) worker: Mutex<WorkerState>,
     pub(super) environment: Option<Mutex<Environment>>,
     pub(super) requirements_snapshot: Mutex<serde_json::Value>,
@@ -43,6 +45,22 @@ pub(super) struct BuiltinSetup {
 }
 
 impl ClientConfiguration {
+    pub(crate) fn with_resolver_settings(
+        mut self,
+        settings: crate::settings::SandboxSettings,
+    ) -> Result<Self, String> {
+        let host_policy = Default::default();
+        self.duckdb_extension_directory = crate::resolver::cache::duckdb_extension_directory(
+            if !self.no_sandbox && cfg!(unix) {
+                &settings
+            } else {
+                &host_policy
+            },
+        )?;
+        self.resolver_settings = settings;
+        Ok(self)
+    }
+
     pub(crate) fn new(
         program: PathBuf,
         relay: Option<PathBuf>,
@@ -71,11 +89,19 @@ impl ClientConfiguration {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         #[cfg(windows)]
         let _ = &diagnostics;
+        let host_policy = Default::default();
+        let duckdb_extension_directory =
+            crate::resolver::cache::duckdb_extension_directory(if !no_sandbox && cfg!(unix) {
+                &resolver_settings
+            } else {
+                &host_policy
+            })?;
         let languages = crate::cell::Languages::from_environment()?;
         let configured_python = python
             .map(PathBuf::into_os_string)
@@ -86,105 +112,100 @@ impl ClientConfiguration {
         #[cfg(any(unix, windows))]
         let local_preparation;
         #[cfg(any(unix, windows))]
-        let (r, duckdb_extensions, python, r_resolver) =
-            if !crate::local_runtime::Selection::r_is_present() {
-                let (preparation, discovery) =
-                    crate::resolver::preparation::Preparation::open_local(
-                        crate::resolver::preparation::Mode::PythonOnly,
-                        diagnostics.clone(),
-                        on_started,
-                    )?;
-                let resolver = crate::resolver::execution::PythonConfiguration::Local {
-                    preparation: preparation.clone(),
-                    has_uv: discovery
-                        .local_has_uv
-                        .ok_or("local Python discovery has no uv result")?,
-                };
-                let selected = crate::local_runtime::Selection::python(
-                    configured_python.clone(),
+        let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
+            crate::resolver::preparation::Mode::Auto,
+            (!no_sandbox && cfg!(unix)).then(|| resolver_settings.clone()),
+            configured_python.as_deref(),
+            diagnostics.clone(),
+            on_started,
+        )?;
+        #[cfg(any(unix, windows))]
+        let (r, duckdb_extensions, python, r_resolver) = if discovery.selections.r_home.is_none() {
+            let resolver = crate::resolver::execution::PythonConfiguration::Local {
+                preparation: preparation.clone(),
+                has_uv: discovery
+                    .local_has_uv
+                    .ok_or("local Python discovery has no uv result")?,
+            };
+            let selected = crate::local_runtime::Selection::python(
+                configured_python.clone(),
+                &resolver,
+                duckdb_extension_directory.clone(),
+                on_started,
+            )
+            .and_then(|(selection, managed)| {
+                let extensions = selection.prepare_default_duckdb_extensions(
+                    managed.as_ref(),
                     &resolver,
                     on_started,
-                )
-                .and_then(|(selection, managed)| {
-                    let extensions = selection.prepare_default_duckdb_extensions(
-                        managed.as_ref(),
-                        &resolver,
-                        on_started,
-                    )?;
-                    Ok((selection, managed, extensions))
-                });
-                let (selection, managed, extensions) = match selected {
-                    Ok(selection) => selection,
-                    Err(error) => {
-                        preparation
-                            .close()
-                            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
-                        return Err(error);
-                    }
-                };
-                local_runtime = Some(selection);
-                local_preparation = Some(preparation);
-                let python = Some(match managed {
-                    Some(selected) => PythonEnvironment::Managed { selected, resolver },
-                    None => PythonEnvironment::bare(configured_python.clone()),
-                });
-                (None, extensions, python, RResolver::Disabled)
-            } else {
-                let (preparation, discovery) =
-                    crate::resolver::preparation::Preparation::open_local(
-                        crate::resolver::preparation::Mode::R,
-                        diagnostics.clone(),
-                        on_started,
-                    )?;
-                #[cfg(unix)]
-                use std::os::unix::ffi::OsStringExt;
-                #[cfg(unix)]
-                let home = PathBuf::from(OsString::from_vec(
-                    discovery
-                        .local_r_home_bytes
-                        .ok_or("local R discovery has no R home")?,
-                ));
-                #[cfg(windows)]
-                let home = PathBuf::from(
-                    discovery
-                        .selections
-                        .r_home
-                        .clone()
-                        .ok_or("local R discovery has no R home")?,
-                );
-                local_runtime = Some(crate::local_runtime::Selection {
-                    r_home: Some(home),
-                    python: None,
-                });
-                local_preparation = Some(preparation.clone());
-                if discovery.managed {
-                    (
-                        None,
-                        Default::default(),
-                        None,
-                        RResolver::Pending(BuiltinSetup {
-                            bootstrap: crate::resolver::execution::Bootstrap::Local(
-                                preparation.clone(),
-                            ),
-                            python_resolver:
-                                crate::resolver::execution::PythonConfiguration::Local {
-                                    preparation,
-                                    has_uv: discovery
-                                        .local_has_uv
-                                        .ok_or("local R discovery has no uv result")?,
-                                },
-                            configured_python: configured_python.clone(),
-                        }),
-                    )
-                } else {
-                    (
-                        None,
-                        Default::default(),
-                        Some(PythonEnvironment::bare(configured_python.clone())),
-                        RResolver::Disabled,
-                    )
+                )?;
+                Ok((selection, managed, extensions))
+            });
+            let (selection, managed, extensions) = match selected {
+                Ok(selection) => selection,
+                Err(error) => {
+                    preparation
+                        .close()
+                        .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+                    return Err(error);
                 }
             };
+            local_runtime = Some(selection);
+            local_preparation = Some(preparation);
+            let python = Some(match managed {
+                Some(selected) => PythonEnvironment::Managed { selected, resolver },
+                None => PythonEnvironment::bare(configured_python.clone()),
+            });
+            (None, extensions, python, RResolver::Disabled)
+        } else {
+            #[cfg(unix)]
+            use std::os::unix::ffi::OsStringExt;
+            #[cfg(unix)]
+            let home = PathBuf::from(OsString::from_vec(
+                discovery
+                    .local_r_home_bytes
+                    .ok_or("local R discovery has no R home")?,
+            ));
+            #[cfg(windows)]
+            let home = PathBuf::from(
+                discovery
+                    .selections
+                    .r_home
+                    .clone()
+                    .ok_or("local R discovery has no R home")?,
+            );
+            local_runtime = Some(crate::local_runtime::Selection {
+                r_home: Some(home),
+                python: None,
+            });
+            local_preparation = Some(preparation.clone());
+            if discovery.managed {
+                (
+                    None,
+                    Default::default(),
+                    None,
+                    RResolver::Pending(BuiltinSetup {
+                        bootstrap: crate::resolver::execution::Bootstrap::Local(
+                            preparation.clone(),
+                        ),
+                        python_resolver: crate::resolver::execution::PythonConfiguration::Local {
+                            preparation,
+                            has_uv: discovery
+                                .local_has_uv
+                                .ok_or("local R discovery has no uv result")?,
+                        },
+                        configured_python: configured_python.clone(),
+                    }),
+                )
+            } else {
+                (
+                    None,
+                    Default::default(),
+                    Some(PythonEnvironment::bare(configured_python.clone())),
+                    RResolver::Disabled,
+                )
+            }
+        };
         // Preserve Windows' independent peer runtimes even in a bare R session. An
         // explicit Python selection is inspected by the same preparation owner.
         #[cfg(windows)]
@@ -242,6 +263,7 @@ impl ClientConfiguration {
                 r_resolver,
             },
         );
+        configuration.duckdb_extension_directory = duckdb_extension_directory;
         configuration.local_preparation = Mutex::new(local_preparation);
         configuration.languages = Some(languages);
         Ok(configuration)
@@ -273,6 +295,8 @@ impl ClientConfiguration {
             relay,
             no_sandbox,
             sandbox_settings,
+            resolver_settings: Default::default(),
+            duckdb_extension_directory: None,
             worker: Mutex::new(WorkerState::Initial),
             requirements_snapshot: Mutex::new(environment.inspection()),
             runtime_r_requirements: environment

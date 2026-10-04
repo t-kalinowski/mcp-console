@@ -174,6 +174,7 @@ fn run_server(
         python,
         source: _,
         policy,
+        resolver,
         target,
         provider,
     } = settings::discover(overrides)?;
@@ -206,7 +207,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, target, python,
+        worker, relay, no_sandbox, settings, target, python, resolver,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

@@ -397,6 +397,7 @@ impl Client {
                 relay: self.0.relay.as_deref(),
                 no_sandbox: self.0.no_sandbox,
                 sandbox_settings: &self.0.sandbox_settings,
+                duckdb_extension_directory: self.0.duckdb_extension_directory.as_deref(),
                 python,
                 managed_r,
                 dynamic_resolution: self.0.dynamic_resolution,

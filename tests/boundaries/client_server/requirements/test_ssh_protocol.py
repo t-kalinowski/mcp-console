@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
-from support.requirements import requires
+from support.requirements import SANDBOX, requires
 from support.ssh import SSH, configure, localhost, poison_controller
 from support.suites import run_this_suite
 
@@ -30,6 +30,53 @@ def preparation_peer_command(binary: Path, root: Path, mode: str, record: Path):
     )
     prefix.chmod(0o755)
     return [str(prefix)]
+
+
+@requires(SSH, SANDBOX)
+def test_local_resolver_policy_preserves_ssh_open_protocol(binary: Path):
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        record = root / "requests"
+        configure(
+            root,
+            root,
+            preparation_peer_command(binary, root, "capture-open", record),
+            sandbox={
+                "environment": {
+                    "R_HOME": "/selected/R",
+                    "RETICULATE_PYTHON": "/selected/python",
+                }
+            },
+            resolver={
+                "inherit_environment": False,
+                "environment": {"HOME": "/local-only"},
+            },
+        )
+        with localhost(root / "sshd") as environment:
+            with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
+                client.send(requirements={"action": "get"})
+                client.finish()
+            opened = json.loads(record.with_suffix(".open").read_text())
+            assert set(opened) == {
+                "version",
+                "build",
+                "workspace",
+                "selections",
+                "mode",
+            }, opened
+            assert opened["version"] == 6
+            assert opened["selections"] == {
+                "r_home": "/selected/R",
+                "python": "/selected/python",
+            }
+        return [
+            {
+                "version": 6,
+                "runtime_selections_preserved": True,
+                "local_policy_not_forwarded": True,
+            }
+        ]
 
 
 @requires(SSH)

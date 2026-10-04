@@ -16,7 +16,7 @@ mcp-console -c extends=:workspace serve -c sandbox.network=enabled
 mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analysis.R
 ```
 
-See [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
+See [resolver settings](RESOLVER.md), [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
 
 ## Console home
 

@@ -40,7 +40,7 @@ Selected virtualenv paths and prefixes are preserved for imports, subprocesses, 
 
 Prepared Docker/SBX targets use preinstalled interpreters and packages.
 They can run ordinary Python without NumPy, pandas, or DuckDB; missing DuckDB disables managed SQL, not Python or a user-selected DB-API connection.
-Managed local/SSH Python needs an absolute startup `HOME` for its shared extension cache.
+Managed local Python uses the captured [resolver extension cache](RESOLVER.md); SSH Python needs an absolute startup `HOME` for its shared extension cache.
 Worker spill, secrets, and caches use private lifetime storage, not ownership by R's session tempdir.
 
 ## Cells and polling

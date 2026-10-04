@@ -174,6 +174,7 @@ impl WorkerRuntime {
             relay,
             no_sandbox,
             sandbox_settings,
+            duckdb_extension_directory,
             python,
             managed_r,
             dynamic_resolution,
@@ -231,6 +232,14 @@ impl WorkerRuntime {
             }
             if let Some(managed_r) = managed_r {
                 managed_r.configure_worker(&mut command)?;
+            }
+            // Managed Python carries its prepared cache in the runtime selection.
+            // Managed R and custom workers need the startup-captured cache;
+            // a custom worker may accept its first R layer after launch.
+            if (!builtin || managed_r.is_some())
+                && let Some(directory) = duckdb_extension_directory
+            {
+                command.env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);
             }
             command.env(
                 "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",

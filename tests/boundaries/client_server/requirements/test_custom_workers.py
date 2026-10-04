@@ -97,6 +97,14 @@ def test_standalone_replacement_is_inspectable_before_worker_startup(
     return standalone_preparation(binary, execution, {"action": "set"})
 
 
+def resolver_fixture_arguments(
+    execution: Execution, *arguments: str
+) -> tuple[str, ...]:
+    # Lifecycle fixtures write marker/FIFO state outside package caches. Their
+    # explicit resolver policy leaves native networking and cleanup in place.
+    return execution.serve(*arguments, "-c", "resolver.filesystem.kind=unrestricted")
+
+
 def standalone_preparation(
     binary: Path, execution: Execution, action: dict
 ) -> Transcript:
@@ -132,7 +140,9 @@ def standalone_preparation(
         environment["MCP_CONSOLE_TEST_ZOD_STARTED"] = str(worker_started)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), "--relay", str(relay)),
+            resolver_fixture_arguments(
+                execution, "--worker", str(zod), "--relay", str(relay)
+            ),
             environment,
         )
         finished = False
@@ -311,7 +321,11 @@ def test_custom_worker_keeps_first_r_resolver_selection(
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
         unexpected = root / "unexpected-ir"
         environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
-        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client = McpClient(
+            binary,
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
+            environment,
+        )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["praise"]})
         assert last_tool_text(client) == "[prepared]", client.transcript[-1]
@@ -348,7 +362,11 @@ def test_custom_worker_keeps_selection_after_failed_first_manifest(
         environment["MCP_CONSOLE_TEST_IR_FAIL_ONCE"] = str(root / "first-failed")
         unexpected = root / "unexpected-ir"
         environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
-        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client = McpClient(
+            binary,
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
+            environment,
+        )
         client.initialize_and_list_tools()
         failed = client.send(requirements={"r": ["praise"]})
         assert failed["isError"] is True, failed
@@ -400,7 +418,11 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
                 "MCP_CONSOLE_TEST_IR_HOLDER_RELEASE": str(holder_release.path),
             }
         )
-        client = McpClient(binary, execution.serve("--worker", str(zod)), environment)
+        client = McpClient(
+            binary,
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
+            environment,
+        )
         holder_identity = None
         try:
             client.initialize_and_list_tools()
@@ -455,7 +477,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -602,7 +624,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -644,7 +666,7 @@ def test_custom_worker_resolves_idle_activity_before_preparation(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -675,7 +697,7 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
@@ -788,7 +810,7 @@ def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            resolver_fixture_arguments(execution, "--worker", str(zod)),
             environment,
         )
         client.initialize_and_list_tools()
