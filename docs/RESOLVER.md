@@ -29,6 +29,20 @@ Literal paths are relative to the execution workspace; they do not expand `~` or
 Default cache directories are created before launch.
 Create custom writable directories before launch on Linux, where absent roots cannot be bound.
 
+Default cache grants cover the locations and direct environment overrides listed below.
+Console does not inspect uv configuration files to discover additional writable paths.
+If `UV_CONFIG_FILE` or `uv.toml` selects a custom `cache-dir`, set the matching `resolver.environment.UV_CACHE_DIR` or grant that path in `resolver.filesystem.entries`.
+Use the expanded default as the starting point when supplying entries, since they replace all default grants.
+Other storage settings and package sources may also need explicit filesystem or proxy permissions.
+
+For a custom uv cache with an automatic write grant:
+
+```yaml
+resolver:
+  environment:
+    UV_CACHE_DIR: /home/alice/package-caches/uv
+```
+
 For a different PyPI mirror:
 
 ```yaml
@@ -143,6 +157,7 @@ R's cache base is `R_USER_CACHE_DIR`, then `XDG_CACHE_HOME`, then `$HOME/Library
 An explicit `IR_LIBRARY_ROOT` also receives writes.
 macOS additionally permits uv's legacy `$HOME/Library/Caches/uv` and `$HOME/Library/Application Support/uv` locations.
 Existing uv and reticulate cache selection remains unchanged.
+For uv grants, relative `XDG_CACHE_HOME` and `XDG_DATA_HOME` values are ignored in favor of the defaults beneath `HOME`.
 An absolute `HOME` is needed for resolver sandbox setup.
 Host cache selection lives in [`src/resolver/cache.rs`](../src/resolver/cache.rs), shared by resolver grants and captured DuckDB runtime paths.
 

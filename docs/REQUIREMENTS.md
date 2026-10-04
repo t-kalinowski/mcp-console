@@ -249,6 +249,8 @@ Shared cache writes can also affect other users of those artifacts; Console does
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
 R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
 Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
+Local resolver write grants cover default cache locations and direct cache environment overrides.
+Custom paths selected by uv configuration files need an explicit [resolver policy](RESOLVER.md#configuration) or a matching `resolver.environment.UV_CACHE_DIR` override.
 
 Managed environment creation removes `UV_NO_CACHE` because uv would otherwise delete the selected environment on exit.
 Worker code starts with `UV_OFFLINE=1`, including under `--no-sandbox`; that variable configures uv, not process-level network enforcement.

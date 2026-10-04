@@ -39,13 +39,22 @@ pub(crate) fn duckdb_extension_directory(
 pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>, String> {
     // Cache selection uses the resolver's effective environment, including its
     // own trusted YAML overrides. Worker environment settings do not reach here.
+    // Config-file cache paths need explicit resolver grants; this covers only
+    // default locations and direct environment overrides.
     let env = |name| environment_path(settings, name);
     let home = env("HOME").ok_or("resolver sandbox requires HOME")?;
     if !home.is_absolute() {
         return Err("resolver sandbox requires an absolute HOME".into());
     }
     let xdg_cache = env("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
-    let xdg_data = env("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local/share"));
+    let uv_cache_base = if xdg_cache.is_absolute() {
+        xdg_cache.clone()
+    } else {
+        home.join(".cache")
+    };
+    let xdg_data = env("XDG_DATA_HOME")
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".local/share"));
     let r_cache = env("R_USER_CACHE_DIR")
         .or_else(|| env("XDG_CACHE_HOME"))
         .unwrap_or_else(|| {
@@ -56,7 +65,7 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
             }
         });
     let mut caches = vec![
-        env("UV_CACHE_DIR").unwrap_or_else(|| xdg_cache.join("uv")),
+        env("UV_CACHE_DIR").unwrap_or_else(|| uv_cache_base.join("uv")),
         env("UV_PYTHON_INSTALL_DIR").unwrap_or_else(|| xdg_data.join("uv/python")),
         env("UV_TOOL_DIR").unwrap_or_else(|| xdg_data.join("uv/tools")),
         env("IR_CACHE_DIR").unwrap_or_else(|| r_cache.join("R/ir")),

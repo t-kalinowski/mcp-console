@@ -57,6 +57,37 @@ def preparation_directory():
     return tempfile.TemporaryDirectory(prefix="console-preparation-test-")
 
 
+def grant_resolver_cache(workspace: Path, cache: Path) -> None:
+    # uv config files select the cache; Console YAML supplies its permissions.
+    cache.mkdir()
+    config = workspace / ".agents/console/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "resolver": {
+                    "filesystem": {
+                        "entries": [
+                            {
+                                "path": {"type": "special", "value": {"kind": "root"}},
+                                "access": "read",
+                            },
+                            {
+                                "path": {"type": "path", "path": str(cache)},
+                                "access": "write",
+                            },
+                        ]
+                    },
+                    "environment": {
+                        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache / "duckdb"),
+                        "MPLCONFIGDIR": str(cache / "matplotlib"),
+                    },
+                }
+            }
+        )
+    )
+
+
 @contextmanager
 def unavailable_fixture_index():
     requests: list[str] = []
@@ -395,6 +426,8 @@ exec "{shutil.which("uv")}" "$@"
         (workspace / "uv.toml").write_text(
             'index-url = "https://invalid.example/project"\n'
         )
+        if execution is SANDBOXED:
+            grant_resolver_cache(workspace, cache)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             client.expect(
@@ -446,6 +479,8 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
                 env["UV_CACHE_DIR"] = "../shared-uv"
             else:
                 env.pop("UV_CACHE_DIR", None)
+                if execution is SANDBOXED:
+                    grant_resolver_cache(workspace, root / "shared-uv")
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
                 client.expect(

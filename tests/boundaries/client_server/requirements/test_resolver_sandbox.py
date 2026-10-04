@@ -98,6 +98,50 @@ def test_retains_tailored_resolver_policy(binary: Path) -> Transcript:
     return permissions(binary, tailored=True)
 
 
+@requires(SANDBOX)
+def test_ignores_relative_uv_xdg_directories(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        tools = root / "bin"
+        tools.mkdir()
+        (tools / "uv").symlink_to(shutil.which("uv"))
+        env = environment(tools)
+        for name in (
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "UV_TOOL_DIR",
+            "UV_CONFIG_FILE",
+        ):
+            env.pop(name, None)
+        env["UV_NO_CONFIG"] = "1"
+        home = root / "resolver-home"
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "resolver": {
+                        "environment": {
+                            "HOME": str(home),
+                            "XDG_CACHE_HOME": "relative-cache",
+                            "XDG_DATA_HOME": "relative-data",
+                        }
+                    }
+                }
+            )
+        )
+        with McpClient(binary, ("serve",), env, root) as client:
+            client.initialize_and_list_tools()
+            client.expect("prepared\n", python="print('prepared')")
+            client.finish()
+        assert not (root / "relative-cache/uv").exists()
+        assert not (root / "relative-data/uv").exists()
+        assert (home / ".cache/uv").is_dir()
+        assert (home / ".local/share/uv/python").is_dir()
+        assert list(home.rglob("pyvenv.cfg"))
+        return [{"relative_uv_xdg_ignored": True, "managed_python_prepared": True}]
+
+
 @requires(SANDBOX, SSH)
 def test_ssh_resolver_permissions(binary: Path) -> Transcript:
     return permissions(binary, tailored=False, remote=True)
