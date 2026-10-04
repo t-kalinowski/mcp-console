@@ -14,6 +14,24 @@ Security and liveness cases may need causal or process assertions in addition to
 Do not assert incidental internal sequencing.
 Keep a combined case when the interaction itself is a plausible failure mode.
 
+## Find a contract's suite
+
+Start with a behavior below, follow a suite and its fixture or harness, then use `--locate` from [Running cases](#running-cases) to reach a case and snapshot.
+These are representative transcript suites; [case capabilities](#requirements-and-execution-modes) and [provider fixtures](#fixtures-and-providers) determine coverage.
+For native Windows acceptance, use the [Windows validation guide](../../docs/WINDOWS.md#validation).
+
+| Behavior                  | Representative suites                                                                                                                | Fixture or harness entry points                                                                      | Production owner                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Admission/delivery        | [Eager startup](client_server/server/test_eager_startup.py), [delivery recovery](client_server/output/test_recovery.py)              | [MCP client](../support/client.py), [causal checkpoints](../support/checkpoints.py)                  | [Session operations](../../src/worker_client/), [MCP delivery](../../src/server_transport.rs)          |
+| Worker lifecycle          | [Restart](client_server/lifecycle/test_restart.py), [relay recovery](relay_worker/lifecycle/test_recovery.py)                        | [Scripted worker](../fixtures/zod), [relay/worker harness](relay_worker/_harness.py)                 | [Session operations](../../src/worker_client/), [relay supervision](../../src/worker_relay/)           |
+| Sideband/framing          | [Sideband](cli/relay/test_sideband.py), [relay failures](server_relay/failures/test_failures.py)                                     | [Pipe peer](../fixtures/relay_worker/pipe_peer.py), [server/relay harness](server_relay/_harness.py) | [Sideband](../../src/sideband.rs), [JSONL framing](../../src/jsonl.rs)                                 |
+| Output retention/previews | [Limits](client_server/output/test_limits.py), [previews](client_server/output/test_previews.py)                                     | [Scripted worker](../fixtures/zod), [preview assertions](../support/previews.py)                     | [Output tape and previews](../../src/worker_client/output/)                                            |
+| Preparation               | [Requirements actions](client_server/requirements/test_actions.py), [relay resolution](server_relay/requirements/test_resolution.py) | [Resolver fixtures](../support/resolvers.py), [server/relay harness](server_relay/_harness.py)       | [Host resolution](../../src/resolver/), [environment activation](../../src/worker_client/environment/) |
+| Recording                 | [Journal](client_server/recording/test_journal.py), [Markdown](client_server/recording/test_markdown.py)                             | [MCP client](../support/client.py), [scripted worker](../fixtures/zod)                               | [Recording](../../src/transcript.rs), [projections and output files](../../src/transcript/)            |
+| Sandbox guarantees        | [CLI profiles](cli/sandbox/test_profiles.py), [session retirement](client_server/sandbox/test_retirement.py)                         | CLI programs in the profiles suite; [descendant observation](../support/sandbox_observation.py)      | [Native-runner handoff](../../src/sandbox/), [target ownership](../../src/target_session.rs)           |
+
+Sandbox enforcement belongs to the native runner; the Console links identify its handoff and retirement ownership.
+
 ## Running cases
 
 ```sh
