@@ -39,7 +39,9 @@ def resolver_fixture_directory(binary: Path, execution: Execution):
             yield Path(directory)
 
 
-def resolver_fixture_arguments(environment: dict[str, str]) -> tuple[str, ...]:
+def resolver_fixture_arguments(
+    environment: dict[str, str], *, readable_roots: tuple[Path, ...] = ()
+) -> tuple[str, ...]:
     """Explicit trusted settings for test probes, without extra write grants."""
     # Fixture scripts need the base interpreter, not the runner's cached venv.
     environment["PATH"] = os.pathsep.join(
@@ -56,7 +58,7 @@ def resolver_fixture_arguments(environment: dict[str, str]) -> tuple[str, ...]:
         "-c",
         "resolver.readable_roots="
         + json.dumps(
-            [sys.base_prefix, str(FIXTURES)]
+            [sys.base_prefix, str(FIXTURES), *map(str, readable_roots)]
             + [
                 str(Path(environment[name]).resolve())
                 for name in ("MCP_CONSOLE_TEST_REAL_UV", "MCP_CONSOLE_TEST_REAL_IR")

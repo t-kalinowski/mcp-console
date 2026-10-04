@@ -29,6 +29,8 @@ from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     recording_uv_environment,
+    resolver_fixture_arguments,
+    resolver_fixture_directory,
     write_uv_python_inventories,
     uv_python_row,
     FIXTURES,
@@ -108,7 +110,7 @@ def python_bootstrap(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
             ),
             environment,
             root,
@@ -430,7 +432,7 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
             ),
             environment,
             root,
@@ -507,7 +509,12 @@ def test_r_bootstrap_resolves_python_version_and_import(
         complete = resources.enter_context(
             closing(FifoCheckpoint.create(root / "complete"))
         )
-        environment, resolving, resolved = checkpoint_uv_environment(root, "py-yaml12")
+        fixtures = resources.enter_context(
+            resolver_fixture_directory(binary, execution)
+        )
+        environment, resolving, resolved = checkpoint_uv_environment(
+            fixtures, "py-yaml12"
+        )
         resources.callback(resolving.close)
         resources.callback(resolved.close)
         r_environment, _ = r_test_environment()
@@ -547,7 +554,8 @@ def test_r_bootstrap_resolves_python_version_and_import(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                *resolver_fixture_arguments(environment, readable_roots=(root,)),
+                *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
             ),
             environment,
             root,
@@ -767,7 +775,10 @@ def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = Fal
                         assert stream.read(1) == b"1"
                 """),
         )
-        environment, _ = recording_uv_environment(root)
+        fixtures = resources.enter_context(
+            resolver_fixture_directory(binary, execution)
+        )
+        environment, _ = recording_uv_environment(fixtures)
         environment.update(without_r_environment(commands))
         environment["PYTHONPATH"] = str(root)
         environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(
@@ -776,7 +787,8 @@ def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = Fal
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                *resolver_fixture_arguments(environment, readable_roots=(root,)),
+                *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
             ),
             environment,
             root,
