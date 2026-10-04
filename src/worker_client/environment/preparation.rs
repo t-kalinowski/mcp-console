@@ -22,6 +22,7 @@ pub(in crate::worker_client) enum PrepareResult {
 pub(in crate::worker_client) enum PreparationIntent {
     Standalone,
     BeforeEvaluation,
+    StartupEvaluation,
 }
 
 impl Client {
@@ -66,7 +67,9 @@ impl Client {
             .evaluation()?
             .as_ref()
             .map(|active| active.evaluation.clone());
-        if let Some(active) = active_operation {
+        if let Some(active) =
+            active_operation.filter(|_| !matches!(intent, PreparationIntent::StartupEvaluation))
+        {
             let environment = match environment.try_lock() {
                 Ok(environment) => environment,
                 Err(std::sync::TryLockError::WouldBlock) => {
@@ -81,10 +84,10 @@ impl Client {
             if delta.is_empty() {
                 return Ok(PrepareResult::Prepared);
             }
-            if self.python_only() {
-                return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
-            }
             self.require_explicit_restart(&delta)?;
+            if self.0.python_only {
+                self.validate_live_native_delta(&environment, &delta)?;
+            }
             if matches!(intent, PreparationIntent::Standalone)
                 && self.requirement_change_state(generation)?
                     == RequirementChangeState::RestartRequired
@@ -93,27 +96,6 @@ impl Client {
             }
             return Err(active.reject_preparation_message().to_string());
         }
-        let mut pending_requirements = Some(requirements);
-        let available_environment = match environment.try_lock() {
-            Ok(environment) => {
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements
-                        .take()
-                        .expect("environment requirements were already consumed"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-                self.require_explicit_restart(&delta)?;
-                Some((environment, delta))
-            }
-            Err(std::sync::TryLockError::WouldBlock) => None,
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                return Err("worker environment lock poisoned".to_string());
-            }
-        };
         // Preparation owns admission and no evaluation is active. A delivered
         // completion can precede release of the evaluator's worker lock.
         let mut worker = self
@@ -121,24 +103,13 @@ impl Client {
             .worker
             .lock()
             .map_err(|_| "worker lock poisoned".to_string())?;
-        if self.python_only() && !matches!(*worker, WorkerState::Initial) {
-            if available_environment.is_none() {
-                let environment = environment
-                    .lock()
-                    .map_err(|_| "worker environment lock poisoned")?;
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements.take().expect("pending requirements"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
-                }
-            }
-            return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
-        }
+        let replace_default = self
+            .0
+            .unused_default
+            .load(std::sync::atomic::Ordering::Acquire)
+            && matches!(&*worker, WorkerState::Running(_));
         let environment_preparation = if let WorkerState::Running(running) = &*worker {
-            match running.reserve_environment_preparation() {
+            match running.reserve_environment_preparation(replace_default) {
                 Ok(reservation) => Ok(Some(reservation)),
                 Err(EnvironmentPreparationAdmissionFailure::Busy(error)) => {
                     return self.finish_environment_resolution_failure(
@@ -152,26 +123,26 @@ impl Client {
         } else {
             Ok(None)
         };
-        let (mut environment, delta) = match available_environment {
-            Some(snapshot) => snapshot,
-            None => {
-                let environment = environment
-                    .lock()
-                    .map_err(|_| "worker environment lock poisoned".to_string())?;
-                self.ensure_generation(generation)?;
-                let delta = RequirementDelta::calculate(
-                    &environment,
-                    pending_requirements
-                        .take()
-                        .expect("environment requirements were already consumed"),
-                )?;
-                if delta.is_empty() {
-                    return Ok(PrepareResult::Prepared);
+        let mut environment = environment
+            .lock()
+            .map_err(|_| "worker environment lock poisoned".to_string())?;
+        self.ensure_generation(generation)?;
+        let delta = RequirementDelta::calculate(&environment, requirements)?;
+        if delta.is_empty() {
+            return Ok(PrepareResult::Prepared);
+        }
+        self.require_explicit_restart(&delta)?;
+        if self.0.python_only && !replace_default {
+            match &*worker {
+                WorkerState::Initial => {}
+                WorkerState::Running(_) => {
+                    self.validate_live_native_delta(&environment, &delta)?;
                 }
-                self.require_explicit_restart(&delta)?;
-                (environment, delta)
+                WorkerState::Stopped => {
+                    return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
+                }
             }
-        };
+        }
         let includes_r = delta.r_changed;
         let _environment_preparation = match environment_preparation {
             Ok(reservation) => reservation,
@@ -197,7 +168,7 @@ impl Client {
         {
             return Ok(PrepareResult::RestartRequired);
         }
-        if matches!(*worker, WorkerState::Running(_)) {
+        if matches!(*worker, WorkerState::Running(_)) && !replace_default {
             let RequirementDelta {
                 duckdb_extensions,
                 duckdb_changed,
@@ -218,7 +189,19 @@ impl Client {
             } else {
                 None
             };
-            if !duckdb_extensions.is_empty() && (duckdb_changed || managed_r.is_some()) {
+            if self.0.python_only && duckdb_changed && python_candidate.is_none() {
+                let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
+                if let Err(failure) = self.resolve_python_duckdb_extensions_for_environment(
+                    generation,
+                    &environment,
+                    &extensions,
+                ) {
+                    return self.finish_environment_resolution_failure(generation, intent, failure);
+                }
+            } else if !self.0.python_only
+                && !duckdb_extensions.is_empty()
+                && (duckdb_changed || managed_r.is_some())
+            {
                 let mut targets = Vec::new();
                 if duckdb_changed {
                     targets.extend(environment.duckdb_r_targets.iter().cloned());
@@ -266,6 +249,20 @@ impl Client {
             }
         };
 
+        if replace_default {
+            // Resolve the complete candidate first: failed preparation must
+            // preserve the prewarmed worker and committed declaration.
+            match self
+                .stop_failed_worker(&mut worker, generation)
+                .map_err(|failure| failure.message)?
+            {
+                FailedWorkerStop::Stopped(_) => *worker = WorkerState::Initial,
+                FailedWorkerStop::RestartOwnsWorker => {
+                    return Err(preparation_cancelled(includes_r));
+                }
+            }
+        }
+
         let mut lifecycle = self
             .0
             .lifecycle
@@ -275,6 +272,7 @@ impl Client {
             LifecycleState::Ready if lifecycle.generation.is(generation) => {
                 lifecycle.processes.resolver = None;
                 *environment = resolved;
+                self.record_accepted_python(&environment);
                 self.publish_requirements(&environment);
                 self.record_requirements(action, call_id, &environment);
                 Ok(PrepareResult::Prepared)
@@ -288,8 +286,27 @@ impl Client {
     }
 
     fn require_explicit_restart(&self, delta: &RequirementDelta) -> Result<(), String> {
-        if delta.restart_required && self.has_live_worker()? {
+        if delta.restart_required
+            && self.has_live_worker()?
+            && !self
+                .0
+                .unused_default
+                .load(std::sync::atomic::Ordering::Acquire)
+        {
             return Err("changed requirements require an explicit restart; retry send(control=\"restart\", requirements={\"action\": \"set\", ...}) with the complete declaration (or action=\"reset\")".into());
+        }
+        Ok(())
+    }
+
+    fn validate_live_native_delta(
+        &self,
+        environment: &Environment,
+        delta: &RequirementDelta,
+    ) -> Result<(), String> {
+        if delta.has_live_python_additions() {
+            delta.validate_live_python_additions(environment)?;
+        } else if !delta.is_live_duckdb_only() {
+            return Err(crate::local_runtime::LIVE_PREPARATION_DISABLED.into());
         }
         Ok(())
     }
@@ -366,16 +383,28 @@ impl Client {
             let commit = Box::new(move |result| {
                 let managed = match result {
                     Ok(managed) => managed,
-                    Err(error) => return Ok(PreparationOutcome::Completed(Err(error))),
+                    Err(error) => {
+                        let error = if client.requirement_change_state(&commit_generation)?
+                            == RequirementChangeState::RestartRequired
+                        {
+                            requirement_restart_error(error)
+                        } else {
+                            error
+                        };
+                        return Ok(PreparationOutcome::Completed(Err(error)));
+                    }
                 };
                 if client.old_generation_commit_disposition(&commit_generation)?
                     == OldGenerationCommitDisposition::DiscardForReplacement
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
-                if let Some(managed) = managed
-                    && client.commit_runtime_python(commit_generation.clone(), managed)?
-                        == OldGenerationCommitDisposition::DiscardForReplacement
+                if let Some((managed, configuration)) = managed
+                    && client.commit_runtime_python(
+                        commit_generation.clone(),
+                        managed,
+                        configuration,
+                    )? == OldGenerationCommitDisposition::DiscardForReplacement
                 {
                     return Ok(PreparationOutcome::DiscardedByReplacement);
                 }
@@ -390,7 +419,15 @@ impl Client {
                 }
                 Ok(PreparationOutcome::Completed(Ok(())))
             });
-            let result = running.prepare_python(python_packages, includes_r, commit);
+            let result = running.prepare_python(
+                python_packages,
+                includes_r,
+                self.0
+                    .python_only
+                    .then(|| duckdb_extensions.clone())
+                    .flatten(),
+                commit,
+            );
             match result {
                 Ok(PreparationOutcome::Completed(Ok(()))) => {}
                 Ok(PreparationOutcome::Completed(Err(error))) => {
@@ -575,7 +612,7 @@ impl Client {
         }
     }
 
-    pub(super) fn require_restart_for_requirement_changes(
+    pub(in crate::worker_client) fn require_restart_for_requirement_changes(
         &self,
         generation: &WorkerGeneration,
     ) -> Result<OldGenerationCommitDisposition, String> {

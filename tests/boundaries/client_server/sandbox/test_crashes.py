@@ -6,6 +6,7 @@ import select
 import shutil
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -22,9 +23,14 @@ from support.macos import (
     signal_darwin_process,
 )
 from support.normalization import code
-from support.processes import worker_launcher_identities
 from support.records import Transcript
-from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    requires,
+)
+from support.sandbox_observation import observed_sandbox_descendants
 from support.suites import run_this_suite
 
 TIMEOUT = 10
@@ -47,7 +53,7 @@ def _last_text(client: McpClient) -> str:
     return content[0]["text"]
 
 
-def _spawn_detached_generation(client: McpClient, binary: Path) -> Generation:
+def _spawn_detached_generation(client: McpClient) -> Generation:
     # Use the bundled Python runtime and standard library so crash supervision
     # does not depend on an externally resolved R package. Starting a new
     # session proves that observation is not limited to the relay's group.
@@ -95,9 +101,14 @@ def _spawn_detached_generation(client: McpClient, binary: Path) -> Generation:
         "sandbox_temporary_directory": "omitted",
     }
     relay_identity = capture_darwin_process_identity(relay_pid)
-    (runner_identity,) = worker_launcher_identities(
-        capture_darwin_process_identity(client.process.pid), binary
-    )
+    server_identity = capture_darwin_process_identity(client.process.pid)
+    runners = [
+        child
+        for child in darwin_child_process_identities(server_identity)
+        if relay_identity in darwin_child_process_identities(child)
+    ]
+    assert len(runners) == 1, runners
+    runner_identity = runners[0]
     assert darwin_child_process_identities(runner_identity) == (relay_identity,)
     worker_identity = capture_darwin_process_identity(worker_pid)
     child_identity = capture_darwin_process_identity(child_pid)
@@ -122,7 +133,11 @@ def _wait_for_process_reaping(
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"processes were not reaped: {sorted(pending)}"
         events = process_events.control(None, len(watched), remaining)
-        assert events, f"processes were not reaped: {sorted(pending)}"
+        assert events, (
+            f"processes were not reaped: {sorted(pending)}; "
+            f"runner/relay/worker/child identities: {identities}; "
+            f"remaining identities: {live_darwin_processes(identities)}"
+        )
         for event in events:
             assert event.ident in watched, event
             assert event.filter == select.KQ_FILTER_PROC, event
@@ -150,13 +165,6 @@ def _wait_for_generation_failure(client: McpClient) -> None:
         time.sleep(0.01)
 
 
-def _manager_pid(server_pid: int, binary: Path) -> int:
-    (runner,) = worker_launcher_identities(
-        capture_darwin_process_identity(server_pid), binary
-    )
-    return runner[0]
-
-
 def _close_client_streams(client: McpClient) -> None:
     for stream in (client.stdin, client.stdout, client.stderr):
         try:
@@ -165,77 +173,82 @@ def _close_client_streams(client: McpClient) -> None:
             pass
 
 
-@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_server_crash_retires_the_worker_generation(binary: Path) -> Transcript:
     # The owned launcher must treat loss of the server as retirement of the
     # entire worker generation. A detached child must not survive merely because
     # the server received an uncatchable signal before its normal shutdown path.
-    client = McpClient(binary, SANDBOXED.serve())
-    generation: Generation | None = None
-    manager_identity: DarwinProcessIdentity | None = None
-    manager_exit = select.kqueue()
-    generation_reaping = select.kqueue()
-    try:
-        client.initialize_and_list_tools()
-        generation = _spawn_detached_generation(client, binary)
-        manager_identity = capture_darwin_process_identity(
-            _manager_pid(client.process.pid, binary)
-        )
-        exit_watch = select.kevent(
-            manager_identity[0],
-            filter=select.KQ_FILTER_PROC,
-            flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-            fflags=select.KQ_NOTE_EXIT,
-        )
-        assert manager_exit.control([exit_watch], 0, 0) == []
-        reap_watches = [
-            select.kevent(
-                identity[0],
+    environment = os.environ.copy()
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        observed_sandbox_descendants(Path(directory), environment) as observe,
+    ):
+        client = McpClient(binary, SANDBOXED.serve(), environment)
+        generation: Generation | None = None
+        manager_identity: DarwinProcessIdentity | None = None
+        manager_exit = select.kqueue()
+        generation_reaping = select.kqueue()
+        try:
+            client.initialize_and_list_tools()
+            generation = _spawn_detached_generation(client)
+            # A ready worker does not prove the runner has observed a detached child.
+            observe(generation[3][0], client.process)
+            manager_identity = generation[0]
+            exit_watch = select.kevent(
+                manager_identity[0],
                 filter=select.KQ_FILTER_PROC,
                 flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
-                fflags=select.KQ_NOTE_EXIT | _KQ_NOTE_REAP,
+                fflags=select.KQ_NOTE_EXIT,
             )
-            for identity in generation[:4]
-        ]
-        assert generation_reaping.control(reap_watches, 0, 0) == []
-        assert live_darwin_processes(generation[:4]) == [
-            identity[0] for identity in generation[:4]
-        ], "worker generation changed while registering reap watches"
+            assert manager_exit.control([exit_watch], 0, 0) == []
+            reap_watches = [
+                select.kevent(
+                    identity[0],
+                    filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_EXIT | _KQ_NOTE_REAP,
+                )
+                for identity in generation[:4]
+            ]
+            assert generation_reaping.control(reap_watches, 0, 0) == []
+            assert live_darwin_processes(generation[:4]) == [
+                identity[0] for identity in generation[:4]
+            ], "worker generation changed while registering reap watches"
 
-        client.process.kill()
-        returncode = client.process.wait(timeout=TIMEOUT)
-        events = manager_exit.control(None, 1, TIMEOUT)
-        assert len(events) == 1, "sandbox manager did not exit after server crash"
-        event = events[0]
-        assert event.ident == manager_identity[0], event
-        assert event.filter == select.KQ_FILTER_PROC, event
-        assert event.fflags & select.KQ_NOTE_EXIT, event
-        # The manager treats zombies as stopped, but their new parent may reap
-        # them just after manager exit. The pre-registered process watches make
-        # that final transition observable without racing a libproc sample.
-        _wait_for_process_reaping(generation_reaping, generation[:4], TIMEOUT)
+            client.process.kill()
+            returncode = client.process.wait(timeout=TIMEOUT)
+            events = manager_exit.control(None, 1, TIMEOUT)
+            assert len(events) == 1, "sandbox manager did not exit after server crash"
+            event = events[0]
+            assert event.ident == manager_identity[0], event
+            assert event.filter == select.KQ_FILTER_PROC, event
+            assert event.fflags & select.KQ_NOTE_EXIT, event
+            # The manager treats zombies as stopped, but their new parent may reap
+            # them just after manager exit. The pre-registered process watches make
+            # that final transition observable without racing a libproc sample.
+            _wait_for_process_reaping(generation_reaping, generation[:4], TIMEOUT)
 
-        assert returncode == -signal.SIGKILL, returncode
-        assert not generation[4].exists(), (
-            f"worker temporary directory survived server crash: {generation[4]}"
-        )
-        client.transcript.append(
-            {
-                "server_signal": "SIGKILL",
-                "server_returncode": returncode,
-            }
-        )
-        return client.transcript
-    finally:
-        stop_client(client)
-        if generation is not None:
-            kill_darwin_processes(generation[:4])
-            shutil.rmtree(generation[4].parent, ignore_errors=True)
-        if manager_identity is not None:
-            kill_darwin_processes((manager_identity,))
-        _close_client_streams(client)
-        manager_exit.close()
-        generation_reaping.close()
+            assert returncode == -signal.SIGKILL, returncode
+            assert not generation[4].exists(), (
+                f"worker temporary directory survived server crash: {generation[4]}"
+            )
+            client.transcript.append(
+                {
+                    "server_signal": "SIGKILL",
+                    "server_returncode": returncode,
+                }
+            )
+            return client.transcript
+        finally:
+            stop_client(client)
+            if generation is not None:
+                kill_darwin_processes(generation[:4])
+                shutil.rmtree(generation[4].parent, ignore_errors=True)
+            if manager_identity is not None:
+                kill_darwin_processes((manager_identity,))
+            _close_client_streams(client)
+            manager_exit.close()
+            generation_reaping.close()
 
 
 @requires(MACOS_SANDBOX, PROCESS_EVENTS)
@@ -247,9 +260,8 @@ def test_manager_crash_retires_the_worker_generation(binary: Path) -> Transcript
     manager_identity: DarwinProcessIdentity | None = None
     try:
         client.initialize_and_list_tools()
-        generation = _spawn_detached_generation(client, binary)
-        manager_pid = _manager_pid(client.process.pid, binary)
-        manager_identity = capture_darwin_process_identity(manager_pid)
+        generation = _spawn_detached_generation(client)
+        manager_identity = generation[0]
 
         assert signal_darwin_process(manager_identity, signal.SIGKILL), (
             "manager exited before crash injection"

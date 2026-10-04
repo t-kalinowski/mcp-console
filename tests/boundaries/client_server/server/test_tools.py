@@ -108,12 +108,16 @@ def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     companions = {
+        "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
         "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
         ),
         "python-managed.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True, python_managed=True
+        ),
+        "r-sql.yaml": _initializes_and_lists_tools(
+            binary, execution, languages="r,sql"
         ),
     }
     if execution == SANDBOXED:
@@ -123,26 +127,23 @@ def test_initializes_and_lists_tools(
         companions["workspace.yaml"] = _initializes_and_lists_tools(
             binary, execution, workspace_profile=True
         )
-        companions["python-workspace.yaml"] = _initializes_and_lists_tools(
-            binary, execution, python_only=True, workspace_profile=True
-        )
-    else:
-        companions["r-sql.yaml"] = _initializes_and_lists_tools(
-            binary, execution, languages="r,sql"
-        )
     companions["ssh.yaml"] = _initializes_and_lists_tools(
         binary, execution, bare=True, workspace_profile=True, ssh=True
     )
-    return TranscriptWithCompanions(
-        _initializes_and_lists_tools(binary, execution),
-        companions,
-    )
+    baseline = _initializes_and_lists_tools(binary, execution)
+    # Runtime discovery must not change the configured public interface.
+    for name in ("bare.yaml", "python-only.yaml", "python-managed.yaml"):
+        assert (
+            companions[name][2]["result"]["tools"] == baseline[2]["result"]["tools"]
+        ), name
+    return TranscriptWithCompanions(baseline, companions)
 
 
 def _initializes_and_lists_tools(
     binary: Path,
     execution: Execution,
     *,
+    custom: bool = False,
     bare: bool = False,
     python_only: bool = False,
     python_managed: bool = False,
@@ -161,11 +162,10 @@ def _initializes_and_lists_tools(
         if python_only:
             python_bin = Path(library) / "bin"
             python_bin.mkdir()
-            (python_bin / "python3").symlink_to(sys.executable)
             if python_managed:
-                uv = shutil.which("uv")
-                assert uv is not None
-                (python_bin / "uv").symlink_to(uv)
+                (python_bin / "uv").symlink_to(shutil.which("uv"))
+            else:
+                (python_bin / "python3").symlink_to(sys.executable)
             environment["PATH"] = str(python_bin)
             for name in (
                 "R_HOME",
@@ -175,6 +175,8 @@ def _initializes_and_lists_tools(
                 "RETICULATE_UV",
             ):
                 environment.pop(name, None)
+            if not python_managed:
+                environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
         workspace = Path(library) / "workspace"
         workspace.mkdir()
         if ssh:
@@ -199,7 +201,11 @@ def _initializes_and_lists_tools(
             )
         with McpClient(
             binary,
-            execution.serve(),
+            execution.serve(
+                *("--worker", str(Path(__file__).resolve().parents[3] / "fixtures/zod"))
+                if custom
+                else ()
+            ),
             environment,
             workspace,
             record_in_project=False,
@@ -208,6 +214,25 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            description = send["description"]
+            if custom:
+                assert "custom-worker" in description
+                assert "does not supply built-in runtime packages" in description
+                assert "defaults include SQLite" not in description
+            else:
+                assert description.index(
+                    "consider DuckDB SQL first"
+                ) < description.index("Send one complete")
+                assert "CSV, Parquet, JSON, and JSONL directly" in description
+                assert "JSON support is built in" in description
+                assert (
+                    "bounded table previews that abbreviate long text cells"
+                    in description
+                )
+                assert "attach the database read-only" in description
+                assert "managed defaults include SQLite when" in description
+                assert "Use R for vectorized data and string operations" in description
+                assert 'requirements={"action":"add","duckdb":["fts"]}' in description
             if proxy:
                 assert (
                     "network subject to the launcher's proxy settings"
@@ -225,19 +250,9 @@ def _initializes_and_lists_tools(
             else:
                 assert not (workspace / ".agents/console").exists(), workspace
             if python_only:
-                assert {"r", "sql"}.isdisjoint(send["inputSchema"]["properties"])
-            if bare or (python_only and not python_managed):
-                assert send["inputSchema"]["properties"]["requirements"]["properties"][
-                    "action"
-                ]["enum"] == ["get"]
-                transcript = client.finish()
-                if ssh:
-                    transcript = json.loads(
-                        json.dumps(transcript).replace(
-                            str(Path(library).resolve()), "<ssh-test>"
-                        )
-                    )
-                return transcript
+                assert {"r", "python", "sql"} <= send["inputSchema"][
+                    "properties"
+                ].keys()
             send_requirements = send["inputSchema"]["properties"]["requirements"]
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
@@ -268,9 +283,21 @@ def _initializes_and_lists_tools(
                 assert "maxItems" not in requirement, requirement
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
-            if not python_managed:
-                assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
-            return client.finish()
+            assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
+            # Inspection does not wait for preparation; it must leave the
+            # configured schema unchanged. Keep the handshake-only snapshot.
+            transcript = list(client.transcript)
+            prepared = client.send(requirements={"action": "get"})
+            assert not prepared.get("isError", False), prepared
+            assert client.request("tools/list")["result"] == transcript[2]["result"]
+            client.finish()
+            if ssh:
+                transcript = json.loads(
+                    json.dumps(transcript).replace(
+                        str(Path(library).resolve()), "<ssh-test>"
+                    )
+                )
+            return transcript
 
 
 @requires(SANDBOX)
@@ -380,6 +407,37 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                 assert listed["result"]["tools"][0]["description"] == description
                 client.finish()
                 transcript.append({"configuration": name, "description": description})
+    return transcript
+
+
+def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Transcript:
+    transcript = []
+    for enabled in (
+        "r",
+        "python",
+        "sql",
+        "r,python",
+        "r,sql",
+        "python,sql",
+        "r,python,sql",
+    ):
+        environment = dict(os.environ, MCP_CONSOLE_LANGUAGES=enabled)
+        with McpClient(
+            binary, DIRECT.serve("--worker", "unused-worker"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            tool = client.transcript[-1]["result"]["tools"][0]
+            fields = set(tool["inputSchema"]["properties"]) & {"r", "python", "sql"}
+            assert fields == set(enabled.split(",")), fields
+            description = tool["description"]
+            assert ("Switch languages when useful" in description) == (
+                len(fields) > 1
+            ), (
+                enabled,
+                description,
+            )
+            transcript.append({"languages": enabled, "description": description})
+            client.finish()
     return transcript
 
 
@@ -682,9 +740,12 @@ def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
         return client.finish()
 
 
+@requires(WORKER)
 def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
-    with McpClient(binary, DIRECT.serve()) as client:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with McpClient(binary, DIRECT.serve("--worker", str(zod))) as client:
         client.initialize_and_list_tools()
+        client.send(requirements={"action": "get"})
         client.send(control="interrupt", timeout_ms=0)
         result = client.transcript[-1]["result"]
         assert result["isError"] is True

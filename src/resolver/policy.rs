@@ -16,6 +16,7 @@ pub(crate) struct Settings {
     pub(crate) readable_roots: Vec<PathBuf>,
 }
 
+#[cfg(unix)]
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Launch {
@@ -29,6 +30,7 @@ pub(crate) struct Launch {
     pub(crate) readable: Vec<PathBuf>,
 }
 
+#[cfg(unix)]
 impl Launch {
     pub(crate) fn capture(no_sandbox: bool, settings: Settings) -> Result<Self, String> {
         let workspace = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -407,6 +409,7 @@ impl Launch {
     }
 }
 
+#[cfg(unix)]
 fn python_reads(python: &Path) -> Result<Vec<PathBuf>, String> {
     // An executable alias does not grant its parent directory. Recognize only
     // standard bin/lib layouts, without following library-directory symlinks
@@ -435,6 +438,7 @@ fn python_reads(python: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
+#[cfg(unix)]
 pub(crate) fn protect_worker(
     policy: &mut crate::settings::SandboxSettings,
     workspace: &Path,

@@ -5,8 +5,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::resolver::preparation;
-use crate::target_launch::{self, Bootstrap, Protocol, Retirement, VERSION};
+pub(crate) use crate::resolver::preparation;
+use crate::target_launch::{self, Bootstrap, Protocol, Retirement, SSH_VERSION};
 
 pub(crate) const PROTOCOL: Protocol = Protocol("SSH");
 pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
@@ -14,16 +14,22 @@ pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
 pub(crate) struct Session {
     pub target: crate::settings::Target,
     roots: Vec<PathBuf>,
+    languages: crate::cell::Languages,
     pub(crate) blocked: Arc<Mutex<Option<String>>>,
     pub preparation: Option<preparation::Preparation>,
     discovery: Option<Box<preparation::Discovery>>,
 }
 
 impl Session {
-    pub fn new(target: crate::settings::Target, roots: Vec<PathBuf>) -> Self {
+    pub fn new(
+        target: crate::settings::Target,
+        roots: Vec<PathBuf>,
+        languages: crate::cell::Languages,
+    ) -> Self {
         Self {
             target,
             roots,
+            languages,
             blocked: Arc::default(),
             preparation: None,
             discovery: None,
@@ -75,9 +81,12 @@ impl Session {
         no_sandbox: bool,
         managed_r: Option<&crate::resolver::ManagedR>,
         python: Option<&crate::resolver::ManagedPython>,
+        native: Option<&crate::local_runtime::Selection>,
     ) -> Result<Vec<u8>, String> {
         target_launch::encode(&Bootstrap {
-            version: VERSION,
+            python: None,
+            languages: self.languages,
+            version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: self.target.workspace.clone(),
             policy: policy.clone(),
@@ -91,6 +100,7 @@ impl Session {
                     discovery: *discovery,
                     r: managed_r.cloned(),
                     python: python.cloned(),
+                    native: native.cloned(),
                 }),
         })
         .map_err(|error| format!("cannot encode SSH bootstrap: {error}"))
@@ -99,20 +109,27 @@ impl Session {
     pub fn discover(
         &mut self,
         policy: &crate::settings::SandboxSettings,
+        python: Option<&std::path::Path>,
         no_sandbox: bool,
-        resolver_settings: crate::resolver::broker::Settings,
+        settings: crate::resolver::policy::Settings,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<preparation::Discovery, String> {
-        let selections = preparation::Selections::from_policy(policy);
+        let selections = preparation::Selections::from_policy(policy, python)?;
         let (preparation, discovery) = preparation::Preparation::open(
             self,
             selections,
             no_sandbox,
-            resolver_settings,
+            settings,
+            diagnostics,
             on_started,
         )?;
         self.preparation = Some(preparation);
-        self.discovery = Some(Box::new(discovery.clone()));
+        // The session environment owns the current native selection after discovery.
+        self.discovery = Some(Box::new(preparation::Discovery {
+            native: None,
+            ..discovery.clone()
+        }));
         Ok(discovery)
     }
 

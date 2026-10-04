@@ -10,10 +10,14 @@ use std::ffi::CStr;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use harp::object::{RObject, is_identical, r_null_or_try_into};
+use harp::object::{RObject, is_identical};
 use libr::SEXP;
 
 use super::{Characters, Manifest, Requirements};
+
+mod activation;
+
+pub(super) use activation::check_activation;
 
 #[derive(Clone, Copy)]
 enum Field {
@@ -57,9 +61,83 @@ struct Metadata {
 
 #[derive(Default)]
 struct State {
-    requirements: Requirements,
+    adapter: Option<Rc<RObject>>,
     current_metadata: Option<Rc<Metadata>>,
     pending_metadata: Option<Rc<Metadata>>,
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_requirements_attach(
+    adapter: SEXP,
+) -> harp::Result<SEXP> {
+    let adapter = Rc::new(RObject::view(adapter).clone());
+    let previous = STATE.with(|state| state.borrow_mut().adapter.replace(adapter));
+    drop(previous);
+    unsafe { Ok(libr::R_NilValue) }
+}
+
+pub(super) fn declaration()
+-> Result<Option<crate::worker_protocol::PythonRequirementManifest>, String> {
+    let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
+        return Ok(None);
+    };
+    let json = Adapter(adapter.sexp)
+        .call("manifest_json", &[])
+        .map_err(message)?
+        .text()
+        .map_err(message)?;
+    serde_json::from_str(&json)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+pub(super) struct Projection {
+    adapter: Rc<RObject>,
+    value: Value,
+}
+
+pub(super) fn project_packages(
+    selected: &crate::python::NativePython,
+    packages: &[String],
+    inspected: Option<&serde_json::Value>,
+) -> Result<Option<Projection>, String> {
+    let Some(adapter) = STATE.with(|state| state.borrow().adapter.clone()) else {
+        return Ok(None);
+    };
+    let encoded = serde_json::json!({"selection": selected, "environment": inspected}).to_string();
+    let packages = serde_json::to_string(packages).map_err(|error| error.to_string())?;
+    let (encoded, packages) = harp::exec::r_sandbox(|| {
+        (
+            Value(RObject::from(encoded)),
+            Value(RObject::from(packages)),
+        )
+    })
+    .map_err(|error| error.to_string())?;
+    let value = Adapter(adapter.sexp)
+        .call("project_packages", &[&encoded, &packages])
+        .map_err(message)?;
+    Ok(Some(Projection { adapter, value }))
+}
+
+impl Projection {
+    pub(super) fn commit(self, environment: Option<&serde_json::Value>) -> Result<(), String> {
+        let environment = harp::exec::r_sandbox(|| {
+            environment.map_or_else(Value::null, |value| Value(RObject::from(value.to_string())))
+        })
+        .map_err(|error| error.to_string())?;
+        Adapter(self.adapter.sexp)
+            .call("commit_import", &[&self.value, &environment])
+            .map(|_| ())
+            .map_err(message)
+    }
+}
+
+fn message(error: Error) -> String {
+    match error {
+        Error::Message(message) => message,
+        Error::Interrupt(_) => "Python requirement projection interrupted".into(),
+    }
 }
 
 thread_local! {
@@ -73,106 +151,13 @@ thread_local! {
 pub extern "C-unwind" fn mcp_console_python_requirements_get() -> harp::Result<SEXP> {
     let snapshot = STATE.with(|state| {
         let state = state.borrow();
-        state
-            .requirements
-            .current
-            .clone()
+        super::STATE
+            .with(|state| state.borrow().current.clone())
             .zip(state.current_metadata.clone())
     });
     let (value, metadata) =
         snapshot.ok_or_else(|| harp::anyhow!("managed Python requirements are not installed"))?;
     Ok(metadata.to_r(&value)?.sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_requirements_set(
-    value: SEXP,
-    activation: SEXP,
-) -> harp::Result<SEXP> {
-    let pending = STATE.with(|state| {
-        let state = state.borrow();
-        state
-            .requirements
-            .pending_activation
-            .clone()
-            .zip(state.pending_metadata.clone())
-    });
-    if let Some((pending, metadata)) = pending
-        && !is_identical(activation, metadata.to_r(&pending)?.sexp)
-    {
-        return Err(harp::anyhow!(
-            "Python requirement update does not match pending activation"
-        ));
-    }
-    let (value, metadata) = Metadata::from_r(value)?;
-    let (previous, committed) = STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        let previous = (
-            state.current_metadata.replace(Rc::new(metadata)),
-            state.pending_metadata.take(),
-        );
-        (previous, state.requirements.commit(value))
-    });
-    // Release protection and publish only after leaving the state borrow.
-    drop(previous);
-    if committed {
-        publish_activation(activation)?;
-    }
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activation_pending() -> harp::Result<SEXP> {
-    let pending = STATE.with(|state| state.borrow().requirements.activation_pending());
-    Ok(RObject::from(pending).sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_activation_record(
-    activation: SEXP,
-) -> harp::Result<SEXP> {
-    check_activation()?;
-    // Called only after native activation and process-environment setup
-    // succeed. An earlier failure leaves ordinary snapshot restoration inert.
-    let (activation, metadata) = Metadata::from_r(activation)?;
-    let previous = STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        state.requirements.pending_activation = Some(activation);
-        state.pending_metadata.replace(Rc::new(metadata))
-    });
-    drop(previous);
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_python_initialized(activation: SEXP) -> harp::Result<SEXP> {
-    // Initial startup has its own successful reticulate hook, with no pending
-    // late activation or subsequent requirement write to commit it.
-    publish_activation(activation)?;
-    unsafe { Ok(libr::R_NilValue) }
-}
-
-#[allow(clippy::result_large_err)]
-pub(super) fn check_activation() -> harp::Result<()> {
-    STATE
-        .with(|state| state.borrow().requirements.check_activation())
-        .map_err(|error| harp::anyhow!("{error}"))
-}
-
-#[allow(clippy::result_large_err)]
-fn publish_activation(activation: SEXP) -> harp::Result<()> {
-    // The bridge still supplies its normalized projection in this order.
-    let activation = RObject::view(activation);
-    let requirements = crate::worker_protocol::PythonRequirementManifest {
-        packages: activation.vector_elt(0)?.try_into()?,
-        python_version: activation.vector_elt(1)?.try_into()?,
-        exclude_newer: r_null_or_try_into(activation.vector_elt(2)?)?,
-    };
-    crate::worker::publish_python_activation(requirements).map_err(|error| harp::anyhow!("{error}"))
 }
 
 #[allow(clippy::result_large_err)]
@@ -315,7 +300,11 @@ fn get_char_encoding() -> harp::Result<GetCharEncoding> {
     if let Some(function) = GET_CHAR_ENCODING.get() {
         return Ok(*function);
     }
+    #[cfg(unix)]
     let library = libloading::os::unix::Library::this();
+    #[cfg(windows)]
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")
+        .map_err(|error| harp::anyhow!("failed to load R.dll: {error}"))?;
     let function = unsafe {
         *library
             .get::<GetCharEncoding>(b"Rf_getCharCE\0")
@@ -372,54 +361,47 @@ impl Value {
         self.0.length() == 0
     }
 
-    pub(super) fn copy(&self) -> super::Result<Self> {
+    pub(super) fn copy(&self) -> super::RResult<Self> {
         harp::exec::r_sandbox(|| Self(self.0.clone())).map_err(from_r_error)
     }
 
-    pub(super) fn identical(&self, other: &Self) -> super::Result<bool> {
+    pub(super) fn identical(&self, other: &Self) -> super::RResult<bool> {
         harp::exec::r_sandbox(|| is_identical(self.0.sexp, other.0.sexp)).map_err(from_r_error)
     }
 
-    pub(super) fn text(&self) -> super::Result<String> {
+    pub(super) fn text(&self) -> super::RResult<String> {
         harp::exec::r_sandbox(|| String::try_from(&self.0))
             .map_err(from_r_error)?
             .map_err(from_r_error)
     }
 
-    pub(super) fn boolean(&self) -> super::Result<bool> {
+    pub(super) fn boolean(&self) -> super::RResult<bool> {
         harp::exec::r_sandbox(|| bool::try_from(self.0.clone()))
             .map_err(from_r_error)?
             .map_err(from_r_error)
     }
 
-    pub(super) fn union(&self, other: &Self) -> super::Result<Self> {
+    pub(super) fn union(&self, other: &Self) -> super::RResult<Self> {
         let combined = base_call("c", &[self, other])?;
         base_call("unique", &[&combined])
     }
 
-    pub(super) fn difference(&self, other: &Self) -> super::Result<Self> {
+    pub(super) fn difference(&self, other: &Self) -> super::RResult<Self> {
         base_call("setdiff", &[self, other])
     }
 
-    pub(super) fn disjoint(&self, other: &Self) -> super::Result<bool> {
+    pub(super) fn disjoint(&self, other: &Self) -> super::RResult<bool> {
         let matches = base_call("%in%", &[self, other])?;
         Ok(!base_call("any", &[&matches])?.boolean()?)
     }
 
-    pub(super) fn set_equal(&self, other: &Self) -> super::Result<bool> {
+    pub(super) fn set_equal(&self, other: &Self) -> super::RResult<bool> {
         base_call("setequal", &[self, other])?.boolean()
     }
 }
 
 impl Record {
-    pub(super) fn new(value: Value) -> super::Result<Self> {
-        if value.is_null() {
-            return Err("Python preparation did not produce a managed manifest".into());
-        }
-        Ok(Self(value))
-    }
-
-    pub(super) fn config(value: Value) -> super::Result<Self> {
+    pub(super) fn config(value: Value) -> super::RResult<Self> {
         if value.is_null() {
             return Err("Python activation did not produce candidate configuration".into());
         }
@@ -430,12 +412,12 @@ impl Record {
         &self.0
     }
 
-    pub(super) fn get(&self, field: &str) -> super::Result<Value> {
+    pub(super) fn get(&self, field: &str) -> super::RResult<Value> {
         let field = harp::exec::r_sandbox(|| Value(RObject::from(field))).map_err(from_r_error)?;
         base_call("[[", &[&self.0, &field])
     }
 
-    pub(super) fn set(&mut self, field: &str, value: Value) -> super::Result<()> {
+    pub(super) fn set(&mut self, field: &str, value: Value) -> super::RResult<()> {
         let field = harp::exec::r_sandbox(|| Value(RObject::from(field))).map_err(from_r_error)?;
         let value = base_call("list", &[&value])?;
         // Single-bracket assignment retains an explicitly NULL field and the
@@ -444,7 +426,7 @@ impl Record {
         Ok(())
     }
 
-    pub(super) fn append_history(&mut self, request: &Self) -> super::Result<()> {
+    pub(super) fn append_history(&mut self, request: &Self) -> super::RResult<()> {
         let event = base_call("list", &[request.value()])?;
         let history = base_call("c", &[&self.get("history")?, &event])?;
         self.set("history", history)
@@ -452,7 +434,7 @@ impl Record {
 }
 
 impl Declaration {
-    fn from_r(request: SEXP) -> super::Result<Self> {
+    fn from_r(request: SEXP) -> super::RResult<Self> {
         let record = Record(Value(RObject::view(request)));
         let action = match record.get("action")?.text()?.as_str() {
             "add" => super::Action::Add,
@@ -472,27 +454,28 @@ impl Declaration {
 }
 
 impl Adapter {
-    pub(super) fn call(&self, function: &str, arguments: &[&Value]) -> super::Result<Value> {
+    pub(super) fn call(&self, function: &str, arguments: &[&Value]) -> super::RResult<Value> {
         call(self.0, function, arguments)
     }
 
-    pub(super) fn resolve(&self, candidate: &Record, version: &Value) -> super::Result<Value> {
+    pub(super) fn resolve(&self, candidate: &Record, version: &Value) -> super::RResult<Value> {
         self.call(
             "resolve",
             &[
                 &candidate.get("packages")?,
                 version,
                 &candidate.get("exclude_newer")?,
+                &Value(RObject::from(true)),
             ],
         )
     }
 }
 
-fn base_call(function: &str, arguments: &[&Value]) -> super::Result<Value> {
+fn base_call(function: &str, arguments: &[&Value]) -> super::RResult<Value> {
     call(unsafe { libr::R_BaseEnv }, function, arguments)
 }
 
-fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::Result<Value> {
+fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::RResult<Value> {
     use harp::exec::{RFunction, RFunctionExt};
     let call = harp::exec::r_sandbox(|| {
         let mut call = RFunction::new("", function);
@@ -539,31 +522,20 @@ pub(super) fn from_r_error(error: harp::Error) -> Error {
     })
 }
 
-// Unlike harp::register, these entry points do not suspend interrupts across
+// Unlike harp::register, this entry point does not suspend interrupts across
 // environment preparation or activation. R conversions protect themselves.
 #[ctor::ctor(unsafe)]
 fn register_transitions() {
     type CallMethod = unsafe extern "C-unwind" fn() -> *mut libc::c_void;
-    for (name, function, arity) in [
-        (
-            c"mcp_console_python_transition",
-            python_transition as *const (),
-            4,
-        ),
-        (
-            c"mcp_console_python_prepare",
-            python_prepare as *const (),
-            2,
-        ),
-    ] {
-        // SAFETY: R calls each function on its thread with the registered arity.
-        unsafe {
-            harp::routines::add(libr::R_CallMethodDef {
-                name: name.as_ptr(),
-                fun: Some(std::mem::transmute::<*const (), CallMethod>(function)),
-                numArgs: arity,
-            });
-        }
+    // SAFETY: R calls this function on its thread with four protected arguments.
+    unsafe {
+        harp::routines::add(libr::R_CallMethodDef {
+            name: c"mcp_console_python_transition".as_ptr(),
+            fun: Some(std::mem::transmute::<*const (), CallMethod>(
+                python_transition as *const (),
+            )),
+            numArgs: 4,
+        });
     }
 }
 
@@ -583,21 +555,7 @@ extern "C-unwind" fn python_transition(
     })
 }
 
-extern "C-unwind" fn python_prepare(packages: SEXP, adapter: SEXP) -> SEXP {
-    complete(|| {
-        let failure = Requirements::prepare(&Adapter(adapter), Value(RObject::view(packages)))?;
-        harp::exec::r_sandbox(|| match failure {
-            None => named_list(&[("kind", &Value(RObject::from("ready")))]),
-            Some(message) => named_list(&[
-                ("kind", &Value(RObject::from("failed"))),
-                ("message", &Value(RObject::from(message))),
-            ]),
-        })
-        .map_err(from_r_error)?
-    })
-}
-
-fn named_list(fields: &[(&str, &Value)]) -> super::Result<Value> {
+fn named_list(fields: &[(&str, &Value)]) -> super::RResult<Value> {
     use harp::exec::{RFunction, RFunctionExt};
     harp::exec::r_sandbox(|| {
         let mut call = RFunction::new("base", "list");
@@ -612,9 +570,32 @@ fn named_list(fields: &[(&str, &Value)]) -> super::Result<Value> {
 
 // Return interrupts as conditions only at these two private R boundaries;
 // ordinary errors keep the existing message-only py_require()/prepare contract.
-fn complete(operation: impl FnOnce() -> super::Result<Value>) -> SEXP {
+fn complete(operation: impl FnOnce() -> super::RResult<Value>) -> SEXP {
     harp::exec::r_unwrap(|| match operation() {
         Ok(value) | Err(Error::Interrupt(value)) => Ok(value.0.sexp),
         Err(Error::Message(message)) => Err(message),
     })
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_python_version_matches(
+    version: SEXP,
+    constraints: SEXP,
+) -> harp::Result<SEXP> {
+    let version: String = RObject::view(version).try_into()?;
+    let constraints: Vec<String> = RObject::view(constraints).try_into()?;
+    crate::python_requirement::validate_version_constraints(&constraints)
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    let parsed = version
+        .parse::<pep508_rs::pep440_rs::Version>()
+        .map_err(|error| harp::anyhow!("{error}"))?;
+    let matches = constraints
+        .iter()
+        .flat_map(|constraint| constraint.split(','))
+        .all(|clause| {
+            crate::python_requirement::VersionConstraint::parse(clause.trim())
+                .matches(&parsed, &version)
+        });
+    Ok(RObject::from(matches).sexp)
 }

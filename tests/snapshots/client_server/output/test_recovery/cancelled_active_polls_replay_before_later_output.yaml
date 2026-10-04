@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.custom.direct.yaml
 ---
 send:
   r: echo ready
@@ -23,11 +23,12 @@ result:
 ---
 send:
   timeout_ms: 0
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 5
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping
@@ -35,11 +36,12 @@ result: {}
 ---
 send:
   timeout_ms: 0
+id: <cancelled request 2>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 7
+    requestId: <cancelled request 2>
 ---
 input:
   method: ping

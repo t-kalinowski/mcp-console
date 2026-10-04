@@ -1,5 +1,5 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as custom MCP initialization for this execution mode
 ---
 send:
   r: echo ready
@@ -12,11 +12,12 @@ result:
 ---
 send:
   r: echo held response
+id: <cancelled request 1>
 ---
 input:
   method: notifications/cancelled
   params:
-    requestId: 4
+    requestId: <cancelled request 1>
 ---
 input:
   method: ping

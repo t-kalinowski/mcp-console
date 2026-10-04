@@ -10,11 +10,17 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+from checkout_workflow import WINDOWS, r_executable
 
 
 def probe(*command: str) -> str:
     result = subprocess.run(
-        command, cwd=ROOT, capture_output=True, text=True, timeout=10, check=True
+        [shutil.which(command[0]) or command[0], *command[1:]],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
     )
     return (result.stdout + result.stderr).strip()
 
@@ -26,31 +32,47 @@ def main() -> None:
     tools = {}
     missing = []
     errors: dict[str, str] = {}
+    required_errors: set[str] = set()
 
-    def query(label: str, *command: str) -> str | None:
+    def query(label: str, *command: str, required: bool = True) -> str | None:
         try:
             return probe(*command)
         except subprocess.CalledProcessError as error:
             errors[label] = (error.stdout + error.stderr).strip()
         except (OSError, subprocess.TimeoutExpired) as error:
             errors[label] = str(error)
+        if required:
+            required_errors.add(label)
         return None
 
     for name in ("git", "uv", "cargo", "rustup", "R", "Rscript"):
-        path = shutil.which(name)
+        path = r_executable(name) if name in {"R", "Rscript"} else shutil.which(name)
         label = f"{name}_version"
-        version = query(label, path, "--version") if path else None
+        required = not WINDOWS or name not in {"R", "Rscript"}
+        version = query(label, path, "--version", required=required) if path else None
         tools[name] = {
             "path": path,
             "version": version.splitlines()[0] if version else None,
             "error": errors.get(label),
+            "required": required,
         }
-        if tools[name]["version"] is None:
+        if tools[name]["version"] is None and tools[name]["required"]:
             missing.append(name)
-    companion = json.loads(
-        probe(sys.executable, str(ROOT / "scripts/stage-sandbox-runner"), "--describe")
+    companion = (
+        {
+            "status": "skip",
+            "reason": "the native sandbox companion is unsupported on Windows",
+        }
+        if WINDOWS
+        else json.loads(
+            probe(
+                sys.executable, str(ROOT / "scripts/stage-sandbox-runner"), "--describe"
+            )
+        )
     )
-    executable = ROOT / "target/release/mcp-console"
+    executable = ROOT / (
+        "target/debug/mcp-console.exe" if WINDOWS else "target/release/mcp-console"
+    )
     artifacts = {
         str(path): path.is_file()
         for path in (
@@ -61,28 +83,41 @@ def main() -> None:
     }
 
     # Reuse public-test probes only; never call provider provisioning fixtures.
-    sys.path.insert(0, str(ROOT / "tests"))
-    from support.docker import DOCKER
-    from support.docker_sandbox import DOCKER_SANDBOX
-    from support.ssh_external import EXTERNAL_SSH, HOST
-    from support.requirements import (
-        FRESH_PROCFS,
-        LANDLOCK,
-        NESTED_PROCFS,
-        PROCESS_EVENTS,
-    )
-
-    providers = {
-        name: {
-            "status": "available" if requirement.available else "skip",
-            "reason": None if requirement.available else requirement.reason,
+    if WINDOWS:
+        providers = {
+            name: {"status": "skip", "reason": "Windows controllers are unsupported"}
+            for name in ("docker", "docker_sandbox", "external_ssh")
         }
-        for name, requirement in {
-            "docker": DOCKER,
-            "docker_sandbox": DOCKER_SANDBOX,
-            "external_ssh": EXTERNAL_SSH,
-        }.items()
-    }
+        host = None
+        capabilities = {}
+    else:
+        sys.path.insert(0, str(ROOT / "tests"))
+        from support.docker import DOCKER
+        from support.docker_sandbox import DOCKER_SANDBOX
+        from support.ssh_external import EXTERNAL_SSH, HOST
+        from support.requirements import (
+            FRESH_PROCFS,
+            LANDLOCK,
+            NESTED_PROCFS,
+            PROCESS_EVENTS,
+        )
+
+        providers = {
+            name: {
+                "status": "available" if requirement.available else "skip",
+                "reason": None if requirement.available else requirement.reason,
+            }
+            for name, requirement in {
+                "docker": DOCKER,
+                "docker_sandbox": DOCKER_SANDBOX,
+                "external_ssh": EXTERNAL_SSH,
+            }.items()
+        }
+        host = HOST
+        capabilities = {
+            item.name: {"available": item.available, "reason": item.reason}
+            for item in (PROCESS_EVENTS, LANDLOCK, NESTED_PROCFS, FRESH_PROCFS)
+        }
     report = {
         "checkout": str(ROOT),
         "revision": query("revision", "git", "rev-parse", "HEAD")
@@ -100,26 +135,36 @@ def main() -> None:
             "command_python": sys.executable,
             "command_python_version": sys.version.split()[0],
             "python_selection": os.environ.get("RETICULATE_PYTHON")
-            or "managed at worker startup",
+            or (shutil.which("python") if WINDOWS else "managed at worker startup"),
             "r_home": os.environ.get("R_HOME")
-            or (query("r_home", "R", "RHOME") if tools["R"]["version"] else None),
-            "rustup_toolchain": query("rustup_toolchain", "rustup", "show", "active-toolchain")
+            or (
+                query(
+                    "r_home",
+                    tools["R"]["path"],
+                    "RHOME",
+                    required=tools["R"]["required"],
+                )
+                if tools["R"]["version"]
+                else None
+            ),
+            "rustup_toolchain": query(
+                "rustup_toolchain", "rustup", "show", "active-toolchain"
+            )
             if tools["rustup"]["version"] and tools["cargo"]["version"]
             else None,
         },
         "providers": providers,
-        "external_ssh_host": HOST,
-        "host_capabilities": {
-            item.name: {"available": item.available, "reason": item.reason}
-            for item in (PROCESS_EVENTS, LANDLOCK, NESTED_PROCFS, FRESH_PROCFS)
-        },
+        "external_ssh_host": host,
+        "host_capabilities": capabilities,
         "caches": {
             "checkout_build": str(ROOT / "target"),
-            "runner_source": companion["source_checkout"],
-            "runner_build": companion["build_directory"],
-            "wheel_staging": companion["staging_directory"],
+            "runner_source": companion.get("source_checkout"),
+            "runner_build": companion.get("build_directory"),
+            "wheel_staging": companion.get("staging_directory"),
             "cargo_home": os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")),
-            "uv": query("uv_cache", "uv", "cache", "dir") if tools["uv"]["version"] else None,
+            "uv": query("uv_cache", "uv", "cache", "dir")
+            if tools["uv"]["version"]
+            else None,
         },
         "required_missing": missing,
         "probe_errors": errors,
@@ -132,17 +177,22 @@ def main() -> None:
             f"Development executable: {executable} ({'present' if executable.is_file() else 'missing'})"
         )
         print(f"PATH executable: {report['executable']['on_path']}")
-        print(
-            f"Companion pin: {companion['pin']['commit']}\nStaged revision: {companion['staged_revision']}"
-        )
-        print(f"Staged target: {companion['staged_target']}")
-        print(f"Companion toolchain: {companion['source_toolchain']}")
+        if WINDOWS:
+            print(f"Companion: skip; {companion['reason']}")
+        else:
+            print(
+                f"Companion pin: {companion['pin']['commit']}\nStaged revision: {companion['staged_revision']}"
+            )
+            print(f"Staged target: {companion['staged_target']}")
+            print(f"Companion toolchain: {companion['source_toolchain']}")
         for path, present in artifacts.items():
             print(f"Artifact: {path} ({'present' if present else 'missing'})")
         for name, value in report["runtime"].items():
             print(f"{name}: {value}")
         for name, value in tools.items():
-            print(f"Required {name}: {value['version'] or 'MISSING'} ({value['path']})")
+            print(
+                f"{'Required' if value['required'] else 'Optional'} {name}: {value['version'] or 'MISSING'} ({value['path']})"
+            )
             if value["error"]:
                 print(value["error"])
         for name, item in providers.items():
@@ -158,7 +208,7 @@ def main() -> None:
             print(f"Cache {name}: {path}")
         for label, error in errors.items():
             print(f"Probe error ({label}): {error}")
-    raise SystemExit(bool(missing or errors))
+    raise SystemExit(bool(missing or required_errors))
 
 
 if __name__ == "__main__":

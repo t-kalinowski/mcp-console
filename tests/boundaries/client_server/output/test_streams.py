@@ -85,7 +85,6 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                 assert client.send(r="42", timeout_ms=0)["content"] == [
                     {"type": "text", "text": running}
                 ]
-                session = next((directory / ".agents/console/sessions").iterdir())
                 raw = b""
                 for data, expected in (
                     (b"A\xe2", "A"),
@@ -95,6 +94,8 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                 ):
                     release.release()
                     processed.wait("direct bytes reached the output tape")
+                    # The initial nonblocking send can precede recording metadata.
+                    session = next((directory / ".agents/console/sessions").iterdir())
                     raw += data
                     result = client.send(timeout_ms=0)
                     assert result == {
@@ -152,7 +153,7 @@ def test_captures_worker_stdout(binary: Path, execution: Execution) -> Transcrip
                     "server did not capture the complete stdout payload"
                 )
         assert recorded.read_bytes() == expected.encode()
-        release_fixture_checkpoint(release)
+        release_fixture_checkpoint(release, client=client)
         client.receive(request)
         assert_preview(last_tool_text(client), expected)
         normalize_preview_paths(client)
@@ -417,7 +418,7 @@ def test_drains_background_stderr_while_idle(
         output = last_tool_text(client)
         assert output.endswith("\n[idle]"), output[-100:]
         assert len(output.encode()) <= TEXT_BUDGET
-        assert "no retained cell log" in output
+        assert "outputs/session.log" in output
         assert "outputs/call-" not in output
         assert cell_text(client, 1) == ""
         preview = output.removesuffix("\n[idle]")
@@ -429,7 +430,10 @@ def test_drains_background_stderr_while_idle(
         )
         expected = large_output("zod background stderr\n")
         assert len(expected) <= observed <= len(expected) + LARGE_OUTPUT_SIZE, observed
-        assert f"({observed} raw bytes observed)" in preview
+        assert f"{observed} raw bytes retained" in preview
+        assert (
+            session_directory(client) / "outputs/session.log"
+        ).read_text() == expected + ("y" * (observed - len(expected)))
         assert_preview(preview, expected + ("y" * (observed - len(expected))))
         normalize_pipe_counts(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")

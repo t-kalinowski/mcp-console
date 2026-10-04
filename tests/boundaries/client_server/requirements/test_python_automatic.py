@@ -43,8 +43,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
-    client.send(r="automatic_python_r_state <- 42L")
-    assert last_result_text(client) == "[done]"
+    client.expect(r="automatic_python_r_state <- 42L")
     client.send(sql="CREATE TABLE automatic_python_state AS SELECT 42 AS answer")
 
     # fmt: python
@@ -54,8 +53,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
         automatic_python_object = {"answer": 42}
         automatic_python_pid = os.getpid()
         """)
-    client.send(python=setup)
-    assert last_result_text(client) == "[done]", repr(last_result_text(client))
+    client.expect(python=setup)
 
     # fmt: python
     python = code("""
@@ -214,39 +212,26 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
 
             automatic_meta_finder = AutomaticMetaFinder()
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
-        # Register the finder only after reticulate activates the inferred
-        # environment, while the original import is waiting in this runtime.
-        # fmt: r
-        r = code(r"""
-            reticulate_namespace <- asNamespace("reticulate")
-            original_py_require <- get("py_require", envir = reticulate_namespace)
-            automatic_meta_finder_registered <- FALSE
-            unlockBinding("py_require", reticulate_namespace)
-            assign(
-              "py_require",
-              function(...) {
-                result <- original_py_require(...)
-                if (!automatic_meta_finder_registered) {
-                  reticulate::py_run_string(
-                    paste0(
-                      "import sys, __main__; ",
-                      "sys.meta_path.insert(0, __main__.automatic_meta_finder)"
-                    ),
-                    local = TRUE
-                  )
-                  automatic_meta_finder_registered <<- TRUE
-                }
-                result
-              },
-              envir = reticulate_namespace
-            )
-            lockBinding("py_require", reticulate_namespace)
+        # Activation runs ordinary Python code. Install a finder while the
+        # original import is waiting, after the new environment is active.
+        # fmt: python
+        python = code(r"""
+            import runpy
+            import sys
+
+            original_run_path = runpy.run_path
+
+            def activate_with_finder(*args, **kwargs):
+                result = original_run_path(*args, **kwargs)
+                sys.meta_path.insert(0, automatic_meta_finder)
+                runpy.run_path = original_run_path
+                return result
+
+            runpy.run_path = activate_with_finder
             """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -412,8 +397,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         )
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
-        client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
-        assert last_result_text(client) == "[done]"
+        client.expect(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
 
         # Exercise every driver-controlled call made by the DB-API adapter.
         # fmt: python
@@ -469,8 +453,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
 
             console_sql_connection(Connection())
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         client.send(sql="ANSWER")
         preview = last_result_text(client)
@@ -503,8 +486,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             console_sql_connection(None)
             sys.settrace(restore_hook)
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -551,42 +533,27 @@ def test_does_not_reenter_automatic_python_resolution(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        # Wrap the public reticulate requirement transition reached by the
-        # private callback. Its nested Python miss must not start another host
-        # resolver while the outer import owns resolution.
-        # fmt: r
-        r = code(rf"""
-            reticulate_namespace <- asNamespace("reticulate")
-            original_py_require <- get("py_require", envir = reticulate_namespace)
-            automatic_nested_calls <- 0L
-            automatic_nested_error <- NULL
-            automatic_nested_triggered <- FALSE
-            unlockBinding("py_require", reticulate_namespace)
-            assign(
-              "py_require",
-              function(...) {{
-                if (!automatic_nested_triggered) {{
-                  automatic_nested_triggered <<- TRUE
-                  automatic_nested_calls <<- automatic_nested_calls + 1L
-                  automatic_nested_error <<- tryCatch(
-                    {{
-                      reticulate::py_run_string(
-                        "import {nested}",
-                        local = TRUE
-                      )
-                      NA_character_
-                    }},
-                    error = conditionMessage
-                  )
-                }}
-                original_py_require(...)
-              }},
-              envir = reticulate_namespace
-            )
-            lockBinding("py_require", reticulate_namespace)
+        # A missing import inside the activation script must not reenter
+        # resolution. Use ordinary Python's script hook in every composition.
+        # fmt: python
+        python = code(rf"""
+            import runpy
+            original_run_path = runpy.run_path
+            automatic_nested_calls = 0
+            automatic_nested_error = None
+
+            def activate_with_nested_import(*args, **kwargs):
+                global automatic_nested_calls, automatic_nested_error
+                automatic_nested_calls += 1
+                try:
+                    import {nested}
+                except ModuleNotFoundError as error:
+                    automatic_nested_error = str(error)
+                return original_run_path(*args, **kwargs)
+
+            runpy.run_path = activate_with_nested_import
             """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -599,16 +566,10 @@ def test_does_not_reenter_automatic_python_resolution(
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and "py-yaml12" in runs[0], runs
 
-        # fmt: r
-        r = code(rf"""
-            cat(
-              automatic_nested_calls,
-              grepl("{nested}", automatic_nested_error, fixed = TRUE),
-              sep = "\n"
-            )
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "1\nTRUE\n", repr(last_result_text(client))
+        client.send(
+            python=f"assert automatic_nested_calls == 1; assert '{nested}' in automatic_nested_error; print('nested resolution suppressed')"
+        )
+        assert last_result_text(client) == "nested resolution suppressed\n"
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
@@ -672,6 +633,10 @@ def test_reports_automatic_python_resolution_failure(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
+        client.send(python="import sys; print(sys.executable)")
+        executable = last_result_text(client).strip()
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
+
         output = send_and_collect_runtime_python_resolution(
             client,
             python="import sklearn",
@@ -690,7 +655,7 @@ def test_reports_automatic_python_resolution_failure(
         assert len(runs) == 1, runs
         assert requirement in runs[0] and "sklearn" not in runs[0], runs
 
-        normalized = normalize_python_resolution_error(output)
+        normalized = normalize_python_resolution_error(output, executable=executable)
         client.transcript[-1]["result"]["content"][0]["text"] = normalized
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')
@@ -941,6 +906,31 @@ def test_disables_automatic_resolution_for_user_selected_python(
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_runtime_toolchain_probe_does_not_install_a_distribution(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_uv_environment(Path(temporary))
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"python": ["rply"]})
+            assert last_result_text(client) == "[prepared]"
+            baseline = len(uv_tool_run_requirements(record))
+            client.send(
+                python="import rply; rply.LexerGenerator().build(); print('CPython lexer ready')"
+            )
+            assert last_result_text(client) == "CPython lexer ready\n", (
+                client.transcript[-1]
+            )
+            assert len(uv_tool_run_requirements(record)) == baseline
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]
+            assert "rpython" not in declaration["requirements"]["python"], declaration
+            return client.finish()
 
 
 if __name__ == "__main__":

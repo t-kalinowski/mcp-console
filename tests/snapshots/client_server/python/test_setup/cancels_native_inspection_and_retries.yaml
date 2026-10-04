@@ -32,6 +32,7 @@ result:
 send:
   python: |
     unexecuted_value = 1
+  timeout_ms: 600000
 result:
   content:
     - type: text

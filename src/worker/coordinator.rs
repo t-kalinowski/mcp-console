@@ -4,7 +4,7 @@ use std::io;
 use super::core::{CommandReadiness, emit_output, take_worker_failure};
 use super::input::finish_console_stdin_operation;
 use super::r_integration::Integration;
-use super::{core, embedded_r, interrupt};
+use super::{core, interrupt};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
@@ -12,47 +12,45 @@ struct Coordinator {
     writer: crate::sideband::Writer,
     r: Integration,
     python: crate::python::Runtime,
-    sql: Option<crate::sql::Bridge>,
+    sql: crate::sql::Bridge,
 }
 
-pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    let result = run_session();
+pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    let result = run_session(bootstrap_runtimes);
     // Every return, including startup and readiness failures, must restore
     // Python's initial thread before extension-library process destructors.
     crate::python::prepare_process_exit()?;
     result
 }
 
-fn run_session() -> Result<(), Box<dyn Error>> {
+fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    crate::windows::configure_worker_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
-    let selection = crate::local_runtime::Selection::from_environment()?;
+    let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
+        crate::local_runtime::WorkerSelection {
+            r: true,
+            python: None,
+        },
+    );
     interrupt::normalize_signal()?;
-    let (r, python, sql) =
-        if let Some(crate::local_runtime::Selection::Python {
-            selected, managed, ..
-        }) = selection
-        {
-            // Native sandbox launches supply runner-owned private storage. Direct
-            // launches supply a directory retained by the server's relay lifetime.
-            let temporary = std::env::var_os("TMPDIR")
-                .ok_or("Python worker launch did not supply temporary storage")?;
-            crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
-            core::initialize(reader, writer.clone())?;
-            let r = Integration::new(None)?;
-            let python = crate::python::Runtime::native(&selected, managed.is_some())?;
-            (r, python, None)
-        } else {
-            let r_home = crate::local_runtime::r_home()?;
-            #[cfg(target_os = "linux")]
-            reexec_with_r_library_path(&r_home, &reader, &writer)?;
-            let temporary_directory = embedded_r::initialize_r(&r_home)?;
-            crate::python::configure_worker_environment(&temporary_directory)?;
-            core::initialize(reader, writer.clone())?;
-            let r = Integration::new(Some(embedded_r::Runtime::initialize()?))?;
-            let python = crate::python::Runtime::initialize()?;
-            let sql = Some(crate::sql::Bridge::initialize()?);
-            (r, python, sql)
-        };
+    let r_installation = selection
+        .r
+        .then(crate::local_runtime::r_installation)
+        .transpose()?;
+    #[cfg(target_os = "linux")]
+    if let Some(installation) = &r_installation {
+        reexec_with_r_library_path(&installation.home, &reader, &writer)?;
+    }
+    // The launcher owns this directory through confirmed worker retirement.
+    // R's session tempdir is a child, never the owner of Python/SQL storage.
+    let temporary =
+        std::env::var_os("TMPDIR").ok_or("worker launch did not supply temporary storage")?;
+    crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
+    core::initialize(reader, writer.clone())?;
+    let r = Integration::new(r_installation)?;
+    let python = crate::python::Runtime::new(selection)?;
+    let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;
     let mut coordinator = Coordinator {
         writer,
@@ -60,7 +58,7 @@ fn run_session() -> Result<(), Box<dyn Error>> {
         python,
         sql,
     };
-    coordinator.run()
+    coordinator.run(bootstrap_runtimes)
 }
 
 #[cfg(target_os = "linux")]
@@ -90,12 +88,70 @@ fn reexec_with_r_library_path(
 }
 
 impl Coordinator {
-    fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
         loop {
-            if !self.handle(Self::wait_for_message(&self.r)?)? {
-                return Ok(());
+            r.idle()?;
+            let message = match core::next_command()? {
+                CommandReadiness::Ready(message) => Some(message),
+                CommandReadiness::Waiting => core::receive_idle_command()?,
+            };
+            // The relay signals interrupts before forwarding the next command,
+            // but their watcher may still be publishing native/Python state.
+            interrupt::finish_windows_publication().map_err(|error| error.to_string())?;
+            r.idle()?;
+            if let Some(message) = take_worker_failure() {
+                return Err(message);
+            }
+            if let Some(message) = message {
+                return Ok(message);
             }
         }
+    }
+
+    fn run(&mut self, bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+        if bootstrap_runtimes {
+            self.initialize_runtimes()?;
+        }
+        while !core::is_shutting_down() {
+            if !self.handle(Self::wait_for_message(&self.r)?)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn initialize_runtimes(&mut self) -> Result<(), Box<dyn Error>> {
+        // Ready connects callbacks before hooks run. Bootstrap uses the same
+        // serialized interpreter thread and never enters a user evaluation.
+        let languages = crate::cell::Languages::from_environment()?;
+        core::set_bootstrapping(true);
+        let complete = if languages.enables(Language::Python) {
+            crate::python::ensure_initialized().map_err(io::Error::other)?
+        } else {
+            true
+        };
+        if complete && languages.enables(Language::R) && super::r_available() {
+            super::ensure_r().map_err(io::Error::other)?;
+        }
+        if complete && languages.enables(Language::Sql) && !core::bootstrap_interrupted() {
+            self.sql.initialize().map_err(io::Error::other)?;
+        }
+        self.r.finish_graphics().map_err(io::Error::other)?;
+        // Acknowledge late signals before publishing the bootstrap receipt.
+        let interrupted =
+            interrupt::acknowledge_python_interrupt() || core::bootstrap_interrupted();
+        core::set_bootstrapping(false);
+        finish_console_stdin_operation()?;
+        if core::is_shutting_down() {
+            return Ok(());
+        }
+        if let Some(message) = take_worker_failure() {
+            return Err(io::Error::other(message).into());
+        }
+        self.writer
+            .send(&WorkerMessage::RuntimeInitialized { interrupted })?;
+        Ok(())
     }
 
     fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {
@@ -131,10 +187,10 @@ impl Coordinator {
                 }
                 self.writer.send(&WorkerMessage::Completed)?;
             }
-            // Keep worker-owned preparation state transitions atomic. Any
-            // nested host resolver registers its own interrupt target.
+            // Resolution, inspection, and site hooks remain interruptible;
+            // the native owner defers interrupts only around publication.
             ServerMessage::PreparePython { packages } => {
-                let result = self.r.prepare_python(|| self.python.prepare(packages));
+                let result = self.python.prepare(packages);
                 if core::is_shutting_down() {
                     return Ok(false);
                 }
@@ -148,6 +204,10 @@ impl Coordinator {
                     Ok(crate::python::PreparationOutcome::Failed { message }) => {
                         self.writer
                             .send(&WorkerMessage::PythonPreparationFailed { message })?;
+                    }
+                    Ok(crate::python::PreparationOutcome::Rejected { message }) => {
+                        self.writer
+                            .send(&WorkerMessage::PythonPreparationRejected { message })?;
                     }
                     Err(message) => return Err(io::Error::other(message).into()),
                 }
@@ -185,6 +245,7 @@ impl Coordinator {
         Ok(true)
     }
 
+    #[cfg(unix)]
     fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
         loop {
             let sideband_fd = match core::next_command()? {
@@ -209,7 +270,7 @@ fn evaluate_cell(
     cell: Cell,
     r: &Integration,
     python: &mut crate::python::Runtime,
-    sql: &mut Option<crate::sql::Bridge>,
+    sql: &mut crate::sql::Bridge,
 ) -> Result<(), String> {
     r.idle()?;
     if core::is_shutting_down() {
@@ -229,19 +290,18 @@ fn evaluate_cell(
         emit_output(ConsoleChannel::Diagnostic, message.as_bytes());
         Ok(())
     } else {
+        // Runtime startup belongs to this cell too. A late R startup begins
+        // graphics when it installs its runtime, before loading packages.
+        core::begin_cell(cell.language);
         // Python can enter R and create plots too. SQL retains its exclusion.
         let graphics = !matches!(cell.language, Language::Sql);
         if graphics {
             r.begin_graphics()?;
         }
-        core::begin_cell(cell.language);
         let result = match cell.language {
             Language::R => r.evaluate_r(cell.source),
             Language::Python => python.evaluate(&cell.source),
-            Language::Sql => sql
-                .as_mut()
-                .expect("SQL admission requires R")
-                .evaluate(&cell.source),
+            Language::Sql => sql.evaluate(&cell.source),
         };
         core::finish_cell();
         if graphics {
@@ -259,6 +319,6 @@ fn evaluate_cell(
     result
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[path = "../../tests/fixtures/native_worker.rs"]
 mod tests;

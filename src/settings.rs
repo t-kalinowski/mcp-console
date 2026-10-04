@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 mod target;
-pub(crate) use target::{Access, Compute, DockerSandbox, Pull, Target};
+#[cfg(unix)]
+pub(crate) use target::Access;
+pub(crate) use target::{Compute, DockerSandbox, Pull, Target};
 
 /// Selected enforcement, independently of direct versus inner-runner launch.
 #[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
@@ -82,7 +84,8 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
-    resolver: crate::resolver::broker::Settings,
+    resolver: crate::resolver::policy::Settings,
+    python: Option<std::path::PathBuf>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
     target: Option<Target>,
@@ -90,7 +93,8 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
-    pub resolver: crate::resolver::broker::Settings,
+    pub resolver: crate::resolver::policy::Settings,
+    pub python: Option<std::path::PathBuf>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
     pub target: Option<Target>,
@@ -164,8 +168,40 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .map_err(|error| format!("{name}: {error}"))?;
     }
     let target = project.target.filter(|target| !target.is_local_host());
+    let remote_python = target.is_some();
     Ok(Captured {
         resolver: project.resolver,
+        python: project
+            .python
+            .map(|path| {
+                if path.as_os_str().is_empty() {
+                    let default = match target.as_ref().map(|target| &target.compute) {
+                        Some(Compute::Docker(_) | Compute::DockerSandbox(_)) => {
+                            "select preinstalled target Python"
+                        }
+                        _ => "use uv",
+                    };
+                    return Err(format!(
+                        "python must name an executable; omit it to {default}"
+                    ));
+                }
+                if remote_python {
+                    Ok(path)
+                } else {
+                    let path = if let Ok(relative) = path.strip_prefix("~") {
+                        let home = std::env::var_os("HOME")
+                            .map(PathBuf::from)
+                            .filter(|home| home.is_absolute())
+                            .ok_or("configured Python home expansion requires an absolute HOME")?;
+                        home.join(relative)
+                    } else {
+                        path
+                    };
+                    std::path::absolute(path)
+                        .map_err(|error| format!("cannot locate configured Python: {error}"))
+                }
+            })
+            .transpose()?,
         source: Some(name),
         policy: project.sandbox,
         target,

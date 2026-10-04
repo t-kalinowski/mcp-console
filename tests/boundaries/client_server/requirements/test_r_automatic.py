@@ -129,38 +129,13 @@ def send_and_collect_runtime_r_resolution(
     expected: str,
     **arguments: object,
 ) -> None:
-    call_start = len(client.transcript)
-    client.send(**arguments)
-    chunks = []
-    for attempt in range(5):
-        output = last_result_text(client)
-        # A timeout can drain final R output before the completion event,
-        # so retain every output delta instead of only the last poll.
-        if output.endswith("\n[running; poll with an empty send]"):
-            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
-            if attempt == 4:
-                raise AssertionError(
-                    "automatic R resolution remained running after five responses: "
-                    f"collected={''.join(chunks)!r}, last={output!r}"
-                )
-            client.send()
-            continue
-
-        if output != "[done]" or not chunks:
-            chunks.append(output)
-        collected = "".join(chunks)
-        assert collected == expected, {"actual": collected, "expected": expected}
-
-        calls = client.transcript[call_start:]
-        submitted = calls[0]
-        final_result = calls[-1]["result"]
-        assert isinstance(final_result, dict), final_result
-        content = final_result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        content[0]["text"] = collected
-        submitted["result"] = final_result
-        client.transcript[call_start:] = [submitted]
-        return
+    wait_for_evaluation_output(
+        client,
+        expected,
+        "automatic R resolution",
+        completion_timeout_seconds=client.response_timeout,
+        **arguments,
+    )
 
 
 def send_and_compare_r_error(
@@ -205,8 +180,7 @@ def test_resolves_missing_r_packages_during_evaluation(
             sentinel <- 42L
             worker_pid <- Sys.getpid()
             """)
-        client.send(r=setup)
-        assert last_result_text(client) == "[done]"
+        client.expect(r=setup)
 
         # fmt: r
         r = code(r"""
@@ -227,8 +201,7 @@ def test_resolves_missing_r_packages_during_evaluation(
         output = last_result_text(client)
         assert output == "answer: 42\n", repr(output)
 
-        client.send(python="python_sentinel + 2")
-        assert last_result_text(client) == "42\n"
+        client.expect("42\n", python="python_sentinel + 2")
         client.send(sql="SELECT answer FROM automatic_r_state")
         assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
         return client.finish()
@@ -261,8 +234,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
             }
             invisible()
             """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.expect(r=r)
 
         # fmt: python
         python = code("""
@@ -272,8 +244,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
             connection.create_function("sql_requires_package", 0, r.sql_requires_package)
             console_sql_connection(connection)
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
         baseline = len(ir_run_records(record))
 
         client.send(sql="SELECT sql_requires_package() AS resolved")
@@ -322,8 +293,7 @@ def test_resolves_reached_r_packages_at_runtime(
             environment,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -410,8 +380,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
             environment,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -419,20 +388,30 @@ def test_retains_automatic_r_package_after_error_and_restart(
             stopifnot(is.function(fortunes::fortune))
             stop("after activation")
             """)
-        client.send(r=r)
-        assert "Error: after activation" in last_result_text(client)
-        assert len(ir_run_records(record)) == baseline + 1
-
-        client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
-        assert last_result_text(client) == "[1] 42\n"
-        assert len(ir_run_records(record)) == baseline + 1
-
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        wait_for_evaluation_output(
+            client,
+            "Error: after activation\n",
+            "automatic R package error",
+            completion_timeout_seconds=client.response_timeout,
+            r=r,
+            timeout_ms=0,
         )
-        client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
-        assert last_result_text(client) == "[1] 42\n"
+        assert len(ir_run_records(record)) == baseline + 1
+
+        client.expect(
+            "[1] 42\n",
+            r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L',
+        )
+        assert len(ir_run_records(record)) == baseline + 1
+
+        client.expect(
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
+            control="restart",
+        )
+        client.expect(
+            "[1] 42\n",
+            r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L',
+        )
         assert len(ir_run_records(record)) == baseline + 1
         return client.finish()
 
@@ -585,13 +564,11 @@ def test_does_not_resolve_unreached_package_loads(
             environment,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         client.send(r="options(showErrorCalls = TRUE)")
-        client.send(r=f"if (FALSE) library({missing}); 42L")
-        assert last_result_text(client) == "[1] 42\n"
+        client.expect("[1] 42\n", r=f"if (FALSE) library({missing}); 42L")
         assert len(ir_run_records(record)) == baseline
 
         source = f"library({missing})"
@@ -599,8 +576,7 @@ def test_does_not_resolve_unreached_package_loads(
         failed = len(ir_run_records(record))
         assert failed == baseline + 1
 
-        client.send(r="42L")
-        assert last_result_text(client) == "[1] 42\n"
+        client.expect("[1] 42\n", r="42L")
         send_and_compare_r_error(client, environment, source)
         assert len(ir_run_records(record)) == failed + 1
         return client.finish()
@@ -619,8 +595,7 @@ def test_rejects_non_package_runtime_names_before_ir(
             environment,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -668,8 +643,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             environment,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -821,8 +795,7 @@ def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Tran
             current_directory=package,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -878,8 +851,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
             environment,
         )
         client.initialize_and_list_tools()
-        client.send(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
-        assert last_result_text(client) == "[done]"
+        client.expect(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
         baseline = len(ir_run_records(record))
 
         # The private bridge deliberately uses the live base::.libPaths binding
@@ -910,25 +882,26 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
         assert "synthetic managed R activation failure" in last_result_text(client)
         assert len(ir_run_records(record)) == baseline + 1
 
-        client.send(
-            r=("activation_state + as.integer(identical(Sys.getpid(), activation_pid))")
+        client.expect(
+            "[1] 42\n",
+            r=(
+                "activation_state + as.integer(identical(Sys.getpid(), activation_pid))"
+            ),
         )
-        assert last_result_text(client) == "[1] 42\n"
-        client.send(requirements={"r": ["english"]})
-        assert last_result_text(client) == "[restart required]"
+        client.expect("[restart required]", requirements={"r": ["english"]})
 
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        client.expect(
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
+            control="restart",
         )
-        client.send(
+        client.expect(
+            "[1] 42\n",
             r=(
                 "package <- 'fortunes'; "
                 "stopifnot(do.call(base::requireNamespace, "
                 "list(package = package, quietly = TRUE))); 42L"
-            )
+            ),
         )
-        assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline + 2
         return client.finish()
 
@@ -952,8 +925,7 @@ def test_restart_discards_unactivated_r_candidate(
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(r="invisible(NULL)")
-            assert last_result_text(client) == "[done]"
+            client.expect(r="invisible(NULL)")
             baseline = len(ir_run_records(record))
 
             # The live .libPaths() binding is reached after RResolved and
@@ -1057,8 +1029,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
         finished = False
         try:
             client.initialize_and_list_tools()
-            client.send(requirements={"r": ["DBI"]})
-            assert last_result_text(client) == "[prepared]"
+            client.expect("[prepared]", requirements={"r": ["DBI"]})
             baseline = len(ir_run_records(record))
 
             evaluation = client.start_send(
@@ -1137,10 +1108,9 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(
-                r="resolver_interrupt_state <- 41L; resolver_pid <- Sys.getpid()"
+            client.expect(
+                r="resolver_interrupt_state <- 41L; resolver_pid <- Sys.getpid()",
             )
-            assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
 
             # fmt: r
@@ -1151,8 +1121,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                 """)
             # Release the cell's response claim before the interrupt becomes
             # the sole reader of the resolver error and evaluation completion.
-            client.send(r=r, timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
+            client.expect("\n[running; poll with an empty send]", r=r, timeout_ms=0)
             started.wait("automatic R resolver")
             os.close(keeper)
             keeper = None
@@ -1167,14 +1136,14 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             assert os.read(reader, 1) == b"", "R resolver retained its lifetime pipe"
             assert len(ir_run_records(record)) == baseline + 1
 
-            client.send(
+            client.expect(
+                "[1] 42\n",
                 r=(
                     "resolver_interrupt_state + "
                     "as.integer(!exists('resolver_interrupt_cell_ran')) + "
                     "as.integer(identical(Sys.getpid(), resolver_pid)) - 1L"
-                )
+                ),
             )
-            assert last_result_text(client) == "[1] 42\n"
             transcript = client.finish()
             passed = True
             return transcript

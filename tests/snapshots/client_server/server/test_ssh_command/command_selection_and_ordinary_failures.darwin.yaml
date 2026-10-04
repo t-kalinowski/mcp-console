@@ -1,12 +1,20 @@
 ---
 selection: configured missing
 arguments: []
-standard_error: |
+startup_failure: |-
   /bin/sh: <ssh-test>/commands/absent: No such file or directory
-  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer; truncated SSH frame length: failed to fill whole buffer
+standard_error: >
+  SSH preparation retirement is unconfirmed: truncated SSH frame length:
+  failed to fill whole buffer; truncated SSH frame length: failed to fill
+  whole buffer
 ---
 selection: missing
 arguments: []
-standard_error: |
+startup_failure: |-
   mcp-console: line 0: exec: uvx: not found
-  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer
+  SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer; truncated SSH frame length: failed to fill whole buffer
+standard_error: >
+  SSH preparation retirement is unconfirmed: truncated SSH frame length:
+  failed to fill whole buffer; truncated SSH frame length: failed to fill
+  whole buffer

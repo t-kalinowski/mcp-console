@@ -63,20 +63,23 @@ def test_command_selection_and_ordinary_failures(
                 configure(root, root, prefix)
                 log.write_text("")
                 with McpClient(binary, ("serve",), environment, root) as client:
+                    startup = client.startup_error()
+                    client.stdin.close()
                     assert client.process.wait(timeout=12) != 0
                     assert not client.stdout.read()
                     errors = client.stderr.read()
                     if expected:
-                        assert "selected command failed" in errors, errors
+                        assert "selected command failed" in startup, startup
                     else:
                         assert (
-                            "not found" in errors
-                            or "No such file or directory" in errors
-                        ), errors
+                            "not found" in startup
+                            or "No such file or directory" in startup
+                        ), startup
                     assert log.read_text().splitlines() == expected, log.read_text()
                     entry = {
                         "selection": label,
                         "arguments": expected,
+                        "startup_failure": startup.replace(str(root), "<ssh-test>"),
                         "standard_error": errors.replace(str(root), "<ssh-test>"),
                     }
                     (records if expected else missing).append(entry)

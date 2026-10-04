@@ -1,0 +1,11 @@
+---
+yaml: |
+  !configuration
+  !key target: !target
+    transport: !transport {kind: !kind local}
+    compute: !compute {kind: !kind host}
+    command: !command null
+  sandbox: !policy
+    environment: !environment {LABEL: !text tagged}
+    filesystem: !filesystem {entries: !entries []}
+initialized: true

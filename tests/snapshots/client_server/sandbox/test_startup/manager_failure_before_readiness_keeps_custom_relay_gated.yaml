@@ -1,12 +1,14 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.custom.yaml
 ---
 send:
   r: echo echo
 result:
   content:
     - type: text
-      text: "[worker relay exited before readiness]"
+      text: |-
+        mcp-console-sandbox: failed to fill whole buffer
+        [worker relay exited before readiness]
   isError: true
 startup_supervision_failure:
   manager: killed before readiness

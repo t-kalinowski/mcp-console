@@ -15,6 +15,7 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_worker_ready,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -22,10 +23,11 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
-from support.resolvers import (
-    matplotlib_test_environment,
-)
+from support.requirements import R, requires
+from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
+from boundaries.client_server.server.test_no_r import no_r_environment
+from boundaries.client_server.python.test_setup import deferred_selection_client
 
 
 @executions(DIRECT, SANDBOXED)
@@ -201,7 +203,21 @@ def test_returns_r_plots_from_python_bridge(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcript:
+    return returns_matplotlib_plots(binary, execution, with_r=True)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_returns_no_r_matplotlib_plots(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return returns_matplotlib_plots(binary, execution, with_r=False)
+
+
+def returns_matplotlib_plots(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as clients:
         temporary = Path(temporary_directory)
         workspace = temporary / "workspace"
@@ -210,7 +226,12 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
         host_matplotlib.mkdir()
         host_matplotlibrc = host_matplotlib / "matplotlibrc"
         host_matplotlibrc.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
-        environment = matplotlib_test_environment(temporary / "host-cache")
+        environment = (
+            matplotlib_test_environment(temporary / "host-cache")
+            if with_r
+            else no_r_environment(temporary)
+        )
+        environment["XDG_CACHE_HOME"] = str(temporary / "host-cache")
         environment["TMPDIR"] = temporary_directory
         environment["MPLCONFIGDIR"] = str(host_matplotlib)
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(host_matplotlibrc)
@@ -225,15 +246,16 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
             )
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"python": ["matplotlib"]})
-        assert last_result_text(client) == "[prepared]", client.transcript[-1]
-        # fmt: r
-        r = code(r"""
-            reticulate::py_require("matplotlib")
-            invisible(reticulate::py_config())
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]", client.transcript[-1]
+        if with_r:
+            # fmt: r
+            r = code(r"""
+                reticulate::py_require("matplotlib")
+                invisible(reticulate::py_config())
+                """)
+            client.expect(r=r)
+        else:
+            wait_for_worker_ready(client, "Matplotlib declaration readiness")
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -424,10 +446,8 @@ def test_inherits_explicit_matplotlib_config(
             McpClient(binary, execution.serve(), environment)
         )
         client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
-        )
-        assert last_result_text(client) == "[prepared]"
+        wait_for_worker_ready(client, "explicit Matplotlib declaration readiness")
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -548,10 +568,8 @@ def inherits_matplotlib_config(
             McpClient(binary, execution.serve(), environment)
         )
         client.initialize_and_list_tools()
-        client.send(
-            requirements={"python": ["matplotlib"]},
-        )
-        assert last_result_text(client) == "[prepared]"
+        wait_for_worker_ready(client, "inherited Matplotlib declaration readiness")
+        client.expect("[prepared]", requirements={"python": ["matplotlib"]})
         # fmt: python
         python = code("""
             import os
@@ -944,6 +962,9 @@ def test_python_input_eof_retires_worker(
                 "[idle]",
                 "Python input EOF retirement",
                 expected_error=True,
+                # Confirmed retirement and replacement startup use the client
+                # lifecycle budget, separate from the input-arrival deadline.
+                completion_timeout_seconds=client.response_timeout,
             )
             client.send(python='"eof_marker" in globals()')
             assert last_result_text(client) == "False\n"
@@ -988,52 +1009,51 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 def test_restarts_after_python_bridge_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
-        python_worker_marker <- TRUE
-        Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
-        invisible(suppressMessages(base::trace(
-          "py_discover_config",
-          tracer = quote(base::signalCondition(base::structure(
-            base::list(message = "synthetic interrupt", call = NULL),
-            class = c("interrupt", "condition")
-          ))),
-          print = FALSE,
-          where = asNamespace("reticulate")
-        )))
-        """)
-    client.send(r=r)
-    client.send(python="6 * 7")
-    result = client.transcript[-1]["result"]
-    assert result["isError"] is True
-    bridge_failure = "Python bridge failed during R evaluation\n"
-    python_failure = (
-        "Error in py_discover_config(required_module, use_environment) : \n"
-        "  Python specified in RETICULATE_PYTHON "
-        "(/mcp-console-missing-python) does not exist\n"
-    )
-    worker_failure = (
-        "[worker sideband read failed: worker sideband closed]\n"
-        "[worker exited with status 1]\n"
-        "[worker stopped: in-memory state lost]\n"
-        "[starting new worker]\n"
-        "[idle]"
-    )
-    output = result["content"][0]["text"]
-    assert output.endswith(worker_failure), output
-    assert_exact_interleaving(
-        output.removesuffix(worker_failure),
-        bridge_failure,
-        python_failure,
-    )
-    result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
-    client.send(r='exists("python_worker_marker", inherits = FALSE)')
-    assert last_result_text(client) == "[1] FALSE\n"
-    client.send(python="6 * 7")
-    assert last_result_text(client) == "42\n"
-    return client.finish()
+    with deferred_selection_client(binary, execution.serve()) as client:
+        # fmt: r
+        r = code(r"""
+            python_worker_marker <- TRUE
+            Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
+            invisible(suppressMessages(base::trace(
+              "py_discover_config",
+              tracer = quote(base::signalCondition(base::structure(
+                base::list(message = "synthetic interrupt", call = NULL),
+                class = c("interrupt", "condition")
+              ))),
+              print = FALSE,
+              where = asNamespace("reticulate")
+            )))
+            """)
+        client.send(r=r)
+        client.send(python="6 * 7")
+        result = client.transcript[-1]["result"]
+        assert result["isError"] is True
+        bridge_failure = "Python bridge failed during R evaluation\n"
+        python_failure = (
+            "Error in py_discover_config(required_module, use_environment) : \n"
+            "  Python specified in RETICULATE_PYTHON "
+            "(/mcp-console-missing-python) does not exist\n"
+        )
+        worker_failure = (
+            "[worker sideband read failed: worker sideband closed]\n"
+            "[worker exited with status 1]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        )
+        output = result["content"][0]["text"]
+        assert output.endswith(worker_failure), output
+        assert_exact_interleaving(
+            output.removesuffix(worker_failure),
+            bridge_failure,
+            python_failure,
+        )
+        result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
+        client.send(r='exists("python_worker_marker", inherits = FALSE)')
+        assert last_result_text(client) == "[1] FALSE\n"
+        client.send(python="6 * 7")
+        assert last_result_text(client) == "42\n"
+        return client.finish()
 
 
 if __name__ == "__main__":

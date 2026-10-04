@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::jsonl::JsonlBuffer;
 use crate::readiness::wait_for_io;
 
 const READ_FD_ENV: &str = "MCP_CONSOLE_SIDEBAND_READ_FD";
@@ -19,8 +20,7 @@ static ATFORK_RESULT: OnceLock<libc::c_int> = OnceLock::new();
 
 pub(crate) struct Reader {
     endpoint: PipeReader,
-    buffer: Vec<u8>,
-    scanned: usize,
+    buffer: JsonlBuffer,
 }
 
 #[derive(Clone)]
@@ -79,6 +79,16 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 fn split(reader: PipeReader, writer: PipeWriter) -> io::Result<(Reader, Writer)> {
     set_nonblocking(reader.as_raw_fd())?;
     set_nonblocking(writer.as_raw_fd())?;
+    #[cfg(target_os = "macos")]
+    {
+        // Darwin can deliver a pipe's SIGPIPE to another native thread. A
+        // writer-local mask cannot protect R's handler once DuckDB has threads.
+        // sys/fcntl.h supplies this option; libc does not expose it on macOS.
+        const F_SETNOSIGPIPE: libc::c_int = 73;
+        if unsafe { libc::fcntl(writer.as_raw_fd(), F_SETNOSIGPIPE, 1) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
     Ok((Reader::new(reader), Writer::new(writer)))
 }
 
@@ -86,19 +96,18 @@ impl Reader {
     fn new(endpoint: PipeReader) -> Self {
         Self {
             endpoint,
-            buffer: Vec::new(),
-            scanned: 0,
+            buffer: JsonlBuffer::default(),
         }
     }
 
     pub(crate) fn has_buffered_data(&self) -> bool {
-        !self.buffer.is_empty()
+        self.buffer.has_buffered_data()
     }
 
     /// Receives one newline-delimited JSON message from the worker.
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
         loop {
-            if let Some(message) = self.take_message()? {
+            if let Some(message) = self.receive_buffered()? {
                 return Ok(message);
             }
             match self.read_chunk() {
@@ -114,14 +123,16 @@ impl Reader {
 
     /// Returns one complete frame already assembled from prior reads.
     pub(crate) fn receive_buffered<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
-        self.take_message()
+        self.buffer
+            .next()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     /// Reads one chunk after the caller observes descriptor readiness.
     pub(crate) fn read_chunk(&mut self) -> io::Result<()> {
         let mut buffer = [0; READ_CHUNK_SIZE];
         match self.endpoint.read(&mut buffer)? {
-            0 if self.buffer.is_empty() => Err(io::Error::new(
+            0 if !self.buffer.has_buffered_data() => Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "worker sideband closed",
             )),
@@ -130,31 +141,10 @@ impl Reader {
                 "worker sideband closed midway through a frame",
             )),
             length => {
-                self.buffer.extend_from_slice(&buffer[..length]);
+                self.buffer.append(&buffer[..length]);
                 Ok(())
             }
         }
-    }
-
-    fn take_message<T: DeserializeOwned>(&mut self) -> io::Result<Option<T>> {
-        let Some(newline) = self.buffer[self.scanned..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|newline| self.scanned + newline)
-        else {
-            self.scanned = self.buffer.len();
-            return Ok(None);
-        };
-        let mut line = self.buffer.drain(..=newline).collect::<Vec<_>>();
-        self.scanned = 0;
-        self.buffer.shrink_to(READ_CHUNK_SIZE);
-        line.pop();
-        if line.last() == Some(&b'\r') {
-            line.pop();
-        }
-        serde_json::from_slice(&line)
-            .map(Some)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 }
 
@@ -247,9 +237,16 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn write_without_sigpipe(mut pipe: &PipeWriter, bytes: &[u8]) -> io::Result<usize> {
-    // UnixStream suppresses SIGPIPE per write. Pipes need a thread-local mask
-    // instead: R may have installed its own process-wide SIGPIPE handler.
+    // split() disabled SIGPIPE on this descriptor before native startup.
+    pipe.write(bytes)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_without_sigpipe(mut pipe: &PipeWriter, bytes: &[u8]) -> io::Result<usize> {
+    // Linux directs SIGPIPE to the writing thread. R may have installed its
+    // own process-wide handler, so suppress this write's signal locally.
     // Consume only a newly generated signal on EPIPE, preserving an already
     // pending signal and restoring the caller's mask before returning.
     unsafe {

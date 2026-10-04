@@ -1,0 +1,37 @@
+---
+phase: installation
+full_pipe_wakeups_coalesced: true
+interrupted_write_retried: false
+handler_returns_with_errno_preserved: 9
+owner_cancellation_and_single_retirement: true
+original_diagnostics_retained: true
+standard_error: |
+  Docker Sandbox setup cancelled
+---
+phase: interrupted-write
+full_pipe_wakeups_coalesced: false
+interrupted_write_retried: true
+handler_returns_with_errno_preserved: 4
+owner_cancellation_and_single_retirement: true
+original_diagnostics_retained: true
+standard_error: |
+  Docker Sandbox setup cancelled
+---
+phase: creation
+full_pipe_wakeups_coalesced: true
+interrupted_write_retried: false
+handler_returns_with_errno_preserved: 9
+owner_cancellation_and_single_retirement: true
+original_diagnostics_retained: true
+standard_error: |
+  Docker Sandbox setup cancelled
+---
+phase: blocked-output
+full_pipe_wakeups_coalesced: true
+interrupted_write_retried: false
+handler_returns_with_errno_preserved: 9
+owner_cancellation_and_single_retirement: true
+original_diagnostics_retained: true
+original_provider_diagnostic: |
+  fixture: original attachment diagnostic
+owner_retired_before_controller_resumed: true

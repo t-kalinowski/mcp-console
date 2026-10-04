@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::ManagedR;
 use super::process::{
     ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, resolver_command,
 };
@@ -113,19 +114,6 @@ pub(crate) struct ManagedRResolverConfiguration {
     rscript: PathBuf,
 }
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ManagedR {
-    library: PathBuf,
-    r_libs: OsString,
-    // Executable selection never travels in a preparation request.
-    #[serde(skip)]
-    rscript: PathBuf,
-    requirements: Vec<String>,
-    #[serde(default)]
-    extension_directory: Option<PathBuf>,
-}
-
 impl ManagedRResolverConfiguration {
     pub(crate) fn resolve_uv(
         &self,
@@ -136,8 +124,9 @@ impl ManagedRResolverConfiguration {
         let resolver = ResolverProcess::new();
         let mut on_started = Some(on_started);
         let mut command = resolver_command(&self.rscript);
+        command.arg("--vanilla");
+        let _program = super::r_program::RProgram::append(&mut command, UV_BINARY_RESOLVER_SOURCE)?;
         command
-            .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -164,64 +153,6 @@ impl ManagedRResolverConfiguration {
     }
 }
 
-impl ManagedR {
-    pub(crate) fn on_host(mut self, rscript: &Path) -> Self {
-        self.rscript = rscript.to_path_buf();
-        self
-    }
-    pub(crate) fn configure_worker(&self, command: &mut Command) -> Result<(), String> {
-        if !self.library.is_dir() {
-            return Err(format!(
-                "resolved R library `{}` no longer exists",
-                self.library.display()
-            ));
-        }
-        // Resolver processes inherit only payload libraries. Worker launches
-        // retain their own trusted ambient libraries after the managed paths.
-        let mut libraries = self.library_paths().collect::<Vec<_>>();
-        if let Some(inherited) = std::env::var_os("R_LIBS") {
-            for path in std::env::split_paths(&inherited) {
-                if !path.as_os_str().is_empty() && !libraries.contains(&path) {
-                    libraries.push(path);
-                }
-            }
-        }
-        command.env(
-            "R_LIBS",
-            std::env::join_paths(libraries).map_err(|e| e.to_string())?,
-        );
-        if let Some(directory) = &self.extension_directory {
-            command.env("MCP_CONSOLE_EXTENSION_DIRECTORY", directory);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn with_retained_requirements(mut self, requirements: Vec<String>) -> Self {
-        self.requirements = requirements;
-        self
-    }
-
-    pub(crate) fn requirements(&self) -> &[String] {
-        &self.requirements
-    }
-
-    pub(crate) fn library(&self) -> &Path {
-        &self.library
-    }
-
-    pub(crate) fn library_paths(&self) -> impl Iterator<Item = PathBuf> + '_ {
-        std::env::split_paths(&self.r_libs)
-    }
-
-    pub(crate) fn extension_directory(&self) -> Option<&Path> {
-        self.extension_directory.as_deref()
-    }
-
-    pub(crate) fn rscript(&self) -> &Path {
-        &self.rscript
-    }
-}
-
 pub(crate) fn discover(
     python: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -242,6 +173,21 @@ pub(crate) fn discover(
     ))
 }
 
+pub(crate) fn resolve_r(
+    requirements: Vec<String>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    on_configured: impl FnOnce(ManagedRResolverConfiguration),
+) -> Result<ManagedR, String> {
+    let resolver = ResolverProcess::new();
+    let mut on_started = Some(on_started);
+    let mut python = super::ManagedPythonResolverConfiguration::capture();
+    let configuration = discover_r_resolver_with(&resolver, &mut on_started, &mut python)?
+        .ok_or_else(|| "dynamic environment resolution requires `ir` or `uv`".to_string())?;
+    // Retain the selected executables even when this first manifest fails.
+    on_configured(configuration.clone());
+    resolve_r_with_process(&configuration, requirements, &resolver, &mut on_started)
+}
+
 pub(crate) fn resolve_r_with(
     configuration: &ManagedRResolverConfiguration,
     requirements: Vec<String>,
@@ -252,10 +198,29 @@ pub(crate) fn resolve_r_with(
     resolve_r_with_process(configuration, requirements, &resolver, &mut on_started)
 }
 
+fn discover_r_resolver_with(
+    resolver: &ResolverProcess,
+    on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
+    python: &mut super::ManagedPythonResolverConfiguration,
+) -> Result<Option<ManagedRResolverConfiguration>, String> {
+    let rscript = discover_rscript(resolver, on_started)?;
+    let ir = match select_ir_command(python) {
+        Some(ir) => ir,
+        None => {
+            let Some(uv) = resolve_uv_with_rscript(resolver, on_started, &rscript, python, true)?
+            else {
+                return Ok(None);
+            };
+            python.set_resolved_uv(uv.clone());
+            IrCommand::through_uv(uv)
+        }
+    };
+    validate_ir_version(resolver, on_started, &ir)?;
+    Ok(Some(ManagedRResolverConfiguration { ir, rscript }))
+}
+
 fn select_ir_command(python: &super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
-    let path_ir = std::env::var_os("MCP_CONSOLE_RESOLVER_IR")
-        .map(PathBuf::from)
-        .or_else(|| super::find_path_entry("ir"));
+    let path_ir = super::find_path_entry("ir");
     let path_uv = super::find_path_entry("uv");
     if let Some(ir) = path_ir {
         Some(IrCommand::direct(ir))
@@ -274,10 +239,16 @@ fn discover_rscript(
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<PathBuf, String> {
     if let Some(r_home) = std::env::var_os("R_HOME") {
-        return Ok(PathBuf::from(r_home).join("bin/Rscript"));
+        let rscript = rscript_in(Path::new(&r_home));
+        if !rscript.is_file() {
+            return Err(format!(
+                "R_HOME must select an existing R installation: {} is missing",
+                rscript.display()
+            ));
+        }
+        return Ok(rscript);
     }
-    let selected_r = std::env::var_os("MCP_CONSOLE_RESOLVER_R").unwrap_or_else(|| "R".into());
-    let program = Path::new(&selected_r);
+    let program = Path::new("R");
     let mut command = resolver_command(program);
     command
         .arg("RHOME")
@@ -313,7 +284,21 @@ fn discover_rscript(
     if r_home.is_empty() {
         return Err("worker R returned an empty home path".to_string());
     }
-    Ok(PathBuf::from(r_home).join("bin/Rscript"))
+    Ok(rscript_in(Path::new(r_home)))
+}
+
+fn rscript_in(home: &Path) -> PathBuf {
+    #[cfg(unix)]
+    return home.join("bin/Rscript");
+    #[cfg(windows)]
+    {
+        let executable = home.join("bin/Rscript.exe");
+        if executable.is_file() {
+            executable
+        } else {
+            home.join("bin/x64/Rscript.exe")
+        }
+    }
 }
 
 fn resolve_uv_with_rscript(
@@ -351,8 +336,9 @@ fn run_uv_program(
     probe_only: bool,
 ) -> Result<ResolverOutput, String> {
     let mut command = resolver_command(rscript);
+    command.arg("--vanilla");
+    let _program = super::r_program::RProgram::append(&mut command, UV_BINARY_RESOLVER_SOURCE)?;
     command
-        .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -408,6 +394,8 @@ fn finish_uv_resolution(
     }
     let output = String::from_utf8(output.stdout)
         .map_err(|_| "reticulate `uv` resolver returned a non-UTF-8 path".to_string())?;
+    #[cfg(windows)]
+    let output = output.replace("\r\n", "\n");
     let path = output
         .strip_suffix('\n')
         .filter(|path| !path.is_empty() && !path.contains(['\n', '\r']))
@@ -428,8 +416,8 @@ fn resolve_r_with_process(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<ManagedR, String> {
-    // The surrounding resolver workload owns policy, cache and network access.
-    // Requirement strings are process arguments, never R source.
+    // `ir` resolves and installs remote packages with normal host cache and
+    // network access. Requirement strings are process arguments, never R source.
     let mut command = configuration.ir.command();
     command
         .arg("run")
@@ -447,12 +435,10 @@ fn resolve_r_with_process(
             "PKG_SUBPROCESS_TIMEOUT",
             PAK_SUBPROCESS_STARTUP_TIMEOUT_MILLISECONDS,
         )
-        .args([
-            "--isolated",
-            "--vanilla",
-            "-e",
-            MANAGED_R_LIBRARY_RESOLVER_SOURCE,
-        ])
+        .args(["--isolated", "--vanilla"]);
+    let _program =
+        super::r_program::RProgram::append(&mut command, MANAGED_R_LIBRARY_RESOLVER_SOURCE)?;
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -494,13 +480,18 @@ fn resolve_r_with_process(
             library.display()
         ));
     }
-    let r_libs = std::env::join_paths([&library])
+    let mut libraries = vec![library.clone()];
+    if let Some(inherited) = std::env::var_os("R_LIBS") {
+        libraries
+            .extend(std::env::split_paths(&inherited).filter(|path| !path.as_os_str().is_empty()));
+    }
+    let r_libs = std::env::join_paths(libraries)
         .map_err(|error| format!("failed to construct R library path: {error}"))?;
     Ok(ManagedR {
+        extension_directory: None,
         library,
         r_libs,
         rscript: configuration.rscript.clone(),
-        extension_directory: std::env::var_os("MCP_CONSOLE_EXTENSION_DIRECTORY").map(PathBuf::from),
         requirements,
     })
 }
@@ -566,7 +557,7 @@ fn validate_ir_version(
 
 fn collect_resolver_output(
     resolver: &ResolverProcess,
-    child: &mut std::process::Child,
+    child: &mut super::process::Child,
     stdout: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
     stderr: std::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,

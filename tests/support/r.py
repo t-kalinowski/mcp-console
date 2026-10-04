@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -30,6 +32,77 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
         home = Path(output.stdout.strip())
         environment["R_HOME"] = str(home)
     return environment, home / "bin" / "Rscript"
+
+
+def install_r_startup(
+    directory: Path, environment: dict[str, str], source: str
+) -> Path:
+    """Install the shared interactive startup package with a case-specific script."""
+    rscript = Path(environment["R_HOME"]) / "bin/Rscript"
+    libraries = subprocess.check_output(
+        [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
+        env=environment,
+        text=True,
+    ).splitlines()
+    script = directory / "startup.R"
+    script.write_text(
+        f".libPaths(c({', '.join(json.dumps(path) for path in libraries)}, .libPaths()))\n"
+        + source
+    )
+    library = directory / "library"
+    library.mkdir()
+    subprocess.run(
+        [
+            rscript.with_name("R"),
+            "CMD",
+            "INSTALL",
+            f"--library={library}",
+            FIXTURES / "bootstrap_r",
+        ],
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+    environment.update(
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolebootstrap",
+        MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT=str(script),
+    )
+    return library
+
+
+def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
+    """Retain installed R files while isolating bootstrap settings and loader paths."""
+    original = Path(environment["R_HOME"])
+    selected = directory / "R"
+    selected.mkdir()
+    for entry in original.iterdir():
+        if entry.name not in {"bin", "etc", "lib"}:
+            (selected / entry.name).symlink_to(entry)
+    for name in ("bin", "etc", "lib"):
+        destination = selected / name
+        destination.mkdir()
+        for entry in (original / name).iterdir():
+            target = destination / entry.name
+            if name == "bin" and entry.name == "R":
+                source, count = re.subn(
+                    r"(?m)^R_HOME_DIR=.*$",
+                    f"R_HOME_DIR={shlex.quote(str(selected))}",
+                    entry.read_text(),
+                    count=1,
+                )
+                assert count == 1, "R launcher must declare R_HOME_DIR"
+                target.write_text(source)
+                target.chmod(entry.stat().st_mode)
+            elif name == "etc" and entry.name == "Renviron":
+                shutil.copyfile(entry, target)
+            else:
+                target.symlink_to(entry)
+    environment["R_HOME"] = str(selected)
+    # Rscript uses RHOME to override its compiled-in installation path.
+    environment["RHOME"] = str(selected)
+    environment["PATH"] = os.pathsep.join([str(selected / "bin"), environment["PATH"]])
+    return selected
 
 
 def reference_r_error(environment: dict[str, str], source: str) -> str:
@@ -140,3 +213,46 @@ def r_input_handler_client(
             current_directory=directory,
         ) as client:
             yield client, directory
+
+
+@contextmanager
+def startup_r_package(directory: Path, source: str) -> Iterator[dict[str, str]]:
+    """Run a default package's .onLoad hook before ordinary Python startup."""
+    environment, rscript = r_test_environment()
+    package = directory / "startup-package"
+    (package / "R").mkdir(parents=True)
+    library = directory / "startup-library"
+    library.mkdir()
+    hook = directory / "startup.R"
+    hook.write_text(source)
+    (package / "DESCRIPTION").write_text(
+        "Package: mcpconsolestartup\nVersion: 0.0.1\nTitle: Startup fixture\n"
+        "Description: Exercises public R package startup.\nLicense: MIT\n"
+        "Author: Test\nMaintainer: Test <test@example.org>\n"
+    )
+    (package / "NAMESPACE").write_text("")
+    (package / "R/startup.R").write_text(
+        ".onLoad <- function(libname, pkgname) {\n"
+        '  if (!nzchar(Sys.getenv("MCP_CONSOLE_LOCAL_RUNTIME"))) return(invisible())\n'
+        '  sys.source(Sys.getenv("MCP_CONSOLE_TEST_R_STARTUP"), envir = .GlobalEnv)\n'
+        "}\n"
+    )
+    subprocess.run(
+        [
+            rscript.with_name("R"),
+            "CMD",
+            "INSTALL",
+            "--no-test-load",
+            f"--library={library}",
+            package,
+        ],
+        env=environment,
+        capture_output=True,
+        check=True,
+    )
+    environment.update(
+        R_LIBS=os.pathsep.join(filter(None, (str(library), environment.get("R_LIBS")))),
+        R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods,mcpconsolestartup",
+        MCP_CONSOLE_TEST_R_STARTUP=str(hook),
+    )
+    yield environment

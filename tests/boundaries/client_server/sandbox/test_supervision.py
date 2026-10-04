@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text as _last_text
+from support.assertions import wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import SANDBOXED
 from support.macos import (
@@ -116,7 +117,14 @@ def _spawn_processx_generation(client: McpClient) -> _Generation:
           sprintf("temp=%s", Sys.getenv("TMPDIR"))
         ))
         """)
-    client.send(r=r, requirements={"r": ["processx"]})
+    wait_for_evaluation_output(
+        client,
+        None,
+        "prepared processx generation",
+        completion_timeout_seconds=client.response_timeout,
+        r=r,
+        requirements={"r": ["processx"]},
+    )
     return _normalize_generation(client)
 
 
@@ -182,8 +190,7 @@ def test_failure_replacement_retires_descendants_outside_the_worker_group(
             "isError": True,
         }, result
         _assert_generation_retired(generation, "failure replacement")
-        client.send(r='writeLines("replacement ready")')
-        assert _last_text(client) == "replacement ready\n"
+        client.expect("replacement ready\n", r='writeLines("replacement ready")')
         return client.finish()
 
 

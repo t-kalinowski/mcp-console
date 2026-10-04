@@ -3,11 +3,21 @@ const SQL_BRIDGE_SOURCE: &str = include_str!("bridge.R");
 pub(super) struct Backend(crate::r_bridge::Bridge);
 
 impl Backend {
+    pub(super) fn initialize_managed(&self) -> Result<(), String> {
+        let outcome = crate::r_environment::without_automatic_resolution(|| {
+            self.0.call0_integer(c"initialize_managed_connection")
+        })?;
+        if outcome == -1 {
+            crate::worker::record_bootstrap_interrupt();
+        }
+        Ok(())
+    }
+
     pub(super) fn initialize() -> Result<Self, String> {
         crate::r_bridge::Bridge::initialize(SQL_BRIDGE_SOURCE, "SQL").map(Self)
     }
 
-    pub(super) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+    pub(super) fn evaluate(&self, source: &str) -> Result<(), String> {
         self.0.evaluate(source)
     }
 

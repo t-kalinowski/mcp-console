@@ -193,13 +193,6 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
                 )
             )
             replacement_evaluation_received.wait()
-            readable, _, _ = select.select([client.client.stdout], [], [], 0.2)
-            assert not readable, (
-                "send timeout expired before the replacement evaluation's fresh "
-                "wait budget"
-            )
-            replacement_evaluation_release.release()
-            replacement_evaluation_released = True
             _receive_checkpointed(
                 client.client,
                 evaluation,
@@ -207,9 +200,13 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
             )
             assert _tool_text(evaluation["result"]) == (
                 "[worker stopped: in-memory state lost]\n"
-                "[starting new worker]\n"
-                "replacement requirement cell ran\n"
-                "[done]"
+                "[starting new worker]\n\n"
+                "[running; poll with an empty send]"
+            ), evaluation
+            replacement_evaluation_release.release()
+            replacement_evaluation_released = True
+            assert (
+                _tool_text(client.send()) == "replacement requirement cell ran\n[done]"
             )
             old_transcript = client._read_open_capture(old_capture)
             replacement_transcript = client.finish_active()

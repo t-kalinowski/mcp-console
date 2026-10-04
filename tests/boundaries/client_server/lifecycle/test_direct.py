@@ -67,19 +67,24 @@ def test_builtin_worker_runs_directly_with_host_access(binary: Path) -> Transcri
                     import os
                     from pathlib import Path
 
-                    assert Path(os.environ["TMPDIR"]).samefile(Path.cwd())
+                    storage = Path(os.environ["TMPDIR"])
+                    assert storage.is_dir() and not storage.samefile(Path.cwd())
+                    assert storage.stat().st_mode & 0o777 == 0o700
+                    _ = Path("worker-storage").write_text(str(storage))
                     output = Path("host-output")
                     output.write_text("host write succeeded", encoding="utf-8")
                     print(output.read_text(encoding="utf-8"))
                     """)
             )
             assert (workspace / "host-output").read_text() == "host write succeeded"
-            identities.extend(_direct_generation(client, binary))
+            storage = Path((workspace / "worker-storage").read_text())
+            identities.extend(_direct_generation(client, binary, resolver=True))
             client.send(
                 control="restart",
                 python='print("output" in globals())',
             )
             assert "False\n" in last_tool_text(client), client.transcript[-1]
+            assert not storage.exists(), "retired worker storage survived restart"
             assert live_processes(identities) == []
             identities.extend(_direct_generation(client, binary))
             client.finish()

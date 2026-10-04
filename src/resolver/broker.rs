@@ -5,7 +5,7 @@ use crate::resolver::preparation::{Discovery, Operation};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-pub(crate) use super::policy::{Launch, Settings, protect_worker};
+pub(crate) use super::policy::{Launch, protect_worker};
 pub(crate) use super::storage::inherit_lease;
 pub(super) const VERSION: u32 = 1;
 pub(super) const LIMIT: usize = 1024 * 1024;
@@ -46,24 +46,13 @@ impl Context {
 
     pub(crate) fn discover(
         &mut self,
+        mode: super::preparation::Mode,
+        local: bool,
         started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Discovery, String> {
-        let mut discovery: Discovery = if self.launch.custom_worker {
-            Discovery {
-                managed: true,
-                direct_uv: false,
-                selections: Default::default(),
-                runtime: None,
-                python: None,
-                protected: Vec::new(),
-                lease: None,
-                extension_directory: None,
-                matplotlib_cache: None,
-            }
-        } else {
-            let value = self.execute(Operation::Discover, started)?;
-            serde_json::from_value(value).map_err(|e| format!("invalid resolver discovery: {e}"))?
-        };
+        let value = self.execute(Operation::Discover { mode, local }, started)?;
+        let mut discovery: Discovery = serde_json::from_value(value)
+            .map_err(|e| format!("invalid resolver discovery: {e}"))?;
         discovery.protected.clear();
         discovery.lease = None;
         discovery.extension_directory = None;
@@ -91,9 +80,6 @@ impl Context {
         operation: Operation,
         started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
-        if self.context.is_none() && !matches!(operation, Operation::Discover) {
-            self.execute(Operation::Discover, started)?;
-        }
         let request = super::workload::Request {
             version: VERSION,
             context: self.context.clone(),
@@ -239,7 +225,7 @@ impl Context {
                 }
                 python(managed)?;
             }
-            Operation::R { requirements } => {
+            Operation::R { requirements } | Operation::ResolveRStandalone { requirements } => {
                 let managed: super::ManagedR =
                     serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
                 inside(managed.library())?;
@@ -256,10 +242,10 @@ impl Context {
                     return Err("resolver changed managed extension storage".into());
                 }
             }
-            Operation::Discover => {
+            Operation::Discover { .. } => {
                 let discovery: Discovery =
                     serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-                if let Some(managed) = discovery.python {
+                if let Some(managed) = discovery.native.and_then(|native| native.python) {
                     python(managed)?;
                 }
             }
@@ -277,8 +263,4 @@ impl Context {
         self.storage
             .map_or(Ok(()), super::storage::Storage::quarantine)
     }
-}
-
-pub(crate) fn run() -> Result<(), String> {
-    crate::resolver::preparation::run()
 }

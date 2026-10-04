@@ -1,5 +1,5 @@
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: |
@@ -7,7 +7,7 @@ send:
     import sys
     import subprocess
 
-    assert "RETICULATE_PYTHON" not in os.environ
+    assert os.environ["RETICULATE_PYTHON"] == sys.executable
     assert os.path.samefile(sys.prefix, os.environ["MCP_CONSOLE_TEST_ENVIRONMENT"])
     assert os.path.samefile(sys.exec_prefix, sys.prefix)
     child = subprocess.check_output(

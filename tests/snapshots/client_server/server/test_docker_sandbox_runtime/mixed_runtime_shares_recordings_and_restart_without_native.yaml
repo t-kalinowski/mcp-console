@@ -156,7 +156,7 @@ result:
     - type: text
       text: >-
         dynamic environment resolution is disabled for Docker Sandbox targets;
-        install packages in the image and start a new server session
+        install packages in the template and start a new server session
   isError: true
 ---
 send:

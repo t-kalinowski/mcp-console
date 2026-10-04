@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
-use pep508_rs::pep440_rs::{Version, VersionSpecifier};
+use crate::python_requirement::VersionConstraint;
+use pep508_rs::pep440_rs::Version;
 use serde::Deserialize;
 
 pub(super) struct PythonVersions {
@@ -23,7 +24,6 @@ struct Candidate {
 struct UvPython {
     version: String,
     version_parts: VersionParts,
-    symlink: Option<String>,
     variant: String,
     implementation: String,
 }
@@ -35,31 +35,15 @@ struct VersionParts {
     patch: u64,
 }
 
-#[derive(Clone, Copy)]
-enum ConstraintOperator {
-    Equal,
-    NotEqual,
-    LessThan,
-    LessThanEqual,
-    GreaterThan,
-    GreaterThanEqual,
-}
-
-struct Constraint<'a> {
-    operator: ConstraintOperator,
-    numeric_version: Option<Vec<u64>>,
-    specifier: Option<VersionSpecifier>,
-    exact_version: Option<Version>,
-    version_string: &'a str,
-}
-
 impl PythonVersions {
     pub(super) fn parse(output: &[u8], managed: bool) -> Result<Self, String> {
         let rows = serde_json::from_slice::<Vec<UvPython>>(output)
             .map_err(|error| format!("uv returned invalid Python inventory JSON: {error}"))?;
+        let mut versions = BTreeSet::new();
         let candidates = rows
             .into_iter()
             .filter_map(|row| Candidate::from_uv(row, managed))
+            .filter(|candidate| versions.insert(candidate.version.clone()))
             .collect::<Vec<_>>();
         Ok(Self { candidates })
     }
@@ -105,12 +89,12 @@ impl PythonVersions {
         let requested = constraints.join(",");
         let constraints = constraints
             .iter()
-            .map(|constraint| Constraint::parse(constraint))
+            .map(|constraint| VersionConstraint::parse(constraint))
             .collect::<Vec<_>>();
         if let Some(candidate) = self.candidates.iter().find(|candidate| {
             constraints
                 .iter()
-                .all(|constraint| constraint.matches(candidate))
+                .all(|constraint| constraint.matches(&candidate.parsed_version, &candidate.version))
         }) {
             return Ok(candidate.version.clone());
         }
@@ -133,7 +117,7 @@ Available Python versions found: {available}
 
 impl Candidate {
     fn from_uv(row: UvPython, managed: bool) -> Option<Self> {
-        if row.symlink.is_some() || row.variant != "default" || row.implementation != "cpython" {
+        if row.variant != "default" || row.implementation != "cpython" {
             return None;
         }
         let VersionParts {
@@ -159,96 +143,6 @@ impl Candidate {
         let minor = i128::from(self.minor);
         -(minor - preferred_minor).abs() * 2 - if minor > preferred_minor { 1 } else { 0 }
     }
-}
-
-impl<'a> Constraint<'a> {
-    fn parse(value: &'a str) -> Self {
-        let (operator, version_string, explicit_operator) =
-            if let Some(version) = value.strip_prefix(">=") {
-                (ConstraintOperator::GreaterThanEqual, version, true)
-            } else if let Some(version) = value.strip_prefix("<=") {
-                (ConstraintOperator::LessThanEqual, version, true)
-            } else if let Some(version) = value.strip_prefix("==") {
-                (ConstraintOperator::Equal, version, true)
-            } else if let Some(version) = value.strip_prefix("!=") {
-                (ConstraintOperator::NotEqual, version, true)
-            } else if let Some(version) = value.strip_prefix('>') {
-                (ConstraintOperator::GreaterThan, version, true)
-            } else if let Some(version) = value.strip_prefix('<') {
-                (ConstraintOperator::LessThan, version, true)
-            } else {
-                (ConstraintOperator::Equal, value, false)
-            };
-        let version_string = version_string.trim().trim_end_matches(".*");
-        let numeric_version = parse_numeric_version(version_string);
-        let specifier = explicit_operator
-            .then(|| value.parse::<VersionSpecifier>().ok())
-            .flatten();
-        let exact_version = (!explicit_operator && numeric_version.is_none())
-            .then(|| version_string.parse::<Version>().ok())
-            .flatten();
-        Self {
-            operator,
-            numeric_version,
-            specifier,
-            exact_version,
-            version_string,
-        }
-    }
-
-    fn matches(&self, candidate: &Candidate) -> bool {
-        if candidate.prerelease
-            && let Some(specifier) = self.specifier.as_ref()
-        {
-            return specifier.contains(&candidate.parsed_version);
-        }
-        if let Some(version) = self.exact_version.as_ref() {
-            return candidate.parsed_version == *version;
-        }
-        let Some(version) = self.numeric_version.as_ref() else {
-            return self.specifier.as_ref().map_or_else(
-                || candidate.version == self.version_string,
-                |specifier| specifier.contains(&candidate.parsed_version),
-            );
-        };
-        if candidate.prerelease {
-            return false;
-        }
-        let mut candidate = vec![candidate.major, candidate.minor, candidate.patch];
-        let mut version = version.clone();
-        let specified_levels = version.len();
-        if specified_levels < 3 {
-            version.resize(3, 0);
-            candidate[2] = 0;
-        }
-        if specified_levels < 2 {
-            candidate[1] = 0;
-        }
-        let length = candidate.len().max(version.len());
-        candidate.resize(length, 0);
-        version.resize(length, 0);
-        let ordering = candidate.cmp(&version);
-        match self.operator {
-            ConstraintOperator::Equal => ordering == Ordering::Equal,
-            ConstraintOperator::NotEqual => ordering != Ordering::Equal,
-            ConstraintOperator::LessThan => ordering == Ordering::Less,
-            ConstraintOperator::LessThanEqual => ordering != Ordering::Greater,
-            ConstraintOperator::GreaterThan => ordering == Ordering::Greater,
-            ConstraintOperator::GreaterThanEqual => ordering != Ordering::Less,
-        }
-    }
-}
-
-fn parse_numeric_version(version: &str) -> Option<Vec<u64>> {
-    let parts = version.split('.').collect::<Vec<_>>();
-    if parts.iter().any(|part| part.is_empty()) {
-        return None;
-    }
-    parts
-        .into_iter()
-        .map(str::parse::<u64>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()
 }
 
 fn rank(candidates: &mut [Candidate], prefer_managed: bool) {

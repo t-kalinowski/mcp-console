@@ -127,6 +127,19 @@ class McpClient:
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
 
+    def expect(self, expected: str = "[done]", **arguments: Any) -> ToolResult:
+        """Collect exact successful text after one submission."""
+        from support.assertions import wait_for_evaluation_output
+
+        wait_for_evaluation_output(
+            self,
+            expected,
+            "expected send output",
+            completion_timeout_seconds=self.response_timeout,
+            **arguments,
+        )
+        return self.transcript[-1]["result"]
+
     def __enter__(self) -> Self:
         return self
 
@@ -263,6 +276,14 @@ class McpClient:
         self.initialize()
         self.request("tools/list")
 
+    def startup_error(self) -> str:
+        """Complete MCP discovery and observe a failed runtime through send."""
+        self.initialize_and_list_tools()
+        result = self.send(requirements={"action": "get"})
+        assert result["isError"], result
+        assert all(part["type"] == "text" for part in result["content"]), result
+        return "".join(part["text"] for part in result["content"])
+
     def _start_tool_call(self, name: str, **arguments: Any) -> TranscriptEntry:
         return self.start_request(
             "tools/call",
@@ -285,13 +306,15 @@ class McpClient:
         assert standard_error == "", standard_error
         return transcript
 
-    def finish_with_standard_error(self) -> tuple[Transcript, str]:
+    def finish_with_standard_error(
+        self, *, expected_exit_status: int = 0
+    ) -> tuple[Transcript, str]:
         deadline = self._cleanup_deadline()
         try:
             self._shutdown(deadline - SERVER_REAP_SECONDS)
             extra_output = self.stdout.read()
             standard_error = self.stderr.read()
-            assert self.process.returncode == 0, standard_error
+            assert self.process.returncode == expected_exit_status, standard_error
             assert extra_output == "", f"unexpected extra output: {extra_output}"
             return self.transcript, standard_error
         finally:

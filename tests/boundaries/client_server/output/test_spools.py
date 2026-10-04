@@ -20,6 +20,7 @@ from support.previews import (
     TEXT_BUDGET,
     assert_preview,
     compact_previews,
+    normalize_preview_paths,
 )
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -64,11 +65,15 @@ def test_separates_startup_omissions_from_retained_cell_text(
         assert output.endswith("cell output\n"), output[-1000:]
         marker = OMISSION.search(output)
         assert marker is not None
-        assert "no retained cell log" in marker[0]
+        assert "outputs/session.log" in marker[0]
+        assert (session / "outputs/session.log").read_text() == "s" * (
+            PENDING_TEXT_BUDGET + 7
+        )
         assert path not in marker[0]
         startup_preview = output.removesuffix("cell output\n")
         assert_preview(startup_preview, "s" * (PENDING_TEXT_BUDGET + 7))
         client.transcript[-1]["result"]["content"][0]["text"] = output
+        normalize_preview_paths(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 
@@ -117,12 +122,12 @@ def test_reports_partial_retention_and_later_unretained_output(
             ) as processed:
                 # Keep each batch pending until the server has processed it.
                 # Intermediate polls would reset the inline budget and split counts.
-                release_fixture_checkpoint(release)
+                release_fixture_checkpoint(release, client=client)
                 processed.wait(timeout=client.response_timeout)
                 client.send(timeout_ms=0)
                 first = client.transcript[-1]
                 first_text = last_tool_text(client)
-                release_fixture_checkpoint(release)
+                release_fixture_checkpoint(release, client=client)
                 processed.wait(timeout=client.response_timeout)
                 client.send(timeout_ms=0)
                 second = client.transcript[-1]
@@ -219,7 +224,7 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
         with closing(
             FifoCheckpoint.attach(release.with_name("zod-retention-completed"))
         ) as completed:
-            release_fixture_checkpoint(release)
+            release_fixture_checkpoint(release, client=client)
             # Keep all output pending until the server acknowledges completion;
             # intermediate polls would reset the inline budget and split counts.
             completed.wait(timeout=client.response_timeout)

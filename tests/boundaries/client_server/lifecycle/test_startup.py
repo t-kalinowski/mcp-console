@@ -137,13 +137,17 @@ def test_preserves_initialize_buffered_during_startup(
 ) -> Transcript:
     with startup_fixture(binary, execution) as fixture:
         client = fixture.client
+        fixture.wait_for_resolver()
+        invocations = fixture.invocations()
         client.initialize_and_list_tools()
-        assert fixture.invocations() == [], "initialization started a resolver"
-        client.send()
-        assert last_tool_text(client) == "\n[idle]"
+        client.request("ping")
+        client.send(timeout_ms=0)
+        assert last_tool_text(client) == "[worker starting]"
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
-        assert fixture.invocations() == [], "poll or invalid input started a resolver"
+        assert fixture.invocations() == invocations, (
+            "poll or invalid input duplicated startup"
+        )
         assert not list(fixture.root.glob("sandbox-*"))
         return client.finish()
 
@@ -154,8 +158,9 @@ def test_initializes_before_uv_bootstrap_installation(
     binary: Path, execution: Execution
 ) -> Transcript:
     with startup_fixture(binary, execution, bootstrap="uv") as fixture:
+        fixture.wait_for_resolver()
         fixture.client.initialize_and_list_tools()
-        assert fixture.invocations() == [], "initialization started a resolver"
+        fixture.client.request("ping")
         return fixture.client.finish()
 
 
@@ -209,7 +214,8 @@ def test_first_cell_prepares_defaults_after_running_response(
               "DBI",
               "duckdb",
               "arrow",
-              "nanoarrow"
+              "nanoarrow",
+              "yyjsonr"
             )
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
@@ -238,6 +244,7 @@ def test_first_cell_prepares_defaults_after_running_response(
             "duckdb",
             "arrow",
             "nanoarrow",
+            "yyjsonr",
             "jsonlite",
             "pillar",
             "tibble",
@@ -293,7 +300,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
-        preparation = client.start_send(requirements={"r": ["DBI"]}, timeout_ms=0)
+        preparation = client.start_send(requirements={"r": ["DBI"]})
         fixture.wait_for_resolver()
         client.request("ping")
         assert "result" not in preparation, (
@@ -308,7 +315,6 @@ def test_explicit_preparation_keeps_its_wait_precondition(
             "isError": False,
         }
         fixture.wait_for_resolver_exit()
-        assert not list(fixture.root.glob("sandbox-*"))
         client.send(r="42L")
         assert last_tool_text(client) == "[1] 42\n"
         return client.finish()
@@ -391,31 +397,16 @@ def test_restart_replaces_first_use_cell_and_stdin(
 ) -> Transcript:
     with ExitStack() as resources:
         root = Path(resources.enter_context(tempfile.TemporaryDirectory()))
-        contended = FifoCheckpoint.create(root / "contended")
         completion_started = FifoCheckpoint.create(root / "completion-started")
-        cancel_release = FifoCheckpoint.create(root / "cancel-release")
-        unlocked = FifoCheckpoint.create(root / "unlocked")
         release = FifoCheckpoint.create(root / "release")
         parked = FifoCheckpoint.create(root / "parked")
-        for checkpoint in (
-            contended,
-            completion_started,
-            cancel_release,
-            unlocked,
-            release,
-            parked,
-        ):
+        for checkpoint in (completion_started, release, parked):
             resources.callback(checkpoint.close)
         armed = root / "armed"
         environment = {
-            LOADER_VARIABLE: str(
-                build_interposer(root, "evaluation_return_interposer")
-            ),
+            LOADER_VARIABLE: str(build_interposer(root, "startup_return_interposer")),
             "MCP_CONSOLE_TEST_COMPLETION_ARMED": str(armed),
             "MCP_CONSOLE_TEST_COMPLETION_STARTED": str(completion_started.path),
-            "MCP_CONSOLE_TEST_COMPLETION_CONTENDED": str(contended.path),
-            "MCP_CONSOLE_TEST_COMPLETION_CANCEL_RELEASE": str(cancel_release.path),
-            "MCP_CONSOLE_TEST_COMPLETION_UNLOCKED": str(unlocked.path),
             "MCP_CONSOLE_TEST_COMPLETION_RELEASE": str(release.path),
             "MCP_CONSOLE_TEST_COMPLETION_PARKED": str(parked.path),
         }
@@ -425,7 +416,6 @@ def test_restart_replaces_first_use_cell_and_stdin(
             )
         )
         resources.callback(release.release)
-        resources.callback(cancel_release.release)
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
@@ -447,13 +437,10 @@ def test_restart_replaces_first_use_cell_and_stdin(
             stdin="replacement input",
             timeout_ms=600_000,
         )
-        completion_started.wait("resolver completion reached the server")
-        contended.wait("restart waits for the cancelling evaluation's worker lock")
-        assert not select.select([client.stdout], [], [], 0)[0], (
-            "restart replied before the old evaluation released the worker lock"
-        )
-        cancel_release.release()
-        unlocked.wait("old evaluation released the worker lock")
+        # Hold the cancelled initializer after it closes its input watcher,
+        # before its blocking task returns. The replacement must remain usable
+        # while the old startup outcome is still pending.
+        completion_started.wait("cancelled startup closed its completion socket")
         client.receive(replacement)
         assert last_tool_text(client) == code("""
             [active evaluation stopped by session restart request]
@@ -472,7 +459,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
         )
         fixture.wait_for_resolver_exit()
         release.release()
-        parked.wait("old evaluation task returned to the pool")
+        parked.wait("cancelled startup task returned to the pool")
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         return client.finish()

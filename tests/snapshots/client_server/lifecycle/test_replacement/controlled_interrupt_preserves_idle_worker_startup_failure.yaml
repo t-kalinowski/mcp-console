@@ -1,4 +1,6 @@
 ---
+!same-as custom MCP initialization for this execution mode
+---
 send:
   requirements:
     r:
@@ -6,7 +8,7 @@ send:
 result:
   content:
     - type: text
-      text: dependency resolution interrupted
+      text: "R package resolution failed with exit status: 130: "
   isError: true
 ---
 send:

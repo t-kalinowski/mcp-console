@@ -1,9 +1,11 @@
 import base64
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from support.client import McpClient
+from support.checkpoints import wait_for_path
 from support.records import ToolResult, TranscriptEntry
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
@@ -24,6 +26,38 @@ def last_tool_text(client: McpClient) -> str:
 
 def last_result_text(client: McpClient) -> str:
     return client.transcript[-1]["result"]["content"][0]["text"]
+
+
+def _send_before(
+    client: McpClient, deadline: float, description: str, **arguments: Any
+) -> ToolResult:
+    remaining = deadline - time.monotonic()
+    assert remaining > 0, f"{description} did not complete"
+    original_timeout = client.response_timeout
+    client.response_timeout = min(original_timeout, remaining)
+    try:
+        return client.send(**arguments)
+    except TimeoutError as error:
+        raise TimeoutError(f"{description}: {error}") from error
+    finally:
+        client.response_timeout = original_timeout
+
+
+def wait_for_worker_ready(client: McpClient, description: str) -> None:
+    """Wait through public startup snapshots and retain the initial empty poll."""
+    deadline = time.monotonic() + client.response_timeout
+    poll_start = len(client.transcript)
+    result = _send_before(client, deadline, description)
+    while tool_text(result) == "[worker starting]":
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, f"{description} did not complete"
+        result = _send_before(
+            client, deadline, description, timeout_ms=max(1, int(remaining * 1_000))
+        )
+    assert tool_text(result) == "\n[idle]", result
+    submitted = client.transcript[poll_start]
+    submitted["result"] = client.transcript[-1]["result"]
+    client.transcript[poll_start:] = [submitted]
 
 
 def entry_result_text(entry: TranscriptEntry) -> str:
@@ -107,15 +141,7 @@ def release_worker_callback_gate(
 
     gate, checkpoint, *extra_paths = map(Path, paths)
     gate.touch()
-    deadline = time.monotonic() + 5
-    while not checkpoint.exists():
-        assert client.process.poll() is None, (
-            f"mcp-console stopped before {description} reached its checkpoint"
-        )
-        assert time.monotonic() < deadline, (
-            f"{description} did not reach its checkpoint"
-        )
-        time.sleep(0.01)
+    wait_for_path(checkpoint, description, client=client, timeout=5)
     return tuple(extra_paths)
 
 
@@ -123,13 +149,15 @@ def wait_for_idle_output(
     client: McpClient,
     expected: str,
     description: str,
+    *,
+    completion_timeout_seconds: float = 3,
     **send_arguments: Any,
 ) -> None:
     """Poll the public idle snapshot until a worker event reaches the server."""
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + completion_timeout_seconds
     poll_start = len(client.transcript)
     while True:
-        result = client.send(**send_arguments)
+        result = _send_before(client, deadline, description, **send_arguments)
         assert result.get("isError") is not True, result
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
@@ -148,28 +176,36 @@ def wait_for_idle_output(
 
 def wait_for_evaluation_output(
     client: McpClient,
-    expected: str,
+    expected: str | Callable[[str], bool] | None,
     description: str,
     *,
-    expected_error: bool = False,
+    expected_error: bool | None = False,
     completion_timeout_seconds: float = 3,
+    initial_cuts: tuple[str, ...] = (),
+    output_cuts: list[str] | None = None,
     **send_arguments: Any,
-) -> None:
+) -> str:
     """Accumulate exact output until the expected state; retain the submitted call."""
     deadline = time.monotonic() + completion_timeout_seconds
     poll_start = len(client.transcript)
     running = "\n[running; poll with an empty send]"
     waiting = "[waiting for stdin]"
-    collected = ""
-    result = client.send(**send_arguments)
+    cuts = output_cuts if output_cuts is not None else []
+    cuts.extend(cut for cut in initial_cuts if cut)
+    collected = "".join(cuts)
+
+    result = _send_before(client, deadline, description, **send_arguments)
     while True:
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
         output = content[0]["text"]
         if output.endswith(running):
             assert result.get("isError") is not True, result
-            collected += output.removesuffix(running)
-            if collected + running == expected:
+            cut = output.removesuffix(running)
+            if cut:
+                cuts.append(cut)
+                collected += cut
+            if isinstance(expected, str) and collected + running == expected:
                 collected += running
                 break
         elif output.endswith(waiting):
@@ -177,27 +213,46 @@ def wait_for_evaluation_output(
             # Empty input requests add a separator; prompt notices already
             # contain their own newline, which belongs to the output.
             if output != "\n" + waiting:
-                collected += output.removesuffix(waiting)
+                cut = output.removesuffix(waiting)
+                cuts.append(cut)
+                collected += cut
             waiting_output = collected + ("" if collected.endswith("\n") else "\n")
-            if waiting_output + waiting == expected:
+            if expected is None or (
+                isinstance(expected, str) and waiting_output + waiting == expected
+            ):
                 collected = waiting_output + waiting
+                cuts.append(collected[len("".join(cuts)) :])
                 break
         else:
             if output != "[done]" or not collected:
                 collected += output
-            assert collected == expected, repr(collected)
+                cuts.append(output)
+            assert expected is None or (
+                collected == expected
+                if isinstance(expected, str)
+                else expected(collected)
+            ), repr(collected)
             break
-        assert expected.startswith(collected), repr(collected)
+        if isinstance(expected, str):
+            assert expected.startswith(collected), repr(collected)
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"{description} did not complete"
-        result = client.send(timeout_ms=max(1, int(remaining * 1_000)))
+        poll_ms = max(1, int(remaining * 1_000))
+        if isinstance(expected, str) and expected.endswith((running, waiting)):
+            # Observe a nonterminal state without making completion the event
+            # that wakes the receive at the logical deadline.
+            poll_ms = min(poll_ms, 100)
+        result = _send_before(client, deadline, description, timeout_ms=poll_ms)
 
-    assert result.get("isError", False) is expected_error, result
+    assert expected_error is None or result.get("isError", False) is expected_error, (
+        result
+    )
     content[0]["text"] = collected
     calls = client.transcript[poll_start:]
     submitted = calls[0]
     submitted["result"] = calls[-1]["result"]
     client.transcript[poll_start:] = [submitted]
+    return collected
 
 
 def collect_running_output(
@@ -209,36 +264,16 @@ def collect_running_output(
 ) -> tuple[str, ...]:
     """Poll a running evaluation and retain its public output cuts."""
     assert timeouts_ms and all(timeout_ms > 0 for timeout_ms in timeouts_ms)
-    running = "\n[running; poll with an empty send]"
-    poll_start = len(client.transcript)
-    cuts = [cut for cut in initial_cuts if cut]
-    for attempt, timeout_ms in enumerate(timeouts_ms):
-        result = client.send(timeout_ms=timeout_ms)
-        assert result.get("isError") is not True, result
-        content = result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        output = content[0]["text"]
-        if output.endswith(running):
-            cut = output.removesuffix(running)
-            if cut:
-                cuts.append(cut)
-            if attempt + 1 == len(timeouts_ms):
-                raise AssertionError(
-                    f"{description} remained running after {len(timeouts_ms)} polls: "
-                    f"collected={''.join(cuts)!r}, last={output!r}"
-                )
-            continue
-
-        if output != "[done]" or not cuts:
-            cuts.append(output)
-        break
-
-    collected = "".join(cuts)
-    content[0]["text"] = collected
-    polls = client.transcript[poll_start:]
-    submitted = polls[0]
-    submitted["result"] = polls[-1]["result"]
-    client.transcript[poll_start:] = [submitted]
+    cuts: list[str] = []
+    wait_for_evaluation_output(
+        client,
+        None,
+        description,
+        completion_timeout_seconds=sum(timeouts_ms) / 1_000,
+        timeout_ms=timeouts_ms[0],
+        initial_cuts=initial_cuts,
+        output_cuts=cuts,
+    )
     return tuple(cuts)
 
 

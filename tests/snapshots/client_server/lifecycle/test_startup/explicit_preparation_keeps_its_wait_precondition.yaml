@@ -5,7 +5,6 @@ send:
   requirements:
     r:
       - DBI
-  timeout_ms: 0
 result:
   content:
     - type: text

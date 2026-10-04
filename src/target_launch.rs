@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(dead_code))]
 //! Versioned target bootstrap and envelope around unchanged relay JSONL.
 use crate::resolver::preparation;
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,10 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+#[cfg(not(unix))]
+mod unsupported;
+#[cfg(not(unix))]
+pub(crate) use unsupported::{owner, process, runtime};
 #[cfg(unix)]
 mod launch;
 #[cfg(unix)]
@@ -16,12 +21,16 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-pub(crate) const VERSION: u32 = 3;
+// v11 requires conversion metadata in prepared Python identities.
+// SSH launch stays at v10; its identities use preparation protocol v6.
+pub(crate) const VERSION: u32 = 11;
+pub(crate) const SSH_VERSION: u32 = 10;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;
 pub(crate) const DATA: u8 = 2;
 pub(crate) const RETIRED: u8 = 3;
+pub(crate) const RUNTIME: u8 = 4;
 pub(crate) const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 #[derive(Clone, Copy)]
 pub(crate) struct Protocol(pub &'static str);
@@ -44,7 +53,10 @@ pub(crate) fn run(
     #[cfg(unix)]
     return launch::run(protocol, probe, compute);
     #[cfg(not(unix))]
-    Err("target execution requires macOS or Linux".into())
+    {
+        let _ = (protocol, probe, compute);
+        Err("target execution requires macOS or Linux".into())
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -52,6 +64,8 @@ pub(crate) fn run(
 pub(crate) struct Bootstrap {
     pub version: u32,
     pub build: String,
+    #[serde(default = "crate::cell::Languages::all")]
+    pub languages: crate::cell::Languages,
     pub workspace: String,
     pub policy: crate::settings::SandboxSettings,
     pub writable_roots: Vec<PathBuf>,
@@ -60,6 +74,8 @@ pub(crate) struct Bootstrap {
     pub provider: crate::settings::Provider,
     #[serde(default)]
     pub environment: Option<preparation::WorkerEnvironment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python: Option<String>,
 }
 
 /// Workload-only controls for direct target execution. Native policy remains opaque.
@@ -154,6 +170,8 @@ pub(crate) struct Output<R> {
     finished: bool,
     pending: io::Cursor<Vec<u8>>,
     recording: Option<crate::transcript::Transcript>,
+    probe: bool,
+    runtime: Option<preparation::WorkerEnvironment>,
 }
 
 impl<R: Read> Output<R> {
@@ -166,12 +184,29 @@ impl<R: Read> Output<R> {
             finished: false,
             pending: io::Cursor::new(Vec::new()),
             recording: None,
+            probe: false,
+            runtime: None,
         }
     }
 
     pub fn with_recording(mut self, recording: Option<crate::transcript::Transcript>) -> Self {
         self.recording = recording;
         self
+    }
+
+    pub fn for_probe(mut self) -> Self {
+        self.probe = true;
+        self
+    }
+
+    pub fn take_runtime(&mut self) -> Result<preparation::WorkerEnvironment, String> {
+        if !self.finished || !self.probe {
+            return Err("prepared runtime result requested before probe completion".into());
+        }
+        self.retirement.check()?;
+        self.runtime
+            .take()
+            .ok_or("prepared runtime probe returned no runtime result".into())
     }
 
     fn next_frame(&mut self) -> io::Result<bool> {
@@ -182,7 +217,7 @@ impl<R: Read> Output<R> {
                 self.protocol.0
             ))
         })?;
-        if !matches!(tag[0], HELLO | DATA | RETIRED) {
+        if !matches!(tag[0], HELLO | DATA | RETIRED | RUNTIME) {
             return Err(io::Error::other(format!(
                 "unexpected stdout in {} launch protocol",
                 self.protocol.0
@@ -203,8 +238,19 @@ impl<R: Read> Output<R> {
                 }
                 self.hello = true;
             }
-            DATA if self.hello => {
+            DATA if self.hello && !self.probe => {
                 self.pending = io::Cursor::new(bytes);
+            }
+            RUNTIME
+                if self.hello
+                    && self.probe
+                    && self.runtime.is_none()
+                    && self.protocol.0 != "SSH" =>
+            {
+                let environment: preparation::WorkerEnvironment =
+                    serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+                runtime::validate_result(&environment).map_err(io::Error::other)?;
+                self.runtime = Some(environment);
             }
             RETIRED => {
                 let retired: Retired = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
@@ -257,10 +303,19 @@ impl<R: Read> Read for Output<R> {
 }
 
 impl Protocol {
+    pub fn version(&self) -> u32 {
+        if self.0 == "SSH" {
+            SSH_VERSION
+        } else {
+            VERSION
+        }
+    }
+
     pub fn compatible(&self, version: u32, build: &str) -> Result<(), String> {
-        if version != VERSION || build != env!("CARGO_PKG_VERSION") {
+        let expected = self.version();
+        if version != expected || build != env!("CARGO_PKG_VERSION") {
             return Err(format!(
-                "incompatible {} bootstrap: expected protocol {VERSION}, Console {}; received protocol {version}, Console {build}",
+                "incompatible {} bootstrap: expected protocol {expected}, Console {}; received protocol {version}, Console {build}",
                 self.0,
                 env!("CARGO_PKG_VERSION")
             ));

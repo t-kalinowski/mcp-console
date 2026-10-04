@@ -1,10 +1,34 @@
 ---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        remote R_HOME selection must not contain NUL
+        SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer; truncated SSH frame length: failed to fill whole buffer
+  isError: true
+---
 selection: R_HOME
-standard_error: |
-  remote R_HOME selection must not contain NUL
-  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer
+standard_error: >
+  SSH preparation retirement is unconfirmed: truncated SSH frame length:
+  failed to fill whole buffer; truncated SSH frame length: failed to fill
+  whole buffer
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        remote RETICULATE_PYTHON selection must not contain NUL
+        SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer; truncated SSH frame length: failed to fill whole buffer
+  isError: true
 ---
 selection: RETICULATE_PYTHON
-standard_error: |
-  remote RETICULATE_PYTHON selection must not contain NUL
-  resolver preparation retirement is unconfirmed: truncated resolver frame length: failed to fill whole buffer
+standard_error: >
+  SSH preparation retirement is unconfirmed: truncated SSH frame length:
+  failed to fill whole buffer; truncated SSH frame length: failed to fill
+  whole buffer

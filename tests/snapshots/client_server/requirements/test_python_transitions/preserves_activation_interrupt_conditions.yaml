@@ -12,13 +12,17 @@ result:
 send:
   r: |
     before <- reticulate::py_require()
-    namespace <- asNamespace("reticulate")
+    namespace <- asNamespace("jsonlite")
     invisible(suppressMessages(base::trace(
-      "python_config",
-      tracer = quote(stop(structure(
-        list(message = "activation interrupted", call = NULL),
-        class = c("interrupt", "condition")
-      ))),
+      "fromJSON",
+      tracer = quote({
+        if (is.character(txt) && grepl('"selection":', txt, fixed = TRUE)) {
+          base::stop(structure(
+            list(message = "activation interrupted", call = NULL),
+            class = c("interrupt", "condition")
+          ))
+        }
+      }),
       print = FALSE,
       where = namespace
     )))

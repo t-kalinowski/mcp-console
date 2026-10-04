@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use std::io::{self, Read};
+#[cfg(unix)]
+use std::io;
+use std::io::{BufReader, Read};
 use std::process::Stdio;
 use std::sync::{
     Arc, Mutex,
@@ -9,8 +11,9 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Discovery, Input, Operation, Output, Selections};
+use super::{Discovery, Input, Mode, Operation, Output, Selections};
 use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
+#[cfg(unix)]
 use crate::target_launch::transfer::Io;
 
 #[derive(Clone)]
@@ -19,16 +22,14 @@ pub(crate) struct Preparation(Arc<Connection>);
 struct Connection {
     events: mpsc::Sender<Event>,
     sequence: AtomicU64,
-    closed: AtomicBool,
+    owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
     blocked: Arc<Mutex<Option<String>>>,
+    local: bool,
 }
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        let _ = self.events.send(Event::Close {
-            reply: None,
-            release: false,
-        });
+        let _ = self.events.send(Event::Close);
     }
 }
 
@@ -43,6 +44,7 @@ struct Control {
     id: u64,
     events: mpsc::Sender<Event>,
     state: Arc<State>,
+    local: bool,
 }
 
 impl ResolverControl for Control {
@@ -54,7 +56,7 @@ impl ResolverControl for Control {
                     control: ResolverControlOutcome::Cancelled,
                     reply: None,
                 })
-                .map_err(|_| "resolver preparation owner stopped".to_string())?;
+                .map_err(|_| format!("{} owner stopped", label(self.local)))?;
         }
         Ok(())
     }
@@ -76,7 +78,7 @@ impl ResolverControl for Control {
         }
         response
             .recv()
-            .map_err(|_| "resolver preparation control lost its acknowledgment".to_string())?
+            .map_err(|_| format!("{} control lost its acknowledgment", label(self.local)))?
     }
     fn control_outcome(&self) -> Option<ResolverControlOutcome> {
         *self.state.outcome.lock().expect("preparation control lock")
@@ -103,10 +105,7 @@ enum Event {
     Received(Result<Output, String>),
     WriteFailed(String),
     Exited,
-    Close {
-        reply: Option<mpsc::Sender<Result<(), String>>>,
-        release: bool,
-    },
+    Close,
 }
 
 struct Pending {
@@ -116,9 +115,22 @@ struct Pending {
     chunks: Option<String>,
 }
 
+fn label(local: bool) -> &'static str {
+    if local {
+        "local resolver"
+    } else {
+        "SSH preparation"
+    }
+}
+
 impl Preparation {
     pub(crate) fn check_ready(&self) -> Result<(), String> {
-        if let Some(error) = &*self.0.blocked.lock().map_err(|_| "resolver session lock")? {
+        if let Some(error) = &*self
+            .0
+            .blocked
+            .lock()
+            .map_err(|_| "preparation session lock")?
+        {
             return Err(error.clone());
         }
         Ok(())
@@ -128,75 +140,157 @@ impl Preparation {
         session: &crate::ssh::Session,
         selections: Selections,
         no_sandbox: bool,
-        settings: crate::resolver::broker::Settings,
+        settings: crate::resolver::policy::Settings,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let command = session.command_for("ssh-prepare")?;
-        let open = Input::Open {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-            workspace: session.target.workspace.clone(),
-            selections,
-            launch: None,
-            no_sandbox,
-            settings,
-        };
-        Self::open_with(command, open, session.blocked.clone(), on_started)
+        #[cfg(not(unix))]
+        {
+            let _ = (
+                session,
+                selections,
+                no_sandbox,
+                settings,
+                diagnostics,
+                on_started,
+            );
+            Err("SSH preparation requires macOS or Linux".into())
+        }
+        #[cfg(unix)]
+        {
+            let command = session.command_for("ssh-prepare")?;
+            let open = Input::Open {
+                version: super::VERSION,
+                build: env!("CARGO_PKG_VERSION").into(),
+                workspace: session.target.workspace.clone(),
+                selections,
+                mode: Mode::Auto,
+                launch: None,
+                no_sandbox,
+                settings,
+            };
+            Self::open_with(
+                command,
+                session.blocked.clone(),
+                open,
+                false,
+                diagnostics,
+                on_started,
+            )
+        }
     }
 
-    pub(crate) fn local(
-        launch: crate::resolver::broker::Launch,
+    pub(crate) fn open_local(
+        mode: Mode,
+        no_sandbox: bool,
+        settings: crate::resolver::policy::Settings,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         let mut command =
-            std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
-        command.env_clear().current_dir("/").arg("resolve");
+            std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
+        command.arg("resolve");
+        #[cfg(unix)]
+        let launch = Box::new(crate::resolver::broker::Launch::capture(
+            no_sandbox,
+            settings.clone(),
+        )?);
+        #[cfg(unix)]
+        command.env_clear().current_dir("/");
         let open = Input::Open {
             version: super::VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
-            workspace: launch.workspace.to_string_lossy().into_owned(),
+            workspace: String::new(),
             selections: Selections::default(),
-            launch: Some(Box::new(launch)),
-            no_sandbox: false,
-            settings: Default::default(),
+            mode,
+            #[cfg(unix)]
+            launch: Some(launch),
+            no_sandbox,
+            settings,
         };
-        Self::open_with(command, open, Arc::new(Mutex::new(None)), on_started)
+        Self::open_with(command, Arc::default(), open, true, diagnostics, on_started)
     }
 
     fn open_with(
         mut command: std::process::Command,
-        open: Input,
         blocked: Arc<Mutex<Option<String>>>,
+        open: Input,
+        local: bool,
+        diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        super::encode(&open)?;
+        #[cfg(unix)]
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            let _ = diagnostics;
+            command.stderr(Stdio::inherit());
+        }
+        #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("cannot start resolver preparation: {error}"))?;
+        #[cfg(windows)]
+        let (aborted, abort) = crate::windows::notification().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let (stdin, stdout) = crate::windows::command_pipes(&mut command, aborted.clone())
+            .map_err(|e| e.to_string())?;
+        let mut child = command.spawn().map_err(|error| {
+            format!(
+                "cannot start {} preparation: {error}",
+                if local { "local" } else { "SSH" }
+            )
+        })?;
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
+        #[cfg(unix)]
         let (aborted, abort) = io::pipe().map_err(|e| e.to_string())?;
-        let stdout = child.stdout.take().expect("resolver preparation stdout");
-        let stdin = child.stdin.take().expect("resolver preparation stdin");
+        #[cfg(unix)]
+        let stdout = child.stdout.take().expect("preparation stdout");
+        #[cfg(unix)]
+        let stdin = child.stdin.take().expect("preparation stdin");
+        #[cfg(unix)]
+        let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let diagnostic_reader = {
+            let stderr = child.stderr.take().expect("preparation stderr");
+            let diagnostic_events = events.clone();
+            thread::spawn(move || {
+                if let Err(error) =
+                    crate::process_output::forward(stderr, diagnostic_exit, diagnostics)
+                {
+                    let _ = diagnostic_events.send(Event::Received(Err(format!(
+                        "{} stderr read failed: {error}",
+                        label(local)
+                    ))));
+                }
+            })
+        };
+        #[cfg(unix)]
         let reader_abort = aborted.try_clone().map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let reader_abort = aborted;
         let read_events = events.clone();
         let reader = thread::spawn(move || {
             let result = (|| {
-                let mut input = Io::new(stdout, Some(reader_abort), None)?;
+                #[cfg(unix)]
+                let mut input = BufReader::new(Io::new(stdout, Some(reader_abort), None)?);
+                #[cfg(windows)]
+                let mut input = BufReader::new(stdout.with_cancel(reader_abort));
                 loop {
-                    let message = super::read(&mut input)?;
+                    let message = if local {
+                        super::read_jsonl(&mut input)?
+                    } else {
+                        super::read(&mut input)?
+                    };
                     let closed = matches!(message, Output::Closed);
                     if closed && input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
-                        return Err("unexpected stdout after resolver preparation shutdown".into());
+                        return Err(format!("unexpected stdout after {} shutdown", label(local)));
                     }
                     read_events
                         .send(Event::Received(Ok(message)))
-                        .map_err(|_| "resolver preparation owner stopped")?;
+                        .map_err(|_| format!("{} owner stopped", label(local)))?;
                     if closed {
                         return Ok::<(), String>(());
                     }
@@ -209,9 +303,16 @@ impl Preparation {
         let write_events = events.clone();
         let writer = thread::spawn(move || {
             let result = (|| {
+                #[cfg(unix)]
                 let mut output = Io::new(stdin, Some(aborted), None)?;
+                #[cfg(windows)]
+                let mut output = stdin;
                 for message in writes {
-                    super::write(&mut output, &message)?;
+                    if local {
+                        super::write_jsonl(&mut output, &message)?;
+                    } else {
+                        super::write(&mut output, &message)?;
+                    }
                 }
                 Ok::<(), String>(())
             })();
@@ -222,37 +323,50 @@ impl Preparation {
         let exit_events = events.clone();
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
+                #[cfg(unix)]
+                drop(notify_diagnostic_exit);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
         let (reply, response) = mpsc::channel();
-        let connection = Self(Arc::new(Connection {
-            events: events.clone(),
-            sequence: AtomicU64::new(1),
-            closed: AtomicBool::new(false),
-            blocked: blocked.clone(),
-        }));
         let pending = Pending {
             id: 0,
             state: state.clone(),
             reply,
             chunks: None,
         };
-        thread::spawn(move || {
-            let _ = run(received, &outgoing, pending, open, &blocked);
+        let owner_blocked = blocked.clone();
+        let owner = thread::spawn(move || {
+            let result = run(received, &outgoing, pending, open, &owner_blocked, local);
             drop(outgoing);
             drop(abort);
-            let _ = writer.join();
-            let _ = reader.join();
-            if !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+            // Do not extend failed protocol retirement with a second exit wait.
+            // Kill before joining I/O and reaping.
+            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
                 let _ = child.kill();
             }
-            let _ = child.wait();
+            let _ = writer.join();
+            let _ = reader.join();
+            let reaped = child
+                .wait()
+                .map(|_| ())
+                .map_err(|error| format!("cannot reap {}: {error}", label(local)));
+            #[cfg(unix)]
+            let _ = diagnostic_reader.join();
+            result.and(reaped)
         });
+        let connection = Self(Arc::new(Connection {
+            events: events.clone(),
+            sequence: AtomicU64::new(1),
+            owner: Mutex::new(Some(owner)),
+            blocked,
+            local,
+        }));
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
             state,
+            local,
         });
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
@@ -261,19 +375,26 @@ impl Preparation {
         }
         let discovery = response
             .recv()
-            .map_err(|_| "resolver preparation discovery stopped".to_string())
+            .map_err(|_| format!("{} discovery stopped", label(local)))
             .and_then(|result| result)
             .and_then(|discovery| {
-                serde_json::from_value(discovery)
-                    .map_err(|error| format!("invalid resolver capability result: {error}"))
+                serde_json::from_value(discovery).map_err(|error| {
+                    if local {
+                        format!("invalid local resolver capability result: {error}")
+                    } else {
+                        format!("invalid remote capability result: {error}")
+                    }
+                })
             });
         match discovery {
             Ok(discovery) => Ok((connection, discovery)),
             Err(error) => {
                 // Startup has no Client to own shutdown after discovery fails.
-                // Finish the close handshake before the MCP process can exit.
-                let _ = connection.close();
-                Err(error)
+                // Join preparation cleanup before the MCP process can exit.
+                match connection.close() {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(format!("{error}; {cleanup}")),
+                }
             }
         }
     }
@@ -294,6 +415,7 @@ impl Preparation {
             id,
             events: self.0.events.clone(),
             state: state.clone(),
+            local: self.0.local,
         });
         let (reply, response) = mpsc::channel();
         self.0
@@ -304,7 +426,7 @@ impl Preparation {
                 state,
                 reply,
             })
-            .map_err(|_| "resolver preparation owner stopped")?;
+            .map_err(|_| format!("{} owner stopped", label(self.0.local)))?;
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
             let _ = response.recv();
@@ -312,37 +434,29 @@ impl Preparation {
         }
         let value = response
             .recv()
-            .map_err(|_| "resolver preparation owner stopped".to_string())??;
+            .map_err(|_| format!("{} owner stopped", label(self.0.local)))??;
         serde_json::from_value(value).map_err(|error| {
-            let error = format!("invalid resolver preparation result: {error}");
-            *self.0.blocked.lock().expect("resolver session lock") = Some(error.clone());
+            let error = if self.0.local {
+                format!("invalid local resolver result: {error}")
+            } else {
+                format!("invalid remote preparation result: {error}")
+            };
+            *self.0.blocked.lock().expect("preparation session lock") = Some(error.clone());
             error
         })
     }
 
     pub(crate) fn close(&self) -> Result<(), String> {
-        self.finish(true)
-    }
-
-    pub(crate) fn quarantine(&self) -> Result<(), String> {
-        self.finish(false)
-    }
-
-    fn finish(&self, release: bool) -> Result<(), String> {
-        if self.0.closed.swap(true, Ordering::SeqCst) {
+        // Hold the lock through the join so every close caller waits for the
+        // owner to reap its child, even after Closed and EOF arrive.
+        let mut owner = self.0.owner.lock().map_err(|_| "preparation owner lock")?;
+        let Some(owner) = owner.take() else {
             return Ok(());
-        }
-        let (reply, response) = mpsc::channel();
-        self.0
-            .events
-            .send(Event::Close {
-                reply: Some(reply),
-                release,
-            })
-            .map_err(|_| "resolver preparation owner stopped")?;
-        response
-            .recv()
-            .map_err(|_| "resolver preparation shutdown lost its acknowledgment".to_string())?
+        };
+        let _ = self.0.events.send(Event::Close);
+        owner
+            .join()
+            .map_err(|_| format!("{} owner panicked", label(self.0.local)))?
     }
 }
 
@@ -352,26 +466,28 @@ fn run(
     initial: Pending,
     open: Input,
     blocked: &Mutex<Option<String>>,
+    local: bool,
 ) -> Result<(), String> {
+    let owner = label(local);
     let mut active = Some(initial);
     let mut controls: VecDeque<(u64, ResolverControlOutcome, Option<ControlReply>)> =
         VecDeque::new();
-    let mut closing = Vec::new();
     let mut close_requested = false;
     let mut hello = false;
-    let mut deadline = Some(Instant::now() + super::SETUP_TIMEOUT);
+    let mut setup_deadline = (!local).then(|| Instant::now() + super::SETUP_TIMEOUT);
+    let mut retirement_deadline = None;
     let result = (|| {
         outgoing
             .send(open)
-            .map_err(|_| "resolver preparation writer stopped")?;
+            .map_err(|_| format!("{owner} writer stopped"))?;
         loop {
-            let event = match deadline {
+            let event = match retirement_deadline.or(setup_deadline) {
                 Some(deadline) => received
                     .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                    .map_err(|_| "resolver preparation setup or retirement deadline exceeded")?,
+                    .map_err(|_| format!("{owner} setup or retirement deadline exceeded"))?,
                 None => received
                     .recv()
-                    .map_err(|_| "resolver preparation owner stopped")?,
+                    .map_err(|_| format!("{owner} owner stopped"))?,
             };
             match event {
                 Event::Run {
@@ -388,15 +504,17 @@ fn run(
                     });
                     outgoing
                         .send(request)
-                        .map_err(|_| "resolver preparation writer stopped")?;
+                        .map_err(|_| format!("{owner} writer stopped"))?;
                 }
                 Event::Control { id, control, reply } => {
-                    if active.as_ref().is_some_and(|pending| pending.id == id) {
+                    // Close already cancels active work and is the final host
+                    // request. A concurrent control must not write after it.
+                    if !close_requested && active.as_ref().is_some_and(|pending| pending.id == id) {
                         outgoing
                             .send(Input::Control { id, control })
-                            .map_err(|_| "resolver preparation writer stopped")?;
-                        if control == ResolverControlOutcome::Cancelled {
-                            deadline = Some(Instant::now() + Duration::from_secs(7));
+                            .map_err(|_| format!("{owner} writer stopped"))?;
+                        if !local && control == ResolverControlOutcome::Cancelled {
+                            retirement_deadline = Some(Instant::now() + Duration::from_secs(7));
                         }
                         controls.push_back((id, control, reply));
                     } else if let Some(reply) = reply {
@@ -405,21 +523,17 @@ fn run(
                 }
                 Event::Received(Ok(Output::Hello { version, build })) if !hello => {
                     if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-                        return Err(
-                            "incompatible resolver preparation protocol or Console build".into(),
-                        );
+                        return Err(format!("incompatible {owner} protocol or Console build"));
                     }
                     hello = true;
-                    deadline = None;
+                    setup_deadline = None;
                 }
                 Event::Received(Ok(Output::Controlled { id, result })) if hello => {
                     let Some((expected, control, reply)) = controls.pop_front() else {
-                        return Err(
-                            "unsolicited resolver preparation control acknowledgment".into()
-                        );
+                        return Err(format!("unsolicited {owner} control acknowledgment"));
                     };
                     if id != expected {
-                        return Err("mismatched resolver preparation control acknowledgment".into());
+                        return Err(format!("mismatched {owner} control acknowledgment"));
                     }
                     if result == Ok(true)
                         && let Some(pending) = active.as_ref().filter(|pending| pending.id == id)
@@ -439,12 +553,8 @@ fn run(
                     let pending = active
                         .as_mut()
                         .filter(|pending| pending.id == id)
-                        .ok_or("mismatched resolver preparation result chunk")?;
-                    let chunks = pending.chunks.get_or_insert_default();
-                    if chunks.len() + text.len() > super::LIMIT {
-                        return Err("preparation result exceeds 1 MiB".into());
-                    }
-                    chunks.push_str(&text);
+                        .ok_or_else(|| format!("mismatched {owner} result chunk"))?;
+                    pending.chunks.get_or_insert_default().push_str(&text);
                 }
                 Event::Received(Ok(Output::Completed {
                     id,
@@ -455,18 +565,19 @@ fn run(
                     let pending = active
                         .as_mut()
                         .filter(|pending| pending.id == id)
-                        .ok_or("mismatched resolver preparation result")?;
+                        .ok_or_else(|| format!("mismatched {owner} result"))?;
                     let result = match (pending.chunks.take(), result) {
                         (None, Some(result)) => result,
-                        (Some(chunks), None) => serde_json::from_str(&chunks).map_err(|error| {
-                            format!("invalid chunked resolver preparation result: {error}")
-                        })?,
-                        _ => return Err("resolver preparation requires one complete result".into()),
+                        (Some(chunks), None) => serde_json::from_str(&chunks)
+                            .map_err(|error| format!("invalid chunked {owner} result: {error}"))?,
+                        _ => return Err(format!("{owner} requires one complete result")),
                     };
                     if !confirmed {
-                        return Err(result.err().unwrap_or_else(|| {
-                            "resolver preparation process cleanup failed".into()
-                        }));
+                        return Err(if local {
+                            "local resolver process cleanup failed".into()
+                        } else {
+                            "remote preparation process cleanup failed".into()
+                        });
                     }
                     pending.state.confirmed.store(true, Ordering::SeqCst);
                     pending.state.finished.store(true, Ordering::SeqCst);
@@ -483,12 +594,17 @@ fn run(
                         .outcome
                         .lock()
                         .expect("preparation control lock");
+                    let control_label = if local {
+                        "local resolver"
+                    } else {
+                        "remote preparation"
+                    };
                     let result = result.and_then(|value| match outcome {
                         Some(ResolverControlOutcome::Cancelled) => {
-                            Err("resolver preparation cancelled".into())
+                            Err(format!("{control_label} cancelled"))
                         }
                         Some(ResolverControlOutcome::Interrupted) => {
-                            Err("resolver preparation interrupted".into())
+                            Err(format!("{control_label} interrupted"))
                         }
                         None => Ok(value),
                     });
@@ -498,19 +614,16 @@ fn run(
                         .reply
                         .send(result);
                     if !close_requested {
-                        deadline = None;
+                        retirement_deadline = None;
                     }
                 }
-                Event::Close { reply, release } => {
-                    if let Some(reply) = reply {
-                        closing.push(reply);
-                    }
+                Event::Close => {
                     if !close_requested {
                         outgoing
-                            .send(Input::Close { release })
-                            .map_err(|_| "resolver preparation writer stopped")?;
+                            .send(Input::Close)
+                            .map_err(|_| format!("{owner} writer stopped"))?;
                         close_requested = true;
-                        deadline = Some(Instant::now() + Duration::from_secs(7));
+                        retirement_deadline = Some(Instant::now() + Duration::from_secs(7));
                     }
                 }
                 Event::Received(Ok(Output::Closed)) if close_requested && active.is_none() => {
@@ -520,21 +633,21 @@ fn run(
                 // Output and exit are independent transports. A queued terminal
                 // frame remains authoritative; the reader reports truncation.
                 Event::Exited => {
-                    deadline = Some(Instant::now() + Duration::from_secs(1));
+                    retirement_deadline = Some(Instant::now() + Duration::from_secs(1));
                 }
-                _ => return Err("unexpected resolver preparation event".into()),
+                _ => return Err(format!("unexpected {owner} event")),
             }
         }
     })();
     if let Err(error) = &result {
-        *blocked.lock().expect("resolver session lock") = Some(format!(
-            "resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: {error}"
+        *blocked.lock().expect("preparation session lock") = Some(format!(
+            "{owner} retirement is unconfirmed; this session cannot prepare or start a replacement: {error}"
         ));
     }
     if let Some(pending) = active {
         pending.state.finished.store(true, Ordering::SeqCst);
         let _ = pending.reply.send(Err(format!(
-            "resolver preparation retirement is unconfirmed: {}",
+            "{owner} retirement is unconfirmed: {}",
             result
                 .as_ref()
                 .err()
@@ -544,13 +657,8 @@ fn run(
     }
     for (_, _, reply) in controls {
         if let Some(reply) = reply {
-            let _ = reply.send(Err(
-                "resolver preparation control lost its acknowledgment".into()
-            ));
+            let _ = reply.send(Err(format!("{owner} control lost its acknowledgment")));
         }
-    }
-    for reply in closing {
-        let _ = reply.send(result.clone());
     }
     result
 }

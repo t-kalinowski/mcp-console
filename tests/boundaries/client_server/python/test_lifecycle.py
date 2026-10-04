@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
 import signal
@@ -17,6 +18,7 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.native import SHARED_LIBRARY_FLAG
+from support.python import runtime_source_line
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
@@ -147,10 +149,6 @@ def test_interrupts_running_python_evaluation(
             r = code(r"""
                 python_interrupt_started <- tempfile("python-interrupt-started-")
                 python_interrupt_release <- tempfile("python-interrupt-release-")
-                Sys.setenv(
-                  MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
-                  MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
-                )
                 # Initialize from R before the Python evaluation checkpoint.
                 invisible(reticulate::py_config())
                 cat(python_interrupt_started, python_interrupt_release, sep = "\n")
@@ -185,12 +183,12 @@ def test_interrupts_running_python_evaluation(
                 try:
                     with (
                         open(
-                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
+                            r.python_interrupt_started,
                             "wb",
                             buffering=0,
                         ) as started,
                         open(
-                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
+                            r.python_interrupt_release,
                             "rb",
                             buffering=0,
                         ) as release,
@@ -254,6 +252,8 @@ def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Tran
         python = code("""
             raw_state = object()
             original_raw_state = raw_state
+            # Complete bridge attachment before the blocking-read checkpoint.
+            r.raw_event_wait()
             """)
         client.send(python=python)
         assert last_result_text(client) == "[done]"
@@ -473,19 +473,31 @@ def test_initializes_private_runtime_once_on_first_python_cell(
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # The shared runtime owns module setup. Observe the public initialization
+    # hook instead of counting the removed R-side Matplotlib callback.
     # fmt: r
     r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
+        initialization_count <- 0L
+        setHook("reticulate.onPyInit", function() {
+          initialization_count <<- initialization_count + 1L
+        }, action = "append")
         """)
     client.send(r=r)
-    assert last_result_text(client) == "[1] 1\n"
-    client.send(python="42")
+    assert last_result_text(client) == "[done]"
+    client.send(
+        python="runtime_identity = object(); runtime_identity_id = id(runtime_identity); 42"
+    )
     assert last_result_text(client) == "42\n"
-    # fmt: r
-    r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load"))
-        """)
-    client.send(r=r)
+    client.send(python="assert id(runtime_identity) == runtime_identity_id; 43")
+    assert last_result_text(client) == "43\n"
+    client.send(r="initialization_count")
+    assert last_result_text(client) == "[1] 0\n"
+    client.send(r="invisible(reticulate::py_config()); initialization_count")
+    assert last_result_text(client) == "[1] 1\n"
+    client.send(python="assert id(runtime_identity) == runtime_identity_id; 44")
+    assert last_result_text(client) == "44\n"
+    client.send(r="invisible(reticulate::py_config()); initialization_count")
     assert last_result_text(client) == "[1] 1\n"
     return client.finish()
 
@@ -495,56 +507,55 @@ def test_retries_python_runtime_initialization_after_interrupt(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    configuration_line = runtime_source_line("_defaults.apply(name)")
+    numpy_line = runtime_source_line('if module.get_printoptions()["linewidth"] == 75:')
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        modules = Path(temporary_directory) / "modules"
+        modules.mkdir()
+        # Interrupt the shared setup boundary, independently of bridge hooks.
+        # Restore the function before blocking so retry has no second gate.
+        checkpoint = code("""
+            import __main__
+            import numpy as np
+
+            __main__.runtime_identity = object()
+            __main__.runtime_identity_id = id(__main__.runtime_identity)
+            original_get_printoptions = np.get_printoptions
+            def configuration_checkpoint():
+                np.get_printoptions = original_get_printoptions
+                input('python runtime configuring> ')
+                return original_get_printoptions()
+            np.get_printoptions = configuration_checkpoint
+            """)
+        (modules / "sitecustomize.py").write_text(
+            f"exec(compile({json.dumps(checkpoint)}, '<runtime setup checkpoint>', 'exec'))"
+        )
+        environment["RETICULATE_PYTHONPATH"] = str(modules)
         client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::trace(
-                  "r_to_py",
-                  tracer = quote({
-                    if (is.function(x) && identical(convert, FALSE)) {
-                      invisible(readline("python runtime configuring> "))
-                    }
-                  }),
-                  print = FALSE,
-                  where = asNamespace("reticulate")
-                )))
-                """)
-            wait_for_evaluation_output(
-                client, "[done]", "Python configuration checkpoint", r=r
-            )
-
-            # Callback conversion starts after reticulate attaches and Console
-            # installs its services, before native evaluator setup completes.
             client.send(python="42")
             assert last_result_text(client) == (
                 '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
-            )
+            ), last_result_text(client)
 
             client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
             output = last_result_text(client)
-            assert output in {"", "\n"}, repr(output)
-            result["content"][0]["text"] = output.rstrip("\n")
+            assert output == (
+                "Traceback (most recent call last):\n"
+                f'  File "<string>", line {configuration_line}, in _mcp_console_configure_module_defaults\n'
+                f'  File "<string>", line {numpy_line}, in apply\n'
+                '  File "<runtime setup checkpoint>", line 9, in configuration_checkpoint\n'
+                '  File "<string>", line 50, in _console_input\n'
+                "KeyboardInterrupt\n"
+            ), repr(output)
 
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::untrace(
-                  "r_to_py",
-                  where = asNamespace("reticulate")
-                )))
-                length(getHook("reticulate::matplotlib.pyplot::load"))
-                """)
-            client.send(r=r)
-            assert last_result_text(client) == "[1] 1\n"
-
-            client.send(python="42")
+            client.send(python="assert id(runtime_identity) == runtime_identity_id; 42")
             output = last_result_text(client)
             assert output == "42\n", repr(output)
             client.send(python="import yaml12; yaml12.__name__")
@@ -581,7 +592,7 @@ def test_dispatches_cells_without_reticulate_evaluation(
         client.initialize_and_list_tools()
         client.send(python="direct_state = [41]")
         assert last_result_text(client) == "[done]"
-        # Bootstrap still uses reticulate; subsequent cells must not call its
+        # Ordinary Python setup and evaluation do not call reticulate's
         # R evaluation entry points. This instrumentation is confined to R.
         # fmt: r
         r = code(r"""

@@ -4,6 +4,7 @@
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -16,7 +17,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -24,12 +26,13 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
           },
-          "prepared": false,
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -54,15 +57,17 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
-    prepared: false
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -90,6 +95,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -160,6 +166,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -221,53 +228,19 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        DuckDB extension resolution failed with exit status: 1: Error in `duckdb_result()`:
-        ! Invalid Error: HTTP Error: Failed to download extension "not_a_real_duckdb_extension" at URL "<DuckDB extension URL>" (HTTP 404)
-
-        Candidate extensions: "motherduck", "odbc", "unity_catalog", "delta", "lance"
-        For more info, visit <DuckDB extension troubleshooting URL>
-        ℹ Context: rapi_execute
-        ℹ Error type: INVALID
-        Backtrace:
-             ▆
-          1. ├─base::local(...)
-          2. │ └─base::eval.parent(substitute(eval(quote(expr), envir)))
-          3. │   └─base::eval(expr, p)
-          4. │     └─base::eval(expr, p)
-          5. ├─base::eval(...)
-          6. │ └─base::eval(...)
-          7. │   ├─DBI::dbExecute(connection, base::paste("INSTALL", identifier))
-          8. │   └─DBI::dbExecute(connection, base::paste("INSTALL", identifier))
-          9. │     ├─DBI::dbSendStatement(conn, statement, ...)
-         10. │     └─DBI::dbSendStatement(conn, statement, ...)
-         11. │       ├─DBI::dbSendQuery(conn, statement, ...)
-         12. │       └─duckdb::dbSendQuery(conn, statement, ...)
-         13. │         └─duckdb (local) .local(conn, statement, ...)
-         14. │           └─duckdb:::duckdb_result(connection = conn, stmt_lst = stmt_lst, arrow = arrow)
-         15. │             └─duckdb:::duckdb_execute(res)
-         16. │               └─duckdb:::rethrow_rapi_execute(...)
-         17. │                 ├─rlang::try_fetch(...)
-         18. │                 │ ├─base::tryCatch(...)
-         19. │                 │ │ └─base (local) tryCatchList(expr, classes, parentenv, handlers)
-         20. │                 │ │   └─base (local) tryCatchOne(expr, names, parentenv, handlers[[1L]])
-         21. │                 │ │     └─base (local) doTryCatch(return(expr), name, parentenv, handler)
-         22. │                 │ └─base::withCallingHandlers(...)
-         23. │                 └─duckdb:::rapi_execute(stmt, convert_opts)
-         24. ├─duckdb (local) `<fn>`(...)
-         25. │ └─rlang::abort(error_parts, class = "duckdb_error", !!!fields)
-         26. │   └─rlang:::signal_abort(cnd, .file)
-         27. │     └─base::signalCondition(cnd)
-         28. └─rlang (local) `<fn>`(`<dckdb_rr>`)
-         29.   └─handlers[[1L]](cnd)
-         30.     └─duckdb:::rethrow_error_from_rapi(e, call)
-         31.       └─rlang::abort(msg, call = call)
-        Execution halted
+      text: >-
+        DuckDB extension resolution failed with exit status: 1: <stderr
+        identical to live Rscript --vanilla>
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  reference: native Rscript --vanilla stderr captured before forwarding
+  comparison: exact equality after exit-status prefix; outer whitespace trimmed
 ---
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -348,6 +321,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -434,6 +408,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -500,6 +475,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -566,6 +542,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -640,6 +617,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -652,7 +630,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -660,7 +639,8 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -690,12 +670,14 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

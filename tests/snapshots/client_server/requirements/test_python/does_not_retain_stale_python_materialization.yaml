@@ -11,24 +11,38 @@ result:
 ---
 send:
   r: |
-    namespace <- asNamespace("reticulate")
-    original_py_require <- get("py_require", envir = namespace)
-    injected <- FALSE
-    replacement <- function(...) {
-      if (!injected) {
-        injected <<- TRUE
-        requirements <- original_py_require()
-        invisible(get("uv_get_or_create_env", envir = namespace)(
-          requirements$packages,
-          requirements$python_version,
-          requirements$exclude_newer
-        ))
-      }
-      original_py_require(...)
+    resolve_unchanged <- function() {
+      current <- reticulate::py_require()
+      manifest <- list(
+        packages = I(current$packages),
+        python_version = I(if (is.null(current$python_version)) character() else current$python_version),
+        exclude_newer = current$exclude_newer
+      )
+      request <- jsonlite::toJSON(list(
+        requirements = manifest, retained_requirements = manifest
+      ), auto_unbox = TRUE, null = "null")
+      invisible(.Call("mcp_console_resolve_python", request))
     }
-    unlockBinding("py_require", namespace)
-    assign("py_require", replacement, envir = namespace)
-    lockBinding("py_require", namespace)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
+    import _mcp_console_environment as environment
+
+    original_check = environment._check_compatible
+
+
+    def check_after_materialization(candidate):
+        environment._check_compatible = original_check
+        r.resolve_unchanged()
+        original_check(candidate)
+
+
+    environment._check_compatible = check_after_materialization
 result:
   content:
     - type: text

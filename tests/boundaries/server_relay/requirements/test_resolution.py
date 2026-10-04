@@ -3,6 +3,8 @@
 import base64
 import select
 import sys
+import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -33,8 +35,9 @@ from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.records import Transcript
-from support.requirements import POSIX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.resolvers import resolver_fixture_directory
 from support.suites import run_this_suite
@@ -92,11 +95,18 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
 
 
 @executions(DIRECT, SANDBOXED)
-def test_send_timeout_starts_after_blocked_requirements_resolver(
+@requires(NATIVE_FIXTURES)
+def test_send_timeout_includes_blocked_requirements_resolver(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
-    with resolver_fixture_directory(binary, execution) as root:
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        closing(
+            FifoCheckpoint.create(Path(temporary) / "clock-advanced")
+        ) as clock_advanced,
+    ):
+        root = Path(temporary)
         library = root / "timeout-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
@@ -104,6 +114,14 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
         resolver_release = FifoCheckpoint.create(root / "resolver-release")
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
+        environment.update(
+            {
+                LOADER_VARIABLE: str(build_interposer(root, "relay_completed_output")),
+                "MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME": '"result":{}',
+                "MCP_CONSOLE_TEST_OUTPUT_COMPLETE": str(root / "clock-advanced"),
+                "MCP_CONSOLE_TEST_CLOCK_SECONDS": "120",
+            }
+        )
         client = ServerRelayClient(
             binary,
             "live_r_requirements_then_evaluate",
@@ -111,29 +129,40 @@ def test_send_timeout_starts_after_blocked_requirements_resolver(
             execution=execution,
         )
         client.start_worker()
+        evaluation_received = FifoCheckpoint.attach(
+            client.relay_root() / IDLE_R_EVALUATION_RECEIVED_NAME
+        )
+        evaluation_release = FifoCheckpoint.attach(client.relay_root() / RELEASE_NAME)
         finished = False
         try:
             evaluation = client.client.start_send(
                 r="42",
                 requirements={"r": ["timeout-requirement"]},
-                timeout_ms=50,
+                timeout_ms=60_000,
             )
             resolver_started.wait()
-            readable, _, _ = select.select([client.client.stdout], [], [], 0.25)
-            assert not readable, (
-                "send timeout applied while requirements were resolving"
-            )
+            client.client.request("ping")
+            clock_advanced.wait("send observation deadline has passed")
+            assert "result" not in evaluation, evaluation
 
             resolver_release.release()
+            evaluation_received.wait()
             _receive_checkpointed(
                 client.client,
                 evaluation,
                 "the evaluation after requirement resolution",
             )
-            assert _tool_text(evaluation["result"]) == "[done]"
+            assert _tool_text(evaluation["result"]) == (
+                "\n[running; poll with an empty send]"
+            )
+            evaluation_release.release()
+            assert _tool_text(client.send()) == "[done]"
             transcript = client.finish_active()
             finished = True
         finally:
+            evaluation_release.release()
+            evaluation_received.close()
+            evaluation_release.close()
             if not finished:
                 stop_client(client.client)
                 client._temporary.cleanup()

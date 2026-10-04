@@ -10,9 +10,9 @@ root = Path(__file__).parent
 mode = (root / "inspection-mode").read_text(encoding="utf-8").strip()
 
 if mode.startswith("inspection-"):
-    inspecting = len(sys.argv) == 2 and Path(sys.argv[1]).name.startswith(
-        "mcp-console-result-"
-    )
+    # Inspection invokes isolated Python with -c and one result-path argument.
+    # Synchronize on that invocation, independently of temporary file names.
+    inspecting = sys.flags.isolated and len(sys.argv) == 2 and sys.argv[0] == "-c"
     mode = mode.removeprefix("inspection-") if inspecting else "quiet"
     if inspecting:
         with (root / "inspection-count").open("a") as count:

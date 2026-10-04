@@ -1,5 +1,5 @@
 ---
-!same-as python-managed MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: |
@@ -58,24 +58,7 @@ send:
 result:
   content:
     - type: text
-      text: R and SQL cells are unavailable in Python sessions without R
-  isError: true
----
-send:
-  python: assert id(identity) == identity_id; retained + 2
-result:
-  content:
-    - type: text
-      text: |
-        43
-  isError: false
----
-send:
-  sql: SELECT 1
-result:
-  content:
-    - type: text
-      text: R and SQL cells are unavailable in Python sessions without R
+      text: R cells are unavailable in Python sessions without R
   isError: true
 ---
 send:
@@ -89,14 +72,16 @@ result:
 ---
 send:
   requirements:
+    action: set
     python:
       - six
 result:
   content:
     - type: text
       text: >-
-        live Python requirements are unavailable without R; use
-        requirements.python with control: restart to prepare a new environment
+        changed requirements require an explicit restart; retry
+        send(control="restart", requirements={"action": "set", ...}) with the
+        complete declaration (or action="reset")
   isError: true
 ---
 send:
@@ -115,8 +100,7 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        R and DuckDB requirements are unavailable in Python sessions without R
+      text: R requirements are unavailable in Python sessions without R
   isError: true
 ---
 send:
@@ -132,11 +116,15 @@ send:
   requirements:
     duckdb:
       - json
+    python:
+      - numpy==0.1
 result:
   content:
     - type: text
       text: >-
-        R and DuckDB requirements are unavailable in Python sessions without R
+        live Python requirements can only add new distributions; `numpy==0.1`
+        changes already-declared `numpy`; use control: restart with
+        requirements.action: set
   isError: true
 ---
 send:
@@ -149,16 +137,14 @@ result:
   isError: false
 ---
 send:
-  python: import mcp_console_package_that_does_not_exist
+  python: import os.mcp_console_missing
 result:
   content:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e8>", line 1, in <module>
-        ModuleNotFoundError: No module named 'mcp_console_package_that_does_not_exist'.
-
-        automatic package installation is unavailable in Python sessions without R; use requirements.python before first use or with control: restart
+          File "<mcp-console:python:e7>", line 1, in <module>
+        ModuleNotFoundError: No module named 'os.mcp_console_missing'; 'os' is not a package
   isError: false
 ---
 send:

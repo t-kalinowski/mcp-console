@@ -5,21 +5,21 @@ use crate::resolver::ResolverStopHandle;
 pub(crate) struct Preparation;
 
 impl Preparation {
+    pub(crate) fn open_local(
+        _: super::Mode,
+        _: crate::process_output::Diagnostics,
+        _: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, super::Discovery), String> {
+        Err("managed dependency resolution is not yet supported on Windows; install packages before starting Console".into())
+    }
+
     pub(crate) fn open(
         _session: &crate::ssh::Session,
         _selections: Selections,
-        _no_sandbox: bool,
-        _settings: crate::resolver::broker::Settings,
+        _diagnostics: crate::process_output::Diagnostics,
         _on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        Err("resolver preparation requires macOS or Linux".into())
-    }
-
-    pub(crate) fn local(
-        _launch: crate::resolver::broker::Launch,
-        _on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Discovery), String> {
-        Err("resolver preparation requires macOS or Linux".into())
+        Err("SSH preparation requires macOS or Linux".into())
     }
 
     pub(crate) fn call<T>(
@@ -27,14 +27,10 @@ impl Preparation {
         _operation: Operation,
         _on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<T, String> {
-        Err("resolver preparation requires macOS or Linux".into())
+        Err("SSH preparation requires macOS or Linux".into())
     }
 
     pub(crate) fn close(&self) -> Result<(), String> {
-        Ok(())
-    }
-
-    pub(crate) fn quarantine(&self) -> Result<(), String> {
         Ok(())
     }
 }

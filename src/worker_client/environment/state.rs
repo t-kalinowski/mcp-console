@@ -1,12 +1,29 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::process::Command;
 
 use super::requirements::push_duckdb_r_target;
 
+impl super::super::Client {
+    pub(in crate::worker_client) fn record_accepted_python(&self, environment: &Environment) {
+        if !self.0.python_preparation {
+            return;
+        }
+        let selected = environment
+            .python
+            .as_ref()
+            .and_then(PythonEnvironment::managed)
+            .expect("managed Python preparation retains an environment");
+        if let Some(transcript) = self.0.recording.lock().expect("recording lock").as_ref() {
+            transcript.python_environment_accepted(&selected.requirements().packages);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
+    /// Launch configuration commits with the managed executable and manifest.
     pub(in crate::worker_client) local_runtime: Option<crate::local_runtime::Selection>,
     pub(in crate::worker_client) custom_worker: bool,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
@@ -32,6 +49,26 @@ pub(in crate::worker_client) enum PythonEnvironment {
 impl PythonEnvironment {
     pub(in crate::worker_client) fn uses_managed(configured: Option<&std::ffi::OsStr>) -> bool {
         !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    pub(in crate::worker_client) fn builtin(
+        configured: Option<OsString>,
+        resolver: crate::resolver::ManagedPythonResolverConfiguration,
+        managed_r: Option<&crate::resolver::ManagedR>,
+        on_started: impl FnOnce(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<Self, String> {
+        if let Some(configured) = configured
+            && !configured.is_empty()
+            && configured != "managed"
+        {
+            return Ok(Self::UserSelected(configured));
+        }
+        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
+        Ok(Self::Managed {
+            selected,
+            resolver: crate::resolver::execution::PythonConfiguration::Direct(resolver),
+        })
     }
 
     pub(in crate::worker_client) fn bare(configured: Option<OsString>) -> Self {
@@ -82,7 +119,7 @@ impl PythonEnvironment {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(in crate::worker_client) fn configure_worker(&self, command: &mut Command) {
         match self {
             Self::Managed { selected, .. } => selected.configure_worker(command),

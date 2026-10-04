@@ -106,9 +106,6 @@ def _snapshot_survives_replacement(
             host,
         ) as client:
             client.initialize_and_list_tools()
-            # The trusted resolver override also triggers configuration preflight.
-            preflights = capture.read_text().splitlines() if capture.exists() else []
-            assert len(preflights) == 1, preflights
             # Even the first worker uses the snapshot taken before MCP readiness.
             config.write_text("sandbox: {network: enabled}\n", encoding="utf-8")
             client.send(python=exercise)
@@ -139,10 +136,9 @@ def _snapshot_survives_replacement(
             transcript = client.finish()
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(payloads) == 4 + len(preflights), len(payloads)
-        workers = payloads[len(preflights) :]
-        assert all(payload == workers[0] for payload in workers), workers
-        payload = workers[0]
+        assert len(payloads) == 4, len(payloads)
+        assert all(payload == payloads[0] for payload in payloads), payloads
+        payload = payloads[0]
         assert payload["network"] == "restricted"
         assert (payload.get("proxy") is not None) == configured
         assert payload.get("extends") == (":workspace" if configured else None), payload
@@ -161,9 +157,9 @@ def _snapshot_survives_replacement(
                 "settings.yaml": [
                     {
                         "initially_configured": configured,
-                        "validation_launches": len(preflights),
-                        "identical_worker_launches": len(payloads) - len(preflights),
-                        "writable_roots": ["workspace"] if configured else [],
+                        "validation_launches": 0,
+                        "identical_worker_launches": len(payloads),
+                        "writable_roots": expected_roots,
                         "network": payload["network"],
                         "proxy": payload.get("proxy"),
                     }

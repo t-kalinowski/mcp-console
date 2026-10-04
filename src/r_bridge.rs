@@ -6,13 +6,17 @@ type TryEval = unsafe extern "C-unwind" fn(libr::SEXP, libr::SEXP, *mut c_int) -
 pub(crate) struct Bridge {
     state: libr::SEXP,
     try_eval: TryEval,
-    next_evaluation_id: u64,
+    next_evaluation_id: std::cell::Cell<u64>,
     language: &'static str,
 }
 
 impl Bridge {
     pub(crate) fn initialize(initializer: &str, language: &'static str) -> Result<Self, String> {
+        #[cfg(unix)]
         let library = libloading::os::unix::Library::this();
+        #[cfg(windows)]
+        let library = libloading::os::windows::Library::open_already_loaded("R.dll")
+            .map_err(|e| e.to_string())?;
         let try_eval = unsafe {
             *library
                 .get::<TryEval>(b"R_tryEval\0")
@@ -64,38 +68,36 @@ impl Bridge {
         Ok(Self {
             state,
             try_eval,
-            next_evaluation_id: 1,
+            next_evaluation_id: std::cell::Cell::new(1),
             language,
         })
     }
 
-    pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+    pub(crate) fn evaluate(&self, source: &str) -> Result<(), String> {
         self.evaluate_completed(source).map(|_| ())
     }
 
-    pub(crate) fn evaluate_completed(&mut self, source: &str) -> Result<bool, String> {
+    pub(crate) fn evaluate_completed(&self, source: &str) -> Result<bool, String> {
         self.evaluate_completed_with(source, |_| Ok(()))
             .map(|value| value.is_some())
     }
 
-    pub(crate) fn evaluate_completed_string(
-        &mut self,
-        source: &str,
-    ) -> Result<Option<String>, String> {
+    pub(crate) fn evaluate_completed_string(&self, source: &str) -> Result<Option<String>, String> {
         self.evaluate_completed_with(source, |value| {
             String::try_from(harp::object::RObject::view(value)).map_err(|error| error.to_string())
         })
     }
 
     fn evaluate_completed_with<T>(
-        &mut self,
+        &self,
         source: &str,
         convert: impl FnOnce(libr::SEXP) -> Result<T, String>,
     ) -> Result<Option<T>, String> {
         let source_length = c_int::try_from(source.len())
             .map_err(|_| format!("{} source exceeds R's maximum string size", self.language))?;
-        let evaluation_id = format!("e{}", self.next_evaluation_id);
-        self.next_evaluation_id += 1;
+        let evaluation_id = format!("e{}", self.next_evaluation_id.get());
+        self.next_evaluation_id
+            .set(self.next_evaluation_id.get() + 1);
         let evaluation_id_length = c_int::try_from(evaluation_id.len())
             .expect("generated evaluation IDs should fit in an R string");
         let result = harp::top_level_exec(|| {
@@ -133,6 +135,7 @@ impl Bridge {
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
             if interrupted {
+                crate::worker::record_bootstrap_interrupt();
                 return Ok(None);
             }
             return Err(format!(

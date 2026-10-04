@@ -4,6 +4,7 @@
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -16,7 +17,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -24,12 +26,13 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
           },
-          "prepared": false,
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -54,15 +57,17 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
-    prepared: false
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -86,12 +91,14 @@ send:
       - nanoarrow
       - reticulate
       - tidyverse
+      - yyjsonr
     python:
       - numpy
       - pandas
     duckdb:
       - icu
       - json
+      - sqlite
     python_version: []
     exclude_newer: ~
     action: set
@@ -104,6 +111,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -116,7 +124,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -124,12 +133,13 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
           },
-          "prepared": false,
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -154,15 +164,17 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
-    prepared: false
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -189,6 +201,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -201,7 +214,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -209,12 +223,13 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
           },
-          "prepared": false,
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -239,15 +254,17 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
-    prepared: false
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -274,6 +291,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -352,6 +370,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -425,6 +444,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -514,6 +534,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -596,6 +617,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -672,6 +694,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -781,6 +804,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -858,6 +882,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -921,6 +946,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -989,6 +1015,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -1056,6 +1083,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -1127,6 +1155,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -1199,6 +1228,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -1211,7 +1241,8 @@ result:
               "duckdb",
               "nanoarrow",
               "reticulate",
-              "tidyverse"
+              "tidyverse",
+              "yyjsonr"
             ],
             "python": [
               "numpy",
@@ -1219,7 +1250,8 @@ result:
             ],
             "duckdb": [
               "icu",
-              "json"
+              "json",
+              "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
@@ -1249,12 +1281,14 @@ result:
         - nanoarrow
         - reticulate
         - tidyverse
+        - yyjsonr
       python:
         - numpy
         - pandas
       duckdb:
         - icu
         - json
+        - sqlite
       python_version: []
       exclude_newer: ~
     prepared: true

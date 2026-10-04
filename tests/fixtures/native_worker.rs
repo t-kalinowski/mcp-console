@@ -130,12 +130,14 @@ fn spawn_probe(
     crate::sideband::Reader,
     crate::sideband::Writer,
 ) {
-    spawn_probe_with_configuration(scenario, None)
+    spawn_probe_with_configuration(scenario, None, None, None)
 }
 
 fn spawn_probe_with_configuration(
     scenario: &str,
     configuration: Option<&str>,
+    storage: Option<&Path>,
+    manifest: Option<&crate::worker_protocol::PythonRequirementManifest>,
 ) -> (
     std::process::Child,
     crate::sideband::Reader,
@@ -150,11 +152,22 @@ fn spawn_probe_with_configuration(
             "--nocapture",
         ])
         .env("MCP_CONSOLE_NATIVE_PROBE", scenario)
+        .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "1")
+        .env_remove("MCP_CONSOLE_EXECUTION_COMPUTE")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     if let Some(configuration) = configuration {
         command.env("MCP_CONSOLE_NATIVE_PYTHON_CONFIG", configuration);
+    }
+    if let Some(storage) = storage {
+        command.env("TMPDIR", storage);
+    }
+    if let Some(manifest) = manifest {
+        command.env(
+            "MCP_CONSOLE_MANAGED_PYTHON",
+            serde_json::to_string(manifest).expect("serialize managed Python declaration"),
+        );
     }
     endpoints.configure_process(&mut command);
     let child = command.spawn().expect("start native worker probe");
@@ -170,7 +183,7 @@ fn native_python_setup_runs_cells_without_r() {
     assert!(selected.status.success());
     let selected = String::from_utf8(selected.stdout).expect("selected executable");
     let (mut child, mut reader, _writer) =
-        spawn_probe_with_configuration("python_setup", Some(selected.trim()));
+        spawn_probe_with_configuration("python_setup", Some(selected.trim()), None, None);
     assert!(matches!(
         receive_python_probe(&mut reader, &mut child),
         WorkerMessage::Ready
@@ -199,7 +212,7 @@ fn native_python_setup_runs_cells_without_r() {
     assert!(
         cells[5]
             .1
-            .contains("Automatic resolution disabled in native fixture")
+            .contains("MCP Console is using a user-selected Python environment. Automatic managed package resolution is disabled")
     );
     assert!(
         child
@@ -211,36 +224,138 @@ fn native_python_setup_runs_cells_without_r() {
 }
 
 #[test]
+fn native_python_activation_preserves_runtime_without_r() {
+    let storage = PythonFixture::new();
+    let resolver =
+        crate::resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
+    let manifest = |packages| crate::worker_protocol::PythonRequirementManifest {
+        packages,
+        python_version: vec![],
+        exclude_newer: None,
+    };
+    let initial = crate::resolver::resolve_python_manifest_for_remote(
+        manifest(vec!["duckdb".into()]),
+        &resolver,
+        None,
+        None,
+        |_| Ok(()),
+    )
+    .expect("prepare initial managed Python environment");
+    let candidate = crate::resolver::resolve_python_manifest_for_remote(
+        manifest(vec!["duckdb".into(), "py-yaml12".into()]),
+        &resolver,
+        None,
+        None,
+        |_| Ok(()),
+    )
+    .expect("prepare candidate managed Python environment");
+    let configuration = serde_json::to_string(&[
+        initial.python().to_str().unwrap(),
+        candidate.python().to_str().unwrap(),
+    ])
+    .unwrap();
+
+    for (scenario, expected_output, expected_error) in [
+        (
+            "python_activation_success",
+            "activation-success 41 True True True True\n",
+            None,
+        ),
+        (
+            "python_activation_incompatible",
+            "activation-rejected 41 True True\n",
+            None,
+        ),
+        (
+            "python_activation_exception",
+            "activation-continued 41 True True\n",
+            Some("ValueError: native activation hook failed"),
+        ),
+    ] {
+        let (mut child, mut reader, _writer) = spawn_probe_with_configuration(
+            scenario,
+            Some(&configuration),
+            Some(&storage.0),
+            Some(initial.requirements()),
+        );
+        assert!(matches!(
+            receive_python_probe(&mut reader, &mut child),
+            WorkerMessage::Ready
+        ));
+        assert!(matches!(
+            receive_python_probe(&mut reader, &mut child),
+            WorkerMessage::PythonActivated { requirements } if requirements == *initial.requirements()
+        ));
+        loop {
+            match receive_python_probe(&mut reader, &mut child) {
+                WorkerMessage::ConsoleOutput { .. } => {}
+                WorkerMessage::Completed => break,
+                _ => panic!("native activation setup failed"),
+            }
+        }
+        let mut output = String::new();
+        let mut diagnostic = String::new();
+        loop {
+            match receive_python_probe(&mut reader, &mut child) {
+                WorkerMessage::ConsoleOutput { data } => output.push_str(&data),
+                WorkerMessage::ConsoleDiagnostic { data } => diagnostic.push_str(&data),
+                WorkerMessage::Completed => break,
+                _ => panic!("unexpected native activation response"),
+            }
+        }
+        assert_eq!(output, expected_output, "{scenario}");
+        if let Some(error) = expected_error {
+            assert_eq!(diagnostic.matches(error).count(), 1, "{diagnostic}");
+            assert!(diagnostic.contains("fail_activation_hook"), "{diagnostic}");
+        } else {
+            assert_eq!(diagnostic, "", "{scenario}");
+        }
+        let result = child
+            .wait_with_output()
+            .expect("native activation probe exit");
+        assert!(
+            result.status.success(),
+            "{scenario}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+}
+
+#[test]
 fn native_python_inspection_preserves_virtualenv_executable_and_startup_output() {
     let fixture = PythonFixture::new();
     let site_packages = fixture.create_venv();
     fixture.sitecustomize(&site_packages, "output");
-    let selected = crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+    let selected = crate::python::inspect_native(&fixture.executable(), |_| Ok(()))
         .expect("inspect virtual environment");
-    assert_eq!(selected.python, fixture.executable().to_str().unwrap());
+    assert_eq!(
+        selected.embedding.python,
+        fixture.executable().to_str().unwrap()
+    );
     assert_ne!(
-        selected.python_home,
+        selected.embedding.python_home,
         fixture.0.join("venv").to_str().unwrap()
     );
     assert!(
         selected
+            .embedding
             .python_home
             .split(':')
             .all(|root| Path::new(root).is_dir())
     );
-    assert!(Path::new(&selected.libpython).is_file());
+    assert!(Path::new(&selected.embedding.libpython).is_file());
 }
 
 #[test]
 fn native_python_inspection_rejects_invalid_executable_and_missing_library() {
     let fixture = PythonFixture::new();
     let missing = fixture.0.join("missing-python");
-    let error = crate::python::inspect_selected(&missing, |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&missing, |_| Ok(())).unwrap_err();
     assert!(error.contains("selected Python executable"), "{error}");
 
     let site_packages = fixture.create_venv();
     fixture.sitecustomize(&site_packages, "missing");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(error.contains("embedding library is missing"), "{error}");
 
     std::fs::write(
@@ -249,7 +364,7 @@ fn native_python_inspection_rejects_invalid_executable_and_missing_library() {
     )
     .unwrap();
     fixture.sitecustomize(&site_packages, "unusable");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(error.contains("embedding library is unusable"), "{error}");
 }
 
@@ -258,7 +373,7 @@ fn native_python_inspection_rejects_old_version_and_other_runtime() {
     let fixture = PythonFixture::new();
     let site_packages = fixture.create_venv();
     fixture.sitecustomize(&site_packages, "old-version");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(error.contains("requires Python 3.10 or later"), "{error}");
 
     let output = Command::new("cc")
@@ -277,7 +392,7 @@ fn native_python_inspection_rejects_old_version_and_other_runtime() {
         String::from_utf8_lossy(&output.stderr)
     );
     fixture.sitecustomize(&site_packages, "other-library");
-    let error = crate::python::inspect_selected(&fixture.executable(), |_| Ok(())).unwrap_err();
+    let error = crate::python::inspect_native(&fixture.executable(), |_| Ok(())).unwrap_err();
     assert!(
         error.contains("embedding library does not match the running interpreter"),
         "{error}"
@@ -299,7 +414,7 @@ fn native_python_inspection_cancellation_cleans_up_and_allows_retry() {
     )
     .unwrap();
     let mut stop_handle = None;
-    let error = crate::python::inspect_selected(&fixture.executable(), |handle| {
+    let error = crate::python::inspect_native(&fixture.executable(), |handle| {
         let (_connection, _) = listener.accept().expect("observe Python startup");
         handle.stop()?;
         stop_handle = Some(handle);
@@ -310,9 +425,12 @@ fn native_python_inspection_cancellation_cleans_up_and_allows_retry() {
     assert!(stop_handle.unwrap().cleanup_confirmed());
 
     std::fs::remove_file(site_packages.join("sitecustomize.py")).unwrap();
-    let selected = crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+    let selected = crate::python::inspect_native(&fixture.executable(), |_| Ok(()))
         .expect("retry selected Python inspection");
-    assert_eq!(selected.python, fixture.executable().to_str().unwrap());
+    assert_eq!(
+        selected.embedding.python,
+        fixture.executable().to_str().unwrap()
+    );
 }
 
 #[test]
@@ -320,14 +438,14 @@ fn native_python_inspection_callback_rejection_confirms_cleanup() {
     let fixture = PythonFixture::new();
     fixture.create_venv();
     let mut stop_handle = None;
-    let error = crate::python::inspect_selected(&fixture.executable(), |handle| {
+    let error = crate::python::inspect_native(&fixture.executable(), |handle| {
         stop_handle = Some(handle);
         Err("inspection admission rejected".to_string())
     })
     .unwrap_err();
     assert_eq!(error, "inspection admission rejected");
     assert!(stop_handle.unwrap().cleanup_confirmed());
-    crate::python::inspect_selected(&fixture.executable(), |_| Ok(()))
+    crate::python::inspect_native(&fixture.executable(), |_| Ok(()))
         .expect("retry after rejected inspection");
 }
 
@@ -391,11 +509,130 @@ fn native_probe() {
         return;
     };
     let (reader, writer) = crate::sideband::connect_from_env().expect("connect sideband");
+    interrupt::normalize_signal().expect("normalize worker signal");
     core::initialize(reader, writer.clone()).expect("initialize sideband");
     let integration = Integration::new(None).expect("initialize native integration");
     writer
         .send(&WorkerMessage::Ready)
         .expect("report readiness");
+
+    if scenario.starts_with("python_activation_") {
+        let name = if cfg!(target_os = "macos") {
+            c"libR.dylib"
+        } else {
+            c"libR.so"
+        };
+        let r_library = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) };
+        assert!(
+            r_library.is_null(),
+            "libR was loaded before native activation"
+        );
+        let executables: [String; 2] = serde_json::from_str(
+            &std::env::var("MCP_CONSOLE_NATIVE_PYTHON_CONFIG").expect("selected environments"),
+        )
+        .expect("decode selected environments");
+        let initial = crate::python::inspect_native(Path::new(&executables[0]), |_| Ok(()))
+            .expect("inspect initial environment");
+        let candidate = crate::python::inspect_native(Path::new(&executables[1]), |_| Ok(()))
+            .expect("inspect candidate environment");
+        crate::python::configure_native_worker_environment(Path::new(
+            &std::env::var("TMPDIR").expect("native storage"),
+        ))
+        .expect("configure native worker environment");
+        let mut runtime = crate::python::Runtime::new(crate::local_runtime::WorkerSelection {
+            r: false,
+            python: Some(crate::local_runtime::Python {
+                selected: Box::new(initial.clone()),
+                explicit: None,
+                managed: true,
+                duckdb_extension_directory: None,
+            }),
+        })
+        .expect("initialize native Python runtime");
+        let mut sql = crate::sql::Bridge::new();
+        runtime
+            .evaluate("import sys, runpy, subprocess, multiprocessing\nidentity = object()\nidentity_id = id(identity)\noriginal_executable = sys.executable")
+            .expect("create persistent Python objects");
+        sql.evaluate("CREATE TABLE native_activation AS SELECT 41 AS answer")
+            .expect("create persistent SQL catalog");
+        writer
+            .send(&WorkerMessage::Completed)
+            .expect("report native activation setup");
+
+        let selected_libpython = if scenario == "python_activation_incompatible" {
+            "incompatible-libpython"
+        } else {
+            &candidate.embedding.libpython
+        };
+        let input = crate::python::ActivationInput {
+            candidate_python: &candidate.embedding.python,
+            candidate_libpython: selected_libpython,
+            candidate_executable: &candidate.embedding.python,
+            running_libpython: &initial.embedding.libpython,
+        };
+        if scenario == "python_activation_incompatible" {
+            runtime
+                .evaluate("def reject_activation_hook(_path):\n    raise AssertionError('incompatible candidate ran activation script')\nrunpy.run_path = reject_activation_hook")
+                .expect("guard incompatible candidate against mutation");
+        } else if scenario == "python_activation_exception" {
+            runtime
+                .evaluate("def fail_activation_hook(_path):\n    raise ValueError('native activation hook failed')\nrunpy.run_path = fail_activation_hook")
+                .expect("install failing activation hook");
+        }
+        let result = crate::python::activate_managed_environment(input);
+        match scenario.as_str() {
+            "python_activation_success" => result.expect("activate candidate"),
+            "python_activation_incompatible" => {
+                let error = result.expect_err("reject incompatible candidate");
+                assert!(matches!(
+                    &error,
+                    crate::python::ActivationFailure::Incompatible { .. }
+                ));
+                assert_eq!(
+                    error.to_string(),
+                    format!(
+                        "New environment does not use the same Python binary\nnew libpython: incompatible-libpython\nold libpython: {}",
+                        initial.embedding.libpython
+                    )
+                );
+            }
+            "python_activation_exception" => {
+                assert!(matches!(
+                    result,
+                    Err(crate::python::ActivationFailure::PythonException)
+                ));
+                runtime
+                    .evaluate(
+                        "import builtins\nbuiltins.__dict__['_mcp_console_raise_setup_error']()",
+                    )
+                    .expect("report retained Python exception through evaluator");
+            }
+            _ => unreachable!(),
+        }
+        let candidate_path = serde_json::to_string(&candidate.embedding.python).unwrap();
+        let candidate_prefix = serde_json::to_string(&candidate.prefix).unwrap();
+        let source = match scenario.as_str() {
+            "python_activation_success" => format!(
+                "import yaml12\nprint('activation-success', sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.prefix == {candidate_prefix}, sys.executable == {candidate_path}, subprocess.check_output([sys.executable, '-c', 'import sys; print(sys.executable)'], text=True).strip() == {candidate_path})"
+            ),
+            "python_activation_incompatible" => "import importlib.util\nassert importlib.util.find_spec('yaml12') is None\nprint('activation-rejected', sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.executable == original_executable)".into(),
+            "python_activation_exception" => "print('activation-continued', sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.executable == original_executable)".into(),
+            _ => unreachable!(),
+        };
+        runtime
+            .evaluate(&source)
+            .expect("evaluate after activation");
+        assert!(
+            unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOLOAD | libc::RTLD_NOW) }.is_null(),
+            "libR was loaded during native activation"
+        );
+        writer
+            .send(&WorkerMessage::Completed)
+            .expect("report native activation completion");
+        // The probe owns its process. Skip extension-library exit destructors
+        // after exercising the retained interpreter and SQL connection.
+        unsafe { libc::_exit(0) }
+    }
 
     if scenario == "python_setup" {
         let name = if cfg!(target_os = "macos") {
@@ -408,16 +645,13 @@ fn native_probe() {
         let executable =
             std::env::var("MCP_CONSOLE_NATIVE_PYTHON_CONFIG").expect("selected Python executable");
         let configuration =
-            crate::python::inspect_selected(std::path::Path::new(&executable), |_| Ok(()))
+            crate::python::inspect_native(std::path::Path::new(&executable), |_| Ok(()))
                 .expect("inspect selected Python executable");
         crate::python::initialize_selected(&configuration).expect("initialize known Python");
         assert!(
             crate::python::setup_runtime(
-                std::path::Path::new(&configuration.libpython),
-                crate::python::ImportResolution {
-                    callback: None,
-                    disabled_reason: Some("Automatic resolution disabled in native fixture"),
-                },
+                std::path::Path::new(&configuration.embedding.libpython),
+                false,
             )
             .expect("install native Python setup")
         );
@@ -446,13 +680,8 @@ _mcp_console.configure_import_resolution = fail_reconfiguration"#,
             if index == 4 {
                 assert!(
                     crate::python::setup_runtime(
-                        std::path::Path::new(&configuration.libpython),
-                        crate::python::ImportResolution {
-                            callback: None,
-                            disabled_reason: Some(
-                                "Automatic resolution disabled in native fixture"
-                            ),
-                        },
+                        std::path::Path::new(&configuration.embedding.libpython),
+                        false,
                     )
                     .expect("reuse completed Python setup")
                 );

@@ -1,0 +1,11 @@
+---
+send:
+  python: >-
+    import os, sys; assert sys.executable == os.path.join(os.getcwd(),
+    'python'); print('workspace filename')
+result:
+  content:
+    - type: text
+      text: |
+        workspace filename
+  isError: false

@@ -1,11 +1,13 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
 import subprocess
 import shutil
 import sys
 import tempfile
 from pathlib import Path
+from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -20,10 +22,91 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
+from support.python import runtime_source_line
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
-from support.resolvers import send_and_collect_runtime_python_resolution
+from support.resolvers import (
+    bare_runtime_environment,
+    send_and_collect_runtime_python_resolution,
+)
+from support.r import install_r_startup, r_test_environment
 from support.suites import run_this_suite
+from boundaries.client_server.python.test_environment import bootstrap_diagnostic
+
+
+@contextmanager
+def startup_client(
+    binary: Path,
+    execution: Execution,
+    source: str,
+    *,
+    selected_python: str | None = None,
+):
+    with tempfile.TemporaryDirectory() as temporary:
+        modules = Path(temporary)
+        (modules / "sitecustomize.py").write_text(
+            "import __main__\n"
+            f"exec(compile({json.dumps(source)}, '<setup checkpoint>', 'exec'), __main__.__dict__)\n"
+        )
+        environment = dict(os.environ, RETICULATE_PYTHONPATH=str(modules))
+        if selected_python is not None:
+            environment["RETICULATE_PYTHON"] = selected_python
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            yield client
+
+
+@contextmanager
+def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
+    """Arrange the public retryable, uninitialized state for selection tests."""
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        environment, _ = r_test_environment()
+        library = install_r_startup(
+            directory,
+            environment,
+            # fmt: r
+            code(f"""
+                if (!file.exists({json.dumps(str(directory / "interrupted"))})) {{
+                  options(reticulate.python.beforeInitialized = function() {{
+                    options(reticulate.python.beforeInitialized = NULL)
+                    readline("defer selection> ")
+                    stop(structure(
+                      list(message = "fixture bootstrap interrupt", call = NULL),
+                      class = c("interrupt", "condition")
+                    ))
+                  }})
+                }}
+                """),
+        )
+        environment = bare_runtime_environment(environment, library)
+        with McpClient(binary, serve, environment, directory) as client:
+            client.initialize_and_list_tools()
+            initialized = client.transcript.copy()
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "defer selection> "]\n[waiting for stdin]',
+                "deferred selection fixture",
+                completion_timeout_seconds=client.response_timeout,
+                python="raise AssertionError('interrupted bootstrap ran setup cell')",
+                timeout_ms=0,
+            )
+            wait_for_evaluation_output(
+                client,
+                "Error: fixture bootstrap interrupt\n",
+                "deferred selection bootstrap interruption",
+                completion_timeout_seconds=client.response_timeout,
+                stdin="\n",
+            )
+            assert client.transcript[-1]["result"].get("isError") is not True
+            assert "AssertionError" not in last_result_text(client)
+            client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")
+            assert last_result_text(client) == "[done]", client.transcript[-1]
+            # Mark from the controller so the sentinel survives private sandbox storage.
+            (directory / "interrupted").touch()
+            # Bootstrap arrangement is shared fixture setup, not this case's transcript.
+            client.transcript[:] = initialized
+            yield client
 
 
 @executions(DIRECT, SANDBOXED)
@@ -35,12 +118,12 @@ def test_preserves_queued_inspection_interrupt(
         probe = build_interposer(
             Path(temporary_directory), "queued_inspection_interrupt"
         )
-        with McpClient(
-            binary,
-            execution.serve("-c", 'extends=":workspace"'),
-            current_directory=Path(temporary_directory),
-        ) as client:
-            client.initialize()
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with deferred_selection_client(binary, serve) as client:
             client.send(
                 # fmt: r
                 r=code(f"""
@@ -119,13 +202,13 @@ def test_cancels_native_inspection_and_retries(
         release = FifoCheckpoint.create(site / "inspection-release")
         pid = None
         try:
-            with McpClient(
-                binary,
-                execution.serve("-c", 'extends=":workspace"'),
-                current_directory=Path(temporary_directory),
-            ) as client:
-                client.initialize()
-                client.send(
+            serve = (
+                execution.serve("--writable-root", temporary_directory)
+                if execution == SANDBOXED
+                else execution.serve()
+            )
+            with deferred_selection_client(binary, serve) as client:
+                client.expect(
                     # fmt: r
                     r=code(f"""
                         retained_value <- 41L
@@ -139,9 +222,12 @@ def test_cancels_native_inspection_and_retries(
                     # fmt: python
                     python=code("""
                         unexecuted_value = 1
-                        """)
+                        """),
+                    timeout_ms=600_000,
                 )
-                ready.wait("native Python inspection")
+                # Inspection follows cold Python setup; contention must not
+                # turn its checkpoint into a ten-second startup deadline.
+                ready.wait("native Python inspection", timeout=600)
                 pid = host_process_id(
                     int((site / "inspection-pid").read_text()), client.process.pid
                 )
@@ -196,8 +282,7 @@ def test_cancels_native_inspection_and_retries(
 def test_retries_failed_native_inspection(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         client.send(
             # fmt: r
             r=code("""
@@ -295,12 +380,12 @@ def test_console_configures_selected_python(
                 check=True,
                 capture_output=True,
             )
-            with McpClient(
-                binary,
-                execution.serve("-c", 'extends=":workspace"'),
-                current_directory=Path(temporary_directory),
-            ) as client:
-                client.initialize()
+            serve = (
+                execution.serve("--writable-root", temporary_directory)
+                if execution == SANDBOXED
+                else execution.serve()
+            )
+            with deferred_selection_client(binary, serve) as client:
                 client.send(
                     # fmt: r
                     r=code(f"""
@@ -376,12 +461,12 @@ def test_python_first_initializes_before_reticulate_attaches(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
-        with McpClient(
-            binary,
-            execution.serve("-c", 'extends=":workspace"'),
-            current_directory=Path(temporary_directory),
-        ) as client:
-            client.initialize()
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -442,12 +527,13 @@ def test_python_first_initializes_before_reticulate_attaches(
             client.send(
                 # fmt: r
                 r=code("""
-                    stopifnot(startup_calls == 1L)
+                    stopifnot(startup_calls == 0L)
                     stopifnot(callback_calls == 1L)
                     stopifnot(identical(
                       normalizePath(reticulate::py_config()$python),
                       expected_python
                     ))
+                    stopifnot(startup_calls == 1L)
                     reticulate::py_to_r(reticulate::py$startup_value) + 1L
                     """)
             )
@@ -463,12 +549,12 @@ def test_r_first_initializes_before_reticulate_attaches(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
-        with McpClient(
-            binary,
-            execution.serve("-c", 'extends=":workspace"'),
-            current_directory=Path(temporary_directory),
-        ) as client:
-            client.initialize()
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
@@ -514,8 +600,7 @@ def test_r_first_initializes_before_reticulate_attaches(
 def test_r_first_runs_selection_callback_once(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
             Sys.unsetenv("RETICULATE_PYTHON")
@@ -545,25 +630,23 @@ def test_retries_attachment_without_reinitializing_python(
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         probe = build_interposer(temporary, "python_initialized")
-        with McpClient(
-            binary,
-            execution.serve("-c", 'extends=":workspace"'),
-            current_directory=Path(temporary_directory),
-        ) as client:
-            client.initialize()
+        serve = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with deferred_selection_client(binary, serve) as client:
             # fmt: r
             r = code(f"""
                 startup_probe <- dyn.load({json.dumps(str(probe))})
                 invisible(suppressMessages(base::trace(
-                  "py_run_string_impl",
-                  tracer = quote({{
-                    if (grepl("sys.executable  =", code, fixed = TRUE)) {{
+                  "py_initialize",
+                  exit = quote({{
                       startup_environment <<- Sys.getenv(c("VIRTUAL_ENV", "PATH", "R_SESSION_INITIALIZED"))
                       stop(structure(
                         list(message = "synthetic reticulate attach failure", call = NULL),
                         class = c(attachment_failure, "condition")
                       ))
-                    }}
                   }}),
                   print = FALSE,
                   where = asNamespace("reticulate")
@@ -591,7 +674,7 @@ def test_retries_attachment_without_reinitializing_python(
                   ))
                 }}
                 invisible(suppressMessages(base::untrace(
-                  "py_run_string_impl", where = asNamespace("reticulate")
+                  "py_initialize", where = asNamespace("reticulate")
                 )))
                 config <- reticulate::py_config()
                 sys <- reticulate::import("sys", convert = FALSE)
@@ -610,11 +693,43 @@ def test_retries_attachment_without_reinitializing_python(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_partial_attachment_requires_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with deferred_selection_client(binary, execution.serve()) as client:
+        client.send(
+            python="attachment_object = object(); attachment_identity = id(attachment_object)"
+        )
+        assert last_result_text(client) == "[done]"
+        client.send(
+            r=code("""
+            options(reticulate.python.afterInitialized = function() stop("partial attachment"))
+            first <- tryCatch(reticulate::py_config(), error = conditionMessage)
+            stopifnot(identical(first, "partial attachment"))
+            options(reticulate.python.afterInitialized = NULL)
+            second <- tryCatch(reticulate::py_config(), error = conditionMessage)
+            stopifnot(identical(second, "R/Python attachment is incomplete; restart required"))
+            cat("partial attachment requires restart\\n")
+            """)
+        )
+        assert last_result_text(client) == "partial attachment requires restart\n", (
+            client.transcript[-1]
+        )
+        client.send(python="assert id(attachment_object) == attachment_identity; 42")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        client.send(control="restart")
+        client.send(
+            python="assert 'attachment_object' not in globals(); int(r['40L + 2L'])"
+        )
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_retries_selection_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code(r"""
             r_marker <- 41L
@@ -659,8 +774,7 @@ def test_retries_selection_after_interrupt(
 def test_restores_selection_environment_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code(r"""
             Sys.setenv(PYTHONPATH = "selection-original")
@@ -677,9 +791,9 @@ def test_restores_selection_environment_after_interrupt(
             )
             selection_env_interrupted <- FALSE
             invisible(suppressMessages(base::trace(
-              "Sys.setenv",
+              "py_discover_config",
               exit = quote({
-                if ("PYTHONPATH" %in% names(list(...)) && !selection_env_interrupted) {
+                if (!selection_env_interrupted) {
                   selection_env_interrupted <<- TRUE
                   stop(base::structure(
                     base::list(
@@ -691,7 +805,7 @@ def test_restores_selection_environment_after_interrupt(
                 }
               }),
               print = FALSE,
-              where = baseenv()
+              where = asNamespace("reticulate")
             )))
             """)
         client.send(r=r)
@@ -736,15 +850,15 @@ def test_restores_selection_environment_after_interrupt(
 def test_restores_virtualenv_after_selection_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
+            reticulate::use_python(normalizePath(Sys.which("python3")), required = TRUE)
             interrupted <- TRUE
             invisible(suppressMessages(base::trace(
-              "Sys.setenv",
+              "py_discover_config",
               exit = quote({
-                if ("VIRTUAL_ENV" %in% names(list(...)) && !interrupted) {
+                if (!interrupted) {
                   interrupted <<- TRUE
                   stop(structure(
                     list(message = "selection interrupted", call = NULL),
@@ -753,7 +867,7 @@ def test_restores_virtualenv_after_selection_interrupt(
                 }
               }),
               print = FALSE,
-              where = baseenv()
+              where = asNamespace("reticulate")
             )))
             for (previous in c(NA_character_, "before-selection")) {
               if (is.na(previous)) {
@@ -769,7 +883,10 @@ def test_restores_virtualenv_after_selection_interrupt(
                 !reticulate::py_available(initialize = FALSE)
               )
             }
-            invisible(suppressMessages(base::untrace("Sys.setenv", where = baseenv())))
+            invisible(suppressMessages(base::untrace(
+              "py_discover_config",
+              where = asNamespace("reticulate")
+            )))
             42L
             """)
         client.send(r=r)
@@ -780,32 +897,43 @@ def test_restores_virtualenv_after_selection_interrupt(
 
 
 @executions(DIRECT, SANDBOXED)
-def test_recovers_from_conflicting_requirements_before_python_startup(
+def test_recovers_from_conflicting_requirements_after_python_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
         client.send(r="startup_marker <- 41L")
         assert last_result_text(client) == "[done]", client.transcript[-1]
+        client.send(
+            python="import sys; retained_object = object(); retained_object_id = id(retained_object); print(sys.executable)"
+        )
+        running_python = last_result_text(client).strip()
+        assert Path(running_python).is_file(), client.transcript[-1]
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
         result = client.send(
             python="raise AssertionError('failed preparation ran the cell')",
-            requirements={"python": ["numpy<1", "numpy>=2"]},
+            requirements={"python": ["py-yaml12<0"]},
         )
         assert result["isError"] is True, result
         output = last_result_text(client)
         assert "No solution found" in output, client.transcript[-1]
         client.transcript[-1]["result"]["content"][0]["text"] = (
-            normalize_python_resolution_error(output)
+            normalize_python_resolution_error(output, executable=running_python)
         )
         client.send(
             # fmt: r
             r=code("""
-                stopifnot(!reticulate::py_available(initialize = FALSE))
+                stopifnot(isTRUE(reticulate::py_eval(
+                  "id(retained_object) == retained_object_id"
+                )))
                 startup_marker + 1L
                 """)
         )
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
-        client.send(python="r.startup_marker + 1", requirements={"python": ["numpy"]})
+        client.send(
+            python="assert id(retained_object) == retained_object_id; r.startup_marker + 1",
+            requirements={"python": ["py-yaml12"]},
+        )
         assert last_result_text(client) == "42\n", client.transcript[-1]
         return client.finish()
 
@@ -814,8 +942,7 @@ def test_recovers_from_conflicting_requirements_before_python_startup(
 def test_serializes_selected_python_once_inside_interrupt_boundary(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
+    with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code(r"""
             original_environment <- Sys.getenv(
@@ -831,14 +958,10 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
             )
             selection_serializations <- 0L
             invisible(suppressMessages(base::trace(
-              "toJSON",
+              "fromJSON",
               tracer = quote({
                 if (
-                  is.list(x) &&
-                    identical(
-                      names(x),
-                      c("python", "libpython", "python_home")
-                    )
+                  is.character(txt) && length(txt) == 1L && startsWith(txt, '{"embedding":')
                 ) {
                   selection_serializations <<- selection_serializations + 1L
                   if (selection_serializations == 1L) {
@@ -875,12 +998,9 @@ def test_serializes_selected_python_once_inside_interrupt_boundary(
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
         # fmt: python
         python = code("""
-            import importlib.util
-
-            assert importlib.util.find_spec("yaml12") is not None
             42
             """)
-        client.send(python=python, requirements={"python": ["py-yaml12"]})
+        client.send(python=python)
         assert last_result_text(client) == "42\n", client.transcript[-1]
         client.send(r="stopifnot(selection_serializations == 2L); 42L")
         assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
@@ -1015,46 +1135,97 @@ def test_preserves_setup_after_r_initialization(
 
 
 @executions(DIRECT, SANDBOXED)
+def test_retries_managed_import_setup_after_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    thread_line = runtime_source_line("self._thread = self._threading.get_ident()")
+    # The import finder captures its configuring thread after module defaults.
+    # Interrupt that public threading call once, then retry without bootstrap.
+    source = code("""
+        import numpy as np
+        import threading
+        original_get_printoptions = np.get_printoptions
+        original_get_ident = threading.get_ident
+        runtime_identity = object()
+        runtime_identity_id = id(runtime_identity)
+        def configuring_thread():
+            threading.get_ident = original_get_ident
+            input('Managed import setup> ')
+            return original_get_ident()
+        def configure_thread_checkpoint():
+            np.get_printoptions = original_get_printoptions
+            threading.get_ident = configuring_thread
+            return original_get_printoptions()
+        np.get_printoptions = configure_thread_checkpoint
+        """)
+    with startup_client(binary, execution, source) as client:
+        client.send(python="raise AssertionError('interrupted setup ran the cell')")
+        assert last_result_text(client) == (
+            '[input requested: "Managed import setup> "]\n[waiting for stdin]'
+        ), client.transcript[-1]
+        wait_for_evaluation_output(
+            client,
+            "Traceback (most recent call last):\n"
+            f'  File "<string>", line {thread_line}, in configure\n'
+            '  File "<setup checkpoint>", line 9, in configuring_thread\n'
+            '  File "<string>", line 50, in _console_input\n'
+            "KeyboardInterrupt\n",
+            "managed import setup interruption",
+            control="interrupt",
+        )
+        client.send(
+            python="import yaml12; assert id(runtime_identity) == runtime_identity_id; print('managed import setup retried')"
+        )
+        assert last_result_text(client) == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "managed import setup retried\n"
+        ), client.transcript[-1]
+        accepted = client.send(requirements={"action": "get"})["structuredContent"][
+            "requirements"
+        ]
+        assert "py-yaml12" in accepted["python"], accepted
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_retries_matplotlib_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        # A module attribute setter blocks first-cell setup on managed input.
-        # Its public input request is the checkpoint for a real interrupt.
-        # fmt: r
-        r = code(r"""
-            reticulate::py_run_string(r"---(
-            import sys
-            import types
+    configuration_line = runtime_source_line("_defaults.apply(name)")
+    apply_line = runtime_source_line("self._disable_show()")
+    show_line = runtime_source_line(
+        '_setattr(pyplot, "show", lambda *args, **kwargs: None)'
+    )
+    # A module attribute setter blocks first-cell setup on managed input.
+    # Its public input request is the checkpoint for a real interrupt.
+    source = code("""
+        import sys
+        import types
 
-            class InterruptingPyplot(types.ModuleType):
-                interrupted = False
+        class InterruptingPyplot(types.ModuleType):
+            interrupted = False
 
-                def __setattr__(self, name, value):
-                    if name == "show" and not self.interrupted:
-                        self.interrupted = True
-                        input("Matplotlib setup> ")
-                    super().__setattr__(name, value)
+            def show(self, *args):
+                raise AssertionError("default show was not replaced")
 
-                def get_fignums(self):
-                    return []
+            def __setattr__(self, name, value):
+                if name == "show" and not self.interrupted:
+                    self.interrupted = True
+                    input("Matplotlib setup> ")
+                super().__setattr__(name, value)
 
-                def close(self, *args):
-                    pass
+            def get_fignums(self):
+                return []
 
-            sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+            def close(self, *args):
+                pass
 
-            import _mcp_console
-
-            def configure_again(*args):
-                raise AssertionError("Python runtime configured twice")
-
-            _mcp_console.configure_import_resolution = configure_again
-            )---")
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        InterruptingPyplot.show.__module__ = "matplotlib.pyplot"
+        sys.modules["matplotlib.pyplot"] = InterruptingPyplot("matplotlib.pyplot")
+        runtime_identity = object()
+        runtime_identity_id = id(runtime_identity)
+        """)
+    with startup_client(binary, execution, source) as client:
         client.send(
             # fmt: python
             python=code("""
@@ -1066,13 +1237,20 @@ def test_retries_matplotlib_setup_after_interrupt(
         )
         wait_for_evaluation_output(
             client,
-            "\n",
+            "Traceback (most recent call last):\n"
+            f'  File "<string>", line {configuration_line}, in _mcp_console_configure_module_defaults\n'
+            f'  File "<string>", line {apply_line}, in apply\n'
+            f'  File "<string>", line {show_line}, in _mcp_console_disable_matplotlib_show\n'
+            '  File "<setup checkpoint>", line 13, in __setattr__\n'
+            '  File "<string>", line 50, in _console_input\n'
+            "KeyboardInterrupt\n",
             "Matplotlib setup interruption",
             control="interrupt",
         )
         client.send(
             # fmt: python
             python=code("""
+                assert id(runtime_identity) == runtime_identity_id
                 sys.modules["matplotlib.pyplot"].show()
                 42
                 """)
@@ -1085,53 +1263,64 @@ def test_retries_matplotlib_setup_after_interrupt(
 def test_reports_matplotlib_setup_error_once(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
-        client.initialize_and_list_tools()
-        # fmt: r
-        r = code(r"""
-            reticulate::py_run_string(
-              r"---(
-            import sys
+    source = code("""
+        import sys
 
-            class FailingPyplot:
-                def __setattr__(self, name: str, value: object) -> None:
-                    raise ValueError("matplotlib setup failed")
+        class FailingPyplot:
+            def show(self, *args):
+                pass
 
-            sys.modules["matplotlib.pyplot"] = FailingPyplot()
-            )---"
-            )
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
-        client.send(
-            # fmt: python
-            python=code("""
-                raise AssertionError("failed setup ran the cell")
-                """)
-        )
+            def __setattr__(self, name: str, value: object) -> None:
+                sys.modules.pop("matplotlib.pyplot")
+                raise ValueError("matplotlib setup failed")
+
+        FailingPyplot.show.__module__ = "matplotlib.pyplot"
+        sys.modules["matplotlib.pyplot"] = FailingPyplot()
+        runtime_identity = object()
+        runtime_identity_id = id(runtime_identity)
+        """)
+    with startup_client(binary, execution, source) as client:
+        output = bootstrap_diagnostic(client, "ValueError: matplotlib setup failed\n")
+        assert output.startswith("Traceback (most recent call last):\n"), output
+        assert output.count("ValueError: matplotlib setup failed\n") == 1, output
+        assert output.endswith("ValueError: matplotlib setup failed\n"), output
+        client.send(python="assert id(runtime_identity) == runtime_identity_id; 42")
+        assert last_result_text(client) == "42\n", client.transcript[-1]
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_rejects_startup_environment_mutation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    error_line = runtime_source_line("raise RuntimeError(")
+    source = "import sys; sys.prefix = 'changed-by-startup-hook'"
+    with startup_client(
+        binary, execution, source, selected_python=sys.executable
+    ) as client:
+        client.send(python="raise AssertionError('invalid environment ran code')")
         result = client.transcript[-1]["result"]
         output = last_result_text(client)
         assert result["isError"] is True, result
-        setup_failure = (
-            "Error in py_eval_impl(code, convert) : \n"
-            "  ValueError: matplotlib setup failed\n"
-            "Run `reticulate::py_last_error()` for details.\n"
+        traceback = (
+            "Traceback (most recent call last):\n"
+            f'  File "<string>", line {error_line}, in _mcp_console_configure_environment\n'
+            "RuntimeError: embedded Python prefix differs from the selected environment: "
+            f"'changed-by-startup-hook' != {sys.prefix!r}\n"
         )
-        bridge_failure = "Python bridge failed during R evaluation\n"
-        worker_failure = (
+        failure = "Python environment setup failed; restart required\n"
+        lifecycle = (
             "[worker sideband read failed: worker sideband closed]\n"
             "[worker exited with status 1]\n"
             "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
+            "[starting new worker]\n[idle]"
         )
-        assert output.endswith(worker_failure), output
-        # R diagnostics and terminal worker stderr use independent transports.
-        # Check every byte and each stream's order before canonicalizing them.
-        assert_exact_interleaving(
-            output.removesuffix(worker_failure), setup_failure, bridge_failure
+        assert output.endswith(lifecycle), output
+        # The Python diagnostic and fatal stderr have independent transports.
+        assert_exact_interleaving(output[: -len(lifecycle)], traceback, failure)
+        result["content"][0]["text"] = (traceback + failure + lifecycle).replace(
+            repr(sys.prefix), "'<selected Python prefix>'"
         )
-        result["content"][0]["text"] = setup_failure + bridge_failure + worker_failure
         return client.finish()
 
 

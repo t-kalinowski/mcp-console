@@ -16,6 +16,7 @@ from support.previews import (
     assert_preview,
     cell_text,
     normalize_preview_paths,
+    session_directory,
 )
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
@@ -75,12 +76,15 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
         output = last_tool_text(client)
         raw = cell_text(client, 1)
         assert raw == "", "output after the restart cut does not belong to the cell log"
-        marker = re.search(r"no retained cell log \((\d+) raw bytes observed\)", output)
+        marker = re.search(
+            r"outputs/session.log[^\n]*; (\d+) raw bytes retained", output
+        )
         assert marker is not None, output
         prefix = "zod stdin closed\n" + "x" * LARGE_OUTPUT_SIZE
         observed = int(marker[1])
         assert observed > len(prefix), observed
         raw = prefix + "y" * (observed - len(prefix))
+        assert (session_directory(client) / "outputs/session.log").read_text() == raw
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         suffix = "[active evaluation stopped by session restart request]\n" + suffix
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
@@ -224,13 +228,15 @@ def test_restart_discards_unread_stdin(
         execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
+    client.send(r="echo echo")
+    assert last_tool_text(client) == "zod: echo\n"
     client.send(stdin="stale\n")
     assert last_tool_text(client) == "\n[idle]"
 
     client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    )
+    ), last_tool_text(client)
 
     client.send(r="input without request", stdin="fresh\n")
     assert last_tool_text(client) == "zod stdin: fresh\n"

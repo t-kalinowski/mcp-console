@@ -1,17 +1,31 @@
 #!/usr/bin/env -S uv run --script
 
+import json
+import os
 import sys
+import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import (
+    last_tool_text,
+    release_worker_callback_gate,
+    wait_for_idle_output,
+)
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.resolvers import recording_uv_environment, uv_tool_run_requirements
 from support.resolvers import resolver_fixture_directory, resolver_fixture_arguments
+from support.resolvers import (
+    checkpoint_uv_environment,
+    recording_uv_environment,
+    uv_tool_run_requirements,
+)
 from support.suites import run_this_suite
 
 
@@ -19,7 +33,8 @@ from support.suites import run_this_suite
 def test_owns_managed_python_transitions(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         # Instrument the old planner, then exercise only public declarations,
         # explicit preparation, and automatic imports through the console.
@@ -51,10 +66,12 @@ def test_owns_managed_python_transitions(
         assert last_tool_text(client) == "[prepared]"
         client.send(r="stopifnot(!reticulate::py_available(initialize = FALSE))")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(python="import yaml12; yaml12.__name__")
+        client.send(
+            r='reticulate::py_run_string("import yaml12; print(yaml12.__name__)")'
+        )
         assert last_tool_text(client) == (
             "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
-            "'yaml12'\n"
+            "yaml12\n"
         ), last_tool_text(client)
         # fmt: r
         r = code(r"""
@@ -89,9 +106,62 @@ def test_owns_managed_python_transitions(
         assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(requirements={"python": ["packaging"]})
         assert last_tool_text(client) == "[prepared]"
-        client.send(python="import packaging; packaging.__name__")
-        assert last_tool_text(client) == "'packaging'\n"
-        return client.finish()
+        client.send(
+            r='reticulate::py_run_string("import packaging; print(packaging.__name__)")'
+        )
+        assert last_tool_text(client) == "packaging\n"
+        return client.finish()[3:]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, record = recording_uv_environment(root)
+        serve = (
+            execution.serve("--writable-root", str(root))
+            if execution == SANDBOXED
+            else execution.serve()
+        )
+        with McpClient(binary, serve, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                python="import sys; identity = object(); identity_id = id(identity); initial_executable = sys.executable; from pathlib import Path; _ = Path('initial-python').write_text(sys.executable)"
+            )
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
+            record.write_text("")
+            # fmt: r
+            r = code(r"""
+                before <- reticulate::py_config()
+                invisible(reticulate::py_require("py-yaml12"))
+                after <- reticulate::py_config()
+                stopifnot(
+                  identical(after$libpython, before$libpython),
+                  identical(
+                    after$executable,
+                    reticulate::py_eval("__import__('sys').executable")
+                  ),
+                  "py-yaml12" %in% reticulate::py_require()$packages
+                )
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]", last_tool_text(client)
+            calls = [json.loads(line) for line in record.read_text().splitlines()]
+            resolution = next(call for call in calls if call[:2] == ["tool", "run"])
+            assert (
+                resolution[resolution.index("--python") + 1]
+                == (root / "initial-python").read_text()
+            ), resolution
+            assert not any(call[:2] == ["python", "list"] for call in calls), calls
+            declared = client.send(requirements={"action": "get"})["structuredContent"]
+            assert "py-yaml12" in declared["requirements"]["python"]
+            client.send(
+                python="import yaml12; (id(identity) == identity_id, sys.executable != initial_executable, yaml12.__name__)"
+            )
+            assert last_tool_text(client) == "(True, True, 'yaml12')\n"
+            return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -102,11 +172,8 @@ def test_preserves_preparation_restoration_and_live_noops(
         environment, record = recording_uv_environment(
             resolver_fixtures, fail_requirement="py-yaml12"
         )
-        with McpClient(
-            binary,
-            execution.serve(*resolver_fixture_arguments(environment)),
-            environment,
-        ) as client:
+        environment["MCP_CONSOLE_LANGUAGES"] = "r"
+        with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
@@ -134,7 +201,7 @@ def test_preserves_preparation_restoration_and_live_noops(
             client.send(r=r)
             assert last_tool_text(client) == "[done]", last_tool_text(client)
             Path(environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"]).unlink()
-            client.send(python="None")
+            client.send(r="invisible(reticulate::py_config())")
             assert last_tool_text(client) == "[done]", last_tool_text(client)
             resolutions = uv_tool_run_requirements(record)
             # fmt: r
@@ -204,51 +271,46 @@ def test_preserves_preparation_restoration_and_live_noops(
                 """)
             client.send(r=r)
             assert last_tool_text(client) == "[done]", last_tool_text(client)
-            return client.finish()
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
-def test_rejects_incompatible_live_libpython_before_activation(
+def test_uses_inspected_candidate_without_reticulate_rediscovery(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.send(python="import sys; initial_prefix = sys.prefix")
+        client.send(
+            python="import sys; identity = object(); identity_id = id(identity)"
+        )
         assert last_tool_text(client) == "[done]", last_tool_text(client)
+        # Poison generic discovery only after initialization. Live declaration
+        # and import activation must use the execution host's inspected identity.
         # fmt: r
         r = code(r"""
-            before <- reticulate::py_require()
+            before <- reticulate::py_config()
             namespace <- asNamespace("reticulate")
-            original <- get("python_config", namespace)
-            replacement <- function(...) {
-              config <- original(...)
-              config$libpython <- "incompatible-libpython"
-              config
-            }
-            unlockBinding("python_config", namespace)
-            assign("python_config", replacement, envir = namespace)
-            lockBinding("python_config", namespace)
-            outcome <- tryCatch(
-              reticulate::py_require("py-yaml12"),
-              error = conditionMessage
-            )
+            invisible(suppressMessages(base::trace(
+              "python_config",
+              tracer = quote(stop("candidate rediscovery is forbidden")),
+              print = FALSE,
+              where = namespace
+            )))
+            reticulate::py_require("py-yaml12")
+            after <- reticulate::py_config()
             stopifnot(
-              grepl(
-                "New environment does not use the same Python binary",
-                outcome,
-                fixed = TRUE
-              ),
-              grepl("new libpython: incompatible-libpython", outcome, fixed = TRUE),
-              identical(reticulate::py_require(), before)
+              identical(after$libpython, before$libpython),
+              identical(after$python, reticulate::py_eval("__import__('sys').executable"))
             )
-            unlockBinding("python_config", namespace)
-            assign("python_config", original, envir = namespace)
-            lockBinding("python_config", namespace)
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(python="sys.prefix == initial_prefix")
-        assert last_tool_text(client) == "True\n", last_tool_text(client)
+        client.send(
+            python="import yaml12, more_itertools; assert id(identity) == identity_id; print('inspected candidate retained')"
+        )
+        assert last_tool_text(client) == "inspected candidate retained\n", (
+            last_tool_text(client)
+        )
         return client.finish()
 
 
@@ -279,10 +341,14 @@ def test_reports_activation_python_failure_once_and_restores_requirements(
         assert last_tool_text(client) == "[done]", last_tool_text(client)
         client.send(python="runpy.run_path = original_run_path")
         assert last_tool_text(client) == "[done]", last_tool_text(client)
-        client.send(r='reticulate::py_require("py-yaml12")')
-        assert last_tool_text(client) == "[done]", last_tool_text(client)
+        client.send(requirements={"python": ["py-yaml12"]})
+        assert last_tool_text(client) == "[restart required]", last_tool_text(client)
+        client.send(control="restart")
         client.send(python="import yaml12; yaml12.__name__")
-        assert last_tool_text(client) == "'yaml12'\n", last_tool_text(client)
+        assert last_tool_text(client) == (
+            "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+            "'yaml12'\n"
+        ), last_tool_text(client)
         return client.finish()
 
 
@@ -299,13 +365,17 @@ def test_preserves_activation_interrupt_conditions(
         # fmt: r
         r = code(r"""
             before <- reticulate::py_require()
-            namespace <- asNamespace("reticulate")
+            namespace <- asNamespace("jsonlite")
             invisible(suppressMessages(base::trace(
-              "python_config",
-              tracer = quote(stop(structure(
-                list(message = "activation interrupted", call = NULL),
-                class = c("interrupt", "condition")
-              ))),
+              "fromJSON",
+              tracer = quote({
+                if (is.character(txt) && grepl('"selection":', txt, fixed = TRUE)) {
+                  base::stop(structure(
+                    list(message = "activation interrupted", call = NULL),
+                    class = c("interrupt", "condition")
+                  ))
+                }
+              }),
               print = FALSE,
               where = namespace
             )))
@@ -321,6 +391,126 @@ def test_preserves_activation_interrupt_conditions(
             """)
         client.send(r=r)
         assert last_tool_text(client) == "[done]", last_tool_text(client)
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_rejects_incompatible_live_libpython_before_activation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_without_r import (
+        live_python_rejects_incompatible_library_before_activation,
+    )
+
+    return live_python_rejects_incompatible_library_before_activation(
+        binary, execution, with_r=True
+    )
+
+
+@executions(DIRECT, SANDBOXED)
+def test_idle_activation_failure_retains_worker_until_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as cleanup:
+        root = Path(temporary)
+        environment, resolver_started, resolver_release = checkpoint_uv_environment(
+            root, "py-yaml12", reuse_resolved_python_for=("py-yaml12",)
+        )
+        environment.pop("RETICULATE_PYTHON", None)
+        cleanup.callback(resolver_started.close)
+        cleanup.callback(resolver_release.close)
+        client = cleanup.enter_context(
+            McpClient(binary, execution.serve(), environment, root)
+        )
+        client.initialize_and_list_tools()
+        client.send(requirements={"r": ["later"]})
+        # fmt: python
+        python = code("""
+            import runpy
+            import sys
+
+            identity = object()
+            identity_id = id(identity)
+
+
+            def fail_activation(_path):
+                raise ValueError("idle activation failure")
+
+
+            runpy.run_path = fail_activation
+            print(sys.executable)
+            """)
+        client.send(python=python)
+        executable = Path(last_tool_text(client).strip())
+        assert executable.is_absolute() and executable.is_file(), executable
+        Path(environment["MCP_CONSOLE_TEST_UV_REUSE_PYTHON"]).write_text(
+            str(executable), encoding="utf-8"
+        )
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
+        before = client.send(requirements={"action": "get"})["structuredContent"][
+            "requirements"
+        ]
+        # fmt: r
+        r = code(r"""
+            callback_gate <- tempfile("python-activation-gate-")
+            callback_checkpoint <- tempfile("python-activation-checkpoint-")
+            callback_complete <- tempfile("python-activation-complete-")
+            run_callback <- function() {
+              if (!file.exists(callback_gate)) {
+                later::later(run_callback, delay = 0.01)
+                return(invisible(NULL))
+              }
+              stopifnot(file.create(callback_checkpoint))
+              condition <- tryCatch(
+                reticulate::py_require("py-yaml12"),
+                error = conditionMessage
+              )
+              stopifnot(grepl(
+                "ValueError: idle activation failure",
+                condition,
+                fixed = TRUE
+              ))
+              cat("idle activation rejected\n")
+              complete <- fifo(callback_complete, open = "wb", blocking = TRUE)
+              writeBin(charToRaw("1"), complete)
+              close(complete)
+            }
+            later::later(run_callback, delay = 0.01)
+            cat(callback_gate, callback_checkpoint, callback_complete, sep = "\n")
+            """)
+        client.send(r=r)
+        callback_complete = FifoCheckpoint.create(
+            Path(last_tool_text(client).splitlines()[2])
+        )
+        cleanup.callback(callback_complete.close)
+        # Confirm idle callback entry while resolution is still held. Candidate
+        # preparation must not be included in the callback-entry deadline.
+        release_worker_callback_gate(
+            client, "idle Python activation failure", ("complete",)
+        )
+        resolver_started.wait("idle Python activation resolver")
+        resolver_release.release()
+        callback_complete.wait("idle Python activation failure", timeout=5)
+        assert Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"]).read_text() == (
+            "py-yaml12\n"
+        )
+        # The callback's FIFO receipt does not order its output transport.
+        # Receive the idle output before admitting the follow-up evaluation.
+        wait_for_idle_output(
+            client,
+            "idle activation rejected\n\n[idle]",
+            "idle Python activation failure output",
+        )
+        client.send(python="assert id(identity) == identity_id; print('same object')")
+        assert last_tool_text(client) == "same object\n", last_tool_text(client)
+        assert (
+            client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            == before
+        )
+        client.send(requirements={"python": ["six"]})
+        assert last_tool_text(client) == "[restart required]"
         return client.finish()
 
 

@@ -2,6 +2,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+#[cfg(windows)]
+mod windows;
+
 mod cell;
 mod cli;
 mod config;
@@ -11,21 +14,24 @@ mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(unix)]
+mod jsonl;
 mod local_runtime;
 #[cfg(unix)]
 mod process_descriptors;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "process_exit/windows.rs")]
 mod process_exit;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "process_output/windows.rs")]
 mod process_output;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod python;
 mod python_requirement;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_bridge;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_environment;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod r_graphics;
 mod r_package_name;
 #[cfg(unix)]
@@ -36,9 +42,10 @@ mod sandbox;
 mod server;
 mod server_transport;
 mod settings;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
+#[cfg_attr(windows, path = "sideband/windows.rs")]
 mod sideband;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod sql;
 mod ssh;
 mod target_launch;
@@ -54,6 +61,16 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides.values;
     match cli.command {
+        #[cfg(windows)]
+        cli::Command::SandboxSetup { status, state_dir } => {
+            match sandbox::windows_setup(status, state_dir) {
+                Ok(status) => status,
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         cli::Command::Serve {
             worker,
             relay,
@@ -67,14 +84,15 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::Worker => match worker::run() {
+        cli::Command::Worker { bootstrap_runtimes } => match worker::run(bootstrap_runtimes) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
-        cli::Command::Resolve => match resolver::broker::run() {
+        cli::Command::Resolve => match resolver::preparation::run_local() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
+        #[cfg(unix)]
         cli::Command::ResolverWorkload => match resolver::workload::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -111,10 +129,12 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
-        cli::Command::ImageRuntimeProbe => match target_launch::runtime::runtime_probe() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
+        cli::Command::ImageRuntimeProbe { python } => {
+            match target_launch::runtime::runtime_probe(python.as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::SshLaunch => match ssh::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
@@ -160,13 +180,23 @@ fn run_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
         resolver,
-        source,
+        python,
+        source: _,
         policy,
         target,
         provider,
     } = settings::discover(overrides)?;
     if provider == settings::Provider::Compute {
         docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
+    }
+    #[cfg(windows)]
+    {
+        if target.is_some() {
+            return Err("Windows currently supports local execution only".into());
+        }
+    }
+    if python.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("python selection requires the built-in worker and relay".into());
     }
     let target = target.map(|target| (target, writable_roots.clone()));
     if target.is_some() && (worker.is_some() || relay.is_some()) {
@@ -177,15 +207,17 @@ fn run_server(
     } else if no_sandbox {
         settings::SandboxSettings::default()
     } else {
-        sandbox::capture_policy(source.as_deref(), policy, writable_roots)?
+        // Native validation belongs to the owned background launch. Running a
+        // preflight child here would precede MCP serving and EOF ownership.
+        sandbox::materialize_settings(policy, writable_roots, &std::env::current_dir()?)?
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, target, resolver,
+        worker, relay, no_sandbox, settings, target, python, resolver,
     ));
-    // `server::run` has already joined service and worker shutdown. Tokio's
+    // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
     // leaves its output pipe full, so runtime teardown must not wait for it.
     // The process exits immediately after this function returns.

@@ -26,6 +26,40 @@ def configure(workspace: Path, value: object) -> None:
     config.write_text(json.dumps(value))
 
 
+def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
+    yaml = code("""
+        !configuration
+        !key target: !target
+          transport: !transport {kind: !kind local}
+          compute: !compute {kind: !kind host}
+          command: !command null
+        sandbox: !policy
+          environment: !environment {LABEL: !text tagged}
+          filesystem: !filesystem {entries: !entries []}
+        """)
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary).resolve()
+        config = workspace / CONFIG
+        config.parent.mkdir(parents=True)
+        config.write_text(yaml)
+        with McpClient(
+            binary,
+            (
+                "serve",
+                "--no-sandbox",
+                "--worker",
+                "unused-worker",
+                "-c",
+                "sandbox.environment.ADDED=override",
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            _, stderr = client.finish_with_standard_error()
+            assert stderr == "", stderr
+    return [{"yaml": yaml, "initialized": True}]
+
+
 @requires(SANDBOX, NATIVE_FIXTURES)
 def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
     records = []
@@ -75,28 +109,19 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         for command in ("serve", "sandbox"):
             arguments = [*overrides[:2], command, *overrides[2:]]
             if command == "serve":
-                process = subprocess.Popen(
-                    [binary, *arguments, "--worker", "unused-worker"],
-                    cwd=workspace,
-                    env=environment,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                try:
-                    assert process.wait(timeout=10) == 1
-                    stdout, stderr = process.communicate()
-                finally:
-                    if process.poll() is None:
-                        process.kill()
-                        process.wait()
-                assert stdout == "", stdout
-                assert stderr == (
-                    "managed resolver storage requires the default, :workspace, "
-                    "or :read-only worker filesystem policy without custom "
-                    "filesystem rules or native extensions\n"
-                ), stderr
+                zod = Path(__file__).resolve().parents[2] / "fixtures/zod"
+                with McpClient(
+                    binary,
+                    (*arguments, "--worker", str(zod)),
+                    current_directory=workspace,
+                    environment=environment,
+                ) as client:
+                    client.initialize_and_list_tools()
+                    # Native validation now belongs to the requested worker
+                    # launch. Its completed cell proves that launch occurred.
+                    client.expect("zod: overrides\n", r="echo overrides")
+                    _, stderr = client.finish_with_standard_error()
+                    assert stderr == "", stderr
             else:
                 result = subprocess.run(
                     [binary, *arguments, "--", "/usr/bin/true"],
@@ -418,6 +443,34 @@ def test_rejects_malformed_overrides(binary: Path) -> Transcript:
             assert result.returncode == 1 and result.stdout == "", result
             assert "configuration override" in result.stderr, result.stderr
             records.append({"override": override, "stderr": result.stderr})
+    return records
+
+
+def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, {"python": "~/.venv/bin/python"})
+        for home in (None, "", "relative/home"):
+            environment = dict(os.environ)
+            environment.pop("HOME", None)
+            if home is not None:
+                environment["HOME"] = home
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox"],
+                cwd=workspace,
+                env=environment,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert (
+                "configured Python home expansion requires an absolute HOME"
+                in result.stderr
+            )
+            records.append({"HOME": home, "stderr": result.stderr})
     return records
 
 

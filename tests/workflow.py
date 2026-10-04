@@ -22,6 +22,48 @@ from support.requirements import PROCESS_EVENTS
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class RCacheTests(unittest.TestCase):
+    def test_restored_libraries_retain_only_complete_package_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = Path(temporary)
+            packages = cache / "renv"
+            packages.mkdir()
+            package = packages / "jsonlite"
+            package.mkdir()
+            libraries = cache / "ir/libraries"
+            complete = libraries / "complete"
+            incomplete = libraries / "incomplete"
+            for library in (complete, incomplete):
+                library.mkdir(parents=True)
+                (library / "jsonlite").symlink_to(package, target_is_directory=True)
+            (incomplete / "duckdb").symlink_to(packages / "missing")
+            markers = cache / "ir/resolutions"
+            markers.mkdir()
+            (markers / "candidate").write_text(str(incomplete))
+
+            result = subprocess.run(
+                [sys.executable, ROOT / "scripts/prune-r-cache", cache],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("incomplete", result.stdout)
+            self.assertTrue((complete / "jsonlite").is_dir())
+            self.assertFalse(incomplete.exists())
+            self.assertTrue(package.is_dir())
+            self.assertTrue((markers / "candidate").is_file())
+
+    def test_empty_cache_needs_no_pruning(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            result = subprocess.run(
+                [sys.executable, ROOT / "scripts/prune-r-cache", temporary],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "")
+
+
 class WorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -32,14 +74,20 @@ class WorkflowTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         (self.root / "tests").mkdir()
         (self.root / "target").mkdir()
-        for name in ("check", "test", "with-checkout"):
+        for name in (
+            "check",
+            "test",
+            "with-checkout",
+            "checkout_workflow.py",
+            "build_backend.py",
+        ):
             source = ROOT / "scripts" / name
             shutil.copy2(source, self.root / "scripts" / name)
-        for name in ("checkout_workflow.py", "build_backend.py"):
-            source = ROOT / name
-            shutil.copy2(source, self.root / name)
         self.environment = os.environ | {
             "XDG_CACHE_HOME": str(self.directory / "cache"),
+            "PYTHONPATH": str(self.root / "scripts")
+            + os.pathsep
+            + os.environ.get("PYTHONPATH", ""),
         }
         self.environment.pop("MCP_CONSOLE_CHECKOUT_LOCKS", None)
         self.environment.pop("MCP_CONSOLE_VALIDATION_RUN", None)
@@ -262,6 +310,8 @@ class WorkflowTests(unittest.TestCase):
             "scripts/cargo",
         ):
             self.write_script(script, 'print("checked")')
+        # Exercise a shebang alias whose spelling differs from this interpreter.
+        (self.root / "scripts/python3").symlink_to(sys.executable)
         self.environment["PATH"] = (
             f"{self.root / 'scripts'}{os.pathsep}{os.environ['PATH']}"
         )
@@ -280,7 +330,13 @@ class WorkflowTests(unittest.TestCase):
                     else common
                 )
                 self.assertEqual([p["name"] for p in record["phases"]], expected)
-                architecture = "[architecture] tests/architecture.py"
+                interpreter = next(
+                    phase["command"][0]
+                    for phase in record["phases"]
+                    if phase["name"] == "architecture"
+                )
+                self.assertTrue(Path(interpreter).samefile(sys.executable))
+                architecture = f"[architecture] {interpreter} tests/architecture.py"
                 if arguments != ("--full",):
                     architecture += " SandboxProcessBoundaryTests"
                 self.assertIn(architecture + "\n", result.stderr)
@@ -562,9 +618,9 @@ class WorkflowTests(unittest.TestCase):
                     self.assertTrue(receipt[-1].startswith("stubborn ready "), receipt)
                     group = int(receipt[-1].rsplit(" ", 1)[1])
                     process.terminate()
-                    self.assertEqual(process.wait(timeout=10), 128 + signal.SIGTERM)
                     # EOF also proves the stubborn writer has retired.
-                    process.communicate(timeout=10)
+                    output, _ = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, 128 + signal.SIGTERM, output)
                 finally:
                     if group is not None:
                         try:
@@ -578,6 +634,82 @@ class WorkflowTests(unittest.TestCase):
                     "scripts/with-checkout", sys.executable, "-c", "pass"
                 )
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
+    def test_cancellation_preserves_status_with_only_zombie_group_members(self) -> None:
+        ready = FifoCheckpoint.create(self.directory / "zombie-ready")
+        release = FifoCheckpoint.create(self.directory / "reap-zombie")
+        for checkpoint in (ready, release):
+            self.addCleanup(checkpoint.close)
+        self.write_script(
+            "reaper.py",
+            # fmt: python
+            """
+            import os
+            import sys
+
+            group = int(sys.argv[1])
+            os.setpgid(0, 0)
+            child = os.fork()
+            if child == 0:
+                os.setpgid(0, group)
+                os._exit(0)
+            os.waitid(os.P_PID, child, os.WEXITED | os.WNOWAIT)
+            with open(os.environ["ZOMBIE_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            with open(os.environ["REAP_ZOMBIE"], "rb", buffering=0) as release:
+                assert release.read(1) == b"1"
+            os.waitpid(child, 0)
+            """,
+        )
+        self.write_script(
+            "parent.py",
+            # fmt: python
+            """
+            import os
+            import signal
+            import subprocess
+            import sys
+
+            reaper = subprocess.Popen(
+                [sys.executable, "reaper.py", str(os.getpgrp())],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            print(f"reaper ready {reaper.pid}", flush=True)
+            signal.pause()
+            """,
+        )
+        process = subprocess.Popen(
+            ["scripts/with-checkout", sys.executable, "parent.py"],
+            cwd=self.root,
+            env=self.environment
+            | {"ZOMBIE_READY": str(ready.path), "REAP_ZOMBIE": str(release.path)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        with Events() as events:
+            reaper = None
+            try:
+                assert process.stdout is not None
+                receipt = read_lines(process.stdout, 1, "zombie reaper setup")
+                reaper = int(receipt[-1].rsplit(" ", 1)[1])
+                events.watch_process(reaper)
+                ready.wait("exited child remains unreaped in the phase group")
+                process.terminate()
+                output, _ = process.communicate(timeout=10)
+                self.assertEqual(process.returncode, 128 + signal.SIGTERM, output)
+            finally:
+                release.release()
+                try:
+                    if reaper is not None:
+                        self.assertIn(reaper, events.wait(3))
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                    process.communicate(timeout=10)
 
     def test_quit_retires_phase_before_releasing_ownership(self) -> None:
         self.write_script(
@@ -630,15 +762,17 @@ class WorkflowTests(unittest.TestCase):
         self.assertIsNone(process.poll())
         self.finish_check(process)
 
-    def test_nested_launch_error_records_failure_after_successful_phase(self) -> None:
+    def test_missing_nested_script_records_failure_after_successful_phase(self) -> None:
         shutil.copy2(ROOT / "scripts/check-core", self.root / "scripts/check-core")
         self.write_script("scripts/validate_runtime_sources.py", 'print("checked")')
         result = self.run_command("scripts/check")
         self.assertNotEqual(result.returncode, 0)
         record = next(r for r in self.records() if r["command"] == ["check-core"])
         self.assertEqual(record["phases"][0]["exit_status"], 0)
-        self.assertEqual(record["phases"][1]["exit_status"], 1)
-        self.assertEqual(record["exit_status"], 1)
+        # Python now launches repository scripts explicitly on every platform;
+        # a missing script is Python's exit status 2, not a shebang exec error.
+        self.assertEqual(record["phases"][1]["exit_status"], 2)
+        self.assertEqual(record["exit_status"], 2)
 
     def test_wrapped_command_preserves_stdout_and_stderr(self) -> None:
         self.write_script(

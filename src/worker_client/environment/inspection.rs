@@ -61,10 +61,10 @@ impl Environment {
         }
     }
 
-    pub(super) fn startup_declaration(&self) -> Declaration {
-        let managed = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
+    pub(in crate::worker_client) fn startup_declaration(&self) -> Declaration {
+        let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
         Declaration {
-            r: if managed {
+            r: if managed_r {
                 super::super::DEFAULT_R_REQUIREMENTS
                     .iter()
                     .map(|s| (*s).into())
@@ -73,12 +73,30 @@ impl Environment {
                 vec![]
             },
             python: if self.manages_python() {
-                crate::worker_protocol::default_python_requirement_manifest().packages
+                if self
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only)
+                {
+                    crate::worker_protocol::default_native_python_requirement_manifest().packages
+                } else {
+                    crate::worker_protocol::default_python_requirement_manifest().packages
+                }
             } else {
                 vec![]
             },
-            duckdb: if managed {
+            duckdb: if managed_r {
                 super::super::DEFAULT_DUCKDB_EXTENSIONS
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect()
+            } else if self.manages_python()
+                && self
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only)
+            {
+                crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
                     .iter()
                     .map(|s| (*s).into())
                     .collect()
@@ -166,15 +184,5 @@ impl Client {
             .requirements_snapshot
             .lock()
             .expect("requirements snapshot lock") = environment.inspection();
-        if self.python_preparation() {
-            let selected = environment
-                .python
-                .as_ref()
-                .and_then(PythonEnvironment::managed)
-                .expect("managed Python preparation retains an environment");
-            if let Some(transcript) = self.0.recording.lock().expect("recording lock").as_ref() {
-                transcript.python_environment_accepted(&selected.requirements().packages);
-            }
-        }
     }
 }

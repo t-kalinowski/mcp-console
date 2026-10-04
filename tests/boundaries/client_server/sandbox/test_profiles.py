@@ -133,8 +133,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             assert last_tool_text(client) == "yaml12\n", last_tool_text(client)
             transcript = client.finish()
         launches = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(launches) == 4 + len(preflights), launches
-        launches = launches[len(preflights) :]
+        assert len(launches) == 4, launches
         assert all(policy == launches[0] for policy in launches), launches
         policy = launches[0]
         assert policy["extends"] == ":workspace"

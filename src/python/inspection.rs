@@ -9,8 +9,25 @@ use super::startup::SelectedPython;
 
 const INSPECTION_SOURCE: &str = include_str!("inspection.py");
 
-/// Executable and environment identity observed in the resolver or worker sandbox.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) fn explicit_executable(value: &std::ffi::OsStr) -> Result<PathBuf, String> {
+    let executable = PathBuf::from(value);
+    let executable = if executable.components().count() == 1 {
+        crate::resolver::find_path_entry(
+            executable
+                .to_str()
+                .ok_or("explicit Python executable is not UTF-8")?,
+        )
+        .ok_or("explicit Python executable is not on PATH")?
+    } else {
+        executable
+    };
+    // Preserve executable and virtualenv spelling, including symlinks.
+    std::path::absolute(executable)
+        .map_err(|error| format!("cannot locate selected Python: {error}"))
+}
+
+/// Executable and environment identity observed together on the host.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NativePython {
     pub(crate) embedding: SelectedPython,
@@ -18,18 +35,31 @@ pub(crate) struct NativePython {
     pub(crate) exec_prefix: String,
     pub(crate) base_prefix: String,
     pub(crate) base_exec_prefix: String,
+    pub(crate) metadata: ConversionMetadata,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConversionMetadata {
+    base_executable: String,
+    pythonpath: String,
+    version: String,
+    version_number: String,
+    architecture: String,
+    conda: bool,
+    numpy: Option<NumpyMetadata>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NumpyMetadata {
+    path: String,
+    version: String,
 }
 
 /// Describe a selected executable without changing the calling process or
 /// selecting a replacement. Inspection executes untrusted startup code and must
 /// run inside the selected execution boundary. Returned metadata is data only.
-pub(crate) fn inspect_selected(
-    executable: &Path,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<SelectedPython, String> {
-    inspect_native(executable, on_started).map(|selected| selected.embedding)
-}
-
 pub(crate) fn inspect_native(
     executable: &Path,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -83,7 +113,7 @@ pub(crate) fn inspect_native(
             output.status, ordinary, diagnostic
         ));
     }
-    let description: Description = serde_json::from_slice(&result.read(1024 * 1024)?)
+    let description: Description = serde_json::from_slice(&result.read(64 * 1024)?)
         .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
     description.validate(executable)?;
     let python_home = if description.base_prefix == description.base_exec_prefix {
@@ -106,6 +136,7 @@ pub(crate) fn inspect_native(
         exec_prefix: description.exec_prefix,
         base_prefix: description.base_prefix,
         base_exec_prefix: description.base_exec_prefix,
+        metadata: description.metadata,
     })
 }
 
@@ -118,6 +149,7 @@ struct Description {
     exec_prefix: String,
     base_prefix: String,
     base_exec_prefix: String,
+    metadata: ConversionMetadata,
 }
 
 impl Description {

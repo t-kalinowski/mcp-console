@@ -206,5 +206,207 @@ def test_supervises_stopped_and_continued_workers(
                 stop_process(client.process)
 
 
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_reports_resolver_interrupt_permission_error(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+            resolver_watches,
+        ) = resolver_interrupt_permission_environment(temporary_path)
+
+        client = McpClient(
+            binary,
+            execution.serve("--worker", str(zod)),
+            environment,
+        )
+        resolver_group = None
+        passed = False
+        try:
+            client.initialize_and_list_tools()
+            preparation = client.start_send(
+                requirements={"r": ["blocked-resolver"]},
+            )
+            resolver_started.wait("permission-denied R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            assert resolver_group != os.getpgrp(), (
+                "resolver did not enter a dedicated process group"
+            )
+            wait_for_path(
+                resolver_watches / str(resolver_group),
+                "active resolver supervision",
+                client,
+            )
+
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
+            responses_returned = threading.Event()
+            forced_stop = threading.Event()
+
+            def stop_if_calls_block() -> None:
+                if not responses_returned.wait(2):
+                    forced_stop.set()
+                    stop_process_group(resolver_group)
+
+            watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
+            watchdog.start()
+            try:
+                client.receive_many([preparation, interrupt])
+            finally:
+                responses_returned.set()
+                watchdog.join()
+
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
+            assert denied_group == resolver_group, (
+                "SIGINT denial targeted a different process group"
+            )
+            wait_for_process_group_exit(resolver_group, client)
+            assert not forced_stop.is_set(), (
+                "resolver interrupt failure did not terminate both calls"
+            )
+
+            expected = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "failed to interrupt R package resolver `ir`: "
+                            "Operation not permitted (os error 1)"
+                        ),
+                    }
+                ],
+                "isError": True,
+            }
+            assert preparation["result"] == expected, preparation
+            interrupt_expected = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"[{expected['content'][0]['text']}]",
+                    }
+                ],
+                "isError": True,
+            }
+            assert interrupt["result"] == interrupt_expected, interrupt
+
+            client.send(r="echo echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client.finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(resolver_group)
+                stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_reports_runtime_r_resolver_interrupt_permission_error(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_path = Path(temporary_directory)
+        (
+            environment,
+            resolver_started,
+            resolver_lifetime,
+            resolver_group_record,
+            denied_interrupt,
+            resolver_watches,
+        ) = resolver_interrupt_permission_environment(temporary_path)
+        client = McpClient(
+            binary,
+            execution.serve("--worker", str(zod)),
+            environment,
+        )
+        resolver_group = None
+        passed = False
+        try:
+            client.initialize_and_list_tools()
+            # Complete lazy custom-worker startup before timing resolver arrival.
+            client.expect("zod: ready\n", r="echo ready")
+            evaluation = client.start_send(
+                r="report runtime R resolution failure",
+            )
+            resolver_started.wait("permission-denied runtime R resolver")
+            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            assert resolver_group != os.getpgrp(), (
+                "resolver did not enter a dedicated process group"
+            )
+            wait_for_path(
+                resolver_watches / str(resolver_group),
+                "active resolver supervision",
+                client,
+            )
+
+            interrupt = client.start_send(control="interrupt", timeout_ms=0)
+            responses_returned = threading.Event()
+            forced_stop = threading.Event()
+
+            def stop_if_calls_block() -> None:
+                if not responses_returned.wait(2):
+                    forced_stop.set()
+                    stop_process_group(resolver_group)
+
+            watchdog = threading.Thread(target=stop_if_calls_block, daemon=True)
+            watchdog.start()
+            try:
+                client.receive_many([evaluation, interrupt])
+            finally:
+                responses_returned.set()
+                watchdog.join()
+
+            denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
+            assert denied_group == resolver_group, (
+                "SIGINT denial targeted a different process group"
+            )
+            wait_for_process_group_exit(resolver_group, client)
+            assert not forced_stop.is_set(), (
+                "resolver interrupt failure did not terminate both calls"
+            )
+
+            message = (
+                "failed to interrupt R package resolver `ir`: "
+                "Operation not permitted (os error 1)"
+            )
+            assert evaluation["result"] == {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"zod R resolution failure: host: {message}\n",
+                    }
+                ],
+                "isError": False,
+            }, evaluation
+            assert interrupt["result"] == {
+                "content": [{"type": "text", "text": f"[{message}]"}],
+                "isError": True,
+            }, interrupt
+
+            client.send(r="echo echo")
+            assert last_tool_text(client) == "zod: echo\n"
+            transcript = client.finish()
+            passed = True
+            return transcript
+        finally:
+            if not passed:
+                stop_process_group(resolver_group)
+                stop_client(client)
+            resolver_started.close()
+            resolver_lifetime.close()
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

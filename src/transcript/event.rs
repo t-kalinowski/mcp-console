@@ -21,9 +21,19 @@ pub(super) enum Event<'a> {
     SessionStarted {
         session: &'a str,
         working_directory: &'a str,
-        dynamic_resolution: bool,
+        dynamic_resolution: Option<bool>,
+        python_preparation: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
         target: Option<&'a Value>,
+    },
+    EnvironmentDiscovered {
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+        target: Option<&'a Value>,
+    },
+    StartupFailed {
+        message: &'a str,
     },
     TargetGeneration {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -31,13 +41,13 @@ pub(super) enum Event<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         sandbox: Option<&'a crate::target_launch::SandboxIdentity>,
     },
+    PythonEnvironmentAccepted {
+        packages: &'a [String],
+    },
     RequirementsSelected {
         call_id: Option<u64>,
         action: &'a str,
         snapshot: &'a Value,
-    },
-    PythonEnvironmentAccepted {
-        packages: &'a [String],
     },
     ToolCall {
         call_id: u64,
@@ -46,13 +56,20 @@ pub(super) enum Event<'a> {
     },
     ArtifactCreated {
         artifact_id: u64,
-        call_id: u64,
+        call_id: Option<u64>,
         path: &'a str,
         mime_type: &'a str,
         bytes: usize,
     },
     CellOutput {
         call_id: u64,
+        path: &'a str,
+        retained_bytes: u64,
+        inline_omitted_bytes: u64,
+        discarded_bytes: u64,
+        retention_limit_bytes: u64,
+    },
+    SessionOutput {
         path: &'a str,
         retained_bytes: u64,
         inline_omitted_bytes: u64,

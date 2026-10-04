@@ -1,7 +1,7 @@
 ---
 stage: restart
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: |
@@ -48,7 +48,7 @@ stderr: >
 ---
 stage: shutdown
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: |
@@ -75,7 +75,7 @@ stderr: >
 ---
 stage: startup failure
 ---
-!same-as python-only MCP initialization for this execution mode
+!same-as MCP initialization for this execution mode
 ---
 send:
   python: "42"
@@ -90,4 +90,7 @@ result:
         temporary>: Permission denied (os error 13)]
   isError: true
 ---
-stderr: ""
+stderr: >
+  worker relay shutdown was requested twice; additionally cannot remove
+  worker temporary directory <worker temporary>: Permission denied (os
+  error 13)

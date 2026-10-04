@@ -33,12 +33,11 @@ impl ManagedPythonResolverConfiguration {
     }
 
     pub(crate) fn without_r_bootstrap(mut self) -> Self {
-        // `managed` asks reticulate to obtain uv. Without R, use the uv on
-        // PATH if present and retain the captured UV_* configuration unchanged.
-        if self.reticulate_uv.as_deref() == Some(OsStr::new("managed")) {
-            self.uv = super::find_path_entry("uv").map(Into::into);
-            self.reticulate_uv = self.uv.clone();
-        }
+        // Sans-R preparation uses the startup PATH selection. RETICULATE_UV
+        // belongs to reticulate's R bootstrap, not this mode.
+        self.uv = super::find_path_entry("uv").map(Into::into);
+        self.reticulate_uv = self.uv.clone();
+        self.explicit_uv = None;
         self
     }
 
@@ -67,6 +66,10 @@ impl ManagedPythonResolverConfiguration {
 
     pub(crate) fn has_uv(&self) -> bool {
         self.uv.is_some()
+    }
+
+    pub(crate) fn selected_uv(&self) -> Option<OsString> {
+        self.uv.clone()
     }
 
     pub(crate) fn set_resolved_uv(&mut self, uv: impl Into<OsString>) {

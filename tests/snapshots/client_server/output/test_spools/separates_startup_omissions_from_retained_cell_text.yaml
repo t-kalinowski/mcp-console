@@ -1,5 +1,5 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as custom MCP initialization for this execution mode
 ---
 send:
   r: "42"
@@ -7,15 +7,15 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8072
+        text_bytes: 8055
         concat:
           - repeat: s
-            count: 3968
+            count: 3904
           - |
 
-            [output preview: omitted 8380691 rendered UTF-8 bytes; no retained cell log (8388615 raw bytes observed); omitted text is unavailable]
+            [output preview: omitted 8380819 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace; controller for remote targets); 8388615 raw bytes retained, 0 raw bytes not retained]
           - repeat: s
-            count: 3956
+            count: 3892
           - |
             cell output
   isError: false

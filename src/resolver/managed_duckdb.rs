@@ -21,8 +21,10 @@ pub(crate) fn resolve_duckdb_extensions(
 
     let rscript = managed_r.rscript();
     let mut command = resolver_command(rscript);
+    command.arg("--vanilla");
+    let _program =
+        super::r_program::RProgram::append(&mut command, MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE)?;
     command
-        .args(["--vanilla", "-e", MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

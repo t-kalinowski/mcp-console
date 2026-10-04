@@ -21,7 +21,7 @@ struct Method {
 struct Services {
     api: PythonApi,
     thread: ThreadId,
-    pid: libc::pid_t,
+    pid: u32,
     unicode_utf8: unsafe extern "C" fn(*mut PyObject, *mut isize) -> *const c_char,
     inc_ref: unsafe extern "C" fn(*mut PyObject),
     set_none: unsafe extern "C" fn(*mut PyObject),
@@ -40,18 +40,23 @@ static METHODS_REGISTERED: AtomicBool = AtomicBool::new(false);
 static MODULE_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
+    // R startup replaces this handler even when Python initialized first.
+    #[cfg(unix)]
+    unsafe {
+        (api.set_signal)(libc::SIGPIPE, libc::SIG_IGN)
+    };
     if installed {
         let services = SERVICES
             .get()
             .expect("installed Python services retain callbacks");
-        api.call_unit(c"_mcp_console_services", c"install_interrupt")?;
+        api.call_unit(c"_mcp_console_services", c"install_services")?;
         return worker::install_python_interrupt(services.set_interrupt);
     }
     let services = if let Some(services) = SERVICES.get() {
         services
     } else {
         // The owning Python handle is process-long; no library lock spans Python.
-        let library = libloading::os::unix::Library::this();
+        let library = loaded_library()?;
         let path = std::path::Path::new("loaded Python");
         let exception = |name| -> Result<usize, String> {
             Ok(unsafe { *load_symbol::<*const *mut PyObject>(&library, path, name)? } as usize)
@@ -59,7 +64,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
         let services = Services {
             api: *api,
             thread: std::thread::current().id(),
-            pid: unsafe { libc::getpid() },
+            pid: std::process::id(),
             unicode_utf8: unsafe { load_symbol(&library, path, b"PyUnicode_AsUTF8AndSize\0")? },
             inc_ref: unsafe { load_symbol(&library, path, b"Py_IncRef\0")? },
             set_none: unsafe { load_symbol(&library, path, b"PyErr_SetNone\0")? },
@@ -77,7 +82,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
         SERVICES.get().unwrap()
     };
     if !METHODS_REGISTERED.load(Ordering::Acquire) {
-        let library = libloading::os::unix::Library::this();
+        let library = loaded_library()?;
         let path = std::path::Path::new("loaded Python");
         let add_functions: unsafe extern "C" fn(*mut PyObject, *const Method) -> c_int =
             unsafe { load_symbol(&library, path, b"PyModule_AddFunctions\0")? };
@@ -87,7 +92,18 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             method(c"diagnostic", diagnostic, 8),
             method(c"readline", readline, 8),
             method(c"publish_plot", publish_plot, 8),
+            method(c"resolve_import_request", resolve_import_request, 8),
+            method(c"attach_r", attach_r, 4),
             method(c"interrupt", interrupt, 1), // METH_VARARGS: signal number and frame
+            method(c"inspect_python", inspect_python, 8),
+            method(
+                c"activate_python_environment",
+                activate_python_environment,
+                4,
+            ),
+            method(c"publish_python_activation", publish_python_activation, 8),
+            method(c"begin_python_commit", begin_python_commit, 4),
+            method(c"finish_python_commit", finish_python_commit, 4),
             Method {
                 name: std::ptr::null(),
                 callback: None,
@@ -125,6 +141,11 @@ fn method(name: &'static CStr, callback: Callback, flags: c_int) -> Method {
 }
 
 impl Services {
+    fn string(&self, text: &str) -> *mut PyObject {
+        unsafe {
+            (self.api.unicode_from_string_and_size)(text.as_ptr().cast(), text.len() as isize)
+        }
+    }
     fn text(&self, object: *mut PyObject) -> Result<String, String> {
         let mut length = 0;
         let bytes = unsafe { (self.unicode_utf8)(object, &mut length) };
@@ -159,9 +180,7 @@ fn callback(operation: impl FnOnce(&Services) -> Result<*mut PyObject, String>) 
         .get()
         .expect("Python services initialized before callbacks");
     let result = catch_unwind(AssertUnwindSafe(|| {
-        if unsafe { libc::getpid() } != services.pid
-            || std::thread::current().id() != services.thread
-        {
+        if std::process::id() != services.pid || std::thread::current().id() != services.thread {
             return Err("console service requires the main worker thread".to_string());
         }
         operation(services)
@@ -209,6 +228,32 @@ unsafe extern "C" fn publish_plot(_: *mut PyObject, image: *mut PyObject) -> *mu
     })
 }
 
+unsafe extern "C" fn attach_r(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        services.without_gil(crate::worker::ensure_bridge)?;
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn resolve_import_request(
+    _: *mut PyObject,
+    request: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        let request = services.text(request)?;
+        let resolution = serde_json::from_str(&request)
+            .map_err(|error| format!("invalid Python import request: {error}"))?;
+        let response =
+            services.without_gil(|| crate::python::resolve_managed_import(resolution))?;
+        Ok(unsafe {
+            (services.api.unicode_from_string_and_size)(
+                response.as_ptr().cast(),
+                response.len() as isize,
+            )
+        })
+    })
+}
+
 unsafe extern "C" fn readline(_: *mut PyObject, prompt: *mut PyObject) -> *mut PyObject {
     callback(|services| {
         let prompt = services.text(prompt)?;
@@ -244,4 +289,89 @@ unsafe extern "C" fn interrupt(_: *mut PyObject, _: *mut PyObject) -> *mut PyObj
             Ok(services.none())
         }
     })
+}
+
+unsafe extern "C" fn inspect_python(_: *mut PyObject, executable: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        let executable = services.text(executable)?;
+        let result = services.without_gil(|| super::super::probe::inspect(&executable));
+        if worker::acknowledge_python_interrupt() {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            return Ok(std::ptr::null_mut());
+        }
+        let result = result.map_err(|error| error.to_string())?;
+        Ok(services.string(&result.to_string()))
+    })
+}
+
+unsafe extern "C" fn activate_python_environment(
+    _: *mut PyObject,
+    _: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        match services.without_gil(super::super::requirements::activate_pending_selection) {
+            Ok(()) => Ok(services.none()),
+            Err(super::super::ActivationFailure::PythonException) => unsafe {
+                let function = services
+                    .api
+                    .function(c"builtins", c"_mcp_console_raise_setup_error")?;
+                Ok((services.api.call_no_args)(function))
+            },
+            Err(error) => Err(error.to_string()),
+        }
+    })
+}
+
+unsafe extern "C" fn publish_python_activation(
+    _: *mut PyObject,
+    activation: *mut PyObject,
+) -> *mut PyObject {
+    callback(|services| {
+        let activation: super::super::environment::Activation =
+            serde_json::from_str(&services.text(activation)?).map_err(|error| error.to_string())?;
+        services.without_gil(|| super::super::requirements::publish_activation(activation))?;
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn begin_python_commit(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        worker::begin_python_commit();
+        Ok(services.none())
+    })
+}
+
+unsafe extern "C" fn finish_python_commit(_: *mut PyObject, _: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        if worker::finish_python_commit() {
+            unsafe { (services.set_none)(services.keyboard_interrupt as *mut PyObject) };
+            Ok(std::ptr::null_mut())
+        } else {
+            Ok(services.none())
+        }
+    })
+}
+
+pub(super) fn response_text(value: *mut PyObject) -> Result<String, String> {
+    SERVICES
+        .get()
+        .expect("Python services initialized")
+        .text(value)
+}
+
+fn loaded_library() -> Result<libloading::Library, String> {
+    #[cfg(unix)]
+    {
+        Ok(libloading::os::unix::Library::this().into())
+    }
+    #[cfg(windows)]
+    {
+        let library = super::PYTHON_LIBRARY
+            .lock()
+            .map_err(|_| "Python library lock poisoned")?;
+        let path = &library.as_ref().ok_or("Python library is not loaded")?.path;
+        libloading::os::windows::Library::open_already_loaded(path)
+            .map(Into::into)
+            .map_err(|error| error.to_string())
+    }
 }

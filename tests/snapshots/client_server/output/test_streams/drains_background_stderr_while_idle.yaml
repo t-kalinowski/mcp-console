@@ -1,5 +1,5 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as custom MCP initialization for this execution mode
 ---
 send:
   r: start background stderr
@@ -15,17 +15,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8101
+        text_bytes: 8084
         concat:
           - |
             zod background stderr
           - repeat: x
-            count: 3946
+            count: 3882
           - |
 
-            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; no retained cell log (<raw byte count> raw bytes observed); omitted text is unavailable]
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
           - repeat: y
-            count: 3968
+            count: 3904
           - |-
 
             [idle]

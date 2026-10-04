@@ -9,8 +9,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: resolver preparation
-        process cleanup failed
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: remote preparation process cleanup failed
   isError: true
 ---
 send:
@@ -21,9 +21,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: resolver preparation process cleanup
-        failed
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: remote preparation process cleanup failed
   isError: true
 ---
 send:
@@ -33,13 +32,14 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: remote preparation process cleanup failed]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: resolver preparation process cleanup failed]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: remote preparation process cleanup failed]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  remote preparation process cleanup failed
 ---
 peer: truncated
 ---
@@ -51,8 +51,9 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: truncated resolver frame
-        payload: failed to fill whole buffer
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame payload: failed to fill
+        whole buffer
   isError: true
 ---
 send:
@@ -63,9 +64,9 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: truncated resolver frame payload: failed
-        to fill whole buffer
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame payload: failed to fill
+        whole buffer
   isError: true
 ---
 send:
@@ -75,13 +76,14 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: truncated SSH frame payload: failed to fill whole buffer]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated resolver frame payload: failed to fill whole buffer]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame payload: failed to fill whole buffer]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  truncated SSH frame payload: failed to fill whole buffer
 ---
 peer: missing
 ---
@@ -93,8 +95,9 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: truncated resolver frame
-        length: failed to fill whole buffer
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame length: failed to fill whole
+        buffer
   isError: true
 ---
 send:
@@ -105,9 +108,9 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: truncated resolver frame length: failed
-        to fill whole buffer
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame length: failed to fill whole
+        buffer
   isError: true
 ---
 send:
@@ -117,13 +120,14 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated resolver frame length: failed to fill whole buffer]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame length: failed to fill whole buffer]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  truncated SSH frame length: failed to fill whole buffer
 ---
 peer: mismatched
 ---
@@ -135,8 +139,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: mismatched resolver
-        preparation result
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: mismatched SSH preparation result
   isError: true
 ---
 send:
@@ -147,8 +151,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: mismatched resolver preparation result
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: mismatched SSH preparation result
   isError: true
 ---
 send:
@@ -158,13 +162,14 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: mismatched SSH preparation result]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched resolver preparation result]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched SSH preparation result]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  mismatched SSH preparation result
 ---
 peer: malformed
 ---
@@ -176,8 +181,8 @@ result:
   content:
     - type: text
       text: >-
-        invalid resolver preparation result: invalid type: integer `42`,
-        expected struct ManagedR
+        invalid remote preparation result: invalid type: integer `42`, expected
+        struct ManagedR
   isError: true
 ---
 send:
@@ -188,8 +193,8 @@ result:
   content:
     - type: text
       text: >-
-        invalid resolver preparation result: invalid type: integer `42`,
-        expected struct ManagedR
+        invalid remote preparation result: invalid type: integer `42`, expected
+        struct ManagedR
   isError: true
 ---
 send:
@@ -199,8 +204,9 @@ result:
   content:
     - type: text
       text: |-
+        [invalid remote preparation result: invalid type: integer `42`, expected struct ManagedR]
         [starting new worker]
-        [invalid resolver preparation result: invalid type: integer `42`, expected struct ManagedR]
+        [invalid remote preparation result: invalid type: integer `42`, expected struct ManagedR]
         session restart did not complete; cell was not run
   isError: true
 ---
@@ -216,8 +222,9 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: truncated resolver frame
-        length: failed to fill whole buffer
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame length: failed to fill whole
+        buffer
   isError: true
 ---
 send:
@@ -228,9 +235,9 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: truncated resolver frame length: failed
-        to fill whole buffer
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: truncated SSH frame length: failed to fill whole
+        buffer
   isError: true
 ---
 send:
@@ -240,13 +247,14 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: truncated SSH frame length: failed to fill whole buffer]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated resolver frame length: failed to fill whole buffer]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: truncated SSH frame length: failed to fill whole buffer]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  truncated SSH frame length: failed to fill whole buffer
 ---
 peer: mismatched-chunk
 ---
@@ -258,8 +266,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: mismatched resolver
-        preparation result chunk
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: mismatched SSH preparation result chunk
   isError: true
 ---
 send:
@@ -270,9 +278,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: mismatched resolver preparation result
-        chunk
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: mismatched SSH preparation result chunk
   isError: true
 ---
 send:
@@ -282,13 +289,14 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: mismatched SSH preparation result chunk]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched resolver preparation result chunk]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: mismatched SSH preparation result chunk]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  mismatched SSH preparation result chunk
 ---
 peer: chunked-and-inline
 ---
@@ -300,8 +308,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed: resolver preparation
-        requires one complete result
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: SSH preparation requires one complete result
   isError: true
 ---
 send:
@@ -312,9 +320,8 @@ result:
   content:
     - type: text
       text: >-
-        resolver preparation retirement is unconfirmed; this session cannot
-        prepare or start a replacement: resolver preparation requires one
-        complete result
+        SSH preparation retirement is unconfirmed; this session cannot prepare
+        or start a replacement: SSH preparation requires one complete result
   isError: true
 ---
 send:
@@ -324,10 +331,11 @@ result:
   content:
     - type: text
       text: |-
+        [SSH preparation retirement is unconfirmed: SSH preparation requires one complete result]
         [starting new worker]
-        [resolver preparation retirement is unconfirmed; this session cannot prepare or start a replacement: resolver preparation requires one complete result]
+        [SSH preparation retirement is unconfirmed; this session cannot prepare or start a replacement: SSH preparation requires one complete result]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: |
-  resolver preparation owner stopped
+  SSH preparation requires one complete result

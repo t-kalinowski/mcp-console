@@ -1,54 +1,184 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
-  python: import sys; initial_prefix = sys.prefix
+  requirements:
+    action: get
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse",
+              "yyjsonr"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+        - yyjsonr
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
   isError: false
 ---
 send:
-  r: |
-    before <- reticulate::py_require()
-    namespace <- asNamespace("reticulate")
-    original <- get("python_config", namespace)
-    replacement <- function(...) {
-      config <- original(...)
-      config$libpython <- "incompatible-libpython"
-      config
-    }
-    unlockBinding("python_config", namespace)
-    assign("python_config", replacement, envir = namespace)
-    lockBinding("python_config", namespace)
-    outcome <- tryCatch(
-      reticulate::py_require("py-yaml12"),
-      error = conditionMessage
-    )
-    stopifnot(
-      grepl(
-        "New environment does not use the same Python binary",
-        outcome,
-        fixed = TRUE
-      ),
-      grepl("new libpython: incompatible-libpython", outcome, fixed = TRUE),
-      identical(reticulate::py_require(), before)
-    )
-    unlockBinding("python_config", namespace)
-    assign("python_config", original, envir = namespace)
-    lockBinding("python_config", namespace)
+  requirements:
+    python:
+      - py-yaml12
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |-
+        New environment does not use the same Python binary
+        new libpython: <preparation>/alias-libpython
+        old libpython: <running libpython>
+  isError: true
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse",
+              "yyjsonr"
+            ],
+            "python": [
+              "numpy",
+              "pandas"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - nanoarrow
+        - reticulate
+        - tidyverse
+        - yyjsonr
+      python:
+        - numpy
+        - pandas
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
   isError: false
 ---
 send:
-  python: sys.prefix == initial_prefix
+  python: >-
+    import os; assert os.getpid() == worker_pid and id(identity) ==
+    identity_id; print('compatible worker retained')
 result:
   content:
     - type: text
       text: |
-        True
+        compatible worker retained
   isError: false

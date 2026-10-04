@@ -28,8 +28,8 @@ base::local(
         return(invisible(managed_connection))
       }
 
-      storage <- file.path(tempdir(), "mcp-console-duckdb")
-      managed_connection <<- DBI::dbConnect(
+      storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
+      connection <- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",
           config = list(
@@ -45,8 +45,48 @@ base::local(
           environment_scan = TRUE
         )
       )
-      DBI::dbExecute(managed_connection, "SET enable_progress_bar = false")
+      on.exit({
+        if (is.null(managed_connection)) {
+          tryCatch(
+            DBI::dbDisconnect(connection),
+            error = function(condition) {
+              cat(
+                "Error closing SQL connection: ",
+                conditionMessage(condition),
+                "\n",
+                sep = ""
+              )
+            }
+          )
+        }
+      })
+      DBI::dbExecute(connection, "SET enable_progress_bar = false")
+      managed_connection <<- connection
       invisible(managed_connection)
+    }
+
+    initialize_managed_connection <- function() {
+      tryCatch(
+        {
+          # Bare and prepared environments may omit the optional managed provider.
+          if (
+            !nzchar(system.file(package = "DBI")) ||
+              !nzchar(system.file(package = "duckdb"))
+          ) {
+            return(0L)
+          }
+          ensure_managed_connection()
+          1L
+        },
+        interrupt = function(condition) {
+          cat("\n")
+          -1L
+        },
+        error = function(condition) {
+          cat("Error: ", conditionMessage(condition), "\n", sep = "")
+          0L
+        }
+      )
     }
 
     ensure_connection <- function() {

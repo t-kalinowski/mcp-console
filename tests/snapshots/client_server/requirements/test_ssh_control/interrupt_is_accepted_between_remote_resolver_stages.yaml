@@ -1,13 +1,17 @@
 ---
 send:
+  r: 42L
   requirements:
     r:
       - praise
+  timeout_ms: 0
 result:
   content:
     - type: text
-      text: dependency resolution interrupted
-  isError: true
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
 ---
 input:
   method: ping
@@ -23,6 +27,14 @@ result:
 
         [running; poll with an empty send]
   isError: false
+---
+send:
+  timeout_ms: 180000
+result:
+  content:
+    - type: text
+      text: "[worker startup interrupted]"
+  isError: true
 ---
 send:
   r: 42L

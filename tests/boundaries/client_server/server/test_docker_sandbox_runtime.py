@@ -266,6 +266,11 @@ def test_workload_environment_does_not_configure_controller_sbx(binary: Path) ->
                 records += finish(client, root)[3:]
             for identity in generations(root):
                 absent(**identity)
+    from boundaries.client_server.python.test_peer_runtime import (
+        exercise_prepared_r_only,
+    )
+
+    exercise_prepared_r_only(binary, "sbx")
     return records
 
 

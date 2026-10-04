@@ -14,6 +14,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -74,12 +75,23 @@ send:
 result:
   content:
     - type: text
-      text: "[dependency resolution interrupted]"
+      text: |-
+        [managed Python resolution failed:
+        resolver input:
+        {
+          "python": "3.12.XX (reticulate default)",
+          "packages": [
+            "six"
+          ]
+        }
+        uv output:
+        ]
   isError: true
 ---
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -143,6 +155,61 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+  isError: false
+---
+send:
+  requirements:
+    action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -216,6 +283,7 @@ result:
 send:
   requirements:
     action: get
+  timeout_ms: 600000
 result:
   content:
     - type: text

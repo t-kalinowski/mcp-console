@@ -56,6 +56,19 @@ def test_build_and_image_defaults_captured_once(binary: Path) -> Transcript:
         environment = cli_peer(root / "peer")
         docker_config = root / "docker config"
         docker_config.mkdir()
+        selected_context = docker("context", "show").stdout.strip()
+        if selected_context != "default":
+            archive = root / "selected.dockercontext"
+            exported = docker("context", "export", selected_context, str(archive))
+            assert exported.returncode == 0, exported.stderr
+            imported = docker(
+                "context",
+                "import",
+                selected_context,
+                str(archive),
+                env={**os.environ, "DOCKER_CONFIG": str(docker_config)},
+            )
+            assert imported.returncode == 0, imported.stderr
         environment["DOCKER_CONFIG"] = str(docker_config)
         config = configure(
             root,
@@ -157,6 +170,8 @@ def test_pull_policies_and_tag_capture(binary: Path) -> Transcript:
             try:
                 with McpClient(binary, ("serve",), environment, root) as client:
                     if policy == "never" and not present:
+                        client.startup_error()
+                        client.stdin.close()
                         assert client.stdout.read(timeout=20) == ""
                         diagnostics = client.stderr.read(timeout=20)
                         assert "No such image" in diagnostics
@@ -203,7 +218,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
         ("workspace", "workspace"),
         ("mount", "bind source path does not exist"),
         ("runtime", "RETICULATE_PYTHON"),
-        ("python_executable", "container Python probe failed"),
+        ("python_executable", "failed to inspect selected Python executable"),
         ("python_version", "MCP Console requires Python 3.10 or later"),
         ("compatibility", "incompatible Docker bootstrap"),
         ("native_environment", "mcp-console-sandbox: invalid configuration JSON"),
@@ -237,7 +252,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
 
                         VersionInfo = namedtuple("VersionInfo", "major minor micro releaselevel serial")
                         sys.version_info = VersionInfo(3, 9, 0, "final", 0)
-                        exec(sys.argv[2])
+                        exec(sys.argv[sys.argv.index("-c") + 1])
                         """)
                 )
                 program.chmod(0o755)
@@ -270,14 +285,9 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["filesystem"] = {"kind": "native-runner-must-validate"}
             config.write_text(json.dumps(value))
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.start_request(
-                    "initialize",
-                    protocolVersion="2025-11-25",
-                    capabilities={},
-                    clientInfo={"name": "docker-setup-test", "version": "1"},
-                )
-                response = client.stdout.readline(timeout=30)
-                assert response == "", (case, response)
+                client.startup_error()
+                client.stdin.close()
+                assert client.stdout.read(timeout=30) == "", case
                 error = client.stderr.read(timeout=30)
                 assert expected in error, error
                 assert client.process.wait(timeout=5) != 0
@@ -293,7 +303,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
             assert not (root / "missing-bind").exists()
             records.append(
                 {
-                    "rejected_before_readiness": case,
+                    "rejected_before_worker_startup": case,
                     "container_absent": True,
                     "stderr": error.replace(str(root), "<controller>"),
                 }
@@ -336,6 +346,7 @@ dynamic environment resolution is unavailable
 dynamic environment resolution is unavailable
 """,
                 "disabled container callbacks",
+                completion_timeout_seconds=client.response_timeout,
                 r="42",
             )
             result = client.finish()[3:]

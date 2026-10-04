@@ -1,4 +1,6 @@
 ---
+!same-as MCP initialization for this execution mode
+---
 send:
   python: raise AssertionError('startup failure ran the cell')
 result:
@@ -7,4 +9,16 @@ result:
       text: |-
         [worker sideband read failed: worker sideband closed]
         [worker exited with status 47]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
   isError: true
+---
+send:
+  python: print('replacement initializes on demand')
+result:
+  content:
+    - type: text
+      text: |
+        replacement initializes on demand
+  isError: false

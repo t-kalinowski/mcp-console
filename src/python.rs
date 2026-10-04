@@ -1,21 +1,22 @@
+mod environment;
 mod inspection;
+mod probe;
 mod requirements;
 mod reticulate;
 mod startup;
 
-pub(crate) use inspection::{NativePython, inspect_native, inspect_selected};
-pub(crate) use startup::{
-    SelectedPython, finish_initialization, initialize_selected, setup_runtime,
-};
+pub(crate) use inspection::{NativePython, explicit_executable, inspect_native};
+pub(crate) use requirements::{ActivationFailure, ensure_libpython_compatible};
+#[cfg(all(test, unix))]
+pub(crate) use requirements::{ActivationInput, activate_managed_environment};
+pub(crate) use startup::{finish_initialization, initialize_selected, setup_runtime};
 
 const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
 
-/// Values supplied by an interpreter adapter when the private evaluator is
-/// configured. A caller without managed resolution supplies no callback.
-pub(crate) struct ImportResolution<'a> {
-    // The adapter keeps a converted callback alive for this setup call.
-    pub(crate) callback: Option<std::ptr::NonNull<libc::c_void>>,
-    pub(crate) disabled_reason: Option<&'a str>,
+/// Import policy installed before shared runtime setup is complete.
+pub(crate) enum ImportResolution<'a> {
+    Managed,
+    Disabled(&'a str),
 }
 
 #[derive(serde::Deserialize)]
@@ -26,14 +27,17 @@ pub(crate) enum PreparationOutcome {
     Failed {
         message: String,
     },
+    Rejected {
+        message: String,
+    },
 }
 
 /// Rust-owned Python runtime boundary.
 ///
-/// Reticulate selects and configures Python; cells enter the private evaluator
-/// directly through the retained CPython library.
+/// Every cell enters the same private evaluator through the retained CPython
+/// library. The optional reticulate adapter retains R-side discovery and
+/// attachment policy; it is absent until R is initialized.
 pub(crate) struct Runtime {
-    startup: startup::Runtime,
     next_evaluation_id: u64,
 }
 
@@ -45,24 +49,123 @@ pub(crate) enum SqlProvider {
 
 pub(crate) use platform::configure_worker_environment as configure_native_worker_environment;
 
-pub(crate) fn configure_worker_environment(
-    temporary_directory: &std::path::Path,
-) -> std::io::Result<()> {
-    platform::configure_worker_environment(temporary_directory)?;
-    reticulate::configure_worker_environment()
+pub(crate) use reticulate::{
+    configure_worker_environment as configure_r_environment, defer_r_startup, finish_r_startup,
+};
+
+thread_local! {
+    static ADAPTER: std::cell::RefCell<Option<std::rc::Rc<reticulate::Adapter>>> = const { std::cell::RefCell::new(None) };
+}
+static SELECTION: std::sync::OnceLock<crate::local_runtime::WorkerSelection> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn attach_r_adapter() -> Result<(), String> {
+    if let Some(manifest) = requirements::retained_manifest() {
+        unsafe {
+            std::env::set_var(
+                "MCP_CONSOLE_MANAGED_PYTHON",
+                serde_json::to_string(&manifest).map_err(|error| error.to_string())?,
+            )
+        };
+    }
+    let adapter = std::rc::Rc::new(reticulate::Adapter::initialize()?);
+    ADAPTER.with(|slot| *slot.borrow_mut() = Some(adapter));
+    Ok(())
+}
+
+fn adapter() -> Option<std::rc::Rc<reticulate::Adapter>> {
+    ADAPTER.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn attach_bridge() -> Result<bool, String> {
+    adapter()
+        .ok_or("R bridge is unavailable")?
+        .ensure_initialized()
+}
+
+pub(crate) fn reinstall_services() -> Result<(), String> {
+    if library::initialized_selection()?.is_some() && library::services_installed()? {
+        library::install_services()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_initialized() -> Result<bool, String> {
+    if library::runtime_configured()? {
+        return Ok(true);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(candidate) = requirements::materialized()
+    {
+        return startup::initialize_native(&candidate.selected, true);
+    }
+    let selection = SELECTION
+        .get()
+        .ok_or("Python capability is not configured")?;
+    if crate::worker::bootstrapping()
+        && selection.python.is_none()
+        && std::env::var_os("MCP_CONSOLE_EXECUTION_COMPUTE").is_some()
+    {
+        // Prepared targets already probed genuine Python absence. Preserve
+        // their R-only capability instead of entering unresolved R discovery.
+        return Ok(true);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(python) = &selection.python
+    {
+        return startup::initialize_native(&python.selected, python.managed);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(explicit) = std::env::var_os("RETICULATE_PYTHON")
+            .filter(|value| !value.is_empty() && value != "managed")
+    {
+        let selected = match explicit_executable(&explicit)
+            .and_then(|path| crate::worker::inspect_python(&path))
+        {
+            Ok(selected) => selected,
+            Err(error) => {
+                crate::worker::emit_output(
+                    crate::worker_protocol::ConsoleChannel::Diagnostic,
+                    format!("Error: {error}\n").as_bytes(),
+                );
+                return Ok(false);
+            }
+        };
+        return startup::initialize_native(&selected, false);
+    }
+    // R declarations and selection callbacks genuinely require R. Only an
+    // unresolved compatibility selection enters this path.
+    crate::worker::ensure_r()?;
+    if crate::worker::bootstrapping() {
+        // A bare R library can genuinely lack the Python selection adapter.
+        // Its advertised Python field is not an installed runtime capability;
+        // eager startup must leave ordinary R cells usable in that session.
+        let available = harp::parse_eval_base(r#"requireNamespace("reticulate", quietly = TRUE)"#)
+            .and_then(bool::try_from)
+            .map_err(|error| error.to_string())?;
+        if !available {
+            return Ok(true);
+        }
+    }
+    let adapter = adapter().ok_or("R selection adapter is unavailable")?;
+    let selected = match adapter.select(crate::worker::bootstrapping())? {
+        reticulate::Selection::Selected(selected) => selected,
+        // Discovery ran its ordinary callbacks and found no interpreter. This
+        // completes optional bootstrap; an actual Python cell still reports
+        // the selection error through the ordinary, required path.
+        reticulate::Selection::Unavailable => return Ok(true),
+        reticulate::Selection::Incomplete => return Ok(false),
+    };
+    startup::initialize_native(&selected, adapter.managed)
 }
 
 impl Runtime {
-    pub(crate) fn initialize() -> Result<Self, String> {
+    pub(crate) fn new(selection: crate::local_runtime::WorkerSelection) -> Result<Self, String> {
+        requirements::configure()?;
+        SELECTION
+            .set(selection)
+            .map_err(|_| "runtime capabilities already configured")?;
         Ok(Self {
-            startup: startup::Runtime::initialize()?,
-            next_evaluation_id: 1,
-        })
-    }
-
-    pub(crate) fn native(selected: &NativePython, managed: bool) -> Result<Self, String> {
-        Ok(Self {
-            startup: startup::Runtime::native(selected, managed)?,
             next_evaluation_id: 1,
         })
     }
@@ -70,22 +173,28 @@ impl Runtime {
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
         let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
         self.next_evaluation_id += 1;
-        if !self.startup.ensure_initialized()? {
+        if !ensure_initialized()? {
             return Ok(());
         }
         evaluate_embedded(source, &filename)
     }
 
     pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.startup.prepare(packages)
+        requirements::prepare(packages)
     }
+}
+
+pub(crate) fn resolve_managed_import(
+    resolution: crate::worker_protocol::PythonImportResolution,
+) -> Result<String, String> {
+    requirements::resolve_import(resolution)
 }
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
     library::evaluate(source, filename)
 }
 
-pub(crate) fn install_sql_runtime(source: &str) -> Result<(), String> {
+pub(crate) fn install_sql_runtime(source: &str) -> Result<bool, String> {
     library::install_sql_runtime(source)
 }
 
@@ -95,6 +204,13 @@ pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
 
 pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
+}
+
+pub(crate) fn initialize_managed_sql() -> Result<(), String> {
+    if ensure_initialized()? {
+        library::initialize_managed_sql()?;
+    }
+    Ok(())
 }
 
 pub(crate) fn take_sql_restore_request() -> Result<bool, String> {
@@ -127,7 +243,7 @@ mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::io;
-    use std::os::unix::ffi::OsStrExt as _;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
@@ -136,15 +252,13 @@ mod platform {
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
     pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
-        let matplotlib_cache_directory = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE")
-            .map(PathBuf::from)
-            .or_else(|| inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache"));
+        let matplotlib_cache_directory = inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache");
         let matplotlib_config_directory =
             inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all
         // Matplotlib writes to the worker's private directory.
         if let Some(config) = inherited_matplotlibrc(matplotlib_config_directory.as_deref()) {
-            let config = CString::new(config.as_os_str().as_bytes())
+            let config = path_cstring(&config)
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
         }
@@ -169,8 +283,8 @@ mod platform {
             (c"MPLCONFIGDIR", matplotlib_directory),
             (c"XDG_CACHE_HOME", temporary_directory.join("cache")),
         ] {
-            let directory = CString::new(directory.as_os_str().as_bytes())
-                .expect("temporary directory should not contain NUL");
+            let directory =
+                path_cstring(&directory).expect("temporary directory should not contain NUL");
             set_environment(name, &directory, true)?;
         }
         Ok(())
@@ -202,7 +316,10 @@ mod platform {
             }
             let link = directory.join(name);
             if fs::symlink_metadata(&link).is_err() {
+                #[cfg(unix)]
                 let _ = symlink(cache.path(), link);
+                #[cfg(windows)]
+                let _ = fs::copy(cache.path(), link);
             }
         }
     }
@@ -251,9 +368,39 @@ mod platform {
         path.is_file().then_some(path)
     }
 
+    fn path_cstring(path: &Path) -> Result<CString, std::ffi::NulError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            CString::new(path.as_os_str().as_bytes())
+        }
+        #[cfg(windows)]
+        {
+            CString::new(path.to_string_lossy().as_bytes())
+        }
+    }
+
+    #[cfg(unix)]
     pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
         if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite.into()) } != 0 {
             return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(windows)]
+    pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
+        let name = name.to_str().map_err(io::Error::other)?;
+        if overwrite || std::env::var_os(name).is_none() {
+            let value = value.to_str().map_err(io::Error::other)?;
+            let assignment = CString::new(format!("{name}={value}")).map_err(io::Error::other)?;
+            // Keep both the Win32 environment and the UCRT getenv view used by
+            // embedded R/Python synchronized. _putenv copies its argument.
+            unsafe {
+                std::env::set_var(name, value);
+                if libc::putenv(assignment.as_ptr()) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
         }
         Ok(())
     }

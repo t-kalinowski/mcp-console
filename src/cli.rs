@@ -37,6 +37,16 @@ pub struct ConfigOverrides {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Provision the native Windows sandbox accounts and network rules
+    #[cfg(windows)]
+    SandboxSetup {
+        /// Persistent Windows sandbox state directory
+        #[arg(long, value_name = "PATH")]
+        state_dir: Option<PathBuf>,
+        /// Report setup readiness without provisioning
+        #[arg(long)]
+        status: bool,
+    },
     /// Run the MCP server over standard input and output
     Serve {
         #[command(flatten)]
@@ -61,7 +71,11 @@ pub enum Command {
 
     /// Run the internal R worker
     #[command(hide = true)]
-    Worker,
+    Worker {
+        /// Initialize enabled runtimes after transport readiness
+        #[arg(long, hide = true)]
+        bootstrap_runtimes: bool,
+    },
 
     /// Private resolver broker; requests and results use the preparation protocol
     #[command(hide = true)]
@@ -69,6 +83,7 @@ pub enum Command {
 
     /// Resolver workload, launched only after native enforcement
     #[command(hide = true)]
+    #[cfg(unix)]
     ResolverWorkload,
 
     #[command(hide = true)]
@@ -78,7 +93,10 @@ pub enum Command {
     #[command(hide = true)]
     DockerProbe,
     #[command(hide = true)]
-    ImageRuntimeProbe,
+    ImageRuntimeProbe {
+        #[arg(long)]
+        python: Option<PathBuf>,
+    },
     #[command(hide = true)]
     DockerSandboxOwner,
     #[command(hide = true)]

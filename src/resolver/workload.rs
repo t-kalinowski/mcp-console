@@ -1,7 +1,8 @@
 //! The entire executable preparation graph. This entry point is a sandbox
 //! workload; none of these operations run in the server or resolver broker.
-use crate::resolver::preparation::{Discovery, Operation, Selections};
+use crate::resolver::preparation::{Discovery, Mode, NativeDiscovery, Operation, Selections};
 use crate::resolver::{self, ResolverStopHandle};
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -76,8 +77,8 @@ pub(crate) fn run() -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     let mut context = request.context;
-    let result = if matches!(request.operation, Operation::Discover) {
-        Context::discover(&|_| Ok(())).and_then(|(selected, discovery)| {
+    let result = if let Operation::Discover { mode, local } = request.operation {
+        Context::discover(mode, local, &|_| Ok(())).and_then(|(selected, discovery)| {
             context = Some(selected);
             serde_json::to_value(discovery).map_err(|e| e.to_string())
         })
@@ -103,104 +104,135 @@ pub(crate) fn run() -> Result<(), String> {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(super) struct Context {
+    local: bool,
+    mode: Mode,
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
-    #[serde(with = "super::data::path")]
-    rscript: PathBuf,
+    rscript: Option<PathBuf>,
     managed_python: bool,
 }
 
 impl Context {
-    pub(super) fn discover(
+    fn discover(
+        mode: Mode,
+        local: bool,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let python = resolver::ManagedPythonResolverConfiguration::capture();
-        if !crate::local_runtime::Selection::r_is_present() {
-            let python = python.without_r_bootstrap();
-            let configured = std::env::var_os("RETICULATE_PYTHON");
-            let selection =
-                crate::local_runtime::Selection::python(configured.clone(), &python, on_started)?;
-            let managed = match &selection {
-                crate::local_runtime::Selection::Python { managed, .. } => managed.clone(),
-                _ => unreachable!(),
-            };
-            let discovery = Discovery {
-                managed: false,
-                direct_uv: python.has_uv(),
-                selections: Selections {
-                    r_home: None,
-                    python: configured.map(|s| s.to_string_lossy().into_owned()),
-                },
-                runtime: Some(selection),
-                python: managed,
-                protected: Vec::new(),
-                lease: None,
-                extension_directory: None,
-                matplotlib_cache: None,
+        let mode = if matches!(mode, Mode::Auto) {
+            if crate::local_runtime::Selection::r_is_present() {
+                Mode::R
+            } else {
+                Mode::PythonOnly
+            }
+        } else {
+            mode
+        };
+        let configured_python = std::env::var_os("RETICULATE_PYTHON");
+        let managed_python = !configured_python
+            .as_deref()
+            .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
+        let configured_python = configured_python.and_then(|python| python.into_string().ok());
+        if !matches!(mode, Mode::R) {
+            let python =
+                resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
+            let has_uv = python.has_uv();
+            let native = if !local && matches!(mode, Mode::PythonOnly) {
+                let (selection, managed) = crate::local_runtime::Selection::python_on_host(
+                    configured_python.clone().map(OsString::from),
+                    &python,
+                    on_started,
+                )?;
+                Some(NativeDiscovery {
+                    selection,
+                    python: managed,
+                })
+            } else {
+                None
             };
             return Ok((
                 Self {
+                    local,
+                    mode,
                     bootstrap: None,
                     r: None,
                     python,
-                    rscript: PathBuf::new(),
-                    managed_python: true,
+                    rscript: None,
+                    managed_python,
                 },
-                discovery,
+                Discovery {
+                    managed: false,
+                    selections: Selections {
+                        r_home: None,
+                        python: configured_python,
+                        native_python: None,
+                    },
+                    local_r_home_bytes: None,
+                    local_has_uv: local.then_some(has_uv),
+                    native,
+                    protected: Vec::new(),
+                    lease: None,
+                    extension_directory: None,
+                    matplotlib_cache: None,
+                },
             ));
         }
+        let python = resolver::ManagedPythonResolverConfiguration::capture();
         let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
-        let configured_python = std::env::var("RETICULATE_PYTHON").ok();
-        let managed_python = !configured_python
-            .as_ref()
-            .is_some_and(|python| !python.is_empty() && python != "managed");
+        let home = rscript
+            .parent()
+            .and_then(std::path::Path::parent)
+            .ok_or("remote Rscript has no R home")?;
+        #[cfg(windows)]
+        let home = if home.file_name().is_some_and(|name| name == "bin") {
+            home.parent().ok_or("Rscript has no R home")?
+        } else {
+            home
+        };
         let discovery = Discovery {
             managed: bootstrap.is_some(),
-            direct_uv: python.has_uv(),
-            runtime: Some(crate::local_runtime::Selection::R {
-                home: rscript
-                    .parent()
-                    .and_then(std::path::Path::parent)
-                    .ok_or("Rscript has no home")?
-                    .to_owned(),
+            selections: Selections {
+                r_home: Some(home.to_string_lossy().into_owned()),
+                python: configured_python,
+                native_python: None,
+            },
+            #[cfg(unix)]
+            local_r_home_bytes: local.then(|| {
+                use std::os::unix::ffi::OsStrExt;
+                home.as_os_str().as_bytes().to_vec()
             }),
-            python: None,
+            #[cfg(windows)]
+            local_r_home_bytes: None,
+            local_has_uv: local.then(|| python.has_uv()),
+            native: None,
             protected: Vec::new(),
             lease: None,
             extension_directory: None,
             matplotlib_cache: None,
-            selections: Selections {
-                r_home: Some(
-                    rscript
-                        .parent()
-                        .and_then(std::path::Path::parent)
-                        .ok_or("remote Rscript has no R home")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                python: configured_python,
-            },
         };
         Ok((
             Self {
+                local,
+                mode,
                 bootstrap,
                 r: None,
                 python,
-                rscript,
+                rscript: Some(rscript),
                 managed_python,
             },
             discovery,
         ))
     }
 
-    pub(super) fn execute(
+    fn execute(
         &mut self,
         operation: Operation,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
         match operation {
-            Operation::Discover => Err("discovery is only valid when opening a resolver".into()),
+            Operation::Discover { .. } => {
+                Err("discovery is only valid when opening a resolver".into())
+            }
             Operation::Bootstrap => {
                 let bootstrap = self
                     .bootstrap
@@ -213,35 +245,90 @@ impl Context {
                 Ok(serde_json::Value::Null)
             }
             Operation::R { requirements } => {
-                if self.r.is_none() {
-                    self.r = Some(
-                        self.bootstrap
-                            .as_ref()
-                            .ok_or("R preparation is unavailable")?
-                            .prepare(&mut self.python, on_started)?,
-                    );
-                }
-                let configuration = self.r.as_ref().expect("prepared R bootstrap");
+                let configuration = self
+                    .r
+                    .as_ref()
+                    .ok_or("remote R bootstrap has not been prepared")?;
                 let r = resolver::resolve_r_with(configuration, requirements, on_started)?;
                 serde_json::to_value(r).map_err(|error| error.to_string())
             }
-            Operation::Python { requirements, r } => {
-                let r = r.map(|r| r.on_host(&self.rscript));
+            Operation::ResolveRStandalone { requirements } => {
+                let r = if let Some(configuration) = &self.r {
+                    resolver::resolve_r_with(configuration, requirements, on_started)?
+                } else {
+                    resolver::resolve_r(requirements, on_started, |configuration| {
+                        self.r = Some(configuration);
+                    })?
+                };
+                self.rscript = Some(r.rscript().to_path_buf());
+                serde_json::to_value(r).map_err(|error| error.to_string())
+            }
+            Operation::Python {
+                requirements,
+                r,
+                selected_python,
+            } => {
+                let r =
+                    r.map(|r| r.on_host(self.rscript.as_ref().expect("managed R has an Rscript")));
                 self.prepare_uv(r.as_ref(), on_started)?;
-                let mut python =
-                    resolver::resolve_python_manifest(requirements, &self.python, on_started)?;
+                let mut python = resolver::resolve_python_manifest_for_remote(
+                    requirements,
+                    &self.python,
+                    if self.local { None } else { r.as_ref() },
+                    selected_python.as_deref(),
+                    on_started,
+                )?;
                 python.set_native(crate::python::inspect_native(python.python(), on_started)?);
                 serde_json::to_value(python).map_err(|error| error.to_string())
             }
             Operation::PythonVersion { constraints, r } => {
-                let r = r.map(|r| r.on_host(&self.rscript));
+                let r =
+                    r.map(|r| r.on_host(self.rscript.as_ref().expect("managed R has an Rscript")));
                 self.prepare_uv(r.as_ref(), on_started)?;
-                resolver::resolve_python_version(constraints, &self.python, on_started)
-                    .map(serde_json::Value::String)
+                let version = match r.as_ref() {
+                    Some(r) if !self.local => resolver::resolve_python_version_for_remote(
+                        constraints,
+                        &self.python,
+                        r,
+                        on_started,
+                    )?,
+                    _ => resolver::resolve_python_version(constraints, &self.python, on_started)?,
+                };
+                Ok(serde_json::Value::String(version))
+            }
+            Operation::InspectPython { executable } => {
+                serde_json::to_value(crate::python::inspect_native(&executable, on_started)?)
+                    .map_err(|error| error.to_string())
+            }
+            Operation::Uv { r } => {
+                let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
+                if let Some(uv) = self.python.selected_uv() {
+                    return serde_json::to_value(uv).map_err(|error| error.to_string());
+                }
+                let configuration = self.r.as_ref().ok_or("R bootstrap has not been prepared")?;
+                let uv = configuration.resolve_uv(&r, &self.python, on_started)?;
+                self.python.set_resolved_uv(uv.clone());
+                serde_json::to_value(uv).map_err(|error| error.to_string())
             }
             Operation::Duckdb { r, extensions } => {
-                let r = r.on_host(&self.rscript);
+                let r = r.on_host(self.rscript.as_ref().expect("managed R has an Rscript"));
                 resolver::resolve_duckdb_extensions(&r, &extensions, on_started)?;
+                Ok(serde_json::Value::Null)
+            }
+            Operation::DuckdbPython {
+                python,
+                extensions,
+                extension_directory,
+            } => {
+                if !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
+                    return Err("Python-backed DuckDB preparation requires managed Python".into());
+                }
+                resolver::resolve_python_duckdb_extensions(
+                    &python,
+                    &extensions,
+                    &extension_directory,
+                    on_started,
+                )?;
                 Ok(serde_json::Value::Null)
             }
         }
@@ -256,7 +343,7 @@ impl Context {
             return Err("managed Python requirements are disabled because the session uses a user-selected Python environment".into());
         }
         if !self.python.has_uv() {
-            let r = r.ok_or("remote Python bootstrap requires managed R")?;
+            let r = r.ok_or("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment")?;
             let configuration = self
                 .r
                 .as_ref()

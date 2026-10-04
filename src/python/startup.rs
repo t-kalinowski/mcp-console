@@ -1,20 +1,65 @@
-use super::{ImportResolution, PreparationOutcome, reticulate};
+//! CPython bootstrap operations, independent of the R/reticulate adapter.
+//! Interpreter lifetime and setup completion are retained by `library`.
+
+use super::ImportResolution;
 use std::path::Path;
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SelectedPython {
     pub(crate) python: String,
     pub(crate) libpython: String,
     pub(crate) python_home: String,
 }
 
-pub(crate) fn initialize_selected(selected: &SelectedPython) -> Result<bool, String> {
-    super::library::initialize(
-        Path::new(&selected.libpython),
-        &selected.python,
-        &selected.python_home,
-        true,
-    )
+pub(crate) fn initialize_selected(configuration: &super::NativePython) -> Result<bool, String> {
+    super::library::initialize(configuration)
+}
+
+// Invoked once, after selection validation and before CPython runs any hooks.
+// These process-wide changes share the serialized interpreter thread. They
+// remain committed with the interpreter even when bridge attachment fails.
+pub(super) fn configure_process_environment(selected: &super::NativePython) -> Result<(), String> {
+    let executable = Path::new(&selected.embedding.python);
+    let directory = executable
+        .parent()
+        .ok_or("selected Python has no parent directory")?;
+    let mut path = vec![directory.to_path_buf()];
+    if let Some(inherited) = std::env::var_os("PATH") {
+        path.extend(std::env::split_paths(&inherited));
+    }
+    let path = std::env::join_paths(path).map_err(|error| error.to_string())?;
+    // The current process loads the inspected library by absolute path. Linux
+    // children also need the selected installation's dependent library paths.
+    #[cfg(target_os = "linux")]
+    let libraries = {
+        let mut libraries = vec![Path::new(&selected.prefix).join("lib")];
+        if selected.base_prefix != selected.prefix {
+            libraries.push(Path::new(&selected.base_prefix).join("lib"));
+        }
+        if let Some(inherited) = std::env::var_os("LD_LIBRARY_PATH") {
+            libraries.extend(std::env::split_paths(&inherited));
+        }
+        std::env::join_paths(libraries).map_err(|error| error.to_string())?
+    };
+    // CPython reads pyvenv.cfg from the preserved program name. Setting the
+    // base PythonHome overrides the virtualenv and would require reactivation.
+    unsafe {
+        std::env::remove_var("PYTHONHOME");
+        std::env::remove_var("PYTHONPLATLIBDIR");
+        std::env::set_var("PATH", path);
+        #[cfg(target_os = "linux")]
+        std::env::set_var("LD_LIBRARY_PATH", libraries);
+        if selected.prefix != selected.base_prefix {
+            std::env::set_var("VIRTUAL_ENV", &selected.prefix);
+        } else {
+            std::env::remove_var("VIRTUAL_ENV");
+        }
+        if let Some(path) = std::env::var_os("RETICULATE_PYTHONPATH") {
+            std::env::set_var("PYTHONPATH", path);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn install_services(libpython: &Path) -> Result<(), String> {
@@ -25,22 +70,11 @@ pub(super) fn install_services(libpython: &Path) -> Result<(), String> {
 }
 
 /// Install the shared evaluator after the selected interpreter is live.
-/// Reticulate may call this from its initialization hook, while a native
-/// caller can pass no callback without constructing an R adapter.
+/// Reticulate may call this from its initialization hook. Both compositions
+/// install their managed or disabled import policy through this setup boundary.
 /// Successful steps remain in the process-lifetime library state, so a later
 /// call resumes incomplete setup without replacing the interpreter.
-pub(crate) fn setup_runtime(
-    libpython: &Path,
-    resolution: ImportResolution<'_>,
-) -> Result<bool, String> {
-    setup_runtime_with_sql(libpython, resolution, true)
-}
-
-fn setup_runtime_with_sql(
-    libpython: &Path,
-    resolution: ImportResolution<'_>,
-    sql: bool,
-) -> Result<bool, String> {
+pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, String> {
     super::library::load(libpython)?;
     if super::library::runtime_configured()? {
         return Ok(true);
@@ -50,116 +84,92 @@ fn setup_runtime_with_sql(
     if !super::library::services_installed()? {
         install_services(libpython)?;
     }
+    let site_initialized = super::library::initialize_site()?;
+    // Startup customizations precede evaluator defaults. Install the evaluator
+    // even after an interrupted hook so it can report the retained exception.
     super::library::install_runtime(super::RUNTIME_SOURCE)?;
-    if sql {
-        crate::sql::install_python_runtime()?;
+    if !site_initialized {
+        return Ok(false);
     }
-    // The finder starts with automatic resolution disabled. A native caller
-    // with neither input keeps that default rather than replacing its reason
-    // with Python None.
-    if (resolution.callback.is_some() || resolution.disabled_reason.is_some())
-        && !super::library::configure_import_resolution(resolution)?
+    if !crate::sql::install_python_runtime()? {
+        return Ok(false);
+    }
+    if !super::library::configure_environment()? {
+        return Err("Python environment setup failed; restart required".into());
+    }
+    if !super::library::configure_module_defaults()? {
+        return Ok(false);
+    }
+    if !super::library::configure_import_resolution(import_policy(managed))? {
+        return Ok(false);
+    }
+    if managed
+        && !super::environment::initialize(
+            libpython
+                .to_str()
+                .ok_or("Python library path is not UTF-8")?,
+        )?
     {
         return Ok(false);
     }
-    super::library::mark_runtime_configured(sql)?;
+    super::library::mark_runtime_configured()?;
     Ok(true)
+}
+
+fn import_policy(managed: bool) -> ImportResolution<'static> {
+    if managed {
+        return ImportResolution::Managed;
+    }
+    ImportResolution::Disabled(
+        match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
+            Ok("docker") => {
+                "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session"
+            }
+            Ok("docker_sandbox") => {
+                "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session"
+            }
+            _ if std::env::var("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION").as_deref()
+                == Ok("0") =>
+            {
+                "MCP Console dynamic environment resolution is unavailable. Install the distribution into the ambient Python environment, or install `ir` or `uv` and restart MCP Console."
+            }
+            _ => {
+                "MCP Console is using a user-selected Python environment. Automatic managed package resolution is disabled, and `requirements.python` is also disabled for this interpreter selection. Install the distribution into the selected environment or restart MCP Console with managed Python enabled."
+            }
+        },
+    )
 }
 
 pub(crate) fn finish_initialization() -> Result<(), String> {
     super::library::finish_initialization()
 }
 
-/// Native owner for both Python-first and R-first interpreter startup.
-pub(super) struct Runtime {
-    adapter: Option<reticulate::Adapter>,
-    completed: bool,
-}
-
-impl Runtime {
-    pub(super) fn initialize() -> Result<Self, String> {
-        Ok(Self {
-            adapter: Some(reticulate::Adapter::initialize()?),
-            completed: false,
-        })
-    }
-
-    pub(super) fn native(
-        configuration: &super::NativePython,
-        managed: bool,
-    ) -> Result<Self, String> {
-        let selected = &configuration.embedding;
-        // Let CPython's program-name/pyvenv.cfg path initialization select the
-        // virtualenv. Setting PythonHome to its base overrides that selection.
-        super::library::initialize(Path::new(&selected.libpython), &selected.python, "", false)?;
-        let result = setup_runtime_with_sql(
-            Path::new(&selected.libpython),
-            ImportResolution {
-                callback: None,
-                disabled_reason: Some(if managed {
-                    crate::local_runtime::MANAGED_IMPORT_DISABLED
-                } else {
-                    crate::local_runtime::IMPORT_DISABLED
-                }),
-            },
-            false,
-        )
-        .and_then(|configured| {
-            if !configured {
-                return Err("native Python setup did not complete".into());
-            }
-            super::library::configure_native_environment(configuration)?;
-            if !super::library::disable_matplotlib_show()? {
-                return Err("Python plotting setup did not complete".into());
-            }
-            Ok(())
-        });
-        if result.is_err() {
-            super::library::display_setup_exception()?;
+/// Initialize a host-selected interpreter without constructing an R adapter.
+/// Successful return includes environment, SQL, and import-resolution setup.
+pub(super) fn initialize_native(
+    configuration: &super::NativePython,
+    managed: bool,
+) -> Result<bool, String> {
+    let selected = &configuration.embedding;
+    initialize_selected(configuration)?;
+    let result = setup_runtime(Path::new(&selected.libpython), managed).and_then(|configured| {
+        if configured && !crate::worker::r_available() {
+            super::library::configure_native_sql()?;
         }
-        let finished = finish_initialization();
-        result?;
-        finished?;
-        Ok(Self {
-            adapter: None,
-            completed: true,
-        })
+        Ok(configured)
+    });
+    if !matches!(result, Ok(true)) {
+        super::library::display_setup_exception()?;
     }
-
-    pub(super) fn ensure_initialized(&mut self) -> Result<bool, String> {
-        if !self.completed {
-            let adapter = self
-                .adapter
-                .as_mut()
-                .expect("incomplete reticulate startup");
-            let Some(selected) = adapter.select()? else {
-                return Ok(false);
-            };
-            if let Err(error) = initialize_selected(&selected) {
-                adapter.cancel_selection()?;
-                return Err(error);
-            }
-            // Reticulate attaches conversion and event integration first.
-            // Its initialization hook enters the shared native setup above;
-            // the explicit setup call also covers an already-live interpreter.
-            let result =
-                adapter.attach().and_then(
-                    |attached| {
-                        if attached { adapter.setup() } else { Ok(false) }
-                    },
-                );
-            let finished = finish_initialization();
-            let completed = result?;
-            finished?;
-            self.completed = completed;
-        }
-        Ok(self.completed)
+    let finished = finish_initialization();
+    let configured = result?;
+    finished?;
+    if !configured && managed {
+        super::requirements::interrupt_initialization();
     }
-
-    pub(super) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-        self.adapter
-            .as_ref()
-            .expect("live preparation requires R")
-            .prepare(packages)
+    if configured && managed && !super::requirements::initialized() {
+        let manifest = super::requirements::declaration()?;
+        super::requirements::initialize(configuration, manifest)?;
     }
+    Ok(configured)
 }

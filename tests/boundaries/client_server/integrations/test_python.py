@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -20,8 +21,12 @@ from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
-from support.requirements import WORKER, requires
-from support.resolvers import bare_runtime_environment
+from support.requirements import WORKER, command, requires
+from support.resolvers import (
+    bare_runtime_environment,
+    fake_ir_environment,
+    recording_uv_environment,
+)
 from support.suites import run_this_suite
 
 
@@ -36,19 +41,60 @@ def options(binary: Path, execution: Execution) -> dict:
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
 def test_clients_inspect_and_replace_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
     results = []
     with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = recording_uv_environment(root)
+        # No cell is evaluated, but eager startup still prepares DuckDB extensions.
+        # Supply those real packages alongside deterministic resolver results.
+        library = Path(
+            subprocess.run(
+                [
+                    "ir",
+                    "run",
+                    "--with",
+                    "DBI",
+                    "--with",
+                    "duckdb",
+                    "--with",
+                    "jsonlite",
+                    "--isolated",
+                    "--vanilla",
+                    "-e",
+                    "cat(.libPaths()[[1L]])",
+                ],
+                cwd=directory,
+                env=r_test_environment()[0],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout
+        )
+        assert library.is_absolute() and library.is_dir(), library
+        environment.update(fake_ir_environment(root, [library] * 4))
+        # Preparation must not borrow packages from the caller's R libraries.
+        empty_library = root / "empty-r-library"
+        empty_library.mkdir()
+        environment.update(
+            {
+                name: str(empty_library)
+                for name in ("R_LIBS", "R_LIBS_USER", "R_LIBS_SITE")
+            }
+        )
+        environment.pop("RETICULATE_PYTHON", None)
+        environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         settings = {
             "command": binary,
             "args": execution.serve(),
-            "server_parameters": {"cwd": directory},
+            "server_parameters": {"cwd": directory, "env": environment},
         }
         with MCPConsole(**settings) as console:
             startup = json.loads(console.send(requirements={"action": "get"}))
-            assert startup["prepared"] is False
+            assert startup["prepared"] is True, startup
             console.send(
                 requirements={
                     "action": "set",
@@ -59,13 +105,14 @@ def test_clients_inspect_and_replace_requirements(
             )
             selected = json.loads(console.send(requirements={"action": "get"}))
             console.send(requirements=dict(selected["requirements"], action="set"))
+            assert selected["prepared"] is True, selected
             assert selected["requirements"]["python"] == []
             results.append({"sync": selected})
 
         async def asynchronous() -> None:
             async with AsyncMCPConsole(**settings) as console:
                 startup = json.loads(await console.send(requirements={"action": "get"}))
-                assert startup["prepared"] is False
+                assert startup["prepared"] is True, startup
                 await console.send(requirements={"action": "set"})
                 selected = json.loads(
                     await console.send(requirements={"action": "get"})
@@ -74,6 +121,7 @@ def test_clients_inspect_and_replace_requirements(
                 results.append({"async": selected})
 
         asyncio.run(asynchronous())
+        assert (root / "ir-counter").read_text() == "4"
     return results
 
 
@@ -274,7 +322,12 @@ def test_callable_tools_follow_connected_server_fields(
                     if label == "bare":
                         assert console.send_tool.input_schema["properties"][
                             "requirements"
-                        ]["properties"]["action"]["enum"] == ["get"]
+                        ]["properties"]["action"]["enum"] == [
+                            "get",
+                            "add",
+                            "set",
+                            "reset",
+                        ]
                     output = await exercise_tools(console, source, expected_fields)
                 with MCPConsole(**settings) as console:
                     assert (
