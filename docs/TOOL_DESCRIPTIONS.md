@@ -5,11 +5,13 @@ Include information that changes tool choice, call construction, or result inter
 
 ## Source and stability
 
-[`src/server.rs`](../src/server.rs), its argument definitions, and [`src/server/execution.rs`](../src/server/execution.rs) construct the interface.
+[`src/server/presentation.rs`](../src/server/presentation.rs) composes named [prose sections](../src/server/presentation/sections.rs); [`src/server/arguments.rs`](../src/server/arguments.rs) defines the input schema.
 The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records it.
 Regenerate that snapshot deliberately through the [boundary tests](../tests/boundaries/README.md), never by editing expected output.
 
 Descriptions depend on captured configuration, not completed runtime discovery.
+The presentation profile selects sections from configured languages, built-in or custom worker selection, and host preparation or a prepared image/template.
+Small platform conditionals select Windows language and interrupt guidance without matching or removing sentences.
 For the same configuration, they stay stable as background startup finishes or fails.
 `MCP_CONSOLE_LANGUAGES` filters direct code fields; execution still checks actual runtime availability.
 Prepared Docker/SBX configuration limits requirements to inspection.
