@@ -355,7 +355,6 @@ fn dispatch_worker_events(
                 }
             }
             WorkerEvent::RelayClosed => {
-                commands.abort("worker relay command transport closed".to_string());
                 relay_closed = true;
                 if !(retiring
                     || stdout_closed
@@ -371,6 +370,9 @@ fn dispatch_worker_events(
                     fail_relay_exit(&operation, &mut startup, &interrupts, error.to_string());
                     semantic_failure = true;
                 }
+                // Record the exit cause before rejected command admission can
+                // let a racing evaluator publish an ordinary transport failure.
+                commands.abort("worker relay command transport closed".to_string());
                 if retiring || semantic_failure || !intentional_shutdown {
                     break;
                 }
