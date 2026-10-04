@@ -14,6 +14,24 @@ Security and liveness cases may need causal or process assertions in addition to
 Do not assert incidental internal sequencing.
 Keep a combined case when the interaction itself is a plausible failure mode.
 
+## Find a contract's test area
+
+Start with a behavior below and search its test areas.
+Use `scripts/test --full --list` to discover exact suites and cases, then `scripts/test --locate SELECTOR` to reach source and snapshots; see [Running cases](#running-cases).
+See [Fixtures and providers](#fixtures-and-providers) for fixture and harness guidance, and the [architecture source map](../../docs/ARCHITECTURE.md#where-to-look-in-source) for production ownership.
+These areas provide representative transcript coverage; [case capabilities](#requirements-and-execution-modes) determine applicability.
+For native Windows acceptance, use the [Windows validation guide](../../docs/WINDOWS.md#validation).
+
+| Behavior                  | Test areas                                                                                               |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Admission/delivery        | [MCP server](client_server/server/), [MCP output](client_server/output/)                                 |
+| Worker lifecycle          | [MCP lifecycle](client_server/lifecycle/), [relay/worker lifecycle](relay_worker/lifecycle/)             |
+| Sideband/framing          | [CLI relay](cli/relay/), [server/relay failures](server_relay/failures/)                                 |
+| Output retention/previews | [MCP output](client_server/output/)                                                                      |
+| Preparation               | [MCP requirements](client_server/requirements/), [server/relay requirements](server_relay/requirements/) |
+| Recording                 | [MCP recording](client_server/recording/)                                                                |
+| Sandbox guarantees        | [CLI sandbox](cli/sandbox/), [MCP sandbox](client_server/sandbox/)                                       |
+
 ## Running cases
 
 ```sh
