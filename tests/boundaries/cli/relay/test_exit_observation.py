@@ -13,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.processes import stop_process_group
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
@@ -40,6 +42,7 @@ def test_observation_and_probe_failure_still_stops_and_reaps_worker(
 def observe_relay(binary: Path, *, fail: bool, fail_probe: bool = False) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        worker_pid = root / "worker-pid"
         checkpoints = {
             name: FifoCheckpoint.create(root / name)
             for name in ("entered", "release", "killed")
@@ -48,6 +51,7 @@ def observe_relay(binary: Path, *, fail: bool, fail_probe: bool = False) -> Tran
             **os.environ,
             LOADER_VARIABLE: str(build_interposer(root, "child_exit_observation")),
             "MCP_CONSOLE_TEST_OBSERVER_ENTERED": str(root / "entered"),
+            "MCP_CONSOLE_TEST_OBSERVER_PID": str(worker_pid),
             "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(root / "release"),
             "MCP_CONSOLE_TEST_CHILD_KILLED": str(root / "killed"),
             "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
@@ -146,11 +150,27 @@ def observe_relay(binary: Path, *, fail: bool, fail_probe: bool = False) -> Tran
                 }
             ]
         finally:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=10)
-            for checkpoint in checkpoints.values():
-                checkpoint.close()
+            try:
+                with Events() as exits:
+                    watched = None
+                    if worker_pid.exists():
+                        pid = int(worker_pid.read_text())
+                        try:
+                            exits.watch_process(pid)
+                        except ProcessLookupError:
+                            pass
+                        else:
+                            watched = pid
+                    # The owned group can outlive the relay that leads it.
+                    stop_process_group(process.pid)
+                    if watched is not None:
+                        assert exits.wait(10) == {watched}, (
+                            "worker outlived fixture cleanup"
+                        )
+            finally:
+                process.wait(timeout=10)
+                for checkpoint in checkpoints.values():
+                    checkpoint.close()
 
 
 if __name__ == "__main__":
