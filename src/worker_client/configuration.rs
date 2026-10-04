@@ -12,6 +12,7 @@ pub(crate) struct ClientConfiguration {
     pub(super) relay: Option<PathBuf>,
     pub(super) no_sandbox: bool,
     pub(super) sandbox_settings: crate::settings::SandboxSettings,
+    pub(super) resolver_settings: crate::settings::SandboxSettings,
     pub(super) worker: Mutex<WorkerState>,
     pub(super) environment: Option<Mutex<Environment>>,
     pub(super) requirements_snapshot: Mutex<serde_json::Value>,
@@ -43,6 +44,14 @@ pub(super) struct BuiltinSetup {
 }
 
 impl ClientConfiguration {
+    pub(crate) fn with_resolver_settings(
+        mut self,
+        settings: crate::settings::SandboxSettings,
+    ) -> Self {
+        self.resolver_settings = settings;
+        self
+    }
+
     pub(crate) fn new(
         program: PathBuf,
         relay: Option<PathBuf>,
@@ -71,6 +80,7 @@ impl ClientConfiguration {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -91,6 +101,7 @@ impl ClientConfiguration {
                 let (preparation, discovery) =
                     crate::resolver::preparation::Preparation::open_local(
                         crate::resolver::preparation::Mode::PythonOnly,
+                        (!no_sandbox && cfg!(unix)).then(|| resolver_settings.clone()),
                         diagnostics.clone(),
                         on_started,
                     )?;
@@ -133,6 +144,7 @@ impl ClientConfiguration {
                 let (preparation, discovery) =
                     crate::resolver::preparation::Preparation::open_local(
                         crate::resolver::preparation::Mode::R,
+                        (!no_sandbox && cfg!(unix)).then(|| resolver_settings.clone()),
                         diagnostics.clone(),
                         on_started,
                     )?;
@@ -273,6 +285,7 @@ impl ClientConfiguration {
             relay,
             no_sandbox,
             sandbox_settings,
+            resolver_settings: Default::default(),
             worker: Mutex::new(WorkerState::Initial),
             requirements_snapshot: Mutex::new(environment.inspection()),
             runtime_r_requirements: environment
@@ -291,12 +304,14 @@ impl ClientConfiguration {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn target(
         target: crate::settings::Target,
         roots: Vec<PathBuf>,
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -307,6 +322,7 @@ impl ClientConfiguration {
                 no_sandbox,
                 policy,
                 python,
+                resolver_settings,
                 diagnostics,
                 started,
             );
@@ -356,6 +372,7 @@ impl ClientConfiguration {
         no_sandbox: bool,
         policy: crate::settings::SandboxSettings,
         configured_python: Option<PathBuf>,
+        resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -364,6 +381,7 @@ impl ClientConfiguration {
             let discovery = session.discover(
                 &policy,
                 configured_python.as_deref(),
+                (!no_sandbox).then(|| resolver_settings.clone()),
                 diagnostics.clone(),
                 started,
             )?;
@@ -397,6 +415,7 @@ impl ClientConfiguration {
         let discovery = session.discover(
             &policy,
             configured_python.as_deref(),
+            (!no_sandbox).then(|| resolver_settings.clone()),
             diagnostics.clone(),
             started,
         )?;

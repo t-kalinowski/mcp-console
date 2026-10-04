@@ -127,7 +127,10 @@ def _snapshot_survives_replacement(
             transcript = client.finish()
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(payloads) == 4, len(payloads)
+        assert len(payloads) == 5, len(payloads)
+        resolver = payloads.pop(0)
+        assert resolver["proxy"]["enabled"] is True
+        assert resolver["proxy"]["domains"]["pypi.org"] == "allow"
         assert all(payload == payloads[0] for payload in payloads), payloads
         payload = payloads[0]
         assert payload["network"] == "restricted"

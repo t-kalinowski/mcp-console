@@ -88,8 +88,10 @@ Launch protocol version 10 distinguishes interrupted bootstrap from other incomp
 Preparation protocol version 6 adds required conversion metadata to inspected Python identities.
 Version 5 peers are rejected during negotiation, even when Console package versions match; update the controller and remote executable together.
 
-Preparation is trusted host execution, not a secure isolation boundary.
-Package builds and startup code can run with the remote account's permissions, independently of the worker's network policy.
+On macOS and Linux, preparation runs inside a separate native resolver sandbox unless `--no-sandbox` is selected.
+The controller captures its trusted YAML policy; the remote host materializes cache paths and proxy endpoints.
+See [resolver defaults and configuration](RESOLVER.md).
+Package builds and startup code use the resolver policy's host reads, cache writes, and download destinations, independently of the worker's network policy.
 Captured paths do not freeze worker-modifiable files they name.
 
 ## Lifecycle and records

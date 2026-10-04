@@ -105,7 +105,10 @@ pub enum Command {
 
     /// Prepare dependencies for an authenticated SSH controller
     #[command(hide = true)]
-    SshPrepare,
+    SshPrepare {
+        #[arg(long, hide = true)]
+        open_env: Option<String>,
+    },
 
     /// Run the internal worker relay
     #[command(hide = true)]

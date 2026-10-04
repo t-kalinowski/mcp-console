@@ -101,7 +101,15 @@ def test_managed_python_requires_home_for_default_extensions(
         (root / "uv").symlink_to(shutil.which("uv"))
         env = dict(environment(root), UV_CACHE_DIR=str(root / "uv-cache"))
         env.pop("HOME", None)
-        with sql_client(binary, execution, env, record_in_project=False) as client:
+        if execution is SANDBOXED:
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps({"resolver": {"environment": {"HOME": os.environ["HOME"]}}})
+            )
+        with sql_client(
+            binary, execution, env, current_directory=root, record_in_project=False
+        ) as client:
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
             diagnostic = "DuckDB extension preparation requires an absolute HOME at server startup"
@@ -132,7 +140,39 @@ def test_default_extension_failure_preserves_close_failure(
         env[LOADER_VARIABLE] = str(build_interposer(root, "preparation_close_failure"))
         # Python selection succeeds, but default extension preparation needs HOME.
         env.pop("HOME", None)
-        with sql_client(binary, execution, env, record_in_project=False) as client:
+        if execution is SANDBOXED:
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "resolver": {
+                            "environment": {
+                                "HOME": os.environ["HOME"],
+                                LOADER_VARIABLE: env[LOADER_VARIABLE],
+                            },
+                            "filesystem": {
+                                "entries": [
+                                    {
+                                        "path": {
+                                            "type": "special",
+                                            "value": {"kind": "root"},
+                                        },
+                                        "access": "read",
+                                    },
+                                    {
+                                        "path": {"type": "path", "path": str(root)},
+                                        "access": "write",
+                                    },
+                                ]
+                            },
+                        }
+                    }
+                )
+            )
+        with sql_client(
+            binary, execution, env, current_directory=root, record_in_project=False
+        ) as client:
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
             diagnostic = (
@@ -655,12 +695,14 @@ def test_interrupts_extension_preparation_before_worker_retirement(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        started = FifoCheckpoint.create(root / "started")
-        release = FifoCheckpoint.create(root / "release")
+        checkpoints = root / "uv-cache"
+        checkpoints.mkdir()
+        started = FifoCheckpoint.create(checkpoints / "started")
+        release = FifoCheckpoint.create(checkpoints / "release")
         env = dict(
             env,
-            UV_CACHE_DIR=str(root / "uv-cache"),
-            MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(root),
+            UV_CACHE_DIR=str(checkpoints),
+            MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(checkpoints),
         )
         try:
             with sql_client(binary, execution, env) as client:

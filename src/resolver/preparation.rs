@@ -143,6 +143,8 @@ enum Input {
         selections: Selections,
         #[serde(default, skip_serializing_if = "Mode::is_r")]
         mode: Mode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolver: Option<crate::settings::SandboxSettings>,
     },
     Run {
         id: u64,
@@ -279,16 +281,19 @@ fn read_jsonl<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<
     serde_json::from_slice(&bytes).map_err(|error| format!("invalid resolver JSON: {error}"))
 }
 
-pub(crate) fn run() -> Result<(), String> {
+pub(crate) fn run(open_env: Option<&str>) -> Result<(), String> {
     #[cfg(unix)]
-    return host::run(false);
+    return host::run(false, open_env);
     #[cfg(not(unix))]
-    Err("SSH preparation requires macOS or Linux".into())
+    {
+        let _ = open_env;
+        Err("SSH preparation requires macOS or Linux".into())
+    }
 }
 
 pub(crate) fn run_local() -> Result<(), String> {
     #[cfg(any(unix, windows))]
-    return host::run(true);
+    return host::run(true, None);
     #[cfg(not(any(unix, windows)))]
     Err("host resolution requires macOS, Linux, or Windows".into())
 }

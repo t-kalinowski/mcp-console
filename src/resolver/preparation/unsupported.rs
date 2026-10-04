@@ -7,6 +7,7 @@ pub(crate) struct Preparation;
 impl Preparation {
     pub(crate) fn open_local(
         _: super::Mode,
+        _: Option<crate::settings::SandboxSettings>,
         _: crate::process_output::Diagnostics,
         _: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, super::Discovery), String> {
@@ -16,6 +17,7 @@ impl Preparation {
     pub(crate) fn open(
         _session: &crate::ssh::Session,
         _selections: Selections,
+        _resolver: Option<crate::settings::SandboxSettings>,
         _diagnostics: crate::process_output::Diagnostics,
         _on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {

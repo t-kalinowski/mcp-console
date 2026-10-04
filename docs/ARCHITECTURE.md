@@ -130,7 +130,8 @@ Explicit and failure-driven replacement both respect retirement barriers.
 
 ## Preparation and activation
 
-Dependency resolution runs outside the worker sandbox, on the execution host.
+Dependency resolution runs in a separate native resolver sandbox on macOS and Linux execution hosts.
+Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
 Local sessions use the hidden `resolve` command; SSH has a remote preparation connection.
 Prepared Docker/SBX targets use preinstalled environments and never invoke controller or target dependency resolvers.
 
@@ -144,8 +145,8 @@ Unsafe partial activation can require restart.
 Explicit preparation and worker-originated requests share environment-change ownership, preventing a stale preparation result from overwriting a newer manifest.
 Automatic R loads and Python imports request packages only when execution reaches them; cells are not scanned or rerun.
 
-These are transaction boundaries, **not a resolver sandbox**.
-Accepted package builds and worker-writable resolver inputs can execute with host permissions.
+Transactions protect accepted environments; the resolver sandbox bounds preparation permissions.
+Its default host reads and shared writable caches still require trusted dependencies and inputs.
 [Requirements](REQUIREMENTS.md) defines supported changes and the trust boundary.
 
 ## Retirement and cancellation

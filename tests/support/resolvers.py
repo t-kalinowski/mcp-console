@@ -43,6 +43,8 @@ def recording_ir_environment(
 ) -> tuple[dict[str, str], Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
+    # Fixture records and checkpoints live in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     real_ir = shutil.which("ir")
     assert real_ir is not None, "real `ir` is required"
     fake_bin = directory / "bin"
@@ -99,6 +101,8 @@ def checkpoint_uv_environment(
     started = FifoCheckpoint.create(temporary / "uv-started")
     release = FifoCheckpoint.create(temporary / "uv-release")
     environment = os.environ.copy()
+    # Fixture records and checkpoints live in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(temporary)
     environment["RETICULATE_UV"] = str(FIXTURES / "checkpoint_uv")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = argument
@@ -450,6 +454,8 @@ def recording_uv_environment(
     real_uv = shutil.which("uv")
     assert real_uv is not None, "real uv is required"
     environment = os.environ.copy()
+    # Fixture records and checkpoints live in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     environment.pop("RETICULATE_PYTHON", None)
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv

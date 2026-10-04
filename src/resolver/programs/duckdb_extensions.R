@@ -29,6 +29,16 @@ base::local({
   )
   base::on.exit(DBI::dbDisconnect(connection), add = TRUE)
   DBI::dbExecute(connection, "SET enable_progress_bar = false")
+  if (Sys.getenv("CODEX_NETWORK_PROXY_ACTIVE") == "1") {
+    # Extension INSTALL does not consume the proxy environment itself.
+    DBI::dbExecute(
+      connection,
+      paste(
+        "SET http_proxy =",
+        DBI::dbQuoteString(connection, Sys.getenv("HTTP_PROXY"))
+      )
+    )
+  }
 
   for (extension in extensions) {
     identifier <- DBI::dbQuoteIdentifier(connection, extension)

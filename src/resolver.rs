@@ -8,6 +8,7 @@ mod environment;
 pub(crate) use environment::{ManagedPython, ManagedR};
 pub(crate) mod execution;
 pub(crate) mod preparation;
+pub(crate) mod sandbox;
 
 pub(crate) fn run() -> Result<(), String> {
     preparation::run_local()
