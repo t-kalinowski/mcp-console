@@ -13,7 +13,7 @@ startup_supervision_failure:
   custom_relay: did not execute
   sandbox_stderr: not yet written
   diagnostic_order: held beyond cut and response
-  verified_cleanup: helper exit and manager reaping
+  verified_cleanup: helper and manager reaping
 ---
 send:
   r: echo echo

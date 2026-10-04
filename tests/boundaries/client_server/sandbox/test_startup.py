@@ -5,6 +5,7 @@ import select
 import time
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -13,7 +14,6 @@ from support.checkpoints import FifoCheckpoint
 from support.native import build_interposer
 from support.client import McpClient, stop_client
 from support.execution import SANDBOXED
-from support.events import Events
 from support.macos import (
     DarwinProcessIdentity,
     kill_darwin_processes,
@@ -34,20 +34,28 @@ from support.suites import run_this_suite
 
 TIMEOUT = 10
 MARKER_NAME = "mcp-console-startup-marker"
+# Python's select module omits Darwin's deprecated process-reaping flag.
+_KQ_NOTE_REAP = 0x10000000
 
 
 def _wait_for_startup_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
-    events: Events,
+    events: "select.kqueue",
 ) -> None:
-    remaining = {identity[0] for identity in identities}
+    watched = {identity[0] for identity in identities}
+    remaining = watched.copy()
     deadline = time.monotonic() + TIMEOUT
     while remaining:
         timeout = deadline - time.monotonic()
         assert timeout > 0, f"startup cleanup left processes {remaining}"
-        exited = events.wait(timeout)
-        assert exited, f"startup cleanup left processes {remaining}"
-        remaining.difference_update(exited)
+        notifications = events.control(None, len(watched), timeout)
+        assert notifications, f"startup cleanup left processes {remaining}"
+        for event in notifications:
+            assert event.ident in watched, event
+            assert event.filter == select.KQ_FILTER_PROC, event
+            # Exit alone leaves a zombie identity until its parent reaps it.
+            if event.fflags & _KQ_NOTE_REAP:
+                remaining.remove(event.ident)
 
 
 def _assert_zod_echo(entry: dict[str, object]) -> None:
@@ -117,7 +125,10 @@ def _manager_failure_before_readiness(
     worker = fixture_root / "zod"
     marker_relay = fixture_root / "startup_marker_relay"
 
-    with tempfile.TemporaryDirectory() as temporary_directory, Events() as exit_events:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        closing(select.kqueue()) as reaping_events,
+    ):
         temporary = Path(temporary_directory)
         manager_started = FifoCheckpoint.create(temporary / "manager-started")
         manager_release = FifoCheckpoint.create(temporary / "manager-release")
@@ -166,8 +177,19 @@ def _manager_failure_before_readiness(
             (root,) = darwin_child_process_identities(manager)
             manager_pid = manager[0]
             identities = (root, manager)
-            for identity in identities:
-                exit_events.watch_process(identity[0])
+            reap_watches = [
+                select.kevent(
+                    identity[0],
+                    filter=select.KQ_FILTER_PROC,
+                    flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                    fflags=select.KQ_NOTE_EXIT | _KQ_NOTE_REAP,
+                )
+                for identity in identities
+            ]
+            assert reaping_events.control(reap_watches, 0, 0) == []
+            assert live_darwin_processes(identities) == [
+                identity[0] for identity in identities
+            ], "startup process identities changed while registering reap watches"
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
 
             assert kill_darwin_processes((manager,)) == [manager_pid], (
@@ -212,7 +234,10 @@ def _manager_failure_before_readiness(
                 # A dead manager cannot supervise its deliberately held helper.
                 # Retire that fixture process only after bounded response delivery.
                 assert kill_darwin_processes((root,)) == [root[0]]
-            _wait_for_startup_cleanup(identities, exit_events)
+            _wait_for_startup_cleanup(identities, reaping_events)
+            assert live_darwin_processes(identities) == [], (
+                "startup helper and manager identities survived cleanup"
+            )
             assert darwin_child_process_identities(server) == ()
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
             waiting["startup_supervision_failure"] = {
@@ -224,7 +249,7 @@ def _manager_failure_before_readiness(
                 "diagnostic_order": "complete before cut"
                 if diagnostic_before_cut
                 else "held beyond cut and response",
-                "verified_cleanup": "helper exit and manager reaping",
+                "verified_cleanup": "helper and manager reaping",
             }
 
             replacement = client.start_send(r="echo echo")

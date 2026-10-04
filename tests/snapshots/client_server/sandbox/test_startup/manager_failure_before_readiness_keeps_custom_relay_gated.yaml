@@ -15,7 +15,7 @@ startup_supervision_failure:
   custom_relay: did not execute
   sandbox_stderr: "mcp-console-sandbox: failed to fill whole buffer"
   diagnostic_order: complete before cut
-  verified_cleanup: helper exit and manager reaping
+  verified_cleanup: helper and manager reaping
 ---
 send:
   r: echo echo
