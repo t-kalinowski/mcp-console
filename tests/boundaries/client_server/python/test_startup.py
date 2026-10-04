@@ -236,7 +236,7 @@ def test_retries_after_sql_runtime_installation_interrupt(
             def interrupt_sql(event, arguments):
                 global interrupted
                 if event == "compile" and not interrupted:
-                    if b"def console_sql_connection(" in arguments[0]:
+                    if b"def sql_connection(" in arguments[0]:
                         interrupted = True
                         raise KeyboardInterrupt
 
@@ -258,7 +258,7 @@ def test_retries_after_sql_runtime_installation_interrupt(
                     import json
 
                     assert "never_run" not in globals()
-                    assert callable(console_sql_connection)
+                    assert callable(_console.sql_connection)
                     json.loads("42")
                     """)
             )

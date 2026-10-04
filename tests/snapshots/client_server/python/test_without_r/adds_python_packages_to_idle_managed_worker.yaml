@@ -6,12 +6,12 @@ send:
     identity = object()
     identity_id = id(identity)
     worker_pid = os.getpid()
-    managed = sql_connection()
+    managed = _console.sql_connection()
     managed_id = id(managed)
     managed.execute("create table retained as select 42 as value")
     selected = sqlite3.connect(":memory:")
     selected.execute("create table chosen (value integer)")
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
     print("running state created")
 result:
   content:
@@ -43,7 +43,7 @@ send:
     assert os.getpid() == worker_pid
     assert id(identity) == identity_id
     assert id(managed) == managed_id
-    assert sql_connection() is selected
+    assert _console.sql_connection() is selected
     assert managed.execute("select value from retained").fetchone() == (42,)
     assert (
         subprocess.check_output(
@@ -74,7 +74,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text

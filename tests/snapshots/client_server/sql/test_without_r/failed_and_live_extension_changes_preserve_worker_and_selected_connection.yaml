@@ -32,7 +32,7 @@ send:
     selected = sqlite3.connect(":memory:")
     selected.execute("CREATE TABLE chosen(value INTEGER)")
     selected.execute("INSERT INTO chosen VALUES (17)")
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
     print("selected SQLite")
 result:
   content:
@@ -153,7 +153,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text

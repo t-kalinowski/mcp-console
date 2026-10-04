@@ -22,7 +22,7 @@ send:
 
     connection = sqlite3.connect(":memory:")
     connection.create_function("sql_requires_package", 0, r.sql_requires_package)
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
 result:
   content:
     - type: text

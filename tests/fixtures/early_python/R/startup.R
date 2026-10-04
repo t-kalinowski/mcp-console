@@ -44,6 +44,9 @@
   }
 }
 
-py <- sql_connection <- console_sql_connection <- function(...) {
+py <- function(...) {
   stop("startup package shadowed Console tools")
 }
+
+.console <- new.env(parent = emptyenv())
+.console$sql_connection <- py

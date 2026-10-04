@@ -34,7 +34,7 @@ send:
         charToRaw("1")
       ))
       close(gate)
-      console_sql_connection(NULL)
+      .console$sql_connection(NULL)
       41L
     }
     invisible()
@@ -50,7 +50,7 @@ send:
 
     connection = sqlite3.connect(":memory:")
     connection.create_function("select_r_sql", 0, r.select_r_sql)
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
 result:
   content:
     - type: text

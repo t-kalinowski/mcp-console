@@ -6,11 +6,11 @@ send:
     worker_pid = os.getpid()
     identity = object()
     identity_id = id(identity)
-    managed = sql_connection()
+    managed = _console.sql_connection()
     managed.execute("create table retained as select 42 as value")
     selected = sqlite3.connect(":memory:")
     selected.execute("create table chosen as select 7 as value")
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
     print("state created")
 result:
   content:
@@ -41,7 +41,7 @@ send:
 
     assert os.getpid() == worker_pid
     assert id(identity) == identity_id
-    assert sql_connection() is selected
+    assert _console.sql_connection() is selected
     assert managed.execute("select value from retained").fetchone() == (42,)
     assert subprocess.check_output(
         [sys.executable, "-c", "import yaml12; print('child ready')"],
@@ -56,7 +56,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text

@@ -20,6 +20,6 @@ SELECT 42 AS recorded
 ```
 
 ```{python}
-sql_connection().execute("SELECT 1").fetchone()
+_console.sql_connection().execute("SELECT 1").fetchone()
 ```
 

@@ -87,7 +87,7 @@ def test_persistent_image_runtime_and_controller_records(binary: Path) -> Transc
             client.send(sql="SELECT 6 * 7 AS answer")
             assert "42" in last_result_text(client), last_result_text(client)
             client.send(
-                r="stopifnot(!DBI::dbGetQuery(sql_connection(), \"SELECT current_setting('autoinstall_known_extensions')\")[[1]])"
+                r="stopifnot(!DBI::dbGetQuery(.console$sql_connection(), \"SELECT current_setting('autoinstall_known_extensions')\")[[1]])"
             )
             assert last_result_text(client) == "[done]", last_result_text(client)
             client.send(python='print(input("container prompt: "))')

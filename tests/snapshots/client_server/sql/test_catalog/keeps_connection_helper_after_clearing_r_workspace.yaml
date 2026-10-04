@@ -15,7 +15,7 @@ send:
   r: |
     rm(list = ls())
     values <- DBI::dbGetQuery(
-      sql_connection(),
+      .console$sql_connection(),
       "SELECT label, value FROM retained_values ORDER BY label"
     )
     writeLines(paste(values$label, values$value, sep = ":"))

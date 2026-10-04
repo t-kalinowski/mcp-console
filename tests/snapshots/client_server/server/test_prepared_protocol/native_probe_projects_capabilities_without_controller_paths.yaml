@@ -48,10 +48,12 @@ result:
         globals through `r.name` and R reads Python globals through `py$name`.
         R-owned Console-owned DuckDB SQL can query R data frames by name;
         without R, Python-owned DuckDB requires explicit frame registration with
-        `sql_connection().register(name, frame)`. R accesses its SQL connection
-        through `sql_connection()`; R or Python can select a user-owned
-        connection with `console_sql_connection(connection)`. Dependency
-        preparation is unavailable on this target.
+        `_console.sql_connection().register(name, frame)`. Get the active native
+        connection with `.console$sql_connection()` in R or
+        `_console.sql_connection()` in Python; a getter errors if the connection
+        belongs to the other runtime. Pass a connection to select it, or
+        NULL/None to restore the managed default without closing user
+        connections. Dependency preparation is unavailable on this target.
 
 
         Send one complete `r`, `python`, or `sql` cell per call. Code-bearing
@@ -114,12 +116,13 @@ result:
               One complete R cell when R is available. Expressions display
               automatically; R plots return as PNG images. When both runtimes and
               their bridge are available, read Python globals through py$name. R-owned
-              DuckDB can query R global data frames by name. sql_connection() returns
-              the R-owned connection; console_sql_connection(connection) selects a
-              user-owned DBI connection, and console_sql_connection(NULL) restores the
-              Console-owned catalog. Missing packages report ordinary R errors;
-              automatic package installation is unavailable. Omit for polling or
-              stdin-only calls. Dependencies must be preinstalled in the template.
+              DuckDB can query R global data frames by name. .console$sql_connection()
+              returns the active native DBI connection, or errors if SQL uses Python;
+              .console$sql_connection(connection) selects a user-owned DBI connection,
+              and .console$sql_connection(NULL) restores the Console-owned catalog.
+              Missing packages report ordinary R errors; automatic package
+              installation is unavailable. Omit for polling or stdin-only calls.
+              Dependencies must be preinstalled in the template.
             type:
               - string
               - "null"
@@ -129,12 +132,13 @@ result:
               displays automatically. Use input() for managed stdin; Matplotlib plots
               return as PNG images when installed. When both runtimes and their bridge
               are available, read R globals through r.name.
-              console_sql_connection(connection) selects a user-owned DB-API
-              connection, and console_sql_connection(None) restores the Console-owned
-              catalog. Without R, sql_connection() returns the active Python-owned
-              connection. Missing imports report ordinary Python errors; automatic
-              package installation is unavailable. Omit for polling or stdin-only
-              calls. Dependencies must be preinstalled in the template.
+              _console.sql_connection(connection) selects a user-owned DB-API
+              connection, and _console.sql_connection(None) restores the Console-owned
+              catalog. _console.sql_connection() returns the active native Python
+              connection, or errors if SQL uses R. Missing imports report ordinary
+              Python errors; automatic package installation is unavailable. Omit for
+              polling or stdin-only calls. Dependencies must be preinstalled in the
+              template.
             type:
               - string
               - "null"
@@ -146,15 +150,16 @@ result:
               when SQL is enabled and the adapter and DuckDB are preinstalled;
               first-query work remains deferred. R-owned DuckDB can query R global
               data frames by name; without R, Python data frames require explicit
-              registration with sql_connection().register(name, frame).
-              console_sql_connection(connection) selects a user-owned connection;
-              console_sql_connection(None) in Python or console_sql_connection(NULL)
-              in R restores the Console-owned catalog without discarding it. A query
-              with columns returns a bounded preview. Use the selected driver's SQL
-              dialect; DuckDB CLI dot commands are unsupported. Extensions must be
-              preinstalled; Console does not install extensions or resolve packages.
-              Worker replacement resets the catalog. Omit for polling or stdin-only
-              calls. Dependencies must be preinstalled in the template.
+              registration with _console.sql_connection().register(name, frame).
+              _console.sql_connection(connection) in Python or
+              .console$sql_connection(connection) in R selects a user-owned
+              connection; passing None/NULL restores the Console-owned catalog without
+              discarding it. A query with columns returns a bounded preview. Use the
+              selected driver's SQL dialect; DuckDB CLI dot commands are unsupported.
+              Extensions must be preinstalled; Console does not install extensions or
+              resolve packages. Worker replacement resets the catalog. Omit for
+              polling or stdin-only calls. Dependencies must be preinstalled in the
+              template.
             type:
               - string
               - "null"

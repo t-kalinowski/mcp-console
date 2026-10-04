@@ -25,6 +25,155 @@ from support.suites import run_this_suite
 
 
 @executions(DIRECT, SANDBOXED)
+def test_gets_selects_and_resets_the_active_native_connection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            managed <- .console$sql_connection()
+            stopifnot(inherits(managed, "duckdb_connection"))
+            stopifnot(!exists("sql_connection"), !exists("console_sql_connection"))
+            invisible(DBI::dbExecute(
+              managed,
+              "CREATE TABLE retained AS SELECT 42 AS value"
+            ))
+            sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+            stopifnot(is.null(.console$sql_connection(connection = sqlite)))
+            stopifnot(identical(.console$sql_connection(), sqlite))
+            writeLines("selected native DBI identity")
+            """)
+        client.send(r=r, requirements={"r": ["RSQLite"]})
+        assert last_tool_text(client) == "selected native DBI identity\n", (
+            last_tool_text(client)
+        )
+        client.send(sql="CREATE TABLE chosen AS SELECT 11 AS value")
+        assert last_tool_text(client) == "[done]"
+        # fmt: r
+        r = code(r"""
+            stopifnot(DBI::dbGetQuery(sqlite, "SELECT value FROM chosen")$value == 11)
+            closed <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
+            invisible(DBI::dbDisconnect(closed))
+            message <- tryCatch(.console$sql_connection(closed), error = conditionMessage)
+            stopifnot(identical(.console$sql_connection(), sqlite))
+            writeLines(message)
+            """)
+        client.send(r=r)
+        assert (
+            last_tool_text(client)
+            == "`connection` must be a valid DBIConnection or NULL\n"
+        )
+        # fmt: python
+        python = code("""
+            import builtins
+            import sqlite3
+
+            assert "_console" not in globals()
+            assert "sql_connection" not in vars(builtins)
+            assert "console_sql_connection" not in vars(builtins)
+            try:
+                _console.sql_connection()
+            except RuntimeError as error:
+                print(error)
+            selected = sqlite3.connect(":memory:")
+            assert _console.sql_connection(connection=selected) is None
+            assert _console.sql_connection() is selected
+            _ = selected.execute("CREATE TABLE chosen AS SELECT 23 AS value")
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == (
+            "The active SQL connection belongs to R; use .console$sql_connection() in R\n"
+        )
+        # fmt: r
+        r = code(r"""
+            writeLines(tryCatch(.console$sql_connection(), error = conditionMessage))
+            stopifnot(DBI::dbIsValid(sqlite))
+            """)
+        client.send(r=r)
+        assert last_tool_text(client) == (
+            "The active SQL connection belongs to Python; use _console.sql_connection() in Python\n"
+        )
+        client.send(sql="SELECT value FROM chosen")
+        assert "23" in last_tool_text(client)
+        # fmt: python
+        python = code("""
+            try:
+                _console.sql_connection(object())
+            except TypeError as error:
+                print(error)
+            assert _console.sql_connection() is selected
+            selected.close()
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == (
+            "`connection` must provide a callable cursor() method or be None\n"
+        )
+        client.send(sql="SELECT value FROM chosen")
+        assert last_tool_text(client) == "Error: Cannot operate on a closed database.\n"
+        # fmt: python
+        python = code("""
+            assert _console.sql_connection() is selected
+            selected = sqlite3.connect(":memory:")
+            selected.execute("CREATE TABLE still_open AS SELECT 7 AS value")
+            _console.sql_connection(selected)
+            assert _console.sql_connection(None) is None
+            assert selected.execute("SELECT value FROM still_open").fetchone() == (7,)
+            try:
+                _console.sql_connection()
+            except RuntimeError as error:
+                print(error)
+            """)
+        client.send(python=python)
+        assert last_tool_text(client) == (
+            "The active SQL connection belongs to R; use .console$sql_connection() in R\n"
+        )
+        # fmt: r
+        r = code(r"""
+            stopifnot(identical(.console$sql_connection(), managed))
+            stopifnot(DBI::dbIsValid(sqlite))
+            stopifnot(is.null(.console$sql_connection(sqlite)))
+            stopifnot(
+              DBI::dbGetQuery(
+                .console$sql_connection(),
+                "SELECT value FROM chosen"
+              )$value ==
+                11
+            )
+            stopifnot(is.null(.console$sql_connection(NULL)))
+            stopifnot(identical(.console$sql_connection(), managed), DBI::dbIsValid(sqlite))
+            writeLines("reset retained managed identity and user connection")
+            """)
+        client.send(r=r)
+        assert (
+            last_tool_text(client)
+            == "reset retained managed identity and user connection\n"
+        )
+        client.send(sql="SELECT value FROM retained")
+        assert "42" in last_tool_text(client)
+        client.send(python="_console.sql_connection(selected)")
+        assert last_tool_text(client) == "[done]"
+        client.send(r=".console$sql_connection(NULL)")
+        assert last_tool_text(client) == "[done]"
+        client.send(
+            python="selected.execute('SELECT value FROM still_open').fetchone()"
+        )
+        assert last_tool_text(client) == "(7,)\n"
+        # Restart reinstalls the namespace and drops both selection and catalog.
+        client.send(python="_console.sql_connection(selected)")
+        assert last_tool_text(client) == "[done]"
+        client.send(control="restart", sql="SELECT value FROM retained")
+        assert "Table with name retained does not exist" in last_tool_text(client)
+        client.send(
+            r='stopifnot(inherits(.console$sql_connection(), "duckdb_connection")); writeLines("new managed generation")'
+        )
+        assert last_tool_text(client) == "new managed generation\n"
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_dbi_connection(
     binary: Path,
     execution: Execution,
@@ -40,10 +189,10 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     # fmt: r
     r = code(r"""
         sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-        console_sql_connection(connection = sqlite)
+        .console$sql_connection(connection = sqlite)
         cat(
-          c("selected: ", identical(sql_connection(), sqlite), "\n"),
-          c("valid: ", DBI::dbIsValid(sql_connection()), "\n"),
+          c("selected: ", identical(.console$sql_connection(), sqlite), "\n"),
+          c("valid: ", DBI::dbIsValid(.console$sql_connection()), "\n"),
           sep = ""
         )
         """)
@@ -52,14 +201,14 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
 
     # fmt: r
     r = code(r"""
-        selected <- sql_connection()
+        selected <- .console$sql_connection()
         message <- tryCatch(
-          console_sql_connection("not a connection"),
+          .console$sql_connection("not a connection"),
           error = conditionMessage
         )
         cat(
           c("rejected: ", message, "\n"),
-          c("unchanged: ", identical(sql_connection(), selected), "\n"),
+          c("unchanged: ", identical(.console$sql_connection(), selected), "\n"),
           sep = ""
         )
         """)
@@ -135,7 +284,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
 
     # fmt: r
     r = code(r"""
-        selected <- sql_connection()
+        selected <- .console$sql_connection()
         invisible(DBI::dbDisconnect(selected))
         cat(
           c("disconnected: ", !DBI::dbIsValid(selected), "\n"),
@@ -148,14 +297,14 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     client.send(sql="SELECT label FROM custom_values")
     assert last_tool_text(client) == (
         "Error: The selected SQL connection is no longer valid; "
-        "call console_sql_connection(NULL) to restore DuckDB\n"
+        "call .console$sql_connection(NULL) to restore DuckDB\n"
     )
 
     # fmt: r
     r = code(r"""
-        console_sql_connection(NULL)
+        .console$sql_connection(NULL)
         cat(
-          c("restored: ", !identical(sql_connection(), selected), "\n"),
+          c("restored: ", !identical(.console$sql_connection(), selected), "\n"),
           sep = ""
         )
         """)
@@ -185,24 +334,27 @@ def test_python_restores_managed_connection_before_r_reads_it(
     # fmt: r
     r = code(r"""
         lite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-        console_sql_connection(lite)
+        .console$sql_connection(lite)
         invisible()
         """)
     client.send(r=r, requirements={"r": ["RSQLite"]})
     assert last_tool_text(client) == "[done]"
 
-    client.send(python="console_sql_connection(None)")
+    client.send(python="_console.sql_connection(None)")
     assert last_tool_text(client) == "[done]"
 
     # fmt: r
     r = code(r"""
-        restored <- sql_connection()
+        restored <- .console$sql_connection()
         DBI::dbDisconnect(lite)
         cat(
           c("managed: ", inherits(restored, "duckdb_connection"), "\n"),
           c(
             "value: ",
-            DBI::dbGetQuery(sql_connection(), "SELECT value FROM managed_values")$value,
+            DBI::dbGetQuery(
+              .console$sql_connection(),
+              "SELECT value FROM managed_values"
+            )$value,
             "\n"
           ),
           sep = ""
@@ -241,8 +393,8 @@ def test_python_restores_managed_connection_before_r_reads_it(
     # fmt: r
     r = code(r"""
         another <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-        console_sql_connection(another)
-        managed_in_r <- function() inherits(sql_connection(), "duckdb_connection")
+        .console$sql_connection(another)
+        managed_in_r <- function() inherits(.console$sql_connection(), "duckdb_connection")
         invisible()
         """)
     client.send(r=r)
@@ -250,7 +402,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
 
     # fmt: python
     python = code("""
-        console_sql_connection(None)
+        _console.sql_connection(None)
         assert r.managed_in_r()
         """)
     client.send(python=python)
@@ -286,7 +438,7 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
 
         sqlite = sqlite3.connect(":memory:")
         connection = CursorOnlyConnection(sqlite)
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
         del sqlite
         del connection
         """)
@@ -297,7 +449,7 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     # fmt: python
     python = code("""
         try:
-            console_sql_connection(object())
+            _console.sql_connection(object())
         except TypeError as error:
             print(error)
         """)
@@ -388,7 +540,7 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
                 return ControlCursor()
 
 
-        console_sql_connection(ControlConnection())
+        _console.sql_connection(ControlConnection())
         """)
     client.send(python=python)
     assert last_tool_text(client) == "[done]"
@@ -401,19 +553,19 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     assert max(map(display_width, preview.splitlines())) <= 200
     assert "[cell values truncated to 160 characters]" in preview
 
-    client.send(r="console_sql_connection(NULL); invisible()")
+    client.send(r=".console$sql_connection(NULL); invisible()")
     assert last_tool_text(client) == "[done]"
     client.send(sql="SELECT origin FROM managed_values")
     preview = last_tool_text(client)
     assert '"managed"' in preview
     assert "'a'" not in preview
 
-    client.send(python="console_sql_connection(sqlite3.connect(':memory:'))")
+    client.send(python="_console.sql_connection(sqlite3.connect(':memory:'))")
     assert last_tool_text(client) == "[done]"
     client.send(sql="SELECT 42 AS python_value")
     assert "42" in last_tool_text(client)
 
-    client.send(python="console_sql_connection(None)")
+    client.send(python="_console.sql_connection(None)")
     assert last_tool_text(client) == "[done]"
     client.send(sql="SELECT origin FROM managed_values")
     preview = last_tool_text(client)
@@ -436,7 +588,7 @@ def test_preserves_selected_python_duckdb_connection_state(
 
         connection = duckdb.connect(":memory:")
         connection.execute("CREATE TEMP TABLE before_selection AS SELECT 41 AS value")
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
         del connection
         """)
     client.send(
@@ -494,7 +646,7 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
                 return CleanupCursor()
 
 
-        console_sql_connection(CleanupConnection())
+        _console.sql_connection(CleanupConnection())
         """)
     client.send(python=python)
     assert last_tool_text(client) == "[done]"
@@ -552,7 +704,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
                 return RecoverableCursor(self)
 
 
-        console_sql_connection(RecoverableConnection())
+        _console.sql_connection(RecoverableConnection())
         """)
     client.send(python=python)
     assert last_tool_text(client) == "[done]"
@@ -614,7 +766,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
                     charToRaw("1")
                   ))
                   close(gate)
-                  console_sql_connection(NULL)
+                  .console$sql_connection(NULL)
                   41L
                 }
                 invisible()
@@ -629,7 +781,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
 
                 connection = sqlite3.connect(":memory:")
                 connection.create_function("select_r_sql", 0, r.select_r_sql)
-                console_sql_connection(connection)
+                _console.sql_connection(connection)
                 """)
             client.send(python=python)
             output = last_tool_text(client)
@@ -742,7 +894,7 @@ def test_interrupts_selected_python_dbapi_connection(
                         return self.rows[:size]
 
 
-                console_sql_connection(InterruptibleConnection())
+                _console.sql_connection(InterruptibleConnection())
                 print(started_path, release_path, sep="\n")
                 """)
             client.send(python=python)
@@ -897,7 +1049,7 @@ def test_interrupts_python_dbapi_provider_probe(
                     return pause_provider_probe
 
 
-                console_sql_connection(ProbeConnection())
+                _console.sql_connection(ProbeConnection())
                 sys.settrace(pause_provider_probe)
                 """)
             client.send(python=python)
@@ -972,7 +1124,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
 
 
         connection = StatefulConnection()
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
         sys.settrace(exit_sql_dispatch)
         """)
     client.send(python=python)
@@ -1010,7 +1162,7 @@ def test_recovers_when_r_provider_switch_trace_raises_system_exit(
 
         connection = sqlite3.connect(":memory:")
         connection.execute("CREATE TABLE python_value AS SELECT 42 AS value")
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
         use_r_code = _mcp_console_sql.use_r.__code__
 
 
@@ -1025,7 +1177,7 @@ def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     client.send(python=python)
     assert last_tool_text(client) == "[done]"
 
-    client.send(r="console_sql_connection(NULL); invisible()")
+    client.send(r=".console$sql_connection(NULL); invisible()")
     assert "SystemExit: R provider switch exit" in last_tool_text(client)
 
     client.send(
@@ -1037,7 +1189,7 @@ def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     preview = last_tool_text(client)
     assert "value" in preview and "42" in preview
 
-    client.send(r="console_sql_connection(NULL); invisible()")
+    client.send(r=".console$sql_connection(NULL); invisible()")
     assert last_tool_text(client) == "[done]"
     client.send(sql="SELECT value FROM managed_value")
     preview = last_tool_text(client)
@@ -1107,7 +1259,7 @@ def test_interrupts_sql_warmup_without_losing_worker(
                             """),
                     )
                     client.expect(
-                        r='stopifnot(!"withheld_cell" %in% DBI::dbListTables(sql_connection()))'
+                        r='stopifnot(!"withheld_cell" %in% DBI::dbListTables(.console$sql_connection()))'
                     )
             else:
                 client.expect(python="assert startup_sql_pid == os.getpid()")
@@ -1163,11 +1315,11 @@ def test_optional_sql_warmup_failure_preserves_runtime(
                 assert "SystemExit: optional SQL warmup failed" in output, result
             if not with_r:
                 client.expect(
-                    python="import sqlite3; selected = sqlite3.connect(':memory:'); console_sql_connection(selected)"
+                    python="import sqlite3; selected = sqlite3.connect(':memory:'); _console.sql_connection(selected)"
                 )
                 client.send(sql="SELECT 42 AS answer")
                 assert "42" in last_tool_text(client), client.transcript[-1]
-                client.expect(python="console_sql_connection(None)")
+                client.expect(python="_console.sql_connection(None)")
             client.send(sql="SELECT 42 AS answer")
             assert "42" in last_tool_text(client), client.transcript[-1]
             client.finish()
@@ -1206,7 +1358,7 @@ def test_closes_provisional_connections_after_sql_setup_failure(
                 stopifnot(
                   length(startup_setup_connections) == 3L,
                   DBI::dbIsValid(startup_setup_connections[[3L]]),
-                  identical(sql_connection(), startup_setup_connections[[3L]])
+                  identical(.console$sql_connection(), startup_setup_connections[[3L]])
                 )
                 """),
         )

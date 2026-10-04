@@ -154,7 +154,7 @@ def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> li
                     import json
                     from pathlib import Path
 
-                    connection = sql_connection()
+                    connection = _console.sql_connection()
                     storage = Path(
                         connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
                     ).parent

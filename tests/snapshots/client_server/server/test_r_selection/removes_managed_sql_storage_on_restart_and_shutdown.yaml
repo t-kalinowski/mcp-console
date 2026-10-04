@@ -6,7 +6,7 @@ send:
     import json
     from pathlib import Path
 
-    connection = sql_connection()
+    connection = _console.sql_connection()
     storage = Path(
         connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
     ).parent
@@ -36,7 +36,7 @@ send:
     import json
     from pathlib import Path
 
-    connection = sql_connection()
+    connection = _console.sql_connection()
     storage = Path(
         connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
     ).parent

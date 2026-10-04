@@ -25,9 +25,10 @@ pub(super) struct SendArguments {
     /// already be installed and these operations keep their ordinary R behavior. R source is not
     /// scanned in advance. When both runtimes and their bridge are available, read Python globals
     /// through `py$name`. With R-owned managed DuckDB active, R data frames are directly queryable
-    /// by name from later SQL cells. `sql_connection()` returns the R-owned SQL connection for DBI or dplyr use. Select a user-owned DBI connection for later SQL
-    /// cells with `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
+    /// by name from later SQL cells. `.console$sql_connection()` returns the active native DBI
+    /// connection, or errors if SQL uses Python. Select a user-owned DBI connection for later SQL
+    /// cells with `.console$sql_connection(connection)` and restore managed DuckDB with
+    /// `.console$sql_connection(NULL)`. Do not disconnect the managed DuckDB connection, and restore a
     /// selected connection before disconnecting it. Default-device plots return as PNG images. Keep
     /// all drawing operations for one plot in the same cell. Set persistent dimensions with
     /// `options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`;
@@ -44,10 +45,11 @@ pub(super) struct SendArguments {
     /// environment or bare runtime disables both automatic resolution and managed requirements;
     /// import packages already installed there directly. When both runtimes and their bridge are
     /// available, read R globals and call R functions through `r.name`. Select a user-owned DB-API
-    /// connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
-    /// `console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
-    /// before querying them. Without R, `sql_connection()` returns the Python-owned connection;
-    /// register frames explicitly with `sql_connection().register(name, frame)`. At cell end,
+    /// connection for later SQL cells with `_console.sql_connection(connection)` and restore managed DuckDB with
+    /// `_console.sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
+    /// before querying them. `_console.sql_connection()` returns the active native Python connection,
+    /// or errors if SQL uses R; register frames with `_console.sql_connection().register(name, frame)`
+    /// on Python-owned DuckDB. At cell end,
     /// including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG
     /// image and is closed.
     /// `show()` is optional. R plots called through `r` follow the R plot rules. Omit this field for
@@ -61,7 +63,7 @@ pub(super) struct SendArguments {
     /// them through its connection or cursor protocol. The selected driver supplies its own SQL
     /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
     /// interface. Without R, managed DuckDB uses Python and requires explicit frame registration
-    /// through `sql_connection().register(name, frame)`; it does not scan Python globals.
+    /// through `_console.sql_connection().register(name, frame)`; it does not scan Python globals.
     /// Managed DuckDB conveniences and extension requirements apply only to the managed
     /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
     /// databases outside the sandbox's writable paths; the sandbox blocks DuckDB's

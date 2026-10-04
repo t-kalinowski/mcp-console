@@ -14,12 +14,16 @@ result:
 ---
 send:
   r: |
-    connection <- sql_connection()
+    connection <- .console$sql_connection()
     table_values <- dplyr::tbl(connection, "sql_values")
     lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
       dplyr::mutate(doubled = value * 2L)
     cat(
-      c("same connection: ", identical(connection, sql_connection()), "\n"),
+      c(
+        "same connection: ",
+        identical(connection, .console$sql_connection()),
+        "\n"
+      ),
       c("lazy table: ", inherits(table_values, "tbl_lazy"), "\n"),
       c("lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n"),
       sep = ""

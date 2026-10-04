@@ -110,7 +110,7 @@ def test_mixed_runtime_shares_recordings_and_restart_without_native(
                     print(r.x + 1)
                     import duckdb
                     connection = duckdb.connect()
-                    console_sql_connection(connection)
+                    _console.sql_connection(connection)
                     """)
             )
             assert last_result_text(client) == "read-only share enforced\n42.0\n", (

@@ -217,6 +217,10 @@ pub(crate) fn take_sql_restore_request() -> Result<bool, String> {
     library::take_sql_restore_request()
 }
 
+pub(crate) fn has_selected_sql_connection() -> Result<bool, String> {
+    library::has_selected_sql_connection()
+}
+
 pub(crate) fn prepare_process_exit() -> Result<(), String> {
     library::prepare_process_exit()
 }

@@ -25,9 +25,15 @@ result:
 send:
   r: |
     dyn.load(Sys.getenv("MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"))
-    invisible(DBI::dbExecute(sql_connection(), "SET threads = 1"))
-    invisible(DBI::dbExecute(sql_connection(), "SET enable_progress_bar = true"))
-    invisible(DBI::dbExecute(sql_connection(), "SET progress_bar_time = 0"))
+    invisible(DBI::dbExecute(.console$sql_connection(), "SET threads = 1"))
+    invisible(DBI::dbExecute(
+      .console$sql_connection(),
+      "SET enable_progress_bar = true"
+    ))
+    invisible(DBI::dbExecute(
+      .console$sql_connection(),
+      "SET progress_bar_time = 0"
+    ))
     query_started <- FALSE
     options(duckdb.progress_display = function(percentage) {
       if (!query_started && percentage < 100) {

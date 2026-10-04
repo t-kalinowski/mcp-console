@@ -20,11 +20,11 @@ send:
     identity_id = id(identity)
     worker_pid = os.getpid()
     interpreter = sys.executable
-    managed = sql_connection()
+    managed = _console.sql_connection()
     selected = sqlite3.connect(":memory:")
     selected.execute("CREATE TABLE chosen(value INTEGER)")
     selected.execute("INSERT INTO chosen VALUES (17)")
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
     print("state ready")
 result:
   content:
@@ -50,11 +50,11 @@ send:
     assert os.getpid() == worker_pid
     assert sys.executable == interpreter
     assert id(identity) == identity_id
-    assert sql_connection() is selected
+    assert _console.sql_connection() is selected
     assert managed.execute("SELECT value FROM retained").fetchone() == (42,)
     assert selected.execute("SELECT value FROM chosen").fetchone() == (17,)
-    console_sql_connection(None)
-    assert sql_connection() is managed
+    _console.sql_connection(None)
+    assert _console.sql_connection() is managed
     print("state retained")
 result:
   content:

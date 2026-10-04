@@ -217,7 +217,7 @@ def test_selected_remote_python_uses_workspace_and_no_uv(
                 "import os, sqlite3, sys\n"
                 "assert sys.executable == os.path.join(os.getcwd(), '.venv/bin/python')\n"
                 "connection = sqlite3.connect(':memory:')\n"
-                "console_sql_connection(connection)\n"
+                "_console.sql_connection(connection)\n"
                 "print('selected remote Python')"
             )
         )
@@ -773,7 +773,7 @@ def test_external_r_free_execution_host(
         with McpClient(binary, execution.serve(), environment, local) as client:
             client.initialize_and_list_tools()
             client.send(
-                python="import sqlite3; connection = sqlite3.connect(':memory:'); console_sql_connection(connection); print('explicit remote environment')"
+                python="import sqlite3; connection = sqlite3.connect(':memory:'); _console.sql_connection(connection); print('explicit remote environment')"
             )
             assert last_result_text(client) == "explicit remote environment\n"
             client.send(sql="SELECT 42 AS value")

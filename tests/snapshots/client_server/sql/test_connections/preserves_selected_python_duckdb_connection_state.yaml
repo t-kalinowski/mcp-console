@@ -7,7 +7,7 @@ send:
 
     connection = duckdb.connect(":memory:")
     connection.execute("CREATE TEMP TABLE before_selection AS SELECT 41 AS value")
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
     del connection
   requirements:
     python:

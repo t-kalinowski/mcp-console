@@ -248,7 +248,7 @@ def behavior(binary: Path, provider: str, *, sandbox=False) -> list:
                 assert Path(child_executable).samefile(sys.executable)
                 assert child_prefix == sys.prefix
                 retained = 41
-                catalog = sql_connection()
+                catalog = _console.sql_connection()
                 for setting in ("secret_directory", "temp_directory"):
                     selected = Path(
                         catalog.execute("SELECT current_setting(?)", [setting]).fetchone()[0]
@@ -258,7 +258,7 @@ def behavior(binary: Path, provider: str, *, sandbox=False) -> list:
                 import sqlite3
 
                 custom = sqlite3.connect(":memory:")
-                console_sql_connection(custom)
+                _console.sql_connection(custom)
                 print(retained + 1)
                 """)
         )
@@ -266,7 +266,7 @@ def behavior(binary: Path, provider: str, *, sandbox=False) -> list:
         client.send(sql="CREATE TABLE custom_state AS SELECT 7 AS value")
         client.send(sql="SELECT * FROM custom_state")
         assert "7" in last_result_text(client)
-        client.send(python="console_sql_connection(None)")
+        client.send(python="_console.sql_connection(None)")
         client.send(sql="SELECT * FROM retained")
         assert "42" in last_result_text(client)
         client.send(
@@ -401,7 +401,7 @@ def selected_and_minimal(binary: Path, provider: str) -> list:
                     last_result_text(client)
                 )
                 client.send(
-                    python="import sqlite3; selected_connection = sqlite3.connect(':memory:'); console_sql_connection(selected_connection)"
+                    python="import sqlite3; selected_connection = sqlite3.connect(':memory:'); _console.sql_connection(selected_connection)"
                 )
                 client.send(sql="SELECT 42 AS answer")
                 assert "42" in last_result_text(client)

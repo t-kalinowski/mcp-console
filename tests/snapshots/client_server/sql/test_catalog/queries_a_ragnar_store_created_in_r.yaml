@@ -30,7 +30,7 @@ send:
     stopifnot(
       identical(
         DBI::dbGetQuery(
-          sql_connection(),
+          .console$sql_connection(),
           "SELECT value FROM before_prepare"
         )$value,
         42L
@@ -67,7 +67,7 @@ send:
       ragnar::ragnar_store_insert(store, chunks)
     }
     ragnar::ragnar_store_build_index(store, type = c("vss", "fts"))
-    connection <- sql_connection()
+    connection <- .console$sql_connection()
     invisible(DBI::dbExecute(
       connection,
       paste(

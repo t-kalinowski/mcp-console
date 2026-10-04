@@ -60,7 +60,7 @@ send:
             return self.rows[:size]
 
 
-    console_sql_connection(InterruptibleConnection())
+    _console.sql_connection(InterruptibleConnection())
     print(started_path, release_path, sep="\n")
 result:
   content:
@@ -98,7 +98,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 216, in _evaluate
+          File "<string>", line 231, in _evaluate
           File "<mcp-console:python:e1>", line 38, in execute
         KeyboardInterrupt
   isError: false

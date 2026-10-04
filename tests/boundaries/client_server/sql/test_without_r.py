@@ -256,11 +256,11 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
                     identity_id = id(identity)
                     worker_pid = os.getpid()
                     interpreter = sys.executable
-                    managed = sql_connection()
+                    managed = _console.sql_connection()
                     selected = sqlite3.connect(":memory:")
                     selected.execute("CREATE TABLE chosen(value INTEGER)")
                     selected.execute("INSERT INTO chosen VALUES (17)")
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     print("state ready")
                     """)
             )
@@ -283,11 +283,11 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
                     assert os.getpid() == worker_pid
                     assert sys.executable == interpreter
                     assert id(identity) == identity_id
-                    assert sql_connection() is selected
+                    assert _console.sql_connection() is selected
                     assert managed.execute("SELECT value FROM retained").fetchone() == (42,)
                     assert selected.execute("SELECT value FROM chosen").fetchone() == (17,)
-                    console_sql_connection(None)
-                    assert sql_connection() is managed
+                    _console.sql_connection(None)
+                    assert _console.sql_connection() is managed
                     print("state retained")
                     """)
             )
@@ -471,7 +471,7 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
         env = managed_environment(root)
         uv_cache = root / "uv-cache"
         with sql_client(
-            binary, execution, dict(env, UV_CACHE_DIR=str(uv_cache))
+            binary, execution, dict(env, UV_CACHE_DIR=str(uv_cache), RUST_LOG="error")
         ) as client:
             client.send(
                 requirements={
@@ -491,7 +491,7 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
                     selected = sqlite3.connect(":memory:")
                     selected.execute("CREATE TABLE chosen(value INTEGER)")
                     selected.execute("INSERT INTO chosen VALUES (17)")
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     print("selected SQLite")
                     """)
             )
@@ -524,7 +524,7 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             assert "[waiting for stdin]" in last_tool_text(client)
             # Enqueuing stdin can return before Python consumes it.
             client.expect("fresh input\n", stdin="fresh input\n")
-            client.send(python="console_sql_connection(None)")
+            client.send(python="_console.sql_connection(None)")
             client.send(sql="SELECT value FROM retained")
             assert "42" in last_tool_text(client)
             missing = client.send(
@@ -746,7 +746,7 @@ def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript
                 python=code("""
                     import pandas as pd
 
-                    managed = sql_connection()
+                    managed = _console.sql_connection()
                     assert managed.execute("SELECT value FROM retained").fetchone() == (7,)
                     frame = pd.DataFrame({"value": [3, 4]})
                     managed.register("registered", frame)
@@ -754,7 +754,9 @@ def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript
                     print("shared connection")
                     """)
             )
-            assert last_tool_text(client) == "shared connection\n"
+            assert last_tool_text(client) == "shared connection\n", last_tool_text(
+                client
+            )
             client.send(sql="SELECT sum(value) AS total FROM registered")
             assert "7" in last_tool_text(client)
             client.send(sql="SELECT * FROM unregistered")
@@ -762,13 +764,16 @@ def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript
             client.send(
                 # fmt: python
                 python=code("""
+                    import builtins
                     import sqlite3
 
+                    assert "sql_connection" not in vars(builtins)
+                    assert "console_sql_connection" not in vars(builtins)
                     selected = sqlite3.connect(":memory:")
                     selected.execute("CREATE TABLE chosen(value INTEGER)")
                     selected.execute("INSERT INTO chosen VALUES (11)")
-                    console_sql_connection(selected)
-                    assert sql_connection() is selected
+                    assert _console.sql_connection(connection=selected) is None
+                    assert _console.sql_connection() is selected
                     print("selected SQLite")
                     """)
             )
@@ -778,8 +783,8 @@ def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript
             client.send(
                 # fmt: python
                 python=code("""
-                    console_sql_connection(None)
-                    assert sql_connection() is managed
+                    assert _console.sql_connection(None) is None
+                    assert _console.sql_connection() is managed
                     assert selected.execute("SELECT value FROM chosen").fetchone() == (11,)
                     print("managed restored; SQLite remains open")
                     """)
@@ -797,6 +802,44 @@ def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript
                 python="managed.execute('SELECT value FROM retained').fetchone()"
             )
             assert last_tool_text(client) == "(7,)\n"
+            client.send(
+                # fmt: python
+                python=code("""
+                    _console.sql_connection(selected)
+                    try:
+                        _console.sql_connection(object())
+                    except TypeError as error:
+                        print(error)
+                    assert _console.sql_connection() is selected
+                    selected.close()
+                    """)
+            )
+            assert last_tool_text(client) == (
+                "`connection` must provide a callable cursor() method or be None\n"
+            )
+            client.send(sql="SELECT value FROM chosen")
+            assert (
+                last_tool_text(client)
+                == "Error: Cannot operate on a closed database.\n"
+            )
+            client.send(
+                python="assert _console.sql_connection() is selected; _console.sql_connection(None)"
+            )
+            assert last_tool_text(client) == "[done]"
+            client.send(
+                python="del managed, selected; assert _console.sql_connection().execute('SELECT value FROM retained').fetchone() == (7,)"
+            )
+            assert last_tool_text(client) == "[done]"
+            client.send(python="_console.sql_connection(sqlite3.connect(':memory:'))")
+            assert last_tool_text(client) == "[done]"
+            client.send(
+                control="restart", python="assert callable(_console.sql_connection)"
+            )
+            assert last_tool_text(client) == (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[done]"
+            ), last_tool_text(client)
+            client.send(sql="SELECT value FROM retained")
+            assert "Table with name retained does not exist" in last_tool_text(client)
             return client.finish()[3:]
 
 
@@ -836,7 +879,7 @@ def test_catalog_and_private_storage_follow_worker_lifetime(
             client.send(
                 # fmt: python
                 python=code("""
-                    connection = sql_connection()
+                    connection = _console.sql_connection()
                     spill = Path(
                         connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
                     )
@@ -944,7 +987,7 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
 
                     assert importlib.util.find_spec("duckdb") is None
                     selected = sqlite3.connect(":memory:")
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     print("Python remains available")
                     """)
             )
@@ -952,7 +995,7 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
             client.send(sql="SELECT 7 AS custom_value")
             assert "7" in last_tool_text(client)
             client.send(
-                python="console_sql_connection(None); selected.execute('SELECT 1').fetchone()"
+                python="_console.sql_connection(None); selected.execute('SELECT 1').fetchone()"
             )
             assert last_tool_text(client) == "(1,)\n"
             client.send(sql="SELECT 1")
@@ -998,8 +1041,8 @@ def test_selected_environment_uses_custom_connection_without_duckdb(
                     selected = sqlite3.connect(":memory:")
                     selected.execute("CREATE TABLE custom(value INTEGER)")
                     selected.execute("INSERT INTO custom VALUES (21)")
-                    console_sql_connection(selected)
-                    assert sql_connection() is selected
+                    _console.sql_connection(selected)
+                    assert _console.sql_connection() is selected
                     print("custom connection selected")
                     """)
             )
@@ -1007,7 +1050,7 @@ def test_selected_environment_uses_custom_connection_without_duckdb(
             client.send(sql="SELECT value * 2 AS answer FROM custom")
             assert "42" in last_tool_text(client)
             client.send(
-                python="console_sql_connection(None); selected.execute('SELECT value FROM custom').fetchone()"
+                python="_console.sql_connection(None); selected.execute('SELECT value FROM custom').fetchone()"
             )
             assert last_tool_text(client) == "(21,)\n"
             client.send(sql="SELECT 1")
@@ -1059,7 +1102,7 @@ def test_bootstrap_ignores_workspace_duckdb_shadows(
                         selected = sqlite3.connect(":memory:")
                         selected.execute("CREATE TABLE custom(value INTEGER)")
                         selected.execute("INSERT INTO custom VALUES (42)")
-                        console_sql_connection(selected)
+                        _console.sql_connection(selected)
                         print("Python remains available; DuckDB shadow remains unimported")
                         """),
                 )
@@ -1121,7 +1164,7 @@ def test_selected_environment_uses_preinstalled_duckdb(
             client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
             assert "Error:" not in last_tool_text(client)
             client.send(
-                python="sql_connection().execute('SELECT value FROM selected_state').fetchone()"
+                python="_console.sql_connection().execute('SELECT value FROM selected_state').fetchone()"
             )
             assert last_tool_text(client) == "(42,)\n"
             inspected = client.send(requirements={"action": "get"})
@@ -1145,7 +1188,9 @@ def test_records_managed_sql_cells(
             client.send(sql="SELECT 42 AS recorded")
             added = client.send(requirements={"duckdb": ["json"]})
             assert not added.get("isError"), added
-            client.send(python='sql_connection().execute("SELECT 1").fetchone()')
+            client.send(
+                python='_console.sql_connection().execute("SELECT 1").fetchone()'
+            )
             records = client.finish()[3:]
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         markdown = (session / "transcript.md").read_text()
@@ -1285,7 +1330,7 @@ def test_interrupt_preserves_sql_and_python_state(
                             return [(7,)]
 
 
-                    console_sql_connection(InterruptibleConnection())
+                    _console.sql_connection(InterruptibleConnection())
                     print(started_path, release_path, sep="\n")
                     """)
             )
@@ -1307,7 +1352,7 @@ def test_interrupt_preserves_sql_and_python_state(
             client.send()
             assert "KeyboardInterrupt" in last_tool_text(client)
             client.send(
-                python="console_sql_connection(None); print('Python remains usable')"
+                python="_console.sql_connection(None); print('Python remains usable')"
             )
             assert last_tool_text(client) == "Python remains usable\n"
             client.send(sql="SELECT value FROM retained")

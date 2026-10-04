@@ -93,14 +93,19 @@ base::local(
       selected_connection
     }
 
-    sql_connection <- function() {
-      if (.Call("mcp_console_sql_take_restore_request")) {
-        selected_connection <<- NULL
+    sql_connection <- function(connection) {
+      if (missing(connection)) {
+        if (.Call("mcp_console_sql_has_python_connection")) {
+          stop(paste(
+            "The active SQL connection belongs to Python;",
+            "use _console.sql_connection() in Python"
+          ))
+        }
+        if (.Call("mcp_console_sql_take_restore_request")) {
+          selected_connection <<- NULL
+        }
+        return(ensure_connection())
       }
-      ensure_connection()
-    }
-
-    console_sql_connection <- function(connection) {
       if (is.null(connection)) {
         connection <- ensure_managed_connection()
       } else {
@@ -116,7 +121,7 @@ base::local(
       }
       invisible(.Call("mcp_console_sql_use_r"))
       selected_connection <<- connection
-      invisible(selected_connection)
+      invisible(NULL)
     }
 
     restore_managed_connection <- function() {
@@ -132,12 +137,9 @@ base::local(
     # Match reticulate's getter-only `py` binding. Attribute assignment such as
     # `py$name <- value` already writes through the returned Python module proxy.
     base::makeActiveBinding("py", function() reticulate::py, tools)
-    base::assign("sql_connection", sql_connection, envir = tools)
-    base::assign(
-      "console_sql_connection",
-      console_sql_connection,
-      envir = tools
-    )
+    console <- new.env(parent = emptyenv())
+    console$sql_connection <- sql_connection
+    base::assign(".console", console, envir = tools)
 
     ensure_printer <- function() {
       if (printer_ready) {
@@ -480,7 +482,7 @@ base::local(
             stop(
               paste(
                 "The selected SQL connection is no longer valid;",
-                "call console_sql_connection(NULL) to restore DuckDB"
+                "call .console$sql_connection(NULL) to restore DuckDB"
               )
             )
           }

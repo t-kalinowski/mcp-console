@@ -24,8 +24,7 @@ send:
       identical(isTRUE(reticulate::py_config()$ephemeral), TRUE),
       identical(search()[[2L]], "tools:mcp-console"),
       identical(find("py")[[1L]], "tools:mcp-console"),
-      identical(find("sql_connection")[[1L]], "tools:mcp-console"),
-      identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
+      identical(find(".console")[[1L]], "tools:mcp-console")
     )
 result:
   content:

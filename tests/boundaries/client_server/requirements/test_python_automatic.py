@@ -438,7 +438,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
                     return Cursor()
 
 
-            console_sql_connection(Connection())
+            _console.sql_connection(Connection())
             """)
         client.expect(python=python)
 
@@ -470,7 +470,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
                 return restore_hook
 
 
-            console_sql_connection(None)
+            _console.sql_connection(None)
             sys.settrace(restore_hook)
             """)
         client.expect(python=python)

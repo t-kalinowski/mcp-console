@@ -696,12 +696,12 @@ def test_adds_python_packages_to_idle_managed_worker(
                     identity = object()
                     identity_id = id(identity)
                     worker_pid = os.getpid()
-                    managed = sql_connection()
+                    managed = _console.sql_connection()
                     managed_id = id(managed)
                     managed.execute("create table retained as select 42 as value")
                     selected = sqlite3.connect(":memory:")
                     selected.execute("create table chosen (value integer)")
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     print("running state created")
                     """),
             )
@@ -717,7 +717,7 @@ def test_adds_python_packages_to_idle_managed_worker(
                     assert os.getpid() == worker_pid
                     assert id(identity) == identity_id
                     assert id(managed) == managed_id
-                    assert sql_connection() is selected
+                    assert _console.sql_connection() is selected
                     assert managed.execute("select value from retained").fetchone() == (42,)
                     assert (
                         subprocess.check_output(
@@ -735,7 +735,7 @@ def test_adds_python_packages_to_idle_managed_worker(
             ), client.transcript[-1]
             client.send(sql="select value from chosen")
             assert "value" in last_result_text(client), client.transcript[-1]
-            client.send(python="console_sql_connection(None)")
+            client.send(python="_console.sql_connection(None)")
             client.send(sql="select value from retained")
             assert "42" in last_result_text(client), client.transcript[-1]
             client.send(
@@ -829,11 +829,11 @@ def test_resolves_reached_import_in_managed_worker(
                     worker_pid = os.getpid()
                     identity = object()
                     identity_id = id(identity)
-                    managed = sql_connection()
+                    managed = _console.sql_connection()
                     managed.execute("create table retained as select 42 as value")
                     selected = sqlite3.connect(":memory:")
                     selected.execute("create table chosen as select 7 as value")
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     steps = []
                     print("state created")
                     """),
@@ -847,7 +847,7 @@ def test_resolves_reached_import_in_managed_worker(
                     loaded = load_package()
                     assert os.getpid() == worker_pid
                     assert id(identity) == identity_id
-                    assert sql_connection() is selected
+                    assert _console.sql_connection() is selected
                     assert managed.execute("select value from retained").fetchone() == (42,)
                     assert steps == ["before import"]
                     print("reached import activated")
@@ -889,7 +889,7 @@ def test_resolves_reached_import_in_managed_worker(
                     import subprocess, sys
 
                     assert os.getpid() == worker_pid and id(identity) == identity_id
-                    assert sql_connection() is selected
+                    assert _console.sql_connection() is selected
                     assert managed.execute("select value from retained").fetchone() == (42,)
                     assert subprocess.check_output(
                         [sys.executable, "-c", "import yaml12, pydash; print('child ready')"],
@@ -947,11 +947,11 @@ def test_combines_live_python_and_duckdb_additions(
                     worker_pid = os.getpid()
                     identity = object()
                     identity_id = id(identity)
-                    managed = sql_connection()
+                    managed = _console.sql_connection()
                     managed.execute("create table retained as select 42 as value")
                     selected = sqlite3.connect(":memory:")
                     selected.execute("create table chosen as select 7 as value")
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     print("state created")
                     """),
             )
@@ -967,7 +967,7 @@ def test_combines_live_python_and_duckdb_additions(
 
                     assert os.getpid() == worker_pid
                     assert id(identity) == identity_id
-                    assert sql_connection() is selected
+                    assert _console.sql_connection() is selected
                     assert managed.execute("select value from retained").fetchone() == (42,)
                     assert subprocess.check_output(
                         [sys.executable, "-c", "import yaml12; print('child ready')"],
@@ -976,7 +976,7 @@ def test_combines_live_python_and_duckdb_additions(
                     print("combined additions retained state")
                     """),
             )
-            client.send(python="console_sql_connection(None)")
+            client.send(python="_console.sql_connection(None)")
             client.send(sql="select value from retained")
             assert "42" in last_result_text(client), client.transcript[-1]
             declaration = client.send(requirements={"action": "get"})[
@@ -1254,7 +1254,7 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
                             return 42
                     selected = sqlite3.connect(":memory:")
                     selected.create_function("missing_from_sql", 0, missing_from_sql)
-                    console_sql_connection(selected)
+                    _console.sql_connection(selected)
                     """)
             )
             client.send(sql="select missing_from_sql() as value")

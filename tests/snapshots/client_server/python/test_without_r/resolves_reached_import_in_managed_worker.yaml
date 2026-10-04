@@ -6,11 +6,11 @@ send:
     worker_pid = os.getpid()
     identity = object()
     identity_id = id(identity)
-    managed = sql_connection()
+    managed = _console.sql_connection()
     managed.execute("create table retained as select 42 as value")
     selected = sqlite3.connect(":memory:")
     selected.execute("create table chosen as select 7 as value")
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
     steps = []
     print("state created")
 result:
@@ -29,7 +29,7 @@ send:
     loaded = load_package()
     assert os.getpid() == worker_pid
     assert id(identity) == identity_id
-    assert sql_connection() is selected
+    assert _console.sql_connection() is selected
     assert managed.execute("select value from retained").fetchone() == (42,)
     assert steps == ["before import"]
     print("reached import activated")
@@ -177,7 +177,7 @@ send:
     import subprocess, sys
 
     assert os.getpid() == worker_pid and id(identity) == identity_id
-    assert sql_connection() is selected
+    assert _console.sql_connection() is selected
     assert managed.execute("select value from retained").fetchone() == (42,)
     assert subprocess.check_output(
         [sys.executable, "-c", "import yaml12, pydash; print('child ready')"],

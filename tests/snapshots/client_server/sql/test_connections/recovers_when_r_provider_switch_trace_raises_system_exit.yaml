@@ -18,7 +18,7 @@ send:
 
     connection = sqlite3.connect(":memory:")
     connection.execute("CREATE TABLE python_value AS SELECT 42 AS value")
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
     use_r_code = _mcp_console_sql.use_r.__code__
 
 
@@ -36,13 +36,13 @@ result:
   isError: false
 ---
 send:
-  r: console_sql_connection(NULL); invisible()
+  r: .console$sql_connection(NULL); invisible()
 result:
   content:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 49, in use_r
+          File "<string>", line 64, in use_r
           File "<mcp-console:python:e1>", line 14, in exit_use_r
         SystemExit: R provider switch exit
         Error: Python function `_mcp_console_sql.use_r` failed
@@ -69,7 +69,7 @@ result:
   isError: false
 ---
 send:
-  r: console_sql_connection(NULL); invisible()
+  r: .console$sql_connection(NULL); invisible()
 result:
   content:
     - type: text
