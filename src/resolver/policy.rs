@@ -67,6 +67,7 @@ impl Launch {
             });
         }
         let cache_home = std::env::var_os("XDG_CACHE_HOME")
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")));
         let mut environment = BTreeMap::new();
@@ -336,6 +337,11 @@ impl Launch {
             "/opt/homebrew/opt",
             "/opt/homebrew/lib",
             "/opt/homebrew/Cellar",
+            // Intel Homebrew uses /usr/local instead of /opt/homebrew.
+            "/usr/local/bin",
+            "/usr/local/opt",
+            "/usr/local/lib",
+            "/usr/local/Cellar",
             "/opt/R",
             "/etc/ssl/certs",
             "/etc/ssl/cert.pem",
@@ -349,6 +355,8 @@ impl Launch {
             "/etc/ld.so.conf.d",
             // Debian library links (including BLAS) pass through alternatives.
             "/etc/alternatives",
+            // Debian and Ubuntu link /usr/lib/R/etc into this directory.
+            "/etc/R",
             // pak and renv need distribution metadata to select Linux binaries.
             "/etc/os-release",
             "/etc/redhat-release",

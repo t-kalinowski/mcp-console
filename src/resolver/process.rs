@@ -461,7 +461,18 @@ fn wait_for_resolver(
     if resolver.native
         && let Err(error) = status
     {
-        let stderr = receive_result(stderr, "stderr reader", kind)?.map_err(|e| e.to_string())?;
+        // Unconfirmed retirement may leave the runner holding stderr open.
+        // Diagnostics must not turn a bounded cleanup failure into another wait.
+        let stderr = match stderr.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(Ok(stderr)) => stderr,
+            Ok(Err(read_error)) => {
+                return Err(format!("{error}; failed to read resolver stderr: {read_error}"));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(format!("{error}; timed out collecting resolver diagnostics"));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(error),
+        };
         let diagnostic = String::from_utf8_lossy(&stderr);
         return Err(if diagnostic.is_empty() {
             error
@@ -502,11 +513,21 @@ fn retire_native(
         let _ = reply.send(result);
     }
     if !exit.wait(std::time::Duration::from_secs(6))? {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(
-            "native resolver required forced termination; retirement is unconfirmed".into(),
-        );
+        let message = "native resolver required forced termination; retirement is unconfirmed";
+        child
+            .kill()
+            .map_err(|error| format!("{message}; failed to force-stop runner: {error}"))?;
+        // Even a successful SIGKILL does not guarantee prompt exit. Keep the
+        // observer bounded and never infer descendant cleanup from a forced exit.
+        if exit
+            .wait(std::time::Duration::from_secs(1))
+            .map_err(|error| format!("{message}; {error}"))?
+        {
+            let _ = child
+                .try_wait()
+                .map_err(|error| format!("{message}; failed to reap runner: {error}"))?;
+        }
+        return Err(message.into());
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {

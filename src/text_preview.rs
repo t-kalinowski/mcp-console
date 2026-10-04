@@ -13,7 +13,11 @@ impl TextPreview {
         let mut pending = Vec::new();
         let mut buffer = [0; 8192];
         loop {
-            let count = reader.read(&mut buffer)?;
+            let count = match reader.read(&mut buffer) {
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            };
             pending.extend_from_slice(&buffer[..count]);
             let complete = if count == 0 {
                 pending.len()

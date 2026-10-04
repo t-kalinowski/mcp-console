@@ -186,10 +186,11 @@ impl Context {
     }
 
     fn validate(&self, operation: &Operation, value: &serde_json::Value) -> Result<(), String> {
-        let Some(storage) = &self.storage else {
-            return Ok(());
-        };
         let inside = |path: &Path| -> Result<(), String> {
+            // Direct mode skips containment, not request/result validation.
+            let Some(storage) = &self.storage else {
+                return Ok(());
+            };
             let canonical = path
                 .canonicalize()
                 .map_err(|e| format!("invalid managed path {}: {e}", path.display()))?;
@@ -248,8 +249,9 @@ impl Context {
                 if managed.requirements() != requirements {
                     return Err("resolver changed the accepted R manifest".into());
                 }
-                if managed.extension_directory()
-                    != Some(storage.payload.join("extensions").as_path())
+                if let Some(storage) = &self.storage
+                    && managed.extension_directory()
+                        != Some(storage.payload.join("extensions").as_path())
                 {
                     return Err("resolver changed managed extension storage".into());
                 }
