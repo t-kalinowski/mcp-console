@@ -62,6 +62,8 @@ Include every host that serves the mirror's artifacts or redirects, plus the R a
 The proxy's native host matching and local-network checks apply.
 Resolver environment values configure preparation; worker environment values do not.
 R availability is discovered inside the resolver after its environment policy applies.
+Resolver and worker policies preserve the server's Python selection: `python` in Console YAML, otherwise the server's `RETICULATE_PYTHON`.
+Omit both to use managed Python.
 Configuration is captured once and retained across preparation calls and worker restarts.
 The `resolver` mapping applies only to local sandboxed preparation.
 
@@ -75,6 +77,7 @@ resolver:
 
 Console captures this path for installation and the managed R/Python SQL connections.
 Without this override, both use `.duckdb/extensions` beneath the resolver's effective `HOME`, even when it differs from the server or worker `HOME`.
+User-selected Python retains DuckDB's own cache settings and preinstalled extensions.
 An explicit `filesystem.entries` must grant writes to the selected directory.
 
 ## Expanded default

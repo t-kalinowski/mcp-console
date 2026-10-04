@@ -1169,7 +1169,14 @@ def test_selected_environment_uses_preinstalled_duckdb(
         )
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text("python: .venv/bin/python\n")
+        config.write_text(
+            json.dumps(
+                {
+                    "python": ".venv/bin/python",
+                    "resolver": {"environment": {"HOME": str(root / "resolver-home")}},
+                }
+            )
+        )
         bin_dir = root / "bin"
         bin_dir.mkdir()
         uv = bin_dir / "uv"
@@ -1191,6 +1198,9 @@ def test_selected_environment_uses_preinstalled_duckdb(
                 python="sql_connection().execute('SELECT value FROM selected_state').fetchone()"
             )
             assert last_tool_text(client) == "(42,)\n"
+            client.send(control="restart")
+            client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
+            assert "Error:" not in last_tool_text(client), last_tool_text(client)
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["python"] == []
             refused = client.send(requirements={"duckdb": ["fts"]})

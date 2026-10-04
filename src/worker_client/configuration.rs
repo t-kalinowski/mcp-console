@@ -115,6 +115,7 @@ impl ClientConfiguration {
         let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
             crate::resolver::preparation::Mode::Auto,
             (!no_sandbox && cfg!(unix)).then(|| resolver_settings.clone()),
+            configured_python.as_deref(),
             diagnostics.clone(),
             on_started,
         )?;

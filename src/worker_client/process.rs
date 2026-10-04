@@ -233,7 +233,11 @@ impl WorkerRuntime {
             if let Some(managed_r) = managed_r {
                 managed_r.configure_worker(&mut command)?;
             }
-            if let Some(directory) = duckdb_extension_directory {
+            // Managed Python carries its prepared cache in the runtime selection.
+            // Only managed R needs this additional launch assignment.
+            if managed_r.is_some()
+                && let Some(directory) = duckdb_extension_directory
+            {
                 command.env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);
             }
             command.env(

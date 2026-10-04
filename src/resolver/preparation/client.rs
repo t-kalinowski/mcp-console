@@ -171,14 +171,26 @@ impl Preparation {
     pub(crate) fn open_local(
         mode: Mode,
         resolver: Option<crate::settings::SandboxSettings>,
+        python: Option<&std::ffi::OsStr>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut command = if let Some(settings) = resolver {
+        let mut command = if let Some(mut settings) = resolver {
+            // Preparation and the retained worker must agree on whether Python
+            // is managed, including with an isolated resolver environment.
+            crate::settings::preserve_environment(
+                &mut settings,
+                [("RETICULATE_PYTHON".as_ref(), python)],
+            )?;
             crate::resolver::sandbox::command(settings, std::process::id())?
         } else {
             std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
         };
+        if let Some(python) = python {
+            command.env("RETICULATE_PYTHON", python);
+        } else {
+            command.env_remove("RETICULATE_PYTHON");
+        }
         command.arg("resolve");
         let open = Input::Open {
             version: super::VERSION,

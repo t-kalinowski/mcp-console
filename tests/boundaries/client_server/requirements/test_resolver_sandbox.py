@@ -102,6 +102,73 @@ def test_retains_tailored_resolver_policy(binary: Path) -> Transcript:
     return permissions(binary, tailored=True)
 
 
+@requires(SANDBOX)
+def test_preserves_python_selection_in_resolver_environment(binary: Path) -> Transcript:
+    for source in ("managed", "environment", "config"):
+        for inherit in (False, True):
+            with TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                tools = root / "bin"
+                tools.mkdir()
+                (tools / "uv").symlink_to(shutil.which("uv"))
+                env = environment(tools)
+                if source == "environment":
+                    env["RETICULATE_PYTHON"] = sys.executable
+                elif source == "config":
+                    env["RETICULATE_PYTHON"] = str(root / "missing-server-python")
+                settings = {
+                    "resolver": {
+                        "inherit_environment": inherit,
+                        "environment": {
+                            "HOME": env["HOME"],
+                            "PATH": env["PATH"],
+                            "RETICULATE_PYTHON": sys.executable,
+                            "UV_NO_CONFIG": "1",
+                        },
+                    }
+                }
+                if source == "config":
+                    settings["python"] = sys.executable
+                config = root / ".agents/console/config.yaml"
+                config.parent.mkdir(parents=True)
+                config.write_text(json.dumps(settings))
+                with McpClient(binary, ("serve",), env, root) as client:
+                    client.initialize_and_list_tools()
+                    for restart in (False, True):
+                        if restart:
+                            client.send(control="restart")
+                        if source == "managed":
+                            client.expect(
+                                "managed selection retained\n",
+                                # fmt: python
+                                python=code("""
+                                    import os
+
+                                    assert "RETICULATE_PYTHON" not in os.environ
+                                    assert "MCP_CONSOLE_MANAGED_PYTHON" in os.environ
+                                    print("managed selection retained")
+                                    """),
+                            )
+                        else:
+                            client.expect(
+                                "explicit selection retained\n",
+                                # fmt: python
+                                python=code("""
+                                    import os
+                                    import sys
+
+                                    assert os.environ["RETICULATE_PYTHON"] == sys.executable
+                                    assert "MCP_CONSOLE_MANAGED_PYTHON" not in os.environ
+                                    print("explicit selection retained")
+                                    """),
+                            )
+                        inspected = client.send(requirements={"action": "get"})
+                        requirements = inspected["structuredContent"]["requirements"]
+                        assert bool(requirements["python"]) == (source == "managed")
+                    client.finish()
+    return [{"python_selection_preserved": ["managed", "environment", "config"]}]
+
+
 @requires(SANDBOX, R, command("ir"))
 def test_discovers_r_from_resolver_environment(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:

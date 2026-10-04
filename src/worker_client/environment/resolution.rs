@@ -331,6 +331,7 @@ impl Client {
                         crate::resolver::preparation::Mode::Custom,
                         (!self.0.no_sandbox && cfg!(unix))
                             .then(|| self.0.resolver_settings.clone()),
+                        std::env::var_os("RETICULATE_PYTHON").as_deref(),
                         self.0.output.diagnostics(),
                         &|handle| self.register_resolver_stop_handle(generation, handle),
                     );

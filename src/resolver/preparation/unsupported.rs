@@ -8,6 +8,7 @@ impl Preparation {
     pub(crate) fn open_local(
         _: super::Mode,
         _: Option<crate::settings::SandboxSettings>,
+        _: Option<&std::ffi::OsStr>,
         _: crate::process_output::Diagnostics,
         _: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, super::Discovery), String> {
