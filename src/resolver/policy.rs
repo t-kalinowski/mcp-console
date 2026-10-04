@@ -1,9 +1,13 @@
 //! Trusted launch settings, independent of submitted requirements and worker grants.
 
+#[cfg(unix)]
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+#[cfg(unix)]
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -173,11 +177,8 @@ impl Launch {
                 readable.push(target);
             }
         }
-        for variable in ["R_HOME"] {
-            if let Some(value) = environment.get(variable) {
-                readable
-                    .extend(std::env::split_paths(value).filter(|p| p.is_absolute() && p.exists()));
-            }
+        if let Some(value) = environment.get("R_HOME") {
+            readable.extend(std::env::split_paths(value).filter(|p| p.is_absolute() && p.exists()));
         }
         if !environment.contains_key("MCP_CONSOLE_RESOLVER_R")
             && !environment.contains_key("R_HOME")

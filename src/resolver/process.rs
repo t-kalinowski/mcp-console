@@ -137,7 +137,7 @@ impl ResolverProcess {
                 self.events.clone(),
                 vec![stdout_done, stderr_done],
             );
-            return Ok((child, stdout, stderr));
+            Ok((child, stdout, stderr))
         }
         #[cfg(windows)]
         let mut child = spawn_resolver(command)?;
@@ -412,6 +412,7 @@ fn wait_for_resolver_exit(
                 reply,
                 clear_marker,
             }) => {
+                #[cfg(unix)]
                 if native {
                     let result = retire_native(child, Some(reply));
                     cleanup.store(result.is_ok(), Ordering::SeqCst);

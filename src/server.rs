@@ -36,6 +36,7 @@ struct ConsoleServer {
 }
 
 impl ConsoleServer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         input_closed: InputClosed,
         worker: Option<PathBuf>,

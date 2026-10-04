@@ -27,15 +27,6 @@ struct ResolverInput<'a> {
     exclude_newer: Option<&'a str>,
 }
 
-#[cfg(all(test, unix))]
-pub(crate) fn resolve_python_manifest(
-    requirements: crate::worker_protocol::PythonRequirementManifest,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<ManagedPython, String> {
-    resolve_python_manifest_with_r(requirements, configuration, None, None, on_started)
-}
-
 pub(crate) fn resolve_python_manifest_for_remote(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,

@@ -1410,11 +1410,21 @@ mod tests {
     #[tokio::test]
     async fn replacement_failure_preserves_an_unclaimed_assembled_response() {
         let client = Client::pending();
-        client.configure(crate::worker_client::ClientConfiguration::new(
+        client.configure(crate::worker_client::ClientConfiguration::with_arguments(
             std::path::PathBuf::from("unused-worker"),
+            Vec::new(),
             None,
             false,
             crate::settings::SandboxSettings::default(),
+            super::super::Environment {
+                local_runtime: None,
+                custom_worker: true,
+                duckdb_extensions: Default::default(),
+                duckdb_r_targets: Vec::new(),
+                python: None,
+                r: None,
+                r_resolver: super::super::RResolver::Discover,
+            },
         ));
         client.finish_startup(Ok(()));
         let evaluation = Arc::new(super::super::Evaluation::new(
@@ -1460,11 +1470,21 @@ mod tests {
     #[tokio::test]
     async fn failed_restart_excludes_a_delivered_response_but_keeps_later_output() {
         let client = Client::pending();
-        client.configure(crate::worker_client::ClientConfiguration::new(
+        client.configure(crate::worker_client::ClientConfiguration::with_arguments(
             std::path::PathBuf::from("unused-worker"),
+            Vec::new(),
             None,
             false,
             crate::settings::SandboxSettings::default(),
+            super::super::Environment {
+                local_runtime: None,
+                custom_worker: true,
+                duckdb_extensions: Default::default(),
+                duckdb_r_targets: Vec::new(),
+                python: None,
+                r: None,
+                r_resolver: super::super::RResolver::Discover,
+            },
         ));
         client.finish_startup(Ok(()));
         let evaluation = Arc::new(super::super::Evaluation::new(

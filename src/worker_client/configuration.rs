@@ -320,7 +320,7 @@ impl ClientConfiguration {
         Ok(configuration)
     }
 
-    fn with_arguments(
+    pub(in crate::worker_client) fn with_arguments(
         program: PathBuf,
         arguments: Vec<OsString>,
         relay: Option<PathBuf>,
@@ -365,6 +365,7 @@ impl ClientConfiguration {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn target(
         target: crate::settings::Target,
         roots: Vec<PathBuf>,
