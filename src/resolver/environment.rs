@@ -72,14 +72,19 @@ impl ManagedR {
                 self.library.display()
             ));
         }
-        // Resolver processes inherit only payload libraries. Worker launches
-        // retain their own trusted ambient libraries after the managed paths.
-        let mut libraries = self.library_paths().collect::<Vec<_>>();
+        // Keep the accepted library first and preserve ambient worker-library
+        // precedence before resolver bootstrap libraries.
+        let mut libraries = vec![self.library.clone()];
         if let Some(inherited) = std::env::var_os("R_LIBS") {
             for path in std::env::split_paths(&inherited) {
                 if !path.as_os_str().is_empty() && !libraries.contains(&path) {
                     libraries.push(path);
                 }
+            }
+        }
+        for path in self.library_paths() {
+            if !libraries.contains(&path) {
+                libraries.push(path);
             }
         }
         command.env(

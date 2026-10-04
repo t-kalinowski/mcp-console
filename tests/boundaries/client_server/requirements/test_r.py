@@ -601,9 +601,11 @@ def test_prepares_initial_r_requirements(
         tempfile.TemporaryDirectory() as temporary,
         resolver_fixture_directory(binary, execution) as fixtures,
     ):
-        # Keep the failed-candidate checkpoint independent of pak's optional
-        # packages in the host installation. Successful resolutions use real ir.
-        environment, _ = recording_ir_environment(fixtures, fail_requirement=invalid_r)
+        # Replay the real parser diagnostic through the failure fixture. Cold
+        # pak installations can emit optional-package notices before that error.
+        environment, _ = recording_ir_environment(
+            fixtures, fail_requirement=invalid_r, failure_output=""
+        )
         workspace = Path(temporary)
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
@@ -624,10 +626,9 @@ def test_prepares_initial_r_requirements(
         )
         assert last_result_text(client) == "[prepared]"
 
-        invalid_r = "not a valid requirement !!!"
         reference = subprocess.run(
             [
-                "ir",
+                environment["MCP_CONSOLE_TEST_REAL_IR"],
                 "run",
                 "--rscript",
                 str(rscript),
@@ -646,15 +647,17 @@ def test_prepares_initial_r_requirements(
             text=True,
         )
         assert reference.returncode == 1, reference
+        Path(environment["MCP_CONSOLE_TEST_IR_FAILURE_OUTPUT"]).write_text(
+            reference.stderr, encoding="utf-8"
+        )
         client.send(
             requirements={"r": [invalid_r]},
         )
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         error = result["content"][0]["text"]
-        assert error == (
-            "R package resolution failed with exit status: 1: "
-            f"synthetic `ir` failure for {invalid_r}"
+        assert error.startswith(
+            "R package resolution failed with exit status: 1: Error:"
         ), error
         assert f"Cannot parse package: {invalid_r}." in error, error
         assert error.endswith("Execution halted\nir: dependency resolution failed"), (

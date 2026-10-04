@@ -1,5 +1,5 @@
 ---
-configuration: unrestricted restricted (string)
+configuration: :workspace restricted (string)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -32,11 +32,19 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution, when available, runs outside the sandbox
-  and may execute installation or build code; use only trusted dependencies.
+  Evaluated code uses the native ":workspace" profile: it can edit files beneath
+  the fixed launch workspace, write in the worker's private temporary directory
+  and to explicitly allowed paths, and cannot directly access the network. The
+  workspace's .git, .agents, .codex, and .claude paths are readable and
+  protected from writes by default. Explicit native rules can override these
+  defaults or restrict reads. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: unrestricted restricted (mapping)
+configuration: :workspace restricted (mapping)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -69,11 +77,19 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution, when available, runs outside the sandbox
-  and may execute installation or build code; use only trusted dependencies.
+  Evaluated code uses the native ":workspace" profile: it can edit files beneath
+  the fixed launch workspace, write in the worker's private temporary directory
+  and to explicitly allowed paths, and cannot directly access the network. The
+  workspace's .git, .agents, .codex, and .claude paths are readable and
+  protected from writes by default. Explicit native rules can override these
+  defaults or restrict reads. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: unrestricted enabled (string)
+configuration: :workspace enabled (string)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -106,11 +122,19 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution, when available, runs outside the sandbox and
-  may execute installation or build code; use only trusted dependencies.
+  Evaluated code uses the native ":workspace" profile: it can edit files beneath
+  the fixed launch workspace, write in the worker's private temporary directory
+  and to explicitly allowed paths, and can directly access the network. The
+  workspace's .git, .agents, .codex, and .claude paths are readable and
+  protected from writes by default. Explicit native rules can override these
+  defaults or restrict reads. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: unrestricted enabled (mapping)
+configuration: :workspace enabled (mapping)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -143,11 +167,19 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution, when available, runs outside the sandbox and
-  may execute installation or build code; use only trusted dependencies.
+  Evaluated code uses the native ":workspace" profile: it can edit files beneath
+  the fixed launch workspace, write in the worker's private temporary directory
+  and to explicitly allowed paths, and can directly access the network. The
+  workspace's .git, .agents, .codex, and .claude paths are readable and
+  protected from writes by default. Explicit native rules can override these
+  defaults or restrict reads. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: restricted restricted (string)
+configuration: :read-only restricted (string)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -180,13 +212,17 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code uses the native ":read-only" profile: it can read host files
+  subject to configured read restrictions, write in the worker's private
+  temporary directory and to explicitly allowed paths, and cannot directly
+  access the network. Dependency preparation, when available, runs in a separate
+  native resolver sandbox. Package code can write only to Console-owned resolver
+  storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: restricted restricted (mapping)
+configuration: :read-only restricted (mapping)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -219,13 +255,17 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code uses the native ":read-only" profile: it can read host files
+  subject to configured read restrictions, write in the worker's private
+  temporary directory and to explicitly allowed paths, and cannot directly
+  access the network. Dependency preparation, when available, runs in a separate
+  native resolver sandbox. Package code can write only to Console-owned resolver
+  storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: restricted enabled (string)
+configuration: :read-only enabled (string)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -258,13 +298,17 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  Evaluated code uses the native ":read-only" profile: it can read host files
+  subject to configured read restrictions, write in the worker's private
+  temporary directory and to explicitly allowed paths, and can directly access
+  the network. Dependency preparation, when available, runs in a separate native
+  resolver sandbox. Package code can write only to Console-owned resolver
+  storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
-configuration: restricted enabled (mapping)
+configuration: :read-only enabled (mapping)
 description: >-
   Persistent custom-worker workbench. Language fields describe the configured
   interface; supported languages, evaluation, display, SQL, and cross-language
@@ -297,163 +341,15 @@ description: >-
   through existing tools; Console provides no read/search interface.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
----
-configuration: external-sandbox restricted (string)
-description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
-
-
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
-
-
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
-
-
-  Evaluated code has filesystem access governed by the launcher's sandbox
-  settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
----
-configuration: external-sandbox restricted (mapping)
-description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
-
-
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
-
-
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
-
-
-  Evaluated code has filesystem access governed by the launcher's sandbox
-  settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
----
-configuration: external-sandbox enabled (string)
-description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
-
-
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
-
-
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
-
-
-  Evaluated code has filesystem access governed by the launcher's sandbox
-  settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
----
-configuration: external-sandbox enabled (mapping)
-description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
-
-
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
-
-
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
-
-
-  Evaluated code has filesystem access governed by the launcher's sandbox
-  settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Evaluated code uses the native ":read-only" profile: it can read host files
+  subject to configured read restrictions, write in the worker's private
+  temporary directory and to explicitly allowed paths, and can directly access
+  the network. Dependency preparation, when available, runs in a separate native
+  resolver sandbox. Package code can write only to Console-owned resolver
+  storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
 configuration: restricted
 description: >-
@@ -490,9 +386,12 @@ description: >-
 
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
 configuration: enabled
 description: >-
@@ -529,9 +428,12 @@ description: >-
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
 configuration: proxy
 description: >-
@@ -569,8 +471,12 @@ description: >-
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  preparation, when available, runs in a separate native resolver sandbox.
+  Package code can write only to Console-owned resolver storage. Package
+  downloads use a managed proxy restricted to trusted destinations; installer
+  coordination permits loopback sockets (including host loopback services and
+  DNS on macOS). Prepared artifacts remain untrusted and are read-only to the
+  worker.
 ---
 configuration: proxy with local binding
 description: >-
@@ -608,8 +514,12 @@ description: >-
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  preparation, when available, runs in a separate native resolver sandbox.
+  Package code can write only to Console-owned resolver storage. Package
+  downloads use a managed proxy restricted to trusted destinations; installer
+  coordination permits loopback sockets (including host loopback services and
+  DNS on macOS). Prepared artifacts remain untrusted and are read-only to the
+  worker.
 ---
 configuration: proxy with network enabled
 description: >-
@@ -647,8 +557,12 @@ description: >-
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  preparation, when available, runs in a separate native resolver sandbox.
+  Package code can write only to Console-owned resolver storage. Package
+  downloads use a managed proxy restricted to trusted destinations; installer
+  coordination permits loopback sockets (including host loopback services and
+  DNS on macOS). Prepared artifacts remain untrusted and are read-only to the
+  worker.
 ---
 configuration: native network representation
 description: >-
@@ -685,47 +599,12 @@ description: >-
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
----
-configuration: external enforcement
-description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
-
-
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
-
-
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
-
-
-  Evaluated code has filesystem access governed by the launcher's sandbox
-  settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  allowed by the launcher. Dependency preparation, when available, runs in a
+  separate native resolver sandbox. Package code can write only to Console-owned
+  resolver storage. Package downloads use a managed proxy restricted to trusted
+  destinations; installer coordination permits loopback sockets (including host
+  loopback services and DNS on macOS). Prepared artifacts remain untrusted and
+  are read-only to the worker.
 ---
 configuration: no sandbox
 description: >-

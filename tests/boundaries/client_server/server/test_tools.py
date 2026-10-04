@@ -301,7 +301,7 @@ def _initializes_and_lists_tools(
 
 @requires(SANDBOX)
 def test_describes_project_network_access(binary: Path) -> Transcript:
-    restricted_filesystem = "can write only in the worker's private temporary directory"
+    restricted_filesystem = "can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
     cases = (
         (
             "restricted",
@@ -374,7 +374,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
             )
             for profile, filesystem_access in (
                 (":workspace", 'uses the native ":workspace" profile'),
-                (":read-only", restricted_filesystem),
+                (":read-only", 'uses the native ":read-only" profile'),
             )
             for network in ("restricted", "enabled")
             for mapping in (False, True)
@@ -404,6 +404,8 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                 config.write_text("invalid: [", encoding="utf-8")
                 listed = client.request("tools/list")
                 assert listed["result"]["tools"][0]["description"] == description
+                prepared = client.send(requirements={"action": "get"})
+                assert not prepared.get("isError"), (name, prepared)
                 client.finish()
                 transcript.append({"configuration": name, "description": description})
     return transcript

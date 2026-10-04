@@ -55,20 +55,28 @@ def accepted(binary: Path, host: Path, *arguments: str) -> None:
 
 
 def invoke(binary: Path, host: Path, *arguments: str):
-    with subprocess.Popen(
+    return subprocess.run(
         [binary, *(arguments or ("serve", "--worker", "unused-worker"))],
         cwd=host,
         env={**os.environ, "MCP_CONSOLE_SANDBOX_SETTINGS": "invalid ambient settings"},
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        input="",
+        capture_output=True,
         text=True,
-    ) as process:
-        process.wait(timeout=30)
-        stdout, stderr = process.communicate()
-        return subprocess.CompletedProcess(
-            process.args, process.returncode, stdout, stderr
-        )
+        timeout=30,
+    )
+
+
+def rejected_worker_policy(binary: Path, host: Path, *arguments: str) -> None:
+    with McpClient(
+        binary,
+        arguments or ("serve", "--worker", "unused-worker"),
+        current_directory=host,
+        record_in_project=False,
+    ) as client:
+        error = client.startup_error()
+        assert "managed resolver storage requires" in error, error
+        _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+        assert "without custom filesystem rules" in stderr, stderr
 
 
 @requires(SANDBOX)
@@ -375,16 +383,14 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
             assert standalone.returncode == 0, standalone
             assert standalone.stdout == "workload started\n", standalone
             if "filesystem" in yaml:
-                server = invoke(binary, host)
-                assert server.returncode == 1 and not server.stdout, server
-                assert "managed resolver storage requires" in server.stderr, server
+                rejected_worker_policy(binary, host)
                 initialized = False
             else:
                 accepted(binary, host)
                 initialized = True
-            server = invoke(binary, host, "serve", "--writable-root", "future CLI")
-            assert server.returncode == 1 and not server.stdout, server
-            assert "managed resolver storage requires" in server.stderr, server
+            rejected_worker_policy(
+                binary, host, "serve", "--writable-root", "future CLI"
+            )
             assert not (host / "future café 雪").exists()
             assert not (host / "future CLI").exists()
             transcript.append(
