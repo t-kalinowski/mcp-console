@@ -178,8 +178,8 @@ Retirement cancels stdin independently and joins every I/O task, including when 
 Output collection preserves bytes already read plus a finite snapshot of queued bytes per stream after process retirement; it does not wait for inherited descriptors to close or accept an endless final producer.
 Failed process cleanup cancels and joins exit observation without signalling or reaping the remaining child.
 The original operation failure and cleanup failures remain separate until diagnostic formatting.
-Resolver cleanup confirmation covers native group/Job retirement and owned observer/I/O task settlement; it does not confirm preparation transport or outer compute retirement.
-Unix retains the process-group leader until observation settles and reaping releases its identity; escaped descendants remain outside that scope.
+Resolver cleanup confirmation combines the native process owner's result with settled observer/I/O tasks; it does not confirm preparation transport or outer compute retirement.
+Unix signals the owned process group and reaps its leader after observation settles; it does not provide a separate empty-group receipt, and escaped descendants remain outside that scope.
 Windows retains suspended creation and kill-on-close Job ownership, requires a confirmed empty Job, and shares its existing retirement allowance with exit observation.
 On connection closure, the server closes admission, cancels preparation, retires owned execution resources, settles accepted responses, and bounds blocked MCP delivery.
 Native runner death has no independent recovery guarantee.

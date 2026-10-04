@@ -223,6 +223,8 @@ def resolver_interrupt_permission_environment(
 
 def fake_ir_environment(root: Path, libraries: list[Path]) -> dict[str, str]:
     environment, _ = r_test_environment()
+    # Keep fixture records and checkpoints in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(root)
     fake_bin = root / "bin"
     fake_bin.mkdir()
     fixture = FIXTURES / "ordered_retirement_ir"
