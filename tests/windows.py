@@ -649,6 +649,72 @@ class WindowsConsole(unittest.TestCase):
             json.dumps(session.send(control="restart", python=source)),
         )
 
+    def test_configured_language_presentation_matrix(self):
+        for custom in (False, True):
+            baseline = None
+            for languages in ("r,python", "r", "python"):
+                with self.subTest(custom=custom, languages=languages):
+                    environment = dict(
+                        os.environ,
+                        PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
+                        RETICULATE_PYTHON=sys.executable,
+                        MCP_CONSOLE_LANGUAGES=languages,
+                    )
+                    environment.pop("R_HOME", None)
+                    session = Session(
+                        environment, relay=sys.executable if custom else None
+                    )
+                    try:
+                        session.initialize()
+                        tool = session.request("tools/list", {})["tools"][0]
+                        self.assertEqual(session.request("ping", {}), {})
+                        properties = tool["inputSchema"]["properties"]
+                        fields = set(languages.split(","))
+                        self.assertEqual(
+                            set(properties) & {"r", "python", "sql"}, fields
+                        )
+                        self.assertIn(
+                            "cooperative interrupt",
+                            properties["control"]["description"],
+                        )
+                        self.assertNotIn("SIGINT", properties["control"]["description"])
+                        if baseline is None:
+                            baseline = tool
+                        else:
+                            expected = {
+                                field: schema
+                                for field, schema in baseline["inputSchema"][
+                                    "properties"
+                                ].items()
+                                if field not in {"r", "python"} or field in fields
+                            }
+                            self.assertEqual(properties, expected)
+                        if custom:
+                            self.assertIn(
+                                "Persistent custom-worker workbench.",
+                                tool["description"],
+                            )
+                            self.assertEqual(
+                                "Switch languages when useful" in tool["description"],
+                                len(fields) > 1,
+                            )
+                        else:
+                            self.assertEqual(
+                                tool["description"], baseline["description"]
+                            )
+                            self.assertIn(
+                                "SQL is not yet supported.", tool["description"]
+                            )
+                            for field in fields:
+                                text = properties[field]["description"].lower()
+                                self.assertNotIn("sql", text)
+                                self.assertNotIn("duckdb", text)
+                        self.assertEqual(
+                            session.request("tools/list", {})["tools"], [tool]
+                        )
+                    finally:
+                        session.close()
+
     def test_selected_python_rejects_managed_requirements(self):
         environment = dict(
             os.environ,
