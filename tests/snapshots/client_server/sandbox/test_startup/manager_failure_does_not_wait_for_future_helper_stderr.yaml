@@ -6,15 +6,13 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        mcp-console-sandbox: failed to fill whole buffer
-        [worker relay exited before readiness]
+      text: "[worker relay exited before readiness]"
   isError: true
 startup_supervision_failure:
   manager: killed before readiness
   custom_relay: did not execute
-  sandbox_stderr: "mcp-console-sandbox: failed to fill whole buffer"
-  diagnostic_order: complete before cut
+  sandbox_stderr: not yet written
+  diagnostic_order: held beyond cut and response
   verified_cleanup: helper and manager reaping
 ---
 send:

@@ -6,6 +6,16 @@ language_guidance: >-
   Use R for vectorized data and string operations, statistics, and plots.
   Use Python when its libraries or format-specific parsing simplify the
   task. Switch languages when useful, reusing persistent state.
+preparation_error:
+  content:
+    - type: text
+      text: >-
+        Python sessions without R require `uv` on PATH; set python in
+        .agents/console/config.yaml to use an existing environment
+  isError: true
+stderr: >
+  Python sessions without R require `uv` on PATH; set python in
+  .agents/console/config.yaml to use an existing environment
 ---
 languages: r
 language_guidance: >-
