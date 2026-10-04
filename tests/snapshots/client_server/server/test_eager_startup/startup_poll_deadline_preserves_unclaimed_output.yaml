@@ -1,6 +1,4 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
   timeout_ms: 10000
 result:

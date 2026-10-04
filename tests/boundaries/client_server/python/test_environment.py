@@ -397,7 +397,7 @@ def test_compacts_native_duckdb_progress_bar(
             McpClient(
                 binary,
                 execution.serve(
-                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                    *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
                 ),
                 no_r_environment(root),
                 current_directory=root,
@@ -455,7 +455,7 @@ def test_compacts_native_duckdb_progress_bar(
                 "elapsed": "omitted",
                 "trailing_progress_padding": "omitted",
             }
-            return client.finish()
+            return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)

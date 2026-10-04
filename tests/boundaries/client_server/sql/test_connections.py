@@ -1274,7 +1274,7 @@ def startup_sql_client(
                 MCP_CONSOLE_TEST_SQL_BEHAVIOR=behavior,
             )
             args = (
-                execution.serve("--writable-root", str(root))
+                execution.serve("-c", "extends=:workspace")
                 if execution == SANDBOXED
                 else execution.serve()
             )

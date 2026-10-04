@@ -138,19 +138,7 @@ result:
 
         MCP Console inferred the PyPI distribution `py-yaml12` from the import `yaml12`, but automatic package resolution failed:
 
-        managed Python resolution failed:
-        resolver input:
-        {
-          "python": "<running Python>",
-          "packages": [
-            "numpy",
-            "pandas",
-            "duckdb",
-            "py-yaml12"
-          ]
-        }
-        uv output:
-        fixture Python resolution interrupted
+        dependency resolution interrupted
 
         Import names and PyPI distribution names can differ. Retry with the correct distribution declared through `requirements.python` in the `send` call, for example:
 

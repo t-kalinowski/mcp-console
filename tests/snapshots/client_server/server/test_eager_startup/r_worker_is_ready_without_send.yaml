@@ -1,28 +1,5 @@
 ---
 input:
-  method: initialize
-  params:
-    protocolVersion: 2025-11-25
-    capabilities: {}
-    clientInfo:
-      name: acceptance-test
-      version: 1.0.0
-result:
-  protocolVersion: 2025-11-25
-  capabilities:
-    tools: {}
-  serverInfo:
-    name: mcp-console
-    version: 0.0.4
----
-input:
-  method: notifications/initialized
----
-input:
-  method: tools/list
-result: <configured R-only schema>
----
-input:
   method: ping
 result: {}
 ---

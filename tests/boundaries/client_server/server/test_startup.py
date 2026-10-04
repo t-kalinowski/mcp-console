@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -27,9 +27,13 @@ from support.suites import run_this_suite
 
 @contextmanager
 def discovery_environment(
-    *, r_home: Path | None = None
+    *, r_home: Path | None = None, directory: Path | None = None
 ) -> Iterator[tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, int]]:
-    with tempfile.TemporaryDirectory() as temporary:
+    with (
+        tempfile.TemporaryDirectory()
+        if directory is None
+        else nullcontext(directory) as temporary
+    ):
         root = Path(temporary)
         reached = FifoCheckpoint.create(root / "reached")
         release = FifoCheckpoint.create(root / "release")

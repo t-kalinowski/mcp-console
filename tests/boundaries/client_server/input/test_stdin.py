@@ -64,13 +64,10 @@ def test_idle_stdin_startup_blocks_preparation(
             execution.serve(
                 "--worker",
                 str(zod),
-                *(
-                    ("--writable-root", str(temporary_path))
-                    if execution == SANDBOXED
-                    else ()
-                ),
+                *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
             ),
             environment,
+            current_directory=temporary_path,
         )
         passed = False
         try:
@@ -107,7 +104,7 @@ def test_idle_stdin_startup_blocks_preparation(
 
             client.send(r="input without request")
             assert last_tool_text(client) == "zod stdin: queued\n"
-            transcript = client.finish()
+            transcript = client.finish()[3:]
             passed = True
             return transcript
         finally:

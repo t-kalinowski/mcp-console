@@ -33,6 +33,7 @@ from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.r import r_test_environment
 from support.python import runtime_source_line, write_test_wheel
+from support.resolvers import resolver_fixture_directory
 
 
 def environment(path: Path) -> dict[str, str]:
@@ -140,7 +141,7 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
                 text,
             )
             text = re.sub(
-                r"<preparation>/archive-v0/[^/\"\n]+/bin/activate_this.py",
+                r"(?:<preparation>|[^\"\n]*/mcp-console/resolver/payload/uv/cache)/archive-v0/[^/\"\n]+/bin/activate_this.py",
                 "<preparation>/archive-v0/<environment>/bin/activate_this.py",
                 text,
             )
@@ -1065,7 +1066,7 @@ def test_automatic_resolution_failure_and_cancel_keep_accepted_state(
 def automatic_resolution_failure_and_cancel_keep_accepted_state(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with preparation_directory() as directory:
+    with resolver_fixture_directory(binary, execution) as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         started = FifoCheckpoint.create(root / "started")
@@ -1135,7 +1136,7 @@ def test_automatic_activation_failure_requires_restart(
 def automatic_activation_failure_requires_restart(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with preparation_directory() as directory:
+    with resolver_fixture_directory(binary, execution) as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
@@ -1420,7 +1421,7 @@ def test_live_python_rejects_incompatible_library_before_activation(
 def live_python_rejects_incompatible_library_before_activation(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with preparation_directory() as directory:
+    with resolver_fixture_directory(binary, execution) as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         with McpClient(installed_console(binary), execution.serve(), env) as client:
@@ -1481,7 +1482,7 @@ def test_live_python_activation_failure_requires_restart(
 def live_python_activation_failure_requires_restart(
     binary: Path, execution: Execution, *, with_r: bool
 ) -> Transcript:
-    with preparation_directory() as directory:
+    with resolver_fixture_directory(binary, execution) as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")

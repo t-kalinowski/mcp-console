@@ -34,7 +34,12 @@ from support.normalization import code
 from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.records import Transcript
-from support.resolvers import ir_run_records, recording_ir_environment
+from support.resolvers import (
+    ir_run_records,
+    recording_ir_environment,
+    resolver_fixture_directory,
+    resolver_fixture_arguments,
+)
 from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
@@ -134,14 +139,15 @@ def test_invalid_early_cell_does_not_poison_default_startup(
     with (
         tempfile.TemporaryDirectory() as temporary,
         ExitStack() as resources,
+        resolver_fixture_directory(binary, execution) as resolver,
     ):
         root = Path(temporary).resolve()
         python, site = isolated_python(root)
         reached = resources.enter_context(
-            closing(FifoCheckpoint.create(root / "probe"))
+            closing(FifoCheckpoint.create(resolver / "probe"))
         )
         release = resources.enter_context(
-            closing(FifoCheckpoint.create(root / "release"))
+            closing(FifoCheckpoint.create(resolver / "release"))
         )
         (site / "sitecustomize.py").write_text(
             # fmt: python
@@ -269,7 +275,7 @@ def ready_without_send(
                 launcher,
                 str(binary),
                 *execution.serve(
-                    *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                    *(("-c", "extends=:workspace") if execution == SANDBOXED else ())
                 ),
             ),
             environment,
@@ -298,7 +304,10 @@ def ready_without_send(
                         assert not survivors, (
                             f"prelaunch resources survived MCP closure: {survivors}"
                         )
-                        return [*client.finish(), {"prelaunch_resources_retired": True}]
+                        return [
+                            *client.finish()[3:],
+                            {"prelaunch_resources_retired": True},
+                        ]
                     finally:
                         kill_processes(descendants)
                 release.release()
@@ -330,7 +339,7 @@ def ready_without_send(
                 )
                 assert client.request("tools/list")["result"] == tools
                 client.transcript[-1]["result"] = "<unchanged from initialization>"
-                return client.finish()
+                return client.finish()[3:]
             finally:
                 release.release()
 
@@ -411,21 +420,25 @@ def early_requirements_with_pending_poll(
     r_environment, _ = r_test_environment()
     with (
         ExitStack() as resources,
-        discovery_environment(r_home=Path(r_environment["R_HOME"])) as (
+        tempfile.TemporaryDirectory() as workspace,
+        resolver_fixture_directory(binary, execution) as resolver,
+        discovery_environment(
+            r_home=Path(r_environment["R_HOME"]), directory=resolver
+        ) as (
             discovery,
             reached,
             release,
             alive,
         ),
     ):
-        root = reached.path.parent
+        root = Path(workspace)
         environment, record = recording_ir_environment(
-            root, fail_requirement="tidyverse"
+            resolver, fail_requirement="tidyverse"
         )
         environment.pop("R_HOME", None)
         environment["PATH"] = os.pathsep.join((discovery["PATH"], environment["PATH"]))
-        prepared = FifoCheckpoint.create(root / "prepared")
-        proceed = FifoCheckpoint.create(root / "proceed")
+        prepared = FifoCheckpoint.create(resolver / "prepared")
+        proceed = FifoCheckpoint.create(resolver / "proceed")
         resources.callback(prepared.close)
         resources.callback(proceed.close)
         write_reached = resources.enter_context(
@@ -454,7 +467,8 @@ def early_requirements_with_pending_poll(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                *resolver_fixture_arguments(environment),
+                *(("-c", "extends=:workspace") if execution == SANDBOXED else ()),
             ),
             environment,
             root,
@@ -535,7 +549,7 @@ def early_requirements_with_pending_poll(
                 assert not any(
                     "tidyverse" in call["arguments"] for call in ir_run_records(record)
                 )
-                return client.finish()
+                return client.finish()[3:]
             finally:
                 write_release.release()
                 proceed.release()

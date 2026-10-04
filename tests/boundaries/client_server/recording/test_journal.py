@@ -1125,7 +1125,7 @@ def test_reports_startup_recording_failure_without_a_tool_call(
             with startup_r_package(root, source) as env:
                 env["RETICULATE_PYTHON"] = sys.executable
                 args = (
-                    execution.serve("--writable-root", str(root))
+                    execution.serve("-c", "extends=:workspace")
                     if execution == SANDBOXED
                     else execution.serve()
                 )
@@ -1172,7 +1172,7 @@ def test_records_startup_without_a_tool_call(
             with startup_r_package(root, source) as env:
                 env["RETICULATE_PYTHON"] = sys.executable
                 args = (
-                    execution.serve("--writable-root", str(root))
+                    execution.serve("-c", "extends=:workspace")
                     if execution == SANDBOXED
                     else execution.serve()
                 )
