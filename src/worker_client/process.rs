@@ -172,6 +172,7 @@ impl WorkerRuntime {
             no_sandbox,
             sandbox_settings,
             duckdb_extension_directory,
+            resolver_matplotlib_cache,
             python,
             managed_r,
             dynamic_resolution,
@@ -219,6 +220,14 @@ impl WorkerRuntime {
             command.env("TMPDIR", temporary.path());
         }
         if target.is_none() {
+            command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
+            if !no_sandbox
+                && cfg!(unix)
+                && python.is_none_or(|python| python.managed().is_some())
+                && let Some(cache) = resolver_matplotlib_cache
+            {
+                command.env("MCP_CONSOLE_MATPLOTLIB_CACHE", cache);
+            }
             // Never accept an ambient internal selection for custom workers.
             command.env_remove(crate::local_runtime::ENVIRONMENT);
             if let Some(python) = python {

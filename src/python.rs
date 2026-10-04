@@ -252,7 +252,10 @@ mod platform {
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
     pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
-        let matplotlib_cache_directory = inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache");
+        let matplotlib_cache_directory = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE")
+            .map(std::path::absolute)
+            .transpose()?
+            .or_else(|| inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache"));
         let matplotlib_config_directory =
             inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all

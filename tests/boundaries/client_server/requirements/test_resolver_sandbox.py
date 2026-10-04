@@ -19,6 +19,7 @@ from support.normalization import code
 from support.records import Transcript
 from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
+from support.resolvers import ir_cache_directory
 from support.ssh import SSH, configure, localhost, remote_command
 from boundaries.client_server.python.test_without_r import environment
 
@@ -425,6 +426,35 @@ def test_ssh_resolver_permissions(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX, R, command("ir"))
+def test_bootstraps_reticulate_uv_in_console_cache(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        env, _ = r_test_environment()
+        env["IR_CACHE_DIR"] = ir_cache_directory(env)
+        env.update(XDG_CACHE_HOME=str(root / "cache"), RETICULATE_UV="managed")
+        for name in (
+            "RETICULATE_PYTHON",
+            "R_USER_CACHE_DIR",
+            "UV_CACHE_DIR",
+            "UV_TOOL_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+        ):
+            env.pop(name, None)
+        with McpClient(binary, ("serve",), env, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "managed uv prepared\n",
+                requirements={"python": ["six"]},
+                python="import six; print('managed uv prepared')",
+            )
+            client.finish()
+        cache = root / "cache/mcp-console/resolver/payload/r"
+        assert (cache / "R/reticulate/uv/bin/uv").is_file()
+        assert not (cache / "reticulate").exists()
+    return [{"reticulate_managed_uv": "R/reticulate", "cache_write_granted": True}]
+
+
+@requires(SANDBOX, R, command("ir"))
 def test_cold_r_cache_resolution(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory).resolve()
@@ -453,7 +483,12 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
     from contextlib import ExitStack
 
     with ExitStack() as stack:
-        directory = stack.enter_context(TemporaryDirectory())
+        # The protected workspace must be outside Darwin's granted user temp.
+        directory = stack.enter_context(
+            TemporaryDirectory(
+                prefix="mcp-console-resolver-permissions-", dir=Path.home()
+            )
+        )
         root = Path(directory).resolve()
         tools = root / "bin"
         tools.mkdir()

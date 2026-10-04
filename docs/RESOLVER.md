@@ -8,10 +8,13 @@ Prepared Docker and Docker Sandbox sessions use preinstalled packages and do not
 Windows retains its host resolver and Job lifecycle; its native runner does not support managed proxy routing.
 
 The default permits host-file reads, writes to the selected package caches and private temporary storage, and downloads through a managed proxy.
+On macOS it also grants Darwin's user temporary directory, which `mktemp` and shell here-documents select independently of `TMPDIR`.
 It allows PyPI, CRAN, Posit's package manager, Bioconductor, GitHub sources and Python releases, and DuckDB's extension repository.
 Loopback binding is allowed for installer subprocess coordination.
 On macOS this also permits access to host loopback services and DNS; Linux uses the runner's private network namespace.
 These permissions are intended for ordinary package preparation, including source builds that use installed compilers and system libraries.
+Resolver executables, wrappers, configuration, and package sources remain trusted inputs.
+Cache placement does not make these inputs immutable or protect wrappers writable under the worker policy.
 
 ## Configuration
 
@@ -54,6 +57,7 @@ resolver:
       packages.example.org: allow
       files.pythonhosted.org: allow
       astral.sh: allow
+      releases.astral.sh: allow
       github.com: allow
       release-assets.githubusercontent.com: allow
 ```
@@ -77,7 +81,8 @@ resolver:
 ```
 
 Console captures this path for installation and the managed R/Python SQL connections.
-Without this override, both use `.duckdb/extensions` beneath the resolver's effective `HOME`, even when it differs from the server or worker `HOME`.
+With the default filesystem policy, an omitted path uses `extensions` beneath the cache namespace below.
+An explicit filesystem policy retains `.duckdb/extensions` beneath the resolver's effective `HOME`, even when it differs from the server or worker `HOME`.
 Custom workers receive the same captured path at launch, before accepting their first managed R layer.
 User-selected Python retains DuckDB's own cache settings and preinstalled extensions.
 An explicit `filesystem.entries` must grant writes to the selected directory.
@@ -88,6 +93,8 @@ With the default local resolver filesystem policy, omitted cache locations use `
 An empty or relative `XDG_CACHE_HOME` uses the HOME fallback.
 uv caches, Python installations and tools, IR, R, renv, pak, Matplotlib, and DuckDB extensions have separate directories beneath this namespace.
 The existing native runner supplies filesystem enforcement, the download proxy, private temporary storage, and process retirement.
+Workers link the warmed font cache into their private Matplotlib directory.
+Host Matplotlib configuration remains selected independently of this cache.
 
 Explicit cache environment values remain effective, including inherited values.
 An explicit `resolver.filesystem.entries` retains the existing host cache layout and requires its matching write grants.
@@ -139,6 +146,7 @@ resolver:
       pypi.org: allow
       files.pythonhosted.org: allow
       astral.sh: allow
+      releases.astral.sh: allow
       github.com: allow
       api.github.com: allow
       codeload.github.com: allow
