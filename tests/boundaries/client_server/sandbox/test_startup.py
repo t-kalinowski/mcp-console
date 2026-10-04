@@ -13,12 +13,14 @@ from support.checkpoints import FifoCheckpoint
 from support.native import build_interposer
 from support.client import McpClient, stop_client
 from support.execution import SANDBOXED
+from support.events import Events
 from support.macos import (
     DarwinProcessIdentity,
     kill_darwin_processes,
     live_darwin_processes,
     capture_darwin_process_identity,
     darwin_child_process_identities,
+    darwin_process_file_descriptors,
 )
 from support.records import Transcript
 from support.requirements import (
@@ -36,16 +38,16 @@ MARKER_NAME = "mcp-console-startup-marker"
 
 def _wait_for_startup_cleanup(
     identities: tuple[DarwinProcessIdentity, ...],
+    events: Events,
 ) -> None:
+    remaining = {identity[0] for identity in identities}
     deadline = time.monotonic() + TIMEOUT
-    while True:
-        survivors = live_darwin_processes(identities)
-        if not survivors:
-            return
-        assert time.monotonic() < deadline, (
-            f"startup cleanup left processes {survivors}"
-        )
-        time.sleep(0.01)
+    while remaining:
+        timeout = deadline - time.monotonic()
+        assert timeout > 0, f"startup cleanup left processes {remaining}"
+        exited = events.wait(timeout)
+        assert exited, f"startup cleanup left processes {remaining}"
+        remaining.difference_update(exited)
 
 
 def _assert_zod_echo(entry: dict[str, object]) -> None:
@@ -98,21 +100,53 @@ def test_sandbox_setup_failure_is_reported_and_retryable(binary: Path) -> Transc
 def test_manager_failure_before_readiness_keeps_custom_relay_gated(
     binary: Path,
 ) -> Transcript:
+    return _manager_failure_before_readiness(binary, diagnostic_before_cut=True)
+
+
+@requires(MACOS_SANDBOX, PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_manager_failure_does_not_wait_for_future_helper_stderr(
+    binary: Path,
+) -> Transcript:
+    return _manager_failure_before_readiness(binary, diagnostic_before_cut=False)
+
+
+def _manager_failure_before_readiness(
+    binary: Path, *, diagnostic_before_cut: bool
+) -> Transcript:
     fixture_root = Path(__file__).resolve().parents[3] / "fixtures"
     worker = fixture_root / "zod"
     marker_relay = fixture_root / "startup_marker_relay"
 
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, Events() as exit_events:
         temporary = Path(temporary_directory)
         manager_started = FifoCheckpoint.create(temporary / "manager-started")
         manager_release = FifoCheckpoint.create(temporary / "manager-release")
+        diagnostic_checkpoints = {
+            name: FifoCheckpoint.create(temporary / name.lower().replace("_", "-"))
+            for name in (
+                "DIAGNOSTIC_STARTED",
+                "DIAGNOSTIC_RELEASE",
+                "DIAGNOSTIC_WRITTEN",
+                "HELPER_EXIT",
+                "DRAIN_STARTED",
+                "DRAIN_RELEASE",
+                "DRAIN_EMPTY",
+                "DRAIN_DIAGNOSTIC",
+            )
+        }
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         environment["MCP_CONSOLE_TEST_MANAGER_START"] = str(manager_started.path)
         environment["MCP_CONSOLE_TEST_MANAGER_RELEASE"] = str(manager_release.path)
+        environment.update(
+            {
+                f"MCP_CONSOLE_TEST_{name}": str(checkpoint.path)
+                for name, checkpoint in diagnostic_checkpoints.items()
+            }
+        )
         environment["DYLD_INSERT_LIBRARIES"] = str(
-            build_interposer(temporary, "manager_start_interposer")
+            build_interposer(temporary, "manager_diagnostic_interposer")
         )
 
         client = McpClient(
@@ -127,41 +161,70 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             waiting = client.start_send(r="echo echo")
             manager_started.wait("manager startup")
 
-            (manager,) = darwin_child_process_identities(
-                capture_darwin_process_identity(client.process.pid)
-            )
+            server = capture_darwin_process_identity(client.process.pid)
+            (manager,) = darwin_child_process_identities(server)
             (root,) = darwin_child_process_identities(manager)
             manager_pid = manager[0]
             identities = (root, manager)
+            for identity in identities:
+                exit_events.watch_process(identity[0])
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
 
             assert kill_darwin_processes((manager,)) == [manager_pid], (
                 "sandbox manager exited before failure injection"
             )
+            diagnostic_checkpoints["DIAGNOSTIC_STARTED"].wait("helper stderr write")
+            for _ in range(2):
+                diagnostic_checkpoints["DRAIN_STARTED"].wait("launcher-exit output cut")
+            if diagnostic_before_cut:
+                # Complete every diagnostic byte while both readers are held
+                # before FIONREAD. The helper retains stderr until we release it.
+                diagnostic_checkpoints["DIAGNOSTIC_RELEASE"].release()
+                diagnostic_checkpoints["DIAGNOSTIC_WRITTEN"].wait(
+                    "complete helper stderr"
+                )
+            for _ in range(2):
+                diagnostic_checkpoints["DRAIN_RELEASE"].release()
+            diagnostic_checkpoints["DRAIN_EMPTY"].wait("empty stdout cut")
+            if diagnostic_before_cut:
+                diagnostic_checkpoints["DRAIN_DIAGNOSTIC"].wait(
+                    "complete diagnostic at stderr cut"
+                )
+            else:
+                diagnostic_checkpoints["DRAIN_EMPTY"].wait("empty finite output cut")
             readable, _, _ = select.select([client.stdout], [], [], TIMEOUT)
             assert readable, "server did not return after sandbox manager failure"
             client.receive(waiting)
             result = waiting["result"]
+            diagnostic = "mcp-console-sandbox: failed to fill whole buffer"
+            output = "[worker relay exited before readiness]"
+            if diagnostic_before_cut:
+                output = diagnostic + "\n" + output
             assert result == {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "mcp-console-sandbox: failed to fill whole buffer\n[worker relay exited before readiness]",
-                    }
-                ],
+                "content": [{"type": "text", "text": output}],
                 "isError": True,
             }, result
-            diagnostic = result["content"][0]["text"].splitlines()[0]
-            assert diagnostic == ("mcp-console-sandbox: failed to fill whole buffer"), (
-                diagnostic
-            )
-            _wait_for_startup_cleanup(identities)
+            assert live_darwin_processes((root,)) == [root[0]]
+            assert 2 in darwin_process_file_descriptors(root)
+            if diagnostic_before_cut:
+                diagnostic_checkpoints["HELPER_EXIT"].release()
+            else:
+                # A dead manager cannot supervise its deliberately held helper.
+                # Retire that fixture process only after bounded response delivery.
+                assert kill_darwin_processes((root,)) == [root[0]]
+            _wait_for_startup_cleanup(identities, exit_events)
+            assert darwin_child_process_identities(server) == ()
             assert list(temporary.glob(f"**/{MARKER_NAME}")) == []
             waiting["startup_supervision_failure"] = {
                 "manager": "killed before readiness",
                 "custom_relay": "did not execute",
-                "sandbox_stderr": diagnostic,
-                "verified_cleanup": "gated relay root and manager",
+                "sandbox_stderr": diagnostic
+                if diagnostic_before_cut
+                else "not yet written",
+                "diagnostic_order": "complete before cut"
+                if diagnostic_before_cut
+                else "held beyond cut and response",
+                "verified_cleanup": "helper exit and manager reaping",
             }
 
             replacement = client.start_send(r="echo echo")
@@ -177,6 +240,10 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
             }
             return client.finish()
         finally:
+            diagnostic_checkpoints["DIAGNOSTIC_RELEASE"].release()
+            diagnostic_checkpoints["HELPER_EXIT"].release()
+            for _ in range(2):
+                diagnostic_checkpoints["DRAIN_RELEASE"].release()
             if not replacement_released:
                 manager_release.release()
             stop_client(client)
@@ -184,6 +251,8 @@ def test_manager_failure_before_readiness_keeps_custom_relay_gated(
                 kill_darwin_processes(identities)
             manager_started.close()
             manager_release.close()
+            for checkpoint in diagnostic_checkpoints.values():
+                checkpoint.close()
 
 
 if __name__ == "__main__":
