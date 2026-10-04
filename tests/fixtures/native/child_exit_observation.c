@@ -30,7 +30,8 @@ static void checkpoint(const char *name, int flags) {
 }
 
 static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
-    bool blocking = type == P_PID && (options & WNOWAIT) && !(options & WNOHANG);
+    bool observing = type == P_PID && (options & WNOWAIT);
+    bool blocking = observing && !(options & WNOHANG);
     if (blocking && atomic_load(&observed_pid) == 0) {
         atomic_store(&observed_pid, (int)id);
         checkpoint("MCP_CONSOLE_TEST_OBSERVER_ENTERED", O_WRONLY);
@@ -38,6 +39,10 @@ static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
     }
     if (blocking && getenv("MCP_CONSOLE_TEST_OBSERVER_FAIL") != NULL) {
         atomic_store(&settled, true);
+        errno = EIO;
+        return -1;
+    }
+    if (observing && !blocking && getenv("MCP_CONSOLE_TEST_OBSERVER_PROBE_FAIL") != NULL) {
         errno = EIO;
         return -1;
     }

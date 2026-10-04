@@ -279,7 +279,9 @@ fn force_stop_worker(
         Ok(exited) => !exited,
         Err(error) => {
             errors.push(format!("failed to read direct worker status: {error}"));
-            false
+            // Failed observation does not establish exit. The unreaped child
+            // still pins its PID, so attempt termination before waiting.
+            true
         }
     };
     if should_kill_direct_worker

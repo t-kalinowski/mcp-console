@@ -30,7 +30,14 @@ def test_observation_failure_still_stops_and_reaps_worker(binary: Path) -> Trans
     return observe_relay(binary, fail=True)
 
 
-def observe_relay(binary: Path, *, fail: bool) -> Transcript:
+@requires(NATIVE_FIXTURES)
+def test_observation_and_probe_failure_still_stops_and_reaps_worker(
+    binary: Path,
+) -> Transcript:
+    return observe_relay(binary, fail=True, fail_probe=True)
+
+
+def observe_relay(binary: Path, *, fail: bool, fail_probe: bool = False) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         checkpoints = {
@@ -49,6 +56,8 @@ def observe_relay(binary: Path, *, fail: bool) -> Transcript:
             environment["MCP_CONSOLE_TEST_OBSERVER_FAIL"] = "1"
         else:
             environment["MCP_CONSOLE_TEST_OBSERVER_EINTR"] = "1"
+        if fail_probe:
+            environment["MCP_CONSOLE_TEST_OBSERVER_PROBE_FAIL"] = "1"
         worker = root / "worker.py"
         worker.write_text(
             # fmt: python
@@ -104,10 +113,13 @@ def observe_relay(binary: Path, *, fail: bool) -> Transcript:
                 events[2]["message"] = re.sub(
                     r"child process \d+", "child process PID", events[2]["message"]
                 )
+                message = "failed to observe child process PID exit: Input/output error (os error 5)"
+                if fail_probe:
+                    message += "; failed to read direct worker status: Input/output error (os error 5)"
                 expected.append(
                     {
                         "kind": "fatal",
-                        "message": "failed to observe child process PID exit: Input/output error (os error 5)",
+                        "message": message,
                     }
                 )
             expected.extend(
@@ -123,7 +135,13 @@ def observe_relay(binary: Path, *, fail: bool) -> Transcript:
             }
             return [
                 {
-                    "observation": "failed" if fail else "exited after EINTR",
+                    "observation": (
+                        "failed with failed status probe"
+                        if fail_probe
+                        else "failed"
+                        if fail
+                        else "exited after EINTR"
+                    ),
                     "events": events,
                 }
             ]
