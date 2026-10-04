@@ -55,13 +55,19 @@ pub(super) fn hold(write: *mut c_void) -> io::Result<()> {
         flush(write)?;
         ready.write_all(b"1")?;
         loop {
-            send(
+            match send(
                 write,
                 "{\"kind\":\"console_output\",\"data\":\"inherited writer\"}\n",
-            )?;
+            ) {
+                Ok(()) => {}
+                // Retirement closes the reader; the test still owns our lifetime.
+                Err(error) if error.kind() == io::ErrorKind::BrokenPipe => break,
+                Err(error) => return Err(error),
+            }
         }
+    } else {
+        ready.write_all(b"1")?;
     }
-    ready.write_all(b"1")?;
     // The test owns termination. Retain handles without manufacturing EOF.
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     assert!(!event.is_null());
