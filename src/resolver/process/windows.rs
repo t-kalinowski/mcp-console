@@ -1,9 +1,13 @@
 //! Resolver descendants belong to a Job before any resolver code can run.
+//! Job-wide termination confirms zero active processes before accepting results.
+//! This owns trusted host preparation and Python inspection, not a sandbox.
+
 use std::io;
 use std::mem::{size_of, zeroed};
 use std::ops::{Deref, DerefMut};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
+use std::path::Path;
 use std::process::{Child as Process, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
@@ -12,6 +16,9 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 use windows_sys::Win32::System::IO::*;
 use windows_sys::Win32::System::JobObjects::*;
 use windows_sys::Win32::System::Threading::*;
+
+use super::{ResolverInterrupt, settle_observation};
+use crate::process_exit::ChildExitWaiter;
 
 pub(crate) struct Child {
     process: Process,
@@ -31,7 +38,13 @@ impl DerefMut for Child {
     }
 }
 
-pub(crate) fn spawn(command: &mut Command) -> io::Result<Child> {
+pub(crate) fn resolver_command(program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
     // SAFETY: every successful handle creation is immediately adopted. No
     // resolver thread runs until assignment to this kill-on-close Job succeeds.
     unsafe {
@@ -122,14 +135,14 @@ fn resume_initial_thread(pid: u32) -> io::Result<()> {
 }
 
 impl Child {
-    pub(crate) fn terminate(&self) -> io::Result<()> {
+    fn terminate(&self) -> io::Result<()> {
         if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
 
-    pub(crate) fn retire(
+    fn retire(
         &mut self,
         settle_observation: impl FnOnce(Duration) -> io::Result<()>,
     ) -> io::Result<ExitStatus> {
@@ -183,4 +196,41 @@ impl Child {
             }
         }
     }
+}
+
+pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
+    if child.try_wait()?.is_some() {
+        return Ok(ResolverInterrupt::AlreadyExited);
+    }
+    child.terminate()?;
+    Ok(ResolverInterrupt::Signaled)
+}
+
+pub(super) fn stop_resolver(
+    child: &mut Child,
+    program: &Path,
+    kind: &str,
+    exit: Option<&mut ChildExitWaiter>,
+) -> Result<ExitStatus, String> {
+    child
+        .retire(|remaining| {
+            if let Some(exit) = exit {
+                // A native observation error is settled, but delayed process
+                // termination must not extend the owner's retirement deadline.
+                if matches!(exit.wait(remaining), Ok(false)) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "resolver exit observation did not settle",
+                    ));
+                }
+                settle_observation(Some(exit));
+            }
+            Ok(())
+        })
+        .map_err(|error| {
+            format!(
+                "failed to retire {kind} resolver `{}`: {error}",
+                program.display()
+            )
+        })
 }
