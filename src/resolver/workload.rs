@@ -138,11 +138,19 @@ impl Context {
                 resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
             let has_uv = python.has_uv();
             let native = if !local && matches!(mode, Mode::PythonOnly) {
-                let (selection, managed) = crate::local_runtime::Selection::python_on_host(
+                let (mut selection, mut managed) = crate::local_runtime::Selection::python_on_host(
                     configured_python.clone().map(OsString::from),
                     &python,
                     on_started,
                 )?;
+                if let Some(python) = &mut selection.python {
+                    if let Some(managed) = &mut managed {
+                        managed.set_native((*python.selected).clone());
+                    }
+                    if let Some(directory) = std::env::var_os("MCP_CONSOLE_EXTENSION_DIRECTORY") {
+                        python.duckdb_extension_directory = Some(PathBuf::from(directory));
+                    }
+                }
                 Some(NativeDiscovery {
                     selection,
                     python: managed,

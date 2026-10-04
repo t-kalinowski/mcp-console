@@ -488,7 +488,7 @@ fn resolve_r_with_process(
     let r_libs = std::env::join_paths(libraries)
         .map_err(|error| format!("failed to construct R library path: {error}"))?;
     Ok(ManagedR {
-        extension_directory: None,
+        extension_directory: std::env::var_os("MCP_CONSOLE_EXTENSION_DIRECTORY").map(PathBuf::from),
         library,
         r_libs,
         rscript: configuration.rscript.clone(),

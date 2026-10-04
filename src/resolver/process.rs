@@ -86,6 +86,7 @@ pub(crate) struct ResolverProcess {
 }
 
 type OutputReader = Receiver<io::Result<Vec<u8>>>;
+const OUTPUT_LIMIT: usize = 1024 * 1024;
 
 impl ResolverProcess {
     pub(crate) fn new() -> Self {
@@ -300,9 +301,9 @@ fn read_bounded_output(
             let mut bytes = Vec::new();
             output
                 .by_ref()
-                .take((super::broker::LIMIT + 1) as u64)
+                .take((OUTPUT_LIMIT + 1) as u64)
                 .read_to_end(&mut bytes)?;
-            if bytes.len() > super::broker::LIMIT {
+            if bytes.len() > OUTPUT_LIMIT {
                 io::copy(&mut output, &mut io::sink())?;
                 return Err(io::Error::other("resolver output exceeds 1 MiB"));
             }

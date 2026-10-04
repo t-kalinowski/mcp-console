@@ -121,6 +121,10 @@ impl Context {
             local_r_home_bytes: None,
             local_has_uv: local.then(|| python.has_uv()),
             native: None,
+            protected: Vec::new(),
+            lease: None,
+            extension_directory: None,
+            matplotlib_cache: None,
         };
         Ok((
             Self {
