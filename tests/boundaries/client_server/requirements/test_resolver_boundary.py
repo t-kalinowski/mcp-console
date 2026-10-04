@@ -427,8 +427,10 @@ def test_cold_r_python_and_duckdb_storage(binary: Path) -> Transcript:
             client.transcript[-1]["result"]["content"][0]["text"] = (
                 prefix
                 + "<cache-dependent installer progress>\n"
-                + diagnostic_start
-                + diagnostic
+                + "\n".join(
+                    line.rstrip()
+                    for line in (diagnostic_start + diagnostic).split("\n")
+                )
             )
             client.transcript[-1]["transcript_normalization"] = {
                 "target": "result.content[0].text",

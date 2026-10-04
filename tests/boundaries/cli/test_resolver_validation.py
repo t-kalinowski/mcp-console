@@ -3,7 +3,6 @@
 import json
 import os
 import select
-import signal
 import subprocess
 import sys
 import time
@@ -16,7 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.checkpoints import FifoCheckpoint
 from support.native import LOADER_VARIABLE, build_interposer
-from support.processes import capture_process_identity, child_process_identities
+from support.processes import (
+    capture_process_identity,
+    child_process_identities,
+    kill_processes,
+)
 from support.records import Transcript
 from support.r import r_test_environment
 from support.requirements import NATIVE_FIXTURES, R, SANDBOX, requires
@@ -301,7 +304,7 @@ def test_failed_forced_termination_bounds_open_stderr(binary: Path) -> Transcrip
                     client.send("Close")
                     assert client.process.wait(timeout=3) != 0
                 finally:
-                    os.kill(launchers[0][0], signal.SIGTERM)
+                    kill_processes(launchers)
             metadata = json.loads(
                 (root / "cache/mcp-console/resolver/control/metadata.json").read_text()
             )

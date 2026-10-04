@@ -191,7 +191,8 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                             "build": build,
                             "workspace": "",
                             "selections": {"r_home": None, "python": None},
-                            "mode": "PythonOnly",
+                            "mode": "Custom",
+                            "no_sandbox": True,
                         }
                     }
                 )
@@ -252,14 +253,14 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                 message["Completed"] for message in messages if "Completed" in message
             )
             assert completed["id"] == 1 and completed["confirmed"] is True, completed
-            error = "managed Python version resolution cancelled"
+            error = "dependency resolution cancelled"
             if fail:
                 completed["result"]["Err"] = re.sub(
                     r"child process \d+",
                     "child process PID",
-                    completed["result"]["Err"].replace(str(uv), "UV"),
+                    completed["result"]["Err"].replace(str(binary), "CONSOLE"),
                 )
-                error = "failed to wait for managed Python version resolver `UV`: failed to observe child process PID exit: Input/output error (os error 5)"
+                error = "failed to wait for dependency resolver `CONSOLE`: failed to observe child process PID exit: Input/output error (os error 5)"
             assert completed == {
                 "id": 1,
                 "result": {"Err": error},

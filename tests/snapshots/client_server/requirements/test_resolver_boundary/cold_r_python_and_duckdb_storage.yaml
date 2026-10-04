@@ -58,9 +58,9 @@ result:
     - type: text
       text: |-
         [R package resolution failed with exit status: 1: <cache-dependent installer progress>
-        Error: 
+        Error:
         ! error in pak subprocess
-        Caused by error: 
+        Caused by error:
         ! Could not solve package dependencies:
         * deps::<resolver-requirements>: Can't install dependency mcpconsolenosuchpackage
         * mcpconsolenosuchpackage: Can't find package called mcpconsolenosuchpackage.
