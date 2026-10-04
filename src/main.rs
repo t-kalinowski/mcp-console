@@ -19,7 +19,6 @@ mod local_runtime;
 #[cfg(unix)]
 mod process_descriptors;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "process_exit/windows.rs")]
 mod process_exit;
 #[cfg(any(unix, windows))]
 #[cfg_attr(windows, path = "process_output/windows.rs")]
