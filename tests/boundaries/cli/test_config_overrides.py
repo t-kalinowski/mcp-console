@@ -114,14 +114,21 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
                     binary,
                     (*arguments, "--worker", str(zod)),
                     current_directory=workspace,
-                    environment=environment,
                 ) as client:
-                    client.initialize_and_list_tools()
-                    # Native validation now belongs to the requested worker
-                    # launch. Its completed cell proves that launch occurred.
-                    client.expect("zod: overrides\n", r="echo overrides")
-                    _, stderr = client.finish_with_standard_error()
-                    assert stderr == "", stderr
+                    error = client.startup_error()
+                    assert "without custom filesystem rules" in error, error
+                    _, stderr = client.finish_with_standard_error(
+                        expected_exit_status=1
+                    )
+                    assert stderr == (
+                        "managed resolver storage requires the default, :workspace, "
+                        "or :read-only worker filesystem policy without custom "
+                        "filesystem rules or native extensions\n"
+                    ), stderr
+                records.append(
+                    {"command": command, "error": stderr, "overrides": overrides}
+                )
+                continue
             else:
                 result = subprocess.run(
                     [binary, *arguments, "--", "/usr/bin/true"],

@@ -92,7 +92,7 @@ The default local native sandbox allows host-file reads, restricts direct networ
 **It does not protect readable secrets.** Trusted [policy configuration](docs/SANDBOX_CONFIGURATION.md) can change these defaults.
 There is no automatic unsandboxed fallback; constrained Linux hosts may lack the required [capabilities](docs/LINUX_COMPATIBILITY.md).
 
-Dependency preparation uses a separate [resolver sandbox](docs/RESOLVER.md), with isolated caches and a managed package-source proxy.
+On macOS and Linux, dependency preparation uses a separate [resolver sandbox](docs/RESOLVER.md), with isolated caches and a managed package-source proxy.
 Its broker handles policy and data; package installation, builds, imports, and inspection run inside that sandbox.
 Explicit `--no-sandbox` preparation uses host permissions and ordinary host caches.
 See the [dependency trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust).

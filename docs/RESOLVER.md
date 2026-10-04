@@ -9,7 +9,7 @@ server → hidden mcp-console resolve broker
 ```
 
 The server retains requirements, worker generations, candidates, and activation transactions.
-`src/resolver/execution.rs` is its preparation interface.
+`src/resolver/preparation.rs` is its preparation interface.
 The broker owns trusted policy, storage, leases, ordinary child supervision, and data validation.
 It launches the current Console executable directly.
 It does not import packages, load returned native libraries, or execute returned interpreters.

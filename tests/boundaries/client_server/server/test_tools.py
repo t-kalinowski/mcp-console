@@ -257,7 +257,7 @@ def _initializes_and_lists_tools(
             assert send_requirements["type"] == ["object", "null"], send_requirements
             assert send_requirements["additionalProperties"] is False, send_requirements
             requirement_properties = send_requirements["properties"]
-            expected_properties = {
+            assert requirement_properties.keys() == {
                 "action",
                 "duckdb",
                 "r",
@@ -265,9 +265,6 @@ def _initializes_and_lists_tools(
                 "python_version",
                 "exclude_newer",
             }
-            if python_managed:
-                expected_properties -= {"r", "duckdb"}
-            assert requirement_properties.keys() == expected_properties
             assert requirement_properties["action"]["enum"] == [
                 "get",
                 "add",
@@ -275,8 +272,6 @@ def _initializes_and_lists_tools(
                 "reset",
             ]
             for name in ("duckdb", "r", "python"):
-                if name not in expected_properties:
-                    continue
                 requirement = requirement_properties[name]
                 assert requirement["type"] == "array", requirement
                 assert "default" not in requirement, requirement

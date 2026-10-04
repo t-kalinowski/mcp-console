@@ -116,10 +116,7 @@ if "Open" in bootstrap:
                 "result": {
                     "Ok": {
                         "managed": False,
-                        "direct_uv": False,
                         "selections": {"r_home": None, "python": None},
-                        "runtime": None,
-                        "python": None,
                         "protected": [],
                         "extension_directory": None,
                     }
@@ -130,7 +127,7 @@ if "Open" in bootstrap:
         }
     )
     length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
-    assert "Close" in json.loads(sys.stdin.buffer.read(length))
+    assert json.loads(sys.stdin.buffer.read(length)) == "Close"
     preparation_frame("Closed")
     if mode in {"diagnostic-overlap", "diagnostic-terminal-overlap"}:
         diagnostic.join()

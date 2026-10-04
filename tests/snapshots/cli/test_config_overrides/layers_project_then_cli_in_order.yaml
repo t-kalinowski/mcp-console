@@ -18,15 +18,6 @@ overrides:
   - extends=null
   - -c
   - sandbox.workspace_options=null
-environment:
-  KEEP: project
-  CHANGE: last
-  BEFORE: first
-  ADD: cli
-workspace_options: ~
-glob_scan_max_depth: 3
-paths:
-  - cli
 ---
 command: sandbox
 overrides:
