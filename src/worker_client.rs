@@ -16,6 +16,9 @@ mod send;
 mod events;
 
 #[cfg(any(unix, windows))]
+mod transport;
+
+#[cfg(any(unix, windows))]
 #[path = "worker_client/process.rs"]
 mod platform;
 

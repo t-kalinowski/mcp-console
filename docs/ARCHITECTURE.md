@@ -162,6 +162,8 @@ Forced transport retirement closes command admission and independently aborts pe
 It does not use stdout closure to decide whether stdin can be retired, and it never inserts a control into a partial frame.
 Retirement settles outstanding control receipts; cancelling a call's observation does not redirect its queued interrupt.
 Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm provider cleanup.
+Worker-client native adapters own endpoint setup and separate output wakeup from command cancellation.
+The shared process and generation owners retain exit observation, I/O joins, and retirement decisions.
 
 The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
 SSH and compute generations carry explicit retirement receipts: transport exit alone does not prove remote processes, containers, or microVMs are gone.

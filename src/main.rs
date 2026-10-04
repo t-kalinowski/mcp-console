@@ -21,7 +21,6 @@ mod process_descriptors;
 #[cfg(any(unix, windows))]
 mod process_exit;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "process_output/windows.rs")]
 mod process_output;
 #[cfg(any(unix, windows))]
 mod python;

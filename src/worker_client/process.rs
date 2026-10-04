@@ -1,17 +1,11 @@
 #[cfg(windows)]
 use crate::windows::ExitStatusExt as _;
-#[cfg(windows)]
-use crate::windows::{Event as PipeReader, Notify as PipeWriter, Pipe as ChildStdout};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{BufReader, Read, Write};
 #[cfg(unix)]
-use std::io::{PipeReader, PipeWriter};
-#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::{Child, Command, ExitStatus, Stdio};
-#[cfg(unix)]
-use std::process::{ChildStdin, ChildStdout};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +14,9 @@ use super::events::{
     OperationResult, ReadyCommitOutcome, WorkerEvent, WorkerEventDispatcher, WorkerOperationState,
 };
 use super::output::SendFailure;
+use super::transport::{
+    self, OutputNotifier, PreparedTransport, RelayInput, RelayOutput, WriterAbort,
+};
 use super::{
     PreparationOutcome, PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome,
 };
@@ -96,7 +93,7 @@ struct RelayTasks {
 }
 
 #[derive(Clone)]
-struct RelayOutputStop(Arc<Mutex<Option<PipeWriter>>>);
+struct RelayOutputStop(Arc<Mutex<Option<OutputNotifier>>>);
 
 impl RelayOutputStop {
     fn stop(&self) {
@@ -117,7 +114,7 @@ pub(super) struct RelayCommandSender {
 
 struct RelayCommandState {
     writer: Option<mpsc::Sender<RelayWriterMessage>>,
-    abort: Option<PipeWriter>,
+    abort: Option<WriterAbort>,
     failure: Option<String>,
 }
 
@@ -258,33 +255,12 @@ impl WorkerRuntime {
                 );
             }
         }
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        #[cfg(unix)]
-        command.stderr(Stdio::piped());
+        transport::configure_stdio(&mut command);
         #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
-        #[cfg(unix)]
-        let (output_exit, notify_output_exit) = std::io::pipe()
-            .map_err(|error| format!("failed to create launcher exit notification: {error}"))?;
-
-        #[cfg(windows)]
-        let (output_exit, notify_output_exit) =
-            crate::windows::notification().map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        let (writer_aborted, abort_writer) = std::io::pipe()
-            .map_err(|error| format!("failed to create relay writer abort pipe: {error}"))?;
-        #[cfg(windows)]
-        let (writer_aborted, abort_writer) =
-            crate::windows::notification().map_err(|e| e.to_string())?;
-        #[cfg(windows)]
-        let (relay_stdin, relay_stdout) =
-            crate::windows::command_pipes(&mut command, writer_aborted)
-                .map_err(|e| e.to_string())?;
+        let (transport, notify_output_exit, abort_writer) = PreparedTransport::new(&mut command)?;
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
@@ -302,33 +278,13 @@ impl WorkerRuntime {
         )
         .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         child.temporary = temporary;
-        #[cfg(unix)]
-        let relay_stdin = child
-            .take_stdin()
-            .expect("piped worker relay stdin should be available");
-        #[cfg(unix)]
-        let relay_stdout = child
-            .take_stdout()
-            .expect("piped worker relay stdout should be available");
-        #[cfg(unix)]
-        let relay_stdin =
-            crate::target_launch::transfer::Io::new(relay_stdin, Some(writer_aborted), None)?;
-        #[cfg(unix)]
-        let diagnostic_reader = {
-            let stderr = child.child.stderr.take().expect("piped launcher stderr");
-            let exited = output_exit.try_clone().map_err(|error| error.to_string())?;
-            let diagnostics = output.diagnostics();
-            let events = worker_events.clone();
-            Some(thread::spawn(move || {
-                if let Err(error) = crate::process_output::forward(stderr, exited, diagnostics) {
-                    let _ = events.send(WorkerEvent::TransportFailure(format!(
-                        "launcher stderr read failed: {error}"
-                    )));
-                }
-            }))
-        };
-        #[cfg(windows)]
-        let diagnostic_reader = None;
+        let events = worker_events.clone();
+        let transport =
+            transport.connect(&mut child.child, output.diagnostics(), move |error| {
+                let _ = events.send(WorkerEvent::TransportFailure(format!(
+                    "launcher stderr read failed: {error}"
+                )));
+            })?;
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new(builtin);
@@ -338,11 +294,14 @@ impl WorkerRuntime {
         let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
         let shutdown_started = ShutdownAcceptance::default();
 
-        let (commands, command_writer) =
-            start_relay_command_writer(relay_stdin, abort_writer, worker_events.clone(), bootstrap);
+        let (commands, command_writer) = start_relay_command_writer(
+            transport.input,
+            abort_writer,
+            worker_events.clone(),
+            bootstrap,
+        );
         let event_reader = start_relay_event_reader(
-            relay_stdout,
-            output_exit,
+            transport.output,
             worker_events,
             generation.clone(),
             callbacks
@@ -373,7 +332,7 @@ impl WorkerRuntime {
                 dispatcher,
                 command_writer,
                 event_reader,
-                diagnostic_reader,
+                diagnostic_reader: transport.diagnostic_reader,
             })),
             output_stop,
         };
@@ -480,16 +439,6 @@ impl RelayProcess {
             retirement_requested: false,
             retirement: None,
         })
-    }
-
-    #[cfg(unix)]
-    fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
-    }
-
-    #[cfg(unix)]
-    fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
     }
 
     fn wait_timeout_without_reaping(&mut self, timeout: Duration) -> Result<bool, String> {
@@ -990,8 +939,8 @@ fn receive_operation(
 }
 
 fn start_relay_command_writer(
-    mut relay_stdin: impl Write + Send + 'static,
-    abort: PipeWriter,
+    mut relay_stdin: RelayInput,
+    abort: WriterAbort,
     events: mpsc::Sender<WorkerEvent>,
     bootstrap: Option<(crate::target_launch::Protocol, Vec<u8>)>,
 ) -> (RelayCommandSender, RelayCommandThread) {
@@ -1060,14 +1009,12 @@ fn start_relay_command_writer(
 }
 
 fn start_relay_event_reader(
-    relay_stdout: ChildStdout,
-    output_exit: PipeReader,
+    output: RelayOutput,
     events: mpsc::Sender<WorkerEvent>,
     target: Option<crate::target_session::Generation>,
     recording: Option<crate::transcript::Transcript>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
         let output: Box<dyn Read> = match &target {
             Some(generation) => Box::new(generation.output(output, recording)),
             None => Box::new(output),
