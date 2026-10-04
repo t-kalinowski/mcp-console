@@ -10,11 +10,7 @@ use std::io::{BufReader, Read, Write};
 #[cfg(unix)]
 use std::io::{PipeReader, PipeWriter};
 #[cfg(unix)]
-use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd};
-#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle as _, OwnedHandle as OwnedFd};
 use std::process::{Child, Command, ExitStatus, Stdio};
 #[cfg(unix)]
 use std::process::{ChildStdin, ChildStdout};
@@ -75,6 +71,7 @@ struct RelayConnection {
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
     target: Option<Box<crate::target_session::Generation>>,
+    output_stop: RelayOutputStop,
 }
 
 struct RelayProcess {
@@ -98,7 +95,15 @@ struct RelayTasks {
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
     diagnostic_reader: Option<thread::JoinHandle<()>>,
-    relay_stdout_observer: OwnedFd,
+}
+
+#[derive(Clone)]
+struct RelayOutputStop(Arc<Mutex<Option<PipeWriter>>>);
+
+impl RelayOutputStop {
+    fn stop(&self) {
+        drop(self.0.lock().expect("relay output stop lock").take());
+    }
 }
 
 struct RelayCommandThread {
@@ -108,8 +113,14 @@ struct RelayCommandThread {
 
 #[derive(Clone)]
 pub(super) struct RelayCommandSender {
-    writer: mpsc::Sender<RelayWriterMessage>,
+    state: Arc<Mutex<RelayCommandState>>,
     events: mpsc::Sender<WorkerEvent>,
+}
+
+struct RelayCommandState {
+    writer: Option<mpsc::Sender<RelayWriterMessage>>,
+    abort: Option<PipeWriter>,
+    failure: Option<String>,
 }
 
 enum RelayWriterMessage {
@@ -118,7 +129,6 @@ enum RelayWriterMessage {
         deadline: Instant,
         completed: mpsc::SyncSender<Result<(), String>>,
     },
-    Stop,
 }
 
 #[derive(Clone, Default)]
@@ -258,14 +268,21 @@ impl WorkerRuntime {
         #[cfg(windows)]
         let (output_exit, notify_output_exit) =
             crate::windows::notification().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let (writer_aborted, abort_writer) = std::io::pipe()
+            .map_err(|error| format!("failed to create relay writer abort pipe: {error}"))?;
+        #[cfg(windows)]
+        let (writer_aborted, abort_writer) =
+            crate::windows::notification().map_err(|e| e.to_string())?;
         #[cfg(windows)]
         let (relay_stdin, relay_stdout) =
-            crate::windows::command_pipes(&mut command, output_exit.clone())
+            crate::windows::command_pipes(&mut command, writer_aborted)
                 .map_err(|e| e.to_string())?;
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
         drop(command);
+        let output_stop = RelayOutputStop(Arc::new(Mutex::new(Some(notify_output_exit))));
         let mut child = RelayProcess::new(
             child,
             no_sandbox,
@@ -274,7 +291,7 @@ impl WorkerRuntime {
                 LAUNCHER_RETIREMENT_GRACE,
                 crate::target_session::Session::retirement_grace,
             ),
-            notify_output_exit,
+            output_stop.clone(),
         )
         .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         child.temporary = temporary;
@@ -287,12 +304,8 @@ impl WorkerRuntime {
             .take_stdout()
             .expect("piped worker relay stdout should be available");
         #[cfg(unix)]
-        let relay_stdout_observer = relay_stdout
-            .as_fd()
-            .try_clone_to_owned()
-            .map_err(|error| format!("failed to monitor worker relay stdout: {error}"))?;
-        #[cfg(windows)]
-        let relay_stdout_observer = relay_stdout.duplicate().map_err(|e| e.to_string())?;
+        let relay_stdin =
+            crate::target_launch::transfer::Io::new(relay_stdin, Some(writer_aborted), None)?;
         #[cfg(unix)]
         let diagnostic_reader = {
             let stderr = child.child.stderr.take().expect("piped launcher stderr");
@@ -319,7 +332,7 @@ impl WorkerRuntime {
         let shutdown_started = ShutdownAcceptance::default();
 
         let (commands, command_writer) =
-            start_relay_command_writer(relay_stdin, worker_events.clone(), bootstrap);
+            start_relay_command_writer(relay_stdin, abort_writer, worker_events.clone(), bootstrap);
         let event_reader = start_relay_event_reader(
             relay_stdout,
             output_exit,
@@ -354,8 +367,8 @@ impl WorkerRuntime {
                 command_writer,
                 event_reader,
                 diagnostic_reader,
-                relay_stdout_observer,
             })),
+            output_stop,
         };
         let mut worker = Worker {
             stdin: StdinSender(commands.clone()),
@@ -435,10 +448,10 @@ impl RelayProcess {
         no_sandbox: bool,
         ssh: bool,
         retirement_grace: Duration,
-        notify_output_exit: PipeWriter,
+        output_stop: RelayOutputStop,
     ) -> Result<Self, String> {
         let exit = match ChildExitWaiter::start_notifying(child.id(), move || {
-            drop(notify_output_exit);
+            output_stop.stop();
         }) {
             Ok(exit) => exit,
             Err(error) => {
@@ -970,52 +983,69 @@ fn receive_operation(
 }
 
 fn start_relay_command_writer(
-    mut relay_stdin: ChildStdin,
+    mut relay_stdin: impl Write + Send + 'static,
+    abort: PipeWriter,
     events: mpsc::Sender<WorkerEvent>,
     bootstrap: Option<(crate::target_launch::Protocol, Vec<u8>)>,
 ) -> (RelayCommandSender, RelayCommandThread) {
     let (writer, receiver) = mpsc::channel();
     let sender = RelayCommandSender {
-        writer,
+        state: Arc::new(Mutex::new(RelayCommandState {
+            writer: Some(writer),
+            abort: Some(abort),
+            failure: None,
+        })),
         events: events.clone(),
     };
+    let thread_sender = sender.clone();
     let thread = thread::spawn(move || {
-        if let Some((protocol, bootstrap)) = bootstrap
-            && let Err(error) = relay_stdin.write_all(&bootstrap)
-        {
-            let _ = events.send(WorkerEvent::TransportFailure(format!(
-                "{} bootstrap write failed: {error}",
-                protocol.0
-            )));
-            return;
-        }
-        let mut writer = JsonlWriter::new(relay_stdin);
-        for message in receiver {
-            let (command, completed) = match message {
-                RelayWriterMessage::Command(command) => (command, None),
-                RelayWriterMessage::Shutdown {
-                    deadline,
-                    completed,
-                } => (
-                    RelayCommand::Shutdown {
-                        grace_millis: duration_millis_ceil(
-                            deadline.saturating_duration_since(Instant::now()),
-                        ),
-                    },
-                    Some(completed),
-                ),
-                RelayWriterMessage::Stop => return,
-            };
-            if let Err(error) = writer.send(&command) {
-                let error = format!("worker relay stdin write failed: {error}");
-                let _ = events.send(WorkerEvent::TransportFailure(error.clone()));
-                if let Some(completed) = completed {
-                    let _ = completed.send(Err(error));
-                }
-                return;
+        let result = (|| -> Result<(), String> {
+            if let Some((protocol, bootstrap)) = bootstrap {
+                relay_stdin
+                    .write_all(&bootstrap)
+                    .map_err(|error| format!("{} bootstrap write failed: {error}", protocol.0))?;
             }
-            if let Some(completed) = completed {
-                let _ = completed.send(Ok(()));
+            let mut writer = JsonlWriter::new(relay_stdin);
+            while let Ok(message) = receiver.recv() {
+                let (command, completed) = match message {
+                    RelayWriterMessage::Command(command) => (command, None),
+                    RelayWriterMessage::Shutdown {
+                        deadline,
+                        completed,
+                    } => (
+                        RelayCommand::Shutdown {
+                            grace_millis: duration_millis_ceil(
+                                deadline.saturating_duration_since(Instant::now()),
+                            ),
+                        },
+                        Some(completed),
+                    ),
+                };
+                let result = match thread_sender.failure() {
+                    Some(error) => Err(error),
+                    None => writer.send(&command).map_err(|error| {
+                        thread_sender.report_command_transport_failure(format!(
+                            "worker relay stdin write failed: {error}"
+                        ))
+                    }),
+                };
+                if let Some(completed) = completed {
+                    let _ = completed.send(result.clone());
+                }
+                result?;
+            }
+            Ok(())
+        })();
+        let error = thread_sender.report_command_transport_failure(
+            result
+                .err()
+                .unwrap_or_else(|| "worker relay command writer stopped".into()),
+        );
+        // Closing admission disconnects the queue. Bootstrap/write aborts must
+        // also settle Shutdown receipts that never reached the serialization owner.
+        for message in receiver.try_iter() {
+            if let RelayWriterMessage::Shutdown { completed, .. } = message {
+                let _ = completed.send(Err(error.clone()));
             }
         }
     });
@@ -1061,13 +1091,43 @@ fn start_relay_event_reader(
 
 impl RelayCommandSender {
     pub(super) fn send(&self, command: RelayCommand) -> Result<(), String> {
-        self.writer
-            .send(RelayWriterMessage::Command(command))
-            .map_err(|_| self.command_writer_stopped())
+        self.enqueue(RelayWriterMessage::Command(command))
     }
 
-    fn stop(&self) {
-        let _ = self.writer.send(RelayWriterMessage::Stop);
+    fn enqueue(&self, message: RelayWriterMessage) -> Result<(), String> {
+        let result = {
+            let state = self.state.lock().expect("relay command admission lock");
+            let Some(writer) = &state.writer else {
+                return Err(state
+                    .failure
+                    .clone()
+                    .expect("closed relay command admission"));
+            };
+            writer.send(message)
+        };
+        result.map_err(|_| self.command_writer_stopped())
+    }
+
+    fn failure(&self) -> Option<String> {
+        self.state
+            .lock()
+            .expect("relay command admission lock")
+            .failure
+            .clone()
+    }
+
+    /// Abort this generation's descriptor independently of its queue. Taking
+    /// the sole queue sender also wakes an idle writer and closes all clones'
+    /// admission under the same boundary.
+    pub(super) fn abort(&self, error: String) -> bool {
+        let mut state = self.state.lock().expect("relay command admission lock");
+        if state.failure.is_some() {
+            return false;
+        }
+        state.failure = Some(error);
+        drop(state.abort.take());
+        drop(state.writer.take());
+        true
     }
 
     fn shutdown(
@@ -1076,12 +1136,10 @@ impl RelayCommandSender {
         completion_deadline: Instant,
     ) -> Result<(), String> {
         let (completed, wait) = mpsc::sync_channel(1);
-        self.writer
-            .send(RelayWriterMessage::Shutdown {
-                deadline: worker_deadline,
-                completed,
-            })
-            .map_err(|_| self.command_writer_stopped())?;
+        self.enqueue(RelayWriterMessage::Shutdown {
+            deadline: worker_deadline,
+            completed,
+        })?;
         match wait.recv_timeout(completion_deadline.saturating_duration_since(Instant::now())) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => Err(self.report_command_transport_failure(
@@ -1120,10 +1178,10 @@ impl RelayCommandSender {
     }
 
     fn report_command_transport_failure(&self, error: String) -> String {
-        let _ = self
-            .events
-            .send(WorkerEvent::TransportFailure(error.clone()));
-        error
+        if self.abort(error.clone()) {
+            let _ = self.events.send(WorkerEvent::TransportFailure(error));
+        }
+        self.failure().expect("failed relay command transport")
     }
 }
 
@@ -1353,6 +1411,9 @@ impl WorkerShutdownHandle {
             }
         }
         if !exited {
+            self.commands.report_command_transport_failure(
+                "worker relay command transport retired".to_string(),
+            );
             if let Err(error) = child.request_retirement() {
                 errors.push(error);
             }
@@ -1435,46 +1496,22 @@ impl RelayConnection {
     }
 
     fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        // Launcher exit wakes the reader even if a descendant retains stdout.
-        // A writer still needs HUP before joining: it may be in a blocking write.
-        let (cleanup, reaped) = {
+        let cleanup = {
             let mut child = self
                 .child
                 .lock()
                 .map_err(|_| "worker child lock poisoned".to_string())?;
-            let cleanup = if child.is_reaped() {
+            if child.is_reaped() {
                 child.temporary_retirement.clone()
             } else {
                 child.retire_launcher()
-            };
-            (cleanup, child.is_reaped())
+            }
         };
-        let tasks = self.tasks.take();
-        let output_closed = tasks.as_ref().map_or(Ok(false), |tasks| {
-            relay_stdout_closed(&tasks.relay_stdout_observer)
-        });
-        let tasks = match (tasks, output_closed) {
-            (Some(tasks), Ok(false)) if reaped => {
-                drop(tasks.command_writer.stop());
-                let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
-                let diagnostics = join_diagnostic_reader(tasks.diagnostic_reader);
-                event_reader.and(diagnostics).and(tasks.dispatcher.join())
-            }
-            (Some(tasks), Ok(false)) => {
-                let RelayTasks {
-                    dispatcher,
-                    command_writer,
-                    event_reader,
-                    diagnostic_reader,
-                    relay_stdout_observer: _,
-                } = *tasks;
-                drop(command_writer.stop());
-                drop(dispatcher);
-                drop(event_reader);
-                drop(diagnostic_reader);
-                Ok(None)
-            }
-            (Some(tasks), Ok(true)) => {
+        // Even failed launcher cleanup must retire owned I/O. Wake the readers'
+        // bounded available-output drain; the cleanup error still blocks replacement.
+        self.output_stop.stop();
+        let tasks = match self.tasks.take() {
+            Some(tasks) => {
                 let command_writer =
                     join_worker_thread(tasks.command_writer.stop(), "relay command writer");
                 let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
@@ -1485,21 +1522,7 @@ impl RelayConnection {
                     .and(diagnostics)
                     .and(outcome)
             }
-            (Some(tasks), Err(error)) => {
-                let RelayTasks {
-                    dispatcher,
-                    command_writer,
-                    event_reader,
-                    diagnostic_reader,
-                    relay_stdout_observer: _,
-                } = *tasks;
-                drop(command_writer.stop());
-                drop(dispatcher);
-                drop(event_reader);
-                drop(diagnostic_reader);
-                Err(error)
-            }
-            (None, _) => Ok(None),
+            None => Ok(None),
         };
         let cleanup = combine_shutdown_results(
             cleanup,
@@ -1517,32 +1540,10 @@ impl RelayConnection {
     }
 }
 
-#[cfg(unix)]
-fn relay_stdout_closed(descriptor: &OwnedFd) -> Result<bool, String> {
-    let mut event = libc::pollfd {
-        fd: descriptor.as_raw_fd(),
-        events: libc::POLLIN | libc::POLLHUP,
-        revents: 0,
-    };
-    let result = loop {
-        let result = unsafe { libc::poll(&mut event, 1, 0) };
-        if result >= 0 {
-            break result;
-        }
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINTR) {
-            return Err(format!("failed to inspect worker relay stdout: {error}"));
-        }
-    };
-    if event.revents & libc::POLLNVAL != 0 {
-        return Err("worker relay stdout descriptor became invalid".to_string());
-    }
-    Ok(result > 0 && event.revents & libc::POLLHUP != 0)
-}
-
 impl RelayCommandThread {
     fn stop(self) -> thread::JoinHandle<()> {
-        self.sender.stop();
+        self.sender
+            .abort("worker relay command transport retired".to_string());
         self.thread
     }
 }
@@ -1596,17 +1597,4 @@ fn kill_child(child: &mut Child) -> std::io::Result<()> {
         return Ok(());
     }
     result
-}
-#[cfg(windows)]
-fn relay_stdout_closed(handle: &OwnedFd) -> Result<bool, String> {
-    match crate::windows::available(handle.as_raw_handle()) {
-        Ok(_) => Ok(false),
-        Err(e)
-            if e.raw_os_error()
-                == Some(windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32) =>
-        {
-            Ok(true)
-        }
-        Err(e) => Err(e.to_string()),
-    }
 }

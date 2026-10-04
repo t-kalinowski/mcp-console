@@ -111,6 +111,11 @@ impl<T: AsRawFd + Read> Read for Io<T> {
 impl<T: AsRawFd + Write> Write for Io<T> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         loop {
+            // Check owner cancellation before every partial write, including
+            // when a continuously writable descriptor never backpressures.
+            if self.cancelled.is_some() {
+                self.wait(libc::POLLOUT)?;
+            }
             match self.inner.write(buffer) {
                 Err(e)
                     if matches!(

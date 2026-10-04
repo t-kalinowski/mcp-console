@@ -321,6 +321,7 @@ fn dispatch_worker_events(
                 }
             }
             WorkerEvent::TransportFailure(error) => {
+                commands.abort(error.clone());
                 if !retiring {
                     candidates.clear();
                     fail_dispatch(&operation, &mut startup, &interrupts, error);
@@ -342,6 +343,7 @@ fn dispatch_worker_events(
                 }
             }
             WorkerEvent::RelayClosed => {
+                commands.abort("worker relay command transport closed".to_string());
                 relay_closed = true;
                 if !(retiring
                     || stdout_closed
