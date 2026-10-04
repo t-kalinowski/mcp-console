@@ -15,8 +15,9 @@ from support.assertions import (
     wait_for_idle_output,
 )
 from support.allocations import AllocationProfile
-from support.checkpoints import FifoCheckpoint
+from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
 from support.client import McpClient
+from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.requirements import WORKER, NATIVE_FIXTURES, requires
@@ -148,6 +149,33 @@ def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
                 receipt_release.release()
                 client.send(timeout_ms=0)
                 assert last_result_text(client) == "[session is preparing requirements]"
+                if exceed_limit:
+                    sessions = local / ".agents/console/sessions"
+                    with Events() as changes:
+
+                        def dispatched_receipt() -> Path | None:
+                            logs = list(sessions.glob("*/outputs/session.log"))
+                            if not logs:
+                                return None
+                            (log,) = logs
+                            changes.watch_file(log)
+                            return (
+                                log
+                                if b"ordered receipt\n" in log.read_bytes()
+                                else None
+                            )
+
+                        # The public raw log is written by the dispatcher after
+                        # all preceding frames reach the deferred spool. A pipe
+                        # read receipt alone leaves that backlog unprocessed.
+                        wait_for_checkpoint(
+                            dispatched_receipt,
+                            "dispatcher recorded output after the deferred backlog",
+                            root=sessions,
+                            recursive=True,
+                            client=client,
+                            events=changes,
+                        )
                 resolved.release()
                 # A fresh producer event can reach the dispatcher before the
                 # reservation owner's ResumeBootstrap marker.
@@ -159,20 +187,12 @@ def check_deferred_startup_output(binary: Path, *, exceed_limit: bool) -> list:
                     in preparation["result"]["content"][0]["text"]
                 ), preparation
                 if exceed_limit:
-                    deadline = time.monotonic() + 3
-                    while True:
-                        result = client.send(timeout_ms=0)
-                        output = last_result_text(client)
-                        if result["isError"]:
-                            assert (
-                                "deferred bootstrap retention exceeds 16 MiB" in output
-                            )
-                            break
-                        assert all(item["type"] == "text" for item in result["content"])
-                        assert "after activation" not in output, output
-                        assert time.monotonic() < deadline, (
-                            "spool overflow did not fail"
-                        )
+                    result = client.send(timeout_ms=0)
+                    output = last_result_text(client)
+                    assert result["isError"], result
+                    assert "deferred bootstrap retention exceeds 16 MiB" in output
+                    assert all(item["type"] == "text" for item in result["content"])
+                    assert "after activation" not in output, output
                     client.finish()
                     return [{"excess_deferred_startup_output_fails_worker": True}]
                 notice = "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']"

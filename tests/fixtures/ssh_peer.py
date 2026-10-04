@@ -151,7 +151,8 @@ frame(
         "build": bootstrap["build"],
     },
 )
-if mode == "incompatible":
+if mode in {"incompatible", "prior-bootstrap-protocol"}:
+    # Rejected handshakes cannot publish Ready on the closed event transport.
     sys.exit(0)
 frame(2, {"kind": "ready"})
 if mode == "startup-recording-failure":
