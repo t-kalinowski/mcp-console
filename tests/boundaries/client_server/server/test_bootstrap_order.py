@@ -20,7 +20,7 @@ from support.client import McpClient
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.requirements import WORKER, NATIVE_FIXTURES, requires
+from support.requirements import WORKER, NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import checkpoint_uv_environment, FIXTURES
 from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
@@ -36,7 +36,7 @@ def test_failed_replacement_preserves_startup_producer_order(binary: Path) -> li
     return check_deferred_startup_output(binary, exceed_limit=False)
 
 
-@requires(WORKER, NATIVE_FIXTURES)
+@requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_rejects_excess_deferred_startup_output(binary: Path) -> list:
     return check_deferred_startup_output(binary, exceed_limit=True)
 
