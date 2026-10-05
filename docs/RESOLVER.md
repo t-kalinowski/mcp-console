@@ -44,6 +44,7 @@ This preserves reads without adding resolver write grants for host package locat
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
 Workers link the warmed font cache into their private Matplotlib directory.
 Host Matplotlib configuration remains selected independently of this cache.
+Font-cache warmup selects the persistent cache explicitly so a read-only host configuration directory cannot redirect it to temporary storage.
 Explicitly selected Python uses its preinstalled packages and DuckDB extensions.
 Host R and installed resolver executables remain readable.
 On macOS, keep uv on `PATH` or select an installed executable with `RETICULATE_UV`.
