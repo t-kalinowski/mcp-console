@@ -5,9 +5,7 @@ import os
 import time
 from pathlib import Path
 
-from .control import (
-    publish_marker,
-)
+from .control import publish_marker
 from .io import (
     emit_large_output,
     write_all,
@@ -20,7 +18,6 @@ from .protocol import (
     wait_for_server_to_process_sideband,
 )
 from .state import WorkerContext
-
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 PNG_1X1 = (
@@ -267,3 +264,14 @@ def emit_image_before_completion(context: WorkerContext, source: str) -> None:
     while not (context.root / "zod-release-image-completion").exists():
         time.sleep(0.01)
     send(context.writer, {"kind": "completed"})
+
+
+def echo(context: WorkerContext, source: str) -> None:
+    payload = source.removeprefix("echo ")
+    for output in ("zod: ", f"{payload}\n"):
+        send_output(context.writer, output)
+    send(context.writer, {"kind": "completed"})
+    if context.idle_input_received:
+        wait_for_server_to_process_sideband(context.reader, context.writer)
+        publish_marker(context.root / "zod-idle-input-received")
+        context.idle_input_received = False

@@ -6,7 +6,6 @@ from pathlib import Path
 
 from .state import WorkerContext
 
-
 TEST_FIXTURE_CONTROL_ENV = "ZOD_TEST_FIXTURE_CONTROL"
 TEST_EVENT_FIFO_NAME = "zod-test-events"
 TEST_CONTROL_FIFO_NAME = "zod-test-control"

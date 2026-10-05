@@ -8,6 +8,7 @@ from .control import (
     publish_marker,
     wait_for_test_control,
 )
+from .output import PENDING_TEXT_BUDGET
 from .protocol import (
     send,
     send_batch,
@@ -15,7 +16,6 @@ from .protocol import (
     wait_for_server_to_process_sideband,
 )
 from .state import LoopAction, WorkerContext
-from .output import PENDING_TEXT_BUDGET
 
 
 def request_input(context: WorkerContext, source: str) -> None:

@@ -5,13 +5,13 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .output import PNG_1X1
 from .protocol import (
     send,
     send_batch,
     send_output,
 )
 from .state import WorkerContext
-from .output import PNG_1X1
 
 
 def resolve_python_while_idle(context: WorkerContext, source: str) -> None:
