@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import signal
 import struct
 import subprocess
@@ -116,13 +117,38 @@ elif args[0] == "exec":
     assert args[3] == bootstrap["workspace"]
     assert bootstrap["provider"] == "compute"
     assert set(bootstrap["policy"]) <= {"environment", "inherit_environment"}
+    probe = args[-1] == "docker-sandbox-probe"
+    frame_log = root / "probe-frames"
+    capture_frames = probe and frame_log.exists()
 
     def frame(tag: int, value: dict) -> None:
         payload = json.dumps(value).encode() + (b"\n" if tag == 2 else b"")
-        sys.stdout.buffer.write(struct.pack(">BI", tag, len(payload)) + payload)
-        sys.stdout.buffer.flush()
+        data = struct.pack(">BI", tag, len(payload)) + payload
 
-    probe = args[-1] == "docker-sandbox-probe"
+        def receipt(stage: str, **evidence: int) -> None:
+            # Opt-in peer evidence stays off protocol stdout. A completed peer
+            # write does not establish an owner read or forwarded-frame receipt.
+            # "written" is buffered acceptance; "flushed" records the peer flush.
+            if capture_frames:
+                with frame_log.open("a") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "tag": tag,
+                                "length": len(payload),
+                                "stage": stage,
+                                **evidence,
+                            }
+                        )
+                        + "\n"
+                    )
+
+        receipt("started")
+        written = sys.stdout.buffer.write(data)
+        receipt("written", bytes=written)
+        sys.stdout.buffer.flush()
+        receipt("flushed")
+
     if (probe and mode == "probe-gate") or (not probe and mode == "launch-gate"):
         gate()
     frame(
@@ -141,6 +167,19 @@ elif args[0] == "exec":
         },
     )
     if probe and mode == "probe-closed-output":
+        if os.environ.get("MCP_CONSOLE_TEST_PREPARED_PROBE"):
+            # Keep the original HELLO and SIGPIPE failure. The public test
+            # releases this peer only after the owner accepted its own header.
+            with (root / "peer-ready").open("wb", buffering=0) as reached:
+                reached.write(b"1")
+            release = os.open(root / "peer-release", os.O_RDONLY)
+            abort = os.open(root / "abort", os.O_RDONLY)
+            ready, _, _ = select.select([release, abort], [], [])
+            if abort in ready:
+                sys.exit(0)
+            assert os.read(release, 1) == b"1"
+            os.close(release)
+            os.close(abort)
         # Keep the attachment pipe open until this peer exits, so the owner
         # cannot cancel the peer before its next write hits the closed reader.
         attachment = os.dup(1)
