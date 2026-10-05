@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
 import subprocess
@@ -1230,7 +1231,11 @@ def test_closes_provisional_connections_after_sql_setup_failure(
 
 @contextmanager
 def startup_sql_client(
-    binary: Path, execution: Execution, with_r: bool, behavior: str
+    binary: Path,
+    execution: Execution,
+    with_r: bool,
+    behavior: str,
+    sql: dict[str, object] | None = None,
 ) -> Iterator[tuple[McpClient, FifoCheckpoint, FifoCheckpoint]]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -1282,6 +1287,34 @@ def startup_sql_client(
                     root / "sitecustomize.py",
                 )
                 environment["RETICULATE_PYTHONPATH"] = str(root)
+            if sql is not None:
+                config = root / ".agents/console/config.yaml"
+                config.parent.mkdir(parents=True)
+                config.write_text(json.dumps({"sql": sql}))
+                if with_r and sql.get("provider") == "python":
+                    from support.python import virtualenv_python
+
+                    selected = root / "python"
+                    subprocess.run(
+                        ["uv", "venv", "--python", "3.13", selected],
+                        capture_output=True,
+                        check=True,
+                        timeout=120,
+                    )
+                    executable = virtualenv_python(selected)
+                    subprocess.run(
+                        ["uv", "pip", "install", "--python", executable, "duckdb"],
+                        capture_output=True,
+                        check=True,
+                        timeout=120,
+                    )
+                    environment["RETICULATE_PYTHON"] = str(executable)
+                    shutil.copyfile(
+                        Path(__file__).resolve().parents[3]
+                        / "fixtures/early_sql/sitecustomize.py",
+                        root / "sitecustomize.py",
+                    )
+                    environment["RETICULATE_PYTHONPATH"] = str(root)
             environment.update(
                 MCP_CONSOLE_TEST_SQL_STARTED=str(started.path),
                 MCP_CONSOLE_TEST_SQL_RELEASE=str(release.path),

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub(crate) mod sql;
 mod target;
 #[cfg(unix)]
 pub(crate) use target::Access;
@@ -91,6 +92,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    sql: sql::Sql,
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
     extends: Option<String>,
@@ -101,6 +103,7 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
+    pub sql: sql::Sql,
     pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
     pub source: Option<String>,
@@ -138,6 +141,10 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     let has_extends = value.get("extends").is_some();
     let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
+    project
+        .sql
+        .validate()
+        .map_err(|error| format!("{name}: {error}"))?;
     let compute = project
         .target
         .as_ref()
@@ -182,6 +189,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     let target = project.target.filter(|target| !target.is_local_host());
     let remote_python = target.is_some();
     Ok(Captured {
+        sql: project.sql,
         cache: project.cache,
         python: project
             .python

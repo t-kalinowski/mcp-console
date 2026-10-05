@@ -93,6 +93,7 @@ impl Session {
                 no_sandbox,
                 session.provider(),
                 ComputeLaunch::Probe(configured),
+                &Default::default(),
             )?,
             Self::DockerSandbox(captured, state) => state.launch(
                 captured,
@@ -101,6 +102,7 @@ impl Session {
                 no_sandbox,
                 session.provider(),
                 ComputeLaunch::Probe(configured),
+                &Default::default(),
             )?,
             Self::Ssh(_) => unreachable!(),
         };
@@ -232,6 +234,7 @@ impl Session {
     pub fn launch(
         &self,
         policy: &SandboxSettings,
+        sql: &crate::settings::sql::Sql,
         no_sandbox: bool,
         managed_r: Option<&crate::resolver::ManagedR>,
         python: Option<&crate::resolver::ManagedPython>,
@@ -240,7 +243,7 @@ impl Session {
         let (command, bytes, owner) = match self {
             Self::Ssh(session) => (
                 session.command()?,
-                session.bootstrap(policy, no_sandbox, managed_r, python, native)?,
+                session.bootstrap(sql, policy, no_sandbox, managed_r, python, native)?,
                 GenerationOwner::Ssh(Box::new(session.clone())),
             ),
             Self::Docker(captured, state) => state.launch(
@@ -250,6 +253,7 @@ impl Session {
                 no_sandbox,
                 self.provider(),
                 ComputeLaunch::Worker,
+                sql,
             )?,
             Self::DockerSandbox(captured, state) => state.launch(
                 captured,
@@ -258,6 +262,7 @@ impl Session {
                 no_sandbox,
                 self.provider(),
                 ComputeLaunch::Worker,
+                sql,
             )?,
         };
         Ok((
@@ -272,6 +277,7 @@ impl Session {
 }
 
 impl ComputeState {
+    #[allow(clippy::too_many_arguments)]
     fn launch(
         &self,
         captured: &impl serde::Serialize,
@@ -280,6 +286,7 @@ impl ComputeState {
         no_sandbox: bool,
         provider: Provider,
         operation: ComputeLaunch,
+        sql: &crate::settings::sql::Sql,
     ) -> Result<(Command, Vec<u8>, GenerationOwner), String> {
         let label = self.profile.protocol.0;
         if let Some(error) = &*self
@@ -299,6 +306,7 @@ impl ComputeState {
             name: name.clone(),
             probe,
             bootstrap: Bootstrap {
+                sql: sql.clone(),
                 languages: self.languages,
                 version: target_launch::VERSION,
                 build: env!("CARGO_PKG_VERSION").into(),

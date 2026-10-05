@@ -12,6 +12,7 @@ _RESPONSE_BYTES = 12 * 1024
 _PROVIDER_R = 0
 _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
+_r_selected = False
 
 try:
     _connection
@@ -33,21 +34,25 @@ def _validate_connection(connection):
 
 
 def console_sql_connection(connection=None):
-    global _connection, _restore_managed
+    global _connection, _restore_managed, _r_selected
 
     if connection is None:
+        _r_selected = False
         _connection = None
         _restore_managed = True
         return None
 
     _validate_connection(connection)
+    _r_selected = False
     _connection = connection
     _restore_managed = False
     return None
 
 
 def use_r():
-    global _connection, _restore_managed
+    global _connection, _restore_managed, _r_selected
+
+    _r_selected = True
 
     _connection = None
     _restore_managed = False
@@ -242,6 +247,8 @@ def _evaluate(source):
 
 
 def _dispatch(source):
+    if _r_selected:
+        return _PROVIDER_R
     if _connection is not None or _select_native_connection():
         _evaluate(source)
         return _PROVIDER_HANDLED
@@ -268,6 +275,7 @@ def take_managed_restore_request():
 # Native Python sessions use the same evaluator and preview formatter. Keep
 # their connection setup below the R-present adapter so its traceback lines
 # remain stable in public transcripts.
+import json as _json
 import os as _os
 from pathlib import Path as _Path
 
@@ -275,6 +283,7 @@ _native_storage = None
 _native_extension_directory = None
 _native_prepared_source = None
 _managed_connection = None
+_settings = _json.loads(_os.environ.get("MCP_CONSOLE_SQL_SETTINGS", "{}"))
 
 
 def enable_native():
@@ -311,6 +320,7 @@ def _ensure_managed_connection():
                 )
             raise RuntimeError(message) from error
         config = {
+            **_settings.get("options", {}),
             "extension_directory": _native_extension_directory,
             "secret_directory": str(_native_storage / "stored-secrets"),
             "temp_directory": str(_native_storage / "spill"),
@@ -318,8 +328,19 @@ def _ensure_managed_connection():
         }
         if _native_prepared_source is not None:
             config["autoinstall_known_extensions"] = "false"
-        connection = duckdb.connect(":memory:", config=config)
-        connection.execute("SET enable_progress_bar = false")
+        connection = duckdb.connect(
+            _settings.get("database", ":memory:"),
+            read_only=_settings.get("read_only", False),
+            config=config,
+        )
+        try:
+            connection.execute("SET enable_progress_bar = false")
+        except BaseException:
+            try:
+                connection.close()
+            except BaseException:
+                _traceback.print_exc()
+            raise
         _managed_connection = connection
     return _managed_connection
 

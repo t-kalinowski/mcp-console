@@ -53,6 +53,51 @@ Prepared Docker/SBX targets always use preinstalled packages: their probe tries 
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
+## Managed SQL connection
+
+The built-in worker captures SQL settings when the server starts:
+
+```yaml
+sql:
+  provider: python
+  database: analysis.duckdb
+  read_only: false
+  options:
+    threads: 2
+    memory_limit: 256MB
+```
+
+`provider` accepts `auto` (the default), `r`, or `python`.
+Automatic selection uses execution-host R availability; explicit Python selection works with R installed, including SQL-only sessions.
+A broken explicit provider or connection configuration reports an error without switching providers.
+Model-visible languages and interpreter initialization order do not select the managed provider.
+
+`database` defaults to `:memory:`.
+File paths resolve on the execution host, relative to the worker workspace; the controller does not inspect or expand them.
+Parent directories must already exist.
+`read_only` defaults to false and requires a file-backed database.
+A persistent catalog survives worker restart; an in-memory catalog belongs to its worker generation.
+Restart retains the captured settings, even if the configuration file changes.
+
+`options` supports only `threads` (an integer from 1 through 2147483647) and `memory_limit` (a nonempty DuckDB memory-size string).
+DuckDB validates engine values during connection construction.
+These settings apply to the first managed connection, including background warmup.
+A Python provider needs DuckDB in its selected environment; in a managed session, prepare it through `requirements.python: [duckdb]` before SQL use.
+SQL demand does not reinstall packages removed from the session requirements.
+Unknown fields and options fail configuration decoding.
+YAML and ordered CLI overrides use the ordinary merge rules, for example `-c sql.options.threads=4`.
+
+Engine settings grant no filesystem or network access.
+A writable database requires an existing sandbox write grant; read-only workspace access remains read-only.
+Console owns spill/secret storage, extension-cache handoff, progress output, and disabled Python replacement scans; SQL options cannot override them.
+Prepared targets use preinstalled packages and retain their extension-install policy.
+SQL configuration does not change resolver/cache policy or ambient DuckDB configuration.
+
+A runtime-selected DBI or DB-API connection takes precedence until reset; these options apply only to the managed default, not user connections.
+See [native connection selection and registration](BUILTIN_RUNTIME.md#sql-and-duckdb).
+Nondefault SQL settings require the built-in worker.
+SQL remains unsupported on Windows.
+
 ## Keys and values
 
 Dotted assignment keys address nested mappings, not list indexes.

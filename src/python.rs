@@ -206,12 +206,19 @@ pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
     library::dispatch_sql(source)
 }
 
+pub(crate) fn reset_managed_sql() -> Result<(), String> {
+    if ensure_initialized()? {
+        library::reset_managed_sql()?;
+    }
+    Ok(())
+}
+
 pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
 pub(crate) fn initialize_managed_sql() -> Result<(), String> {
-    if ensure_initialized()? {
+    if ensure_initialized()? && library::runtime_configured()? {
         library::initialize_managed_sql()?;
     }
     Ok(())

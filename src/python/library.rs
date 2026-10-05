@@ -736,6 +736,10 @@ pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     api.with_gil(|api| api.call_sql_dispatch(source))
 }
 
+pub(super) fn reset_managed_sql() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"console_sql_connection"))
+}
+
 pub(super) fn use_r_sql() -> Result<(), String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(());

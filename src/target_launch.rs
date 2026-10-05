@@ -66,6 +66,8 @@ pub(crate) struct Bootstrap {
     pub build: String,
     #[serde(default = "crate::cell::Languages::all")]
     pub languages: crate::cell::Languages,
+    #[serde(default)]
+    pub sql: crate::settings::sql::Sql,
     pub workspace: String,
     pub policy: crate::settings::SandboxSettings,
     pub writable_roots: Vec<PathBuf>,

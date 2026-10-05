@@ -48,6 +48,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
     core::initialize(reader, writer.clone())?;
     let r = Integration::new(r_installation)?;
     let python = crate::python::Runtime::new(selection)?;
+    crate::sql::configure()?;
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;
     let mut coordinator = Coordinator {

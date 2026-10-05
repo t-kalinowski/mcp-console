@@ -559,5 +559,65 @@ def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
     return records
 
 
+@requires(POSIX)
+def test_rejects_invalid_sql_settings(binary: Path) -> Transcript:
+    cases = (
+        ("sql.provider=unknown", "sql.provider"),
+        ("sql.database=''", "sql.database must not be empty"),
+        ("sql.read_only=true", "sql.read_only requires a file-backed database"),
+        ("sql.options.threads=0", "sql.options.threads must be between"),
+        ("sql.options.threads=-1", "sql.options.threads"),
+        ("sql.options.threads=2147483648", "sql.options.threads must be between"),
+        ("sql.options.memory_limit=42", "sql.options.memory_limit"),
+        ("sql.options.memory_limit=''", "sql.options.memory_limit must not be empty"),
+        (
+            "sql.options.extension_directory=private-cache",
+            "unknown field `extension_directory`",
+        ),
+        (
+            "sql.options.enable_external_access=true",
+            "unknown field `enable_external_access`",
+        ),
+    )
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, {})
+        for override, expected in cases:
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox", "-c", override],
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert expected in result.stderr, result.stderr
+            records.append({"override": override, "error": result.stderr})
+        result = subprocess.run(
+            [
+                binary,
+                "serve",
+                "--no-sandbox",
+                "--worker",
+                "unused",
+                "-c",
+                "sql.provider=python",
+            ],
+            cwd=workspace,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert "SQL settings require the built-in worker" in result.stderr, (
+            result.stderr
+        )
+        records.append({"custom_worker_error": result.stderr})
+    return records
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

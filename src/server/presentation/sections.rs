@@ -4,9 +4,9 @@ pub(super) const BUILTIN_SCOPE: &str = r#"Persistent R, Python, and SQL workbenc
 
 pub(super) const SHARING: &str = r#"Language fields describe the configured interface, not installed runtimes. With both runtimes and their bridge available, Python reads R globals through `r.name` and R reads Python globals through `py$name`. "#;
 
-pub(super) const MANAGED_SQL_SHARING: &str = r#"R-owned managed DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+pub(super) const MANAGED_SQL_SHARING: &str = r#"R-owned managed DuckDB SQL can query R data frames by name; Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
 
-pub(super) const PREPARED_SQL_SHARING: &str = r#"R-owned Console-owned DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+pub(super) const PREPARED_SQL_SHARING: &str = r#"R-owned Console-owned DuckDB SQL can query R data frames by name; Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
 
 pub(super) const MANAGED_PREPARATION: &str = r#"Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages."#;
 
@@ -59,11 +59,11 @@ pub(super) const CUSTOM_SQL: &str = r#"One complete SQL cell, if supported by th
 
 pub(super) const PREPARED_R: &str = r#"One complete R cell when R is available. Expressions display automatically; R plots return as PNG images. When both runtimes and their bridge are available, read Python globals through py$name. R-owned DuckDB can query R global data frames by name. sql_connection() returns the R-owned connection; console_sql_connection(connection) selects a user-owned DBI connection, and console_sql_connection(NULL) restores the Console-owned catalog. Missing packages report ordinary R errors; automatic package installation is unavailable. Omit for polling or stdin-only calls."#;
 
-pub(super) const PREPARED_PYTHON: &str = r#"One complete Python cell when Python is available. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When both runtimes and their bridge are available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. Without R, sql_connection() returns the active Python-owned connection. Missing imports report ordinary Python errors; automatic package installation is unavailable. Omit for polling or stdin-only calls."#;
+pub(super) const PREPARED_PYTHON: &str = r#"One complete Python cell when Python is available. The final expression displays automatically. Use input() for managed stdin; Matplotlib plots return as PNG images when installed. When both runtimes and their bridge are available, read R globals through r.name. console_sql_connection(connection) selects a user-owned DB-API connection, and console_sql_connection(None) restores the Console-owned catalog. With a Python managed default, sql_connection() returns the active Python-owned connection. Missing imports report ordinary Python errors; automatic package installation is unavailable. Omit for polling or stdin-only calls."#;
 
 pub(super) const PREPARED_CONTROL: &str = r#"Applies lifecycle control alone or before compatible same-call fields. interrupt signals the live worker and preserves state; compatible following input is queued before the 100-millisecond interrupt grace. A following cell runs only after the earlier operation finishes. restart discards language objects, debugger state, unread stdin, and the in-memory SQL catalog, retains the captured image/template and interpreter, and sends same-call input and code only to the replacement worker. Dependency preparation is unavailable."#;
 
-pub(super) const PREPARED_SQL: &str = r#"One complete SQL cell through the active R DBI or Python DB-API connection, depending on available runtimes and the selected connection. Console opens its in-memory DuckDB catalog during background startup when SQL is enabled and the adapter and DuckDB are preinstalled; first-query work remains deferred. R-owned DuckDB can query R global data frames by name; without R, Python data frames require explicit registration with sql_connection().register(name, frame). console_sql_connection(connection) selects a user-owned connection; console_sql_connection(None) in Python or console_sql_connection(NULL) in R restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Use the selected driver's SQL dialect; DuckDB CLI dot commands are unsupported. Extensions must be preinstalled; Console does not install extensions or resolve packages. Worker replacement resets the catalog. Omit for polling or stdin-only calls."#;
+pub(super) const PREPARED_SQL: &str = r#"One complete SQL cell through the active R DBI or Python DB-API connection, using the configured managed provider or the selected connection. Console opens its configured DuckDB catalog during background startup when SQL is enabled and the adapter and DuckDB are preinstalled; first-query work remains deferred. R-owned DuckDB can query R global data frames by name; Python-owned DuckDB requires explicit registration with sql_connection().register(name, frame). console_sql_connection(connection) selects a user-owned connection; console_sql_connection(None) in Python or console_sql_connection(NULL) in R restores the Console-owned catalog without discarding it. A query with columns returns a bounded preview. Use the selected driver's SQL dialect; DuckDB CLI dot commands are unsupported. Extensions must be preinstalled; Console does not install extensions or resolve packages. Worker replacement resets in-memory catalogs and retains configured database files. Omit for polling or stdin-only calls."#;
 
 pub(super) const R_RUNTIME: &str = r#"One complete R cell evaluated in persistent global state. Prefer Console for R execution,
 including tests and package checks. When a fresh session is needed and existing in-memory
@@ -111,7 +111,7 @@ available, read R globals and call R functions through `r.name`."#;
 pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API
 connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
 `console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
-before querying them. Without R, `sql_connection()` returns the Python-owned connection;
+before querying them. With a Python managed default, `sql_connection()` returns the Python-owned connection;
 register frames explicitly with `sql_connection().register(name, frame)`."#;
 
 pub(super) const PYTHON_PLOTS: &str = r#" At cell end,
@@ -132,7 +132,7 @@ pub(super) const CONTROL_END: &str = r#" and preserves in-memory state. After
 successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
 earlier evaluation or attempting an optional following cell; the cell is not run if the
 interrupted evaluation remains active. When `requirements` is available, restart resolves
-same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
+same-call requirements before replacement. It then discards R, Python, in-memory SQL, debugger,
 and unread-stdin state and sends same-call stdin and code only to the replacement."#;
 
 pub(super) fn prepared_target(source: &str) -> String {

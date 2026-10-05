@@ -171,6 +171,7 @@ impl WorkerRuntime {
             relay,
             no_sandbox,
             sandbox_settings,
+            sql_settings,
             duckdb_extension_directory,
             resolver_matplotlib_cache,
             python,
@@ -182,6 +183,7 @@ impl WorkerRuntime {
         let (mut command, bootstrap, generation) = if let Some(session) = target {
             let (command, bytes, generation) = session.launch(
                 sandbox_settings,
+                sql_settings,
                 no_sandbox,
                 managed_r,
                 python.and_then(super::PythonEnvironment::managed),
@@ -220,6 +222,10 @@ impl WorkerRuntime {
             command.env("TMPDIR", temporary.path());
         }
         if target.is_none() {
+            command.env_remove(crate::settings::sql::ENVIRONMENT);
+            if builtin {
+                sql_settings.configure(&mut command)?;
+            }
             command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
             if !no_sandbox
                 && cfg!(unix)

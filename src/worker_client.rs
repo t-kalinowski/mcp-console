@@ -149,6 +149,7 @@ struct WorkerSpec<'a> {
     relay: Option<&'a std::path::Path>,
     no_sandbox: bool,
     sandbox_settings: &'a crate::settings::SandboxSettings,
+    sql_settings: &'a crate::settings::sql::Sql,
     duckdb_extension_directory: Option<&'a std::path::Path>,
     resolver_matplotlib_cache: Option<&'a str>,
     python: Option<&'a PythonEnvironment>,

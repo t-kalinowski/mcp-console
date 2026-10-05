@@ -1,6 +1,26 @@
 mod py_dbapi;
 mod r_dbi;
 
+static SETTINGS: std::sync::OnceLock<crate::settings::sql::Sql> = std::sync::OnceLock::new();
+
+pub(crate) fn configure() -> Result<(), String> {
+    SETTINGS
+        .set(crate::settings::sql::Sql::from_environment()?)
+        .map_err(|_| "SQL settings already captured".into())
+}
+
+pub(crate) fn managed_is_r() -> bool {
+    match SETTINGS
+        .get()
+        .expect("worker SQL settings captured")
+        .provider
+    {
+        crate::settings::sql::Provider::Auto => crate::worker::r_available(),
+        crate::settings::sql::Provider::R => true,
+        crate::settings::sql::Provider::Python => false,
+    }
+}
+
 thread_local! {
     static R_BACKEND: std::cell::OnceCell<std::rc::Rc<r_dbi::Backend>> = const { std::cell::OnceCell::new() };
 }
@@ -21,7 +41,10 @@ pub(crate) struct Bridge;
 
 impl Bridge {
     pub(crate) fn initialize(&self) -> Result<(), String> {
-        if crate::worker::r_available() {
+        if managed_is_r() {
+            if !crate::worker::r_available() {
+                return Ok(());
+            }
             self.r_backend()?.initialize_managed()
         } else {
             crate::python::initialize_managed_sql()
@@ -40,17 +63,25 @@ impl Bridge {
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        if !crate::worker::r_available() && !crate::python::ensure_initialized()? {
+        if !managed_is_r() && !crate::python::ensure_initialized()? {
             return Ok(());
         }
         match py_dbapi::dispatch(source)? {
             py_dbapi::Provider::Handled => Ok(()),
-            py_dbapi::Provider::Managed => {
+            provider @ (py_dbapi::Provider::Managed | py_dbapi::Provider::R) => {
+                if !crate::worker::r_available() {
+                    crate::worker::emit_output(
+                        crate::worker_protocol::ConsoleChannel::Diagnostic,
+                        b"Error: R is unavailable in this session\n",
+                    );
+                    return Ok(());
+                }
                 let r_dbi = self.r_backend()?;
-                r_dbi.restore_managed()?;
+                if matches!(provider, py_dbapi::Provider::Managed) {
+                    r_dbi.restore_managed()?;
+                }
                 r_dbi.evaluate(source)
             }
-            py_dbapi::Provider::R => self.r_backend()?.evaluate(source),
         }
     }
 }

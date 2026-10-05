@@ -123,6 +123,8 @@ fn launch(
     // Controller presentation owns enabled languages, independent of the
     // execution host and workload policy environment.
     bootstrap.languages.configure(&mut command);
+    bootstrap.sql.validate()?;
+    bootstrap.sql.configure(&mut command)?;
     command.env_remove(crate::settings::ENVIRONMENT);
     crate::settings::preserve_environment(&mut policy, command.get_envs())?;
     if native {

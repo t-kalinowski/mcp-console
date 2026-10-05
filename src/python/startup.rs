@@ -94,6 +94,9 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !crate::sql::install_python_runtime()? {
         return Ok(false);
     }
+    if !crate::sql::managed_is_r() {
+        super::library::configure_native_sql()?;
+    }
     if !super::library::configure_environment()? {
         return Err("Python environment setup failed; restart required".into());
     }
@@ -152,12 +155,7 @@ pub(super) fn initialize_native(
 ) -> Result<bool, String> {
     let selected = &configuration.embedding;
     initialize_selected(configuration)?;
-    let result = setup_runtime(Path::new(&selected.libpython), managed).and_then(|configured| {
-        if configured && !crate::worker::r_available() {
-            super::library::configure_native_sql()?;
-        }
-        Ok(configured)
-    });
+    let result = setup_runtime(Path::new(&selected.libpython), managed);
     if !matches!(result, Ok(true)) {
         super::library::display_setup_exception()?;
     }

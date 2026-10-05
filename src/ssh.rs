@@ -77,6 +77,7 @@ impl Session {
 
     pub fn bootstrap(
         &self,
+        sql: &crate::settings::sql::Sql,
         policy: &crate::settings::SandboxSettings,
         no_sandbox: bool,
         managed_r: Option<&crate::resolver::ManagedR>,
@@ -85,6 +86,7 @@ impl Session {
     ) -> Result<Vec<u8>, String> {
         target_launch::encode(&Bootstrap {
             python: None,
+            sql: sql.clone(),
             languages: self.languages,
             version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),

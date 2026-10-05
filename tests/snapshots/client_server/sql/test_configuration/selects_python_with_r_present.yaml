@@ -1,0 +1,4 @@
+---
+python_default_with_r_present: true
+threads: 2
+memory_limit: 244.1 MiB

@@ -12,6 +12,7 @@ pub(crate) struct ClientConfiguration {
     pub(super) relay: Option<PathBuf>,
     pub(super) no_sandbox: bool,
     pub(super) sandbox_settings: crate::settings::SandboxSettings,
+    pub(super) sql_settings: crate::settings::sql::Sql,
     pub(super) resolver_settings: crate::settings::SandboxSettings,
     pub(super) duckdb_extension_directory: Option<PathBuf>,
     pub(super) worker: Mutex<WorkerState>,
@@ -45,6 +46,11 @@ pub(super) struct BuiltinSetup {
 }
 
 impl ClientConfiguration {
+    pub(crate) fn with_sql_settings(mut self, settings: crate::settings::sql::Sql) -> Self {
+        self.sql_settings = settings;
+        self
+    }
+
     pub(crate) fn with_resolver_settings(
         mut self,
         settings: crate::settings::SandboxSettings,
@@ -295,6 +301,7 @@ impl ClientConfiguration {
             relay,
             no_sandbox,
             sandbox_settings,
+            sql_settings: Default::default(),
             resolver_settings: Default::default(),
             duckdb_extension_directory: None,
             worker: Mutex::new(WorkerState::Initial),

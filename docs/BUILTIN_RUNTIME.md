@@ -163,8 +163,10 @@ Both interpreters and reentrant bridge calls share the worker's owning thread.
 
 ## SQL and DuckDB
 
-Managed SQL uses one in-memory DuckDB connection and persistent catalog.
-With R available it belongs to R/DBI; without R it belongs to Python/DB-API.
+Managed SQL keeps one connection and catalog per worker.
+[SQL configuration](CONFIGURATION.md#managed-sql-connection) selects the native provider, database, read-only mode, and startup options.
+The default `auto` selects R/DBI when R is available, otherwise Python/DB-API.
+Explicit Python selection works with R installed and does not depend on the first initialized interpreter.
 SQL-only use still needs one of those adapters.
 DuckDB CLI dot commands are not supported.
 Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening databases outside sandbox-writable paths.
@@ -172,7 +174,7 @@ Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening d
 With R-owned DuckDB, unqualified relation names can refer to R global data frames; a table/view with that name takes precedence.
 A view sees later rebinding of the R name.
 Python frames must be assigned to an R global first.
-Without R, register frames explicitly with `sql_connection().register("name", frame)`; Python globals are not scanned.
+With Python-selected DuckDB, register frames explicitly with `sql_connection().register("name", frame)`; Python and R globals are not scanned or copied into the Python catalog.
 
 Select another backend without moving its connection between languages:
 
@@ -194,7 +196,11 @@ console_sql_connection(None)  # Restore the existing managed catalog.
 The latest selection controls SQL cells.
 User connections remain user-owned; restoring managed DuckDB does not close them.
 Never disconnect Console's managed connection.
-R `sql_connection()` returns its R-owned connection even while SQL cells use a Python selection; without R, Python `sql_connection()` returns the active Python connection.
+R `sql_connection()` returns its selected R-owned connection even while SQL cells use a Python selection.
+With a Python managed default and no selected R connection, it reports guidance to use Python `sql_connection()`; no native handle is proxied.
+Python `sql_connection()` is available with the Python managed default and returns its active Python connection.
+Reset from either language restores the configured managed provider and the same managed catalog without closing user connections or changing their transactions.
+R previews of user DBI connections use a private in-memory rendering catalog when the default belongs to Python; they do not open the configured database through a second engine.
 
 R submits cells through `DBI::dbSendQuery()`.
 Python uses the connection's `execute()` when available, otherwise its cursor protocol.

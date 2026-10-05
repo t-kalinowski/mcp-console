@@ -1,6 +1,8 @@
 base::local(
   {
     managed_connection <- NULL
+    rendering_connection <- NULL
+    settings_json <- Sys.getenv("MCP_CONSOLE_SQL_SETTINGS", "{}")
     selected_connection <- NULL
     source <- NULL
     printer_ready <- FALSE
@@ -23,29 +25,29 @@ base::local(
       envir = globalenv()
     )
 
-    ensure_managed_connection <- function() {
-      if (!is.null(managed_connection)) {
-        return(invisible(managed_connection))
-      }
-
+    open_connection <- function(database, read_only, options) {
       storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
       connection <- DBI::dbConnect(
         duckdb::duckdb(
-          dbdir = ":memory:",
-          config = list(
-            # Share the captured cache with preparation, or leave this empty
-            # for DuckDB core's native default when no cache was supplied.
-            extension_directory = Sys.getenv(
-              "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
-            ),
-            secret_directory = file.path(storage, "stored-secrets"),
-            temp_directory = file.path(storage, "spill")
+          dbdir = database,
+          read_only = read_only,
+          config = c(
+            lapply(options, as.character),
+            list(
+              # Cache and worker storage remain Console-owned settings.
+              extension_directory = Sys.getenv(
+                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
+              ),
+              secret_directory = file.path(storage, "stored-secrets"),
+              temp_directory = file.path(storage, "spill")
+            )
           ),
           environment_scan = TRUE
         )
       )
+      complete <- FALSE
       on.exit({
-        if (is.null(managed_connection)) {
+        if (!complete) {
           tryCatch(
             DBI::dbDisconnect(connection),
             error = function(condition) {
@@ -60,8 +62,35 @@ base::local(
         }
       })
       DBI::dbExecute(connection, "SET enable_progress_bar = false")
-      managed_connection <<- connection
+      complete <- TRUE
+      connection
+    }
+
+    ensure_managed_connection <- function() {
+      if (!.Call("mcp_console_sql_default_is_r")) {
+        stop("The managed SQL provider is Python; use Python sql_connection()")
+      }
+      if (is.null(managed_connection)) {
+        settings <- jsonlite::fromJSON(settings_json, simplifyVector = FALSE)
+        managed_connection <<- open_connection(
+          if (is.null(settings$database)) ":memory:" else settings$database,
+          isTRUE(settings$read_only),
+          settings$options
+        )
+      }
       invisible(managed_connection)
+    }
+
+    ensure_rendering_connection <- function() {
+      if (.Call("mcp_console_sql_default_is_r")) {
+        return(ensure_managed_connection())
+      }
+      # A Python-owned catalog cannot supply native R preview operations. This
+      # scratch catalog opens only for an actual DBI preview, never the SQL default.
+      if (is.null(rendering_connection)) {
+        rendering_connection <<- open_connection(":memory:", FALSE, list())
+      }
+      rendering_connection
     }
 
     initialize_managed_connection <- function() {
@@ -104,6 +133,11 @@ base::local(
 
     console_sql_connection <- function(connection) {
       if (is.null(connection)) {
+        if (!.Call("mcp_console_sql_default_is_r")) {
+          invisible(.Call("mcp_console_sql_reset_python"))
+          selected_connection <<- NULL
+          return(invisible(NULL))
+        }
         connection <- ensure_managed_connection()
       } else {
         if (
@@ -241,7 +275,7 @@ base::local(
     }
 
     stringify <- function(batch, schema, rows, columns, id) {
-      render_connection <- ensure_managed_connection()
+      render_connection <- ensure_rendering_connection()
       array_pointer <- nanoarrow::nanoarrow_allocate_array()
       schema_pointer <- nanoarrow::nanoarrow_allocate_schema()
       nanoarrow::nanoarrow_pointer_export(batch, array_pointer)

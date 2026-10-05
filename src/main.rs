@@ -170,6 +170,7 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        sql,
         cache,
         python,
         source: _,
@@ -198,6 +199,14 @@ fn run_server(
             return Err("Windows currently supports local execution only".into());
         }
     }
+    if sql != settings::sql::Sql::default() {
+        if worker.is_some() || relay.is_some() {
+            return Err("SQL settings require the built-in worker and relay".into());
+        }
+        if cfg!(windows) {
+            return Err("SQL is not supported on Windows".into());
+        }
+    }
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
     }
@@ -218,7 +227,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, target, python, resolver,
+        worker, relay, no_sandbox, settings, target, python, resolver, sql,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

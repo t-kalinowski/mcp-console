@@ -1,0 +1,5 @@
+---
+database_path_does_not_grant_write_access: true
+providers:
+  - r
+  - python

@@ -1,0 +1,53 @@
+---
+override: sql.provider=unknown
+error: >
+  configuration with CLI overrides: sql.provider: unknown variant
+  `unknown`, expected one of `auto`, `r`, `python`
+---
+override: sql.database=''
+error: |
+  configuration with CLI overrides: sql.database must not be empty
+---
+override: sql.read_only=true
+error: >
+  configuration with CLI overrides: sql.read_only requires a file-backed
+  database
+---
+override: sql.options.threads=0
+error: >
+  configuration with CLI overrides: sql.options.threads must be between 1
+  and 2147483647
+---
+override: sql.options.threads=-1
+error: >
+  configuration with CLI overrides: sql.options.threads: invalid value:
+  integer `-1`, expected u32
+---
+override: sql.options.threads=2147483648
+error: >
+  configuration with CLI overrides: sql.options.threads must be between 1
+  and 2147483647
+---
+override: sql.options.memory_limit=42
+error: >
+  configuration with CLI overrides: sql.options.memory_limit: invalid
+  type: integer `42`, expected a string
+---
+override: sql.options.memory_limit=''
+error: |
+  configuration with CLI overrides: sql.options.memory_limit must not be empty
+---
+override: sql.options.extension_directory=private-cache
+error: >
+  configuration with CLI overrides: sql.options.extension_directory:
+  unknown field `extension_directory`, expected `threads` or
+  `memory_limit`
+---
+override: sql.options.enable_external_access=true
+error: >
+  configuration with CLI overrides: sql.options.enable_external_access:
+  unknown field `enable_external_access`, expected `threads` or
+  `memory_limit`
+---
+custom_worker_error: |
+  SQL settings require the built-in worker and relay

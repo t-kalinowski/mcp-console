@@ -46,6 +46,7 @@ impl ConsoleServer {
         target: Option<(crate::settings::Target, Vec<PathBuf>)>,
         python: Option<PathBuf>,
         resolver: crate::settings::SandboxSettings,
+        sql: crate::settings::sql::Sql,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
@@ -103,6 +104,7 @@ impl ConsoleServer {
                         started,
                     )?
                 };
+                let configuration = configuration.with_sql_settings(sql);
                 let target = configuration.target_metadata();
                 let transcript = crate::transcript::Transcript::with_target(
                     recording_directory,
@@ -447,6 +449,7 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     worker: Option<PathBuf>,
     relay: Option<PathBuf>,
@@ -455,6 +458,7 @@ pub async fn run(
     target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
     resolver: crate::settings::SandboxSettings,
+    sql: crate::settings::sql::Sql,
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
@@ -469,6 +473,7 @@ pub async fn run(
         target,
         python,
         resolver,
+        sql,
     )
     .map_err(std::io::Error::other)?;
     let startup = server.startup.clone();
