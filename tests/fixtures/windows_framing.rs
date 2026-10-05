@@ -1,6 +1,5 @@
 //! Native process fixtures for framing; no production Reader is embedded here.
 use super::*;
-use std::net::TcpListener;
 use std::process::Command;
 
 fn flush(handle: *mut c_void) -> io::Result<()> {
@@ -25,28 +24,37 @@ fn command(read: *mut c_void) -> io::Result<Vec<u8>> {
     }
 }
 
-fn holder(control: &mut TcpStream, refill: bool) -> io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let child = Command::new(std::env::current_exe()?)
+fn holder(control: &mut Gate, refill: bool) -> io::Result<()> {
+    let mut ready = Gate::listen()?;
+    let mut child = Command::new(std::env::current_exe()?)
         .env("TEST_WORKER_SCENARIO", "framing_holder")
-        .env("TEST_HOLDER_READY", listener.local_addr()?.to_string())
+        .env("TEST_HOLDER_READY", &ready.name)
         .env("TEST_HOLDER_REFILL", if refill { "1" } else { "0" })
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()?;
-    // The test acquires this child's native handle before releasing our exit.
-    let (mut ready, _) = listener.accept()?;
-    let mut byte = [0];
-    ready.read_exact(&mut byte)?;
-    writeln!(control, "{}", child.id())?;
-    control.read_exact(&mut byte)?;
-    assert_eq!(byte, [b'1']);
-    Ok(())
+    let handshake = (|| {
+        // The test acquires this child's native handle before releasing our exit.
+        ready.accept(&child)?;
+        let mut byte = [0];
+        ready.read_exact(&mut byte)?;
+        writeln!(control, "{}", child.id())?;
+        control.read_exact(&mut byte)?;
+        assert_eq!(byte, [b'1']);
+        Ok(())
+    })();
+    if handshake.is_err() {
+        // Ownership has not reached the test's pinned handle. Retire the
+        // fixture child if either rendezvous fails; preserve the gate error.
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    handshake
 }
 
 pub(super) fn hold(write: *mut c_void) -> io::Result<()> {
-    let mut ready = TcpStream::connect(std::env::var("TEST_HOLDER_READY").unwrap())?;
+    let mut ready = Gate::connect(std::env::var("TEST_HOLDER_READY").unwrap())?;
     if std::env::var("TEST_HOLDER_REFILL").as_deref() == Ok("1") {
         send(
             write,
@@ -83,7 +91,7 @@ pub(super) fn run(
     scenario: &str,
     read: *mut c_void,
     write: *mut c_void,
-    mut control: TcpStream,
+    mut control: Gate,
 ) -> io::Result<()> {
     if scenario == "framing_interrupt" {
         return builtin(read, write, control);
@@ -127,7 +135,7 @@ pub(super) fn run(
     Ok(())
 }
 
-fn builtin(read: *mut c_void, write: *mut c_void, mut control: TcpStream) -> io::Result<()> {
+fn builtin(read: *mut c_void, write: *mut c_void, mut control: Gate) -> io::Result<()> {
     let name: Vec<u16> = format!(r"\\.\pipe\console-framing-{}", std::process::id())
         .encode_utf16()
         .chain(Some(0))
