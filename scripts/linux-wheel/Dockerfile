@@ -51,7 +51,10 @@ RUN printf '%s\n' 'CXX17FLAGS=-O0 -g0' > /opt/preparation.Makevars
 ENV R_MAKEVARS_USER=/opt/preparation.Makevars
 RUN uv venv /opt/cmake && uv pip install --python /opt/cmake/bin/python cmake
 ENV PATH=/opt/cmake/bin:$PATH
-RUN uv tool run --isolated --python 3.13 --from r-lib-ir ir run \
+# Latest-package markers expire even when Docker's parent layers stay cached.
+# Refresh resolution for each driver run, retaining cached system/tool setup.
+ARG R_PREPARATION_RUN
+RUN test -n "$R_PREPARATION_RUN" && uv tool run --isolated --python 3.13 --from r-lib-ir ir run \
     --rscript /usr/bin/Rscript --with tidyverse --with reticulate --with DBI \
     --with duckdb --with arrow --with nanoarrow --with yyjsonr \
     --isolated --vanilla -e 'sessionInfo()'

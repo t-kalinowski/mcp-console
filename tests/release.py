@@ -265,6 +265,89 @@ class ReleaseScriptTests(ReleaseFixture):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("requires a push event", result.stderr)
 
+    def test_linux_floor_refreshes_expired_r_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            commands = directory / "commands"
+            commands.mkdir()
+            # Model Docker's persistent RUN cache and IR's 24-hour expiry at
+            # the driver boundary; real cold R preparation takes many minutes.
+            write_executable(
+                commands / "docker",
+                # fmt: python
+                """
+                #!/usr/bin/env python3
+                import json
+                import os
+                import re
+                import sys
+                from pathlib import Path
+
+                arguments = sys.argv[1:]
+                state_path = Path(os.environ["FLOOR_PREPARATION_STATE"])
+                now = int(os.environ["FLOOR_NOW"])
+                if arguments[0] == "info":
+                    print(os.environ["FLOOR_ARCHITECTURE"])
+                elif arguments[0] == "pull":
+                    pass  # Pulling an unchanged base does not expire RUN caches.
+                elif arguments[0] == "build":
+                    mode = arguments[arguments.index("--target") + 1]
+                    if mode == "with-r":
+                        recipe = (Path(arguments[-1]) / "Dockerfile").read_text()
+                        declared = re.findall(r"(?m)^ARG (\\w+)", recipe)
+                        key = [
+                            arguments[index + 1]
+                            for index, argument in enumerate(arguments)
+                            if argument == "--build-arg"
+                            and arguments[index + 1].split("=", 1)[0] in declared
+                        ]
+                        state = json.loads(state_path.read_text()) if state_path.exists() else {}
+                        if state.get("key") != key or "--no-cache" in arguments:
+                            state_path.write_text(json.dumps({"key": key, "prepared": now}))
+                elif arguments[:2] == ["image", "inspect"]:
+                    print("[]")
+                elif arguments[0] == "run":
+                    if "--with-r" in arguments:
+                        state = json.loads(state_path.read_text())
+                        if now - state["prepared"] >= 86400:
+                            print(
+                                "expired R resolution needs a source build; no compiler in runtime",
+                                file=sys.stderr,
+                            )
+                            raise SystemExit(1)
+                else:
+                    raise SystemExit(f"unexpected Docker command: {arguments}")
+                """,
+            )
+            wheel = directory / "wheel.whl"
+            wheel.touch()
+            for architecture in ("x86_64", "aarch64"):
+                environment = os.environ | {
+                    "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+                    "FLOOR_ARCHITECTURE": architecture,
+                    "FLOOR_PREPARATION_STATE": str(directory / f"{architecture}.json"),
+                }
+                # The wheel and base images are unchanged on the second run;
+                # only the cached latest-package resolution has expired.
+                for now in (0, 86401):
+                    with self.subTest(architecture=architecture, now=now):
+                        result = subprocess.run(
+                            [
+                                sys.executable,
+                                str(ROOT / "scripts/check-linux-wheel"),
+                                str(wheel),
+                                "--target",
+                                f"{architecture}-unknown-linux-gnu",
+                                "--evidence",
+                                str(directory / architecture),
+                            ],
+                            env=environment | {"FLOOR_NOW": str(now)},
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+
     def smoke_environment(self, directory: Path) -> tuple[dict[str, str], Path, Path]:
         (directory / "Cargo.toml").write_text(
             '[package]\nversion = "0.0.2"\n', encoding="utf-8"

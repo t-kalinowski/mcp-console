@@ -67,7 +67,20 @@ def main() -> None:
             output.mkdir(exist_ok=True)
             image = f"mcp-console-linux-floor:{inputs.name}-{mode}"
             subprocess.run(
-                [*docker, "build", "--target", mode, "--tag", image, str(inputs)],
+                [
+                    *docker,
+                    "build",
+                    "--target",
+                    mode,
+                    "--tag",
+                    image,
+                    *(
+                        ["--build-arg", f"R_PREPARATION_RUN={inputs.name}"]
+                        if mode == "with-r"
+                        else []
+                    ),
+                    str(inputs),
+                ],
                 check=True,
             )
             images = subprocess.check_output(

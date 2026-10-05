@@ -125,6 +125,8 @@ Use `aarch64-unknown-linux-gnu` on ARM64; emulation is rejected.
 `--docker-context` selects a daemon explicitly, for example `colima` on an ARM64 Mac.
 Only the wheel and minimal release/installation harness enter the runtime containers.
 The no-R image contains standalone Python 3.13 and uv, while the R image additionally retains separately prepared language libraries and resolver metadata.
+Each validation run refreshes R package preparation before copying its cache into the runtime, because IR's latest-package resolution markers expire after 24 hours while Docker layers do not.
+Earlier system and preparation-tool layers remain cached; repeated runs pay the R package preparation cost so source builds finish while compilers are available.
 Preparation uses serial make and `CXX17FLAGS=-O0 -g0` to bound DuckDB build memory; these settings do not affect the distributed wheel.
 Compilers, development packages, build directories, and cached CMake are excluded from the final runtime.
 Normal sandboxed startup keeps the documented Console cache policy.
