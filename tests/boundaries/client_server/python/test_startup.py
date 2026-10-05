@@ -25,6 +25,7 @@ from support.requirements import (
 from support.r import install_r_startup, r_test_environment
 from support.resolvers import bare_runtime_environment
 from support.python import virtualenv_python
+from support.linux_sandbox import retain_system_bwrap
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
@@ -32,6 +33,7 @@ from boundaries.client_server.python.test_without_r import (
 
 
 def selected_python(directory: Path, python: Path) -> dict[str, str]:
+    retain_system_bwrap(directory)
     environment = bare_runtime_environment(os.environ.copy(), directory / "r-library")
     environment["RETICULATE_PYTHON"] = str(python)
     return environment
@@ -330,11 +332,9 @@ def interrupted_initialization(
                 r_environment,
                 # fmt: r
                 code(f"""
-                Sys.setenv(RETICULATE_PYTHON = {
-                  json.dumps(str(python))
-                })
+                Sys.setenv(RETICULATE_PYTHON = {json.dumps(str(python))})
                 writeLines(as.character(Sys.getpid()), {
-                  json.dumps(str(worker_identity))
+                    json.dumps(str(worker_identity))
                 })
                 startup_state <- 41L
                     """),
