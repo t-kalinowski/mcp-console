@@ -55,6 +55,8 @@ signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 if args == ["version"]:
+    if mode == "version-signal":
+        os.kill(os.getpid(), int((root / "version-signal").read_text()))
     if mode == "diagnostics-gate":
         print("provider startup\n" * 20000, end="", file=sys.stderr, flush=True)
         gate()

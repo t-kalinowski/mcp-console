@@ -2,6 +2,7 @@
 """Target setup controls retain their cause and scoped retirement evidence."""
 
 import sys
+import signal
 from contextlib import ExitStack, closing, contextmanager
 from collections.abc import Iterator
 from tempfile import TemporaryDirectory
@@ -31,6 +32,9 @@ def gated_controller(
     ):
         environment = cli_peer(root / "peer")
         configure(root, template=TEMPLATE)
+        if mode == "signal-shutdown":
+            (root / "peer/mode").write_text("version-signal")
+            (root / "peer/version-signal").write_text(str(signal.SIGKILL))
         if mode == "control-gate" or mode.startswith("poll-error"):
             (root / "peer/mode").write_text("diagnostics-gate")
         gates = {
@@ -169,6 +173,25 @@ def test_shutdown_does_not_hide_a_poll_failure_with_local_cleanup(binary: Path) 
                 "provider_creation": False,
             }
         ]
+
+
+@requires(POSIX, NATIVE_FIXTURES)
+def test_shutdown_preserves_an_independent_signal_failure(binary: Path) -> list:
+    with gated_controller(binary, "signal-shutdown") as (client, root, gates):
+        gates["native-reached"].wait("version command exit observed before shutdown")
+        client.stdin.close()
+        gates["native-controlled"].wait("shutdown accepted after independent exit")
+        gates["native-release"].release()
+        _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+        assert stderr == (
+            "Docker Sandbox setup cancelled; Docker Sandbox command failed with "
+            "signal: 9 (SIGKILL); install standalone sbx v0.42.1 or newer and "
+            "complete Docker login and policy setup before starting Console; "
+            "see docs/DOCKER_SANDBOX.md\n"
+        ), stderr
+        assert [call["args"] for call in calls(root)] == [["version"]]
+        assert not (root / "peer/vms").exists()
+        return [{"independent_signal": "SIGKILL", "exit_status": 1, "stderr": stderr}]
 
 
 @requires(POSIX, NATIVE_FIXTURES)

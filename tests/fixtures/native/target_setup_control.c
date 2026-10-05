@@ -79,7 +79,7 @@ __attribute__((constructor)) static void initialize(void) {
 
 static void gate(int target_cancel) {
     if (write(reached, "1", 1) != 1) _exit(92);
-    if (strcmp(mode, "poll-error-shutdown") == 0) {
+    if (strcmp(mode, "poll-error-shutdown") == 0 || strcmp(mode, "signal-shutdown") == 0) {
         struct pollfd waits[] = {
             {.fd = target_cancel, .events = POLLIN},
             {.fd = cancelled, .events = POLLIN},
@@ -117,6 +117,9 @@ static int observed_poll(struct pollfd *fds, nfds_t count, int timeout) {
     }
     int result = poll(fds, count, timeout);
     if (result > 0) gate(fds[1].fd); // Freeze after exit/control receipt, before retirement.
+    // Reproduce both real exit and accepted shutdown becoming ready together.
+    // The child has already exited; the controller has not retired it yet.
+    if (result > 0 && strcmp(mode, "signal-shutdown") == 0) return poll(fds, count, 0);
     return result;
 }
 

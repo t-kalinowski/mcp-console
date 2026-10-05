@@ -1,7 +1,7 @@
 //! Target CLI operations retain control attribution independently of I/O wakes.
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -476,11 +476,12 @@ pub(crate) fn run_report(
             }
         });
     }
-    let status = process.ok();
+    let killed = process.as_ref().is_ok_and(|process| process.killed);
+    let status = process.ok().map(|process| process.status);
     if let Some(status) = status
         && !status.success()
         && !owner
-        && (!aborted || status.code().is_some())
+        && (!killed || status.signal() != Some(libc::SIGKILL))
     {
         diagnostic_bytes.extend_from_slice(&bytes);
         let diagnostic = String::from_utf8_lossy(&diagnostic_bytes);
@@ -504,12 +505,18 @@ pub(crate) fn run_report(
     })
 }
 
+struct CommandRetirement {
+    status: std::process::ExitStatus,
+    killed: bool,
+}
+
 fn retire(
     child: &mut Child,
     mut exit: Option<&mut crate::process_exit::ChildExitWaiter>,
     grace: Option<Duration>,
     aborted: bool,
-) -> Result<std::process::ExitStatus, String> {
+) -> Result<CommandRetirement, String> {
+    let mut killed = false;
     if aborted {
         if let (Some(grace), Some(exit)) = (grace, exit.as_mut()) {
             let _ = exit.wait(grace);
@@ -517,6 +524,8 @@ fn retire(
         if !exit
             .as_mut()
             .is_some_and(|exit| exit.wait(Duration::ZERO) == Ok(true))
+            && !crate::process_exit::direct_child_has_exited(child.id())
+                .map_err(|error| error.to_string())?
         {
             let result = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
             if result < 0 {
@@ -528,6 +537,7 @@ fn retire(
                     return Err(format!("failed to stop target CLI: {error}"));
                 }
             }
+            killed = result == 0;
         }
     }
     let observed = match exit {
@@ -544,5 +554,8 @@ fn retire(
     if !observed {
         return Err("target CLI did not exit after retirement".into());
     }
-    child.wait().map_err(|error| error.to_string())
+    Ok(CommandRetirement {
+        status: child.wait().map_err(|error| error.to_string())?,
+        killed,
+    })
 }
