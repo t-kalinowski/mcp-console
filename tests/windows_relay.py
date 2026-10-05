@@ -400,7 +400,8 @@ class WindowsRelay(unittest.TestCase):
             process.kill()
         process.wait(timeout=10)
         for stream in (process.stdin, process.stdout, process.stderr):
-            stream.close()
+            if stream is not None:
+                stream.close()
 
     def finish(self, process):
         output, errors = process.communicate(timeout=10)

@@ -33,8 +33,13 @@ if scenario.startswith("retirement_"):
             for line in source:
                 journal.write(line)
                 command = json.loads(line)
-                if scenario == "retirement_sideband" and command["kind"] == "evaluate":
+                if (
+                    scenario == "retirement_sideband"
+                    and command["kind"] == "evaluate"
+                    and writer >= 0
+                ):
                     os.close(writer)
+                    writer = -1
                 elif command["kind"] == "shutdown":
                     checkpoint.sendall(b"shutdown\n")
         # Remain alive even if the relay closes the command sideband.
