@@ -273,8 +273,15 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
     ]
 
 
+@requires(SANDBOX)
+def test_resolvers_write_dependency_cache_metadata(binary: Path) -> Transcript:
+    for host, source in ((False, "environment"), (True, "config")):
+        cache_locations(binary, host=host, sources=(source,), metadata=True)
+    return [{"resolver_cache_metadata_writable": True}]
+
+
 def cache_locations(
-    binary: Path, *, host: bool, sources: tuple[str, ...]
+    binary: Path, *, host: bool, sources: tuple[str, ...], metadata: bool = False
 ) -> Transcript:
     for source in sources:
         # Host cache mode grants Darwin's user temp. Keep protected companion
@@ -410,6 +417,11 @@ def cache_locations(
                             else:
                                 raise AssertionError("resolver wrote to companion build cache")
                     cache.joinpath("resolver-probe").write_text("prepared")
+                    if {metadata!r}:
+                        for name in (".git", ".agents", ".codex"):
+                            directory = cache / name
+                            directory.mkdir(exist_ok=True)
+                            (directory / "resolver-metadata").write_text("prepared")
                 """)
             (site / "sitecustomize.py").write_text(probe)
             arguments = ["serve"]
@@ -440,6 +452,10 @@ def cache_locations(
                             actual = Path(os.environ[name])
                             assert actual == Path(value) if {host!r} else actual.is_relative_to(value), (name, actual, value)
                         assert Path(os.environ["UV_CACHE_DIR"]).joinpath("resolver-probe").read_text() == "prepared"
+                        if {metadata!r}:
+                            for name in (".git", ".agents", ".codex"):
+                                file = Path(os.environ["UV_CACHE_DIR"]) / name / "resolver-metadata"
+                                assert file.read_text() == "prepared"
                         print("cache selection retained")
                         """)
                     client.expect("cache selection retained\n", python=check)
