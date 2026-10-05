@@ -116,13 +116,38 @@ elif args[0] == "exec":
     assert args[3] == bootstrap["workspace"]
     assert bootstrap["provider"] == "compute"
     assert set(bootstrap["policy"]) <= {"environment", "inherit_environment"}
+    probe = args[-1] == "docker-sandbox-probe"
+    frame_log = root / "probe-frames"
+    capture_frames = probe and frame_log.exists()
 
     def frame(tag: int, value: dict) -> None:
         payload = json.dumps(value).encode() + (b"\n" if tag == 2 else b"")
-        sys.stdout.buffer.write(struct.pack(">BI", tag, len(payload)) + payload)
-        sys.stdout.buffer.flush()
+        data = struct.pack(">BI", tag, len(payload)) + payload
 
-    probe = args[-1] == "docker-sandbox-probe"
+        def receipt(stage: str, **evidence: int) -> None:
+            # Opt-in peer evidence stays off protocol stdout. A completed peer
+            # write does not establish an owner read or forwarded-frame receipt.
+            # "written" is buffered acceptance; "flushed" records the peer flush.
+            if capture_frames:
+                with frame_log.open("a") as stream:
+                    stream.write(
+                        json.dumps(
+                            {
+                                "tag": tag,
+                                "length": len(payload),
+                                "stage": stage,
+                                **evidence,
+                            }
+                        )
+                        + "\n"
+                    )
+
+        receipt("started")
+        written = sys.stdout.buffer.write(data)
+        receipt("written", bytes=written)
+        sys.stdout.buffer.flush()
+        receipt("flushed")
+
     if (probe and mode == "probe-gate") or (not probe and mode == "launch-gate"):
         gate()
     frame(

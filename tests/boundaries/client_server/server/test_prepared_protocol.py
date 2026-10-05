@@ -226,19 +226,50 @@ def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> lis
             environment = cli_peer(root / "peer")
             configure(root, template=TEMPLATE)
             (root / "peer/mode").write_text(mode)
+            frame_log = root / "peer/probe-frames"
+            frame_log.touch()
             with McpClient(binary, ("serve",), environment, root) as client:
                 tool_error = client.startup_error()
-                assert expected in tool_error, tool_error
+                assert expected in tool_error, {
+                    "mode": mode,
+                    "expected": expected,
+                    "actual": tool_error,
+                    "peer_frames": frame_log.read_text(),
+                    "calls": calls(root),
+                }
                 client.stdin.close()
-                assert client.stdout.read(timeout=30) == ""
+                output = client.stdout.read(timeout=30)
+                assert output == "", {"mode": mode, "stdout": output}
                 diagnostics = client.stderr.read(timeout=30)
-                assert expected in diagnostics, diagnostics
-                assert "BrokenPipeError" not in diagnostics, diagnostics
-                assert client.process.wait(timeout=5) != 0
-            assert not (root / "peer/vms").exists()
+                assert expected in diagnostics, {
+                    "mode": mode,
+                    "expected": expected,
+                    "actual": diagnostics,
+                    "peer_frames": frame_log.read_text(),
+                }
+                assert "BrokenPipeError" not in diagnostics, {
+                    "mode": mode,
+                    "actual": diagnostics,
+                }
+                assert client.process.wait(timeout=5) != 0, mode
+            assert not (root / "peer/vms").exists(), mode
+            assert not (root / "peer/evaluations").exists(), mode
             operations = calls(root)
-            assert sum(call["args"][0] == "create" for call in operations) == 1
-            assert sum(call["args"][0] == "rm" for call in operations) == 1
+            executions = [
+                call["args"] for call in operations if call["args"][0] == "exec"
+            ]
+            assert (
+                len(executions) == 1 and executions[0][-1] == "docker-sandbox-probe"
+            ), {
+                "mode": mode,
+                "executions": executions,
+            }
+            for operation in ("create", "rm"):
+                assert sum(call["args"][0] == operation for call in operations) == 1, {
+                    "mode": mode,
+                    "operation": operation,
+                    "calls": operations,
+                }
             records.append({"mode": mode, "diagnostic": diagnostics})
     return records
 
