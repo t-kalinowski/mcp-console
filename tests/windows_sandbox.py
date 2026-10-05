@@ -179,6 +179,8 @@ class WindowsSandbox(unittest.TestCase):
             )
             try:
                 session.initialize()
+                # Complete runtime startup before starting the networking deadline.
+                session.expect("[done]", python="pass")
                 # This socket tests networking itself; ordinary sequencing uses
                 # public stdin or host-only named pipes.
                 with socket.create_server(("127.0.0.1", 0)) as listener:
