@@ -4,10 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
-use super::commands::WORKER_SHUTDOWN_GRACE;
 use super::commands::{CommandReader, SidebandWrite, SidebandWriter, StdinWrite, StdinWriter};
 use super::event_writer::{self, EventSender};
-use super::lifecycle::{self, FirstFailure, collect_error, report_startup_failure};
+use super::lifecycle::{
+    self, ExitDeadline, FirstFailure, WORKER_SHUTDOWN_GRACE, collect_error, report_startup_failure,
+};
 use super::streams::{OutputReader, OutputStream, SidebandReader, drain_unstarted_output};
 use crate::process_exit::ChildExitWaiter;
 use crate::relay_protocol::RelayEvent;
@@ -134,24 +135,22 @@ fn supervise_worker(
     sideband: &mpsc::Sender<SidebandWrite>,
     stdin: &mpsc::Sender<StdinWrite>,
 ) -> (Option<ExitStatus>, Option<String>) {
-    let mut exit_deadline: Option<Instant> = None;
+    let mut exit_deadline = ExitDeadline::default();
     loop {
-        let control = match exit_deadline {
-            Some(deadline) => {
-                match controls.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                    Ok(control) => control,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        return force_stop_worker(child, Some(exit), String::new());
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        return force_stop_worker(
-                            child,
-                            Some(exit),
-                            "relay control channel stopped".to_string(),
-                        );
-                    }
+        let control = match exit_deadline.remaining() {
+            Some(remaining) => match controls.recv_timeout(remaining) {
+                Ok(control) => control,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return force_stop_worker(child, Some(exit), String::new());
                 }
-            }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return force_stop_worker(
+                        child,
+                        Some(exit),
+                        "relay control channel stopped".to_string(),
+                    );
+                }
+            },
             None => match controls.recv() {
                 Ok(control) => control,
                 Err(_) => {
@@ -170,25 +169,27 @@ fn supervise_worker(
                     return force_stop_worker(child, Some(exit), String::new());
                 }
             }
-            Control::Shutdown {
-                deadline,
-                report_acceptance,
-            } => {
-                if report_acceptance && !events.send_supervisor(RelayEvent::ShutdownStarted) {
-                    return force_stop_worker(child, Some(exit), String::new());
+            Control::Shutdown { deadline } | Control::ControllerEof { deadline } => {
+                if matches!(control, Control::Shutdown { .. }) {
+                    if !exit_deadline.accept_shutdown(events, || deadline) {
+                        return force_stop_worker(child, Some(exit), String::new());
+                    }
+                } else {
+                    // EOF keeps the deadline computed by the command reader
+                    // and sends no acceptance event.
+                    exit_deadline.replace(deadline);
                 }
                 stopping.store(true, Ordering::SeqCst);
                 let _ = stdin.send(StdinWrite::Close);
                 let _ = sideband.send(SidebandWrite::Message(ServerMessage::Shutdown));
-                exit_deadline = Some(deadline);
             }
             Control::Stop { message } => {
                 stopping.store(true, Ordering::SeqCst);
                 return force_stop_worker(child, Some(exit), message);
             }
-            Control::SidebandClosed => {
+            Control::SidebandEof => {
                 stopping.store(true, Ordering::SeqCst);
-                exit_deadline.get_or_insert_with(|| Instant::now() + WORKER_SHUTDOWN_GRACE);
+                exit_deadline.start_if_idle(|| Instant::now() + WORKER_SHUTDOWN_GRACE);
             }
             Control::WorkerExited(result) => {
                 stopping.store(true, Ordering::SeqCst);
@@ -511,16 +512,10 @@ impl FailureReporter {
 }
 
 pub(super) enum Control {
-    Interrupt {
-        request_id: u64,
-    },
-    Shutdown {
-        deadline: Instant,
-        report_acceptance: bool,
-    },
-    SidebandClosed,
-    Stop {
-        message: String,
-    },
+    Interrupt { request_id: u64 },
+    Shutdown { deadline: Instant },
+    ControllerEof { deadline: Instant },
+    SidebandEof,
+    Stop { message: String },
     WorkerExited(Result<(), String>),
 }

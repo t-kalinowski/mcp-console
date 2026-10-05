@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
-use super::lifecycle::{self, FirstFailure};
+use super::lifecycle::{self, ExitDeadline, FirstFailure, WORKER_SHUTDOWN_GRACE};
 use super::routing::Operation;
 use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
@@ -19,7 +19,9 @@ use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 enum Control {
     Command(RelayCommand),
-    Closed,
+    ControllerEof,
+    SidebandEof,
+    SidebandReaderFinished,
     Exited,
     Failed(String),
 }
@@ -113,7 +115,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
             }
         }
-        let _ = input_controls.send(Control::Closed);
+        let _ = input_controls.send(Control::ControllerEof);
     });
     let mut tasks = Vec::new();
     for (handle, is_error) in [(stdout, false), (stderr, true)] {
@@ -170,6 +172,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     let sideband_events = events.clone();
     let sideband_controls = controls.clone();
     tasks.push(thread::spawn(move || {
+        let mut completion = Control::SidebandReaderFinished;
         loop {
             match sideband.receive::<WorkerMessage>() {
                 Ok(message) => {
@@ -187,7 +190,10 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                     }
                     break;
                 }
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                    completion = Control::SidebandEof;
+                    break;
+                }
                 Err(error) => {
                     let _ = sideband_controls.send(Control::Failed(format!(
                         "worker sideband read failed: {error}"
@@ -196,7 +202,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
             }
         }
-        let _ = sideband_controls.send(Control::Closed);
+        let _ = sideband_controls.send(completion);
     }));
     let (send_sideband, messages) = mpsc::channel::<ServerMessage>();
     let writer_controls = controls.clone();
@@ -239,12 +245,10 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         input_ready.set();
     }));
     let mut send_stdin = Some(send_stdin);
-    let mut deadline = None::<Instant>;
+    let mut deadline = ExitDeadline::default();
     loop {
-        let next = match deadline {
-            Some(deadline) => {
-                commands.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            }
+        let next = match deadline.remaining() {
+            Some(remaining) => commands.recv_timeout(remaining),
             None => commands
                 .recv()
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
@@ -259,10 +263,13 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Closed) => {
-                if deadline.is_none() {
+            Ok(Control::ControllerEof | Control::SidebandEof | Control::SidebandReaderFinished) => {
+                // Preserve the existing Windows action for these distinct
+                // inputs; changing shutdown admission/EOF policy is separate.
+                if deadline.start_if_idle(|| {
                     stopping.store(true, Ordering::SeqCst);
-                    deadline = Some(Instant::now() + Duration::from_secs(1));
+                    Instant::now() + WORKER_SHUTDOWN_GRACE
+                }) {
                     send_stdin.take();
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
@@ -277,8 +284,9 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
                 Operation::Shutdown { grace_millis } => {
                     stopping.store(true, Ordering::SeqCst);
-                    events.send_supervisor(RelayEvent::ShutdownStarted);
-                    deadline = Some(Instant::now() + Duration::from_millis(grace_millis));
+                    deadline.accept_shutdown(&events, || {
+                        Instant::now() + Duration::from_millis(grace_millis)
+                    });
                     send_stdin.take();
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }

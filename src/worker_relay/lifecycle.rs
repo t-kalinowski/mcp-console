@@ -1,9 +1,46 @@
 //! Shared relay policy; native owners retire their worker and I/O before finish.
 
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::event_writer::{EventSender, EventWriter};
 use crate::relay_protocol::RelayEvent;
+
+pub(super) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+pub(super) struct ExitDeadline(Option<Instant>);
+
+impl ExitDeadline {
+    pub(super) fn remaining(&self) -> Option<Duration> {
+        self.0
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+    }
+
+    pub(super) fn replace(&mut self, deadline: Instant) {
+        self.0 = Some(deadline);
+    }
+
+    pub(super) fn start_if_idle(&mut self, deadline: impl FnOnce() -> Instant) -> bool {
+        if self.0.is_some() {
+            return false;
+        }
+        self.replace(deadline());
+        true
+    }
+
+    pub(super) fn accept_shutdown(
+        &mut self,
+        events: &EventSender,
+        deadline: impl FnOnce() -> Instant,
+    ) -> bool {
+        let accepted = events.send_supervisor(RelayEvent::ShutdownStarted);
+        // Native adapters choose the clock origin and reaction to failed
+        // publication. Windows still replaces the deadline on every Shutdown.
+        self.replace(deadline());
+        accepted
+    }
+}
 
 #[derive(Clone, Default)]
 pub(super) struct FirstFailure(Arc<OnceLock<String>>);
