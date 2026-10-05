@@ -68,7 +68,6 @@ def preparation(
         send(
             {
                 "Open": {
-                    "version": 6,
                     "build": build,
                     "workspace": "",
                     "selections": {"r_home": None, "python": None},
@@ -76,7 +75,7 @@ def preparation(
                 }
             }
         )
-        assert receive("hello") == {"Hello": {"version": 6, "build": build}}
+        assert receive("hello") == {"Hello": {"build": build}}
         discovery = receive("discovery")["Completed"]
         assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
         yield process, send, receive
