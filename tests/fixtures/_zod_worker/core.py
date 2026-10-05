@@ -43,6 +43,7 @@ from .protocol import (
     wait_for_server_to_process_sideband,
 )
 from .startup import configure_startup
+from .state import WorkerContext
 
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
@@ -67,14 +68,13 @@ def main() -> None:
     """Run the deterministic sideband fixture until the server shuts it down."""
     reader, writer = open_sideband()
     temporary = Path(tempfile.gettempdir())
-    configure_test_fixture_control(temporary)
+    context = WorkerContext(temporary, reader, writer)
+    configure_test_fixture_control(context)
     if started_marker := os.environ.get("MCP_CONSOLE_TEST_ZOD_STARTED"):
         publish_marker(Path(started_marker))
-    received_sigint = False
 
     def handle_sigint(_signum: int, _frame: object) -> None:
-        nonlocal received_sigint
-        received_sigint = True
+        context.received_sigint = True
         publish_marker(temporary / "zod-sigint-received")
 
     signal.signal(signal.SIGINT, handle_sigint)
@@ -106,36 +106,27 @@ def main() -> None:
             temporary / "zod-startup-callback-response",
             response["message"],
         )
-    prepared_r_library: str | None = None
-    fail_next_r_preparation = False
-    emit_output_before_r_preparation_failure = False
-    controlled_restart_state = "fresh"
-    controlled_restart_evaluations = 0
-    python_globals: dict[str, Any] = {}
-    queued_message: dict[str, Any] | None = None
-    block_next_sideband_write: int | None = None
-    idle_input_received = False
-    retain_blocked_sideband = False
     if os.environ.get("ZOD_BLOCK_NEXT_SIDEBAND_WRITE") == "1":
-        command = wait_for_test_control(0, "block_next_sideband_write")
+        command = wait_for_test_control(context, 0, "block_next_sideband_write")
         target_operation = command.get("target_operation")
         assert isinstance(target_operation, int), command
-        block_next_sideband_write = target_operation
-        retain_blocked_sideband = os.environ.get("ZOD_RETAIN_BLOCKED_SIDEBAND") == "1"
+        context.block_next_sideband_write = target_operation
+        context.retain_blocked_sideband = (
+            os.environ.get("ZOD_RETAIN_BLOCKED_SIDEBAND") == "1"
+        )
 
     def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
-        nonlocal queued_message
         while True:
             response = json.loads(reader.readline())
             if response["kind"] == expected_kind:
                 return response
-            assert queued_message is None, response
-            queued_message = response
+            assert context.queued_message is None, response
+            context.queued_message = response
 
     while True:
-        if block_next_sideband_write is not None:
+        if context.block_next_sideband_write is not None:
             assert reader.read(1) != ""
-            if retain_blocked_sideband:
+            if context.retain_blocked_sideband:
                 holder = os.fork()
                 if holder == 0:
                     os.setsid()
@@ -148,31 +139,32 @@ def main() -> None:
                     while True:
                         signal.pause()
             emit_test_event(
-                block_next_sideband_write,
+                context,
+                context.block_next_sideband_write,
                 "sideband_reader_stalled",
                 pid=os.getpid(),
                 process_group=os.getpgrp(),
             )
             while True:
                 signal.pause()
-        if queued_message is None:
+        if context.queued_message is None:
             line = reader.readline()
             if line == "":
                 return
             message = json.loads(line)
         else:
-            message = queued_message
-            queued_message = None
+            message = context.queued_message
+            context.queued_message = None
         message_kind = message["kind"]
         if message_kind == "shutdown":
             return
 
         if message_kind == "prepare_r":
             assert set(message) == {"kind", "library"}
-            if fail_next_r_preparation:
-                fail_next_r_preparation = False
-                if emit_output_before_r_preparation_failure:
-                    emit_output_before_r_preparation_failure = False
+            if context.fail_next_r_preparation:
+                context.fail_next_r_preparation = False
+                if context.emit_output_before_r_preparation_failure:
+                    context.emit_output_before_r_preparation_failure = False
                     output = "before failed preparation\n"
                     send_output(writer, output)
                     send(
@@ -191,8 +183,8 @@ def main() -> None:
                     },
                 )
                 continue
-            prepared_r_library = message["library"]
-            send(writer, {"kind": "r_prepared", "library": prepared_r_library})
+            context.prepared_r_library = message["library"]
+            send(writer, {"kind": "r_prepared", "library": context.prepared_r_library})
             continue
 
         assert message_kind == "evaluate"
@@ -205,12 +197,12 @@ def main() -> None:
                 cells.write(json.dumps(message) + "\n")
             assert language == "python", message
             with redirect_stdout(io.StringIO()) as output:
-                exec(source, python_globals)
+                exec(source, context.python_globals)
             if text := output.getvalue():
                 send_output(writer, text)
             send(writer, {"kind": "completed"})
             continue
-        if idle_input_received:
+        if context.idle_input_received:
             assert (language, source) == ("r", "echo echo"), message
         if language in {"python", "sql"}:
             assert source.startswith("echo "), source
@@ -225,7 +217,7 @@ def main() -> None:
             send(writer, {"kind": "completed"})
             # The client receives completion before releasing this write, so the
             # relay's gated read cannot also hold the completed frame.
-            wait_for_test_control(0, "emit_shutdown_failure")
+            wait_for_test_control(context, 0, "emit_shutdown_failure")
             writer.write('{"kind":"console_output","data":}\n')
             writer.flush()
             while True:
@@ -233,21 +225,22 @@ def main() -> None:
 
         if source.startswith("check response gate: "):
             operation = int(source.removeprefix("check response gate: "))
-            gate_released = response_gate_completed()
+            gate_released = response_gate_completed(context)
             emit_test_event(
+                context,
                 operation,
                 "worker_operation_started",
                 response_gate_released=gate_released,
             )
             send_output(writer, "zod response-gated operation\n")
-            emit_test_event(operation, "worker_operation_completed")
+            emit_test_event(context, operation, "worker_operation_completed")
             send(writer, {"kind": "completed"})
             continue
 
         if source.startswith("checkpoint "):
             operation = int(source.removeprefix("checkpoint "))
-            emit_test_event(operation, "worker_operation_started")
-            emit_test_event(operation, "worker_operation_completed")
+            emit_test_event(context, operation, "worker_operation_started")
+            emit_test_event(context, operation, "worker_operation_completed")
             send(writer, {"kind": "completed"})
             continue
 
@@ -255,23 +248,25 @@ def main() -> None:
             target = int(source.removeprefix("wait for interrupt: "))
             previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
             try:
-                emit_test_event(target, "worker_operation_started")
+                emit_test_event(context, target, "worker_operation_started")
                 received = signal.sigwait({signal.SIGINT})
             finally:
                 signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
             assert received == signal.SIGINT, received
-            received_sigint = False
-            emit_test_event(target, "worker_interrupt_observed", signal=received)
+            context.received_sigint = False
+            emit_test_event(
+                context, target, "worker_interrupt_observed", signal=received
+            )
             send_output(writer, "zod interrupted\n")
-            emit_test_event(target, "worker_operation_completed")
+            emit_test_event(context, target, "worker_operation_completed")
             send(writer, {"kind": "completed"})
             continue
 
         if source == "interrupt":
             publish_marker(temporary / "zod-interrupt-evaluation-started")
-            while not received_sigint:
+            while not context.received_sigint:
                 time.sleep(0.01)
-            received_sigint = False
+            context.received_sigint = False
             if release := os.environ.get("MCP_CONSOLE_TEST_INTERRUPT_RELEASE"):
                 with Path(release).open("rb", buffering=0) as checkpoint:
                     assert checkpoint.read(1) == b"1"
@@ -286,8 +281,9 @@ def main() -> None:
 
         if source.startswith("stall: "):
             operation = int(source.removeprefix("stall: "))
-            emit_test_event(operation, "worker_operation_started")
+            emit_test_event(context, operation, "worker_operation_started")
             emit_test_event(
+                context,
                 operation,
                 "parent_operation_stalled",
                 pid=os.getpid(),
@@ -762,14 +758,14 @@ def main() -> None:
                 assert stream.read(1) == b"x"
             writer.write('{"kind":"console_output"')
             writer.flush()
-            emit_test_event(0, "partial_sideband_written")
+            emit_test_event(context, 0, "partial_sideband_written")
             if source == "start partial sideband descendant":
                 # Requested retirement closes stdin before the worker exits.
                 assert os.read(0, 1) == b""
             os._exit(86)
 
         if source == "wait after readable frame and partial tail":
-            cleanup_source = duplicate_test_cleanup_gate()
+            cleanup_source = duplicate_test_cleanup_gate(context)
             child = os.fork()
             if child == 0:
                 os.setsid()
@@ -787,7 +783,7 @@ def main() -> None:
                 writer.close()
                 os._exit(0)
             os.close(cleanup_source)
-            close_test_cleanup_gate()
+            close_test_cleanup_gate(context)
             send_output(writer, "zod readable retirement frame\n")
             writer.write('{"kind":"console_output"')
             writer.flush()
@@ -816,7 +812,7 @@ def main() -> None:
 
         if source.startswith("stall with detached stdin: "):
             operation = int(source.removeprefix("stall with detached stdin: "))
-            emit_test_event(operation, "worker_operation_started")
+            emit_test_event(context, operation, "worker_operation_started")
             acknowledged, acknowledge = os.pipe()
             child = os.fork()
             if child == 0:
@@ -825,13 +821,14 @@ def main() -> None:
                 retained_stdin = os.dup(0)
                 assert os.fstat(retained_stdin) == os.fstat(0)
                 os.close(0)
-                cleanup = duplicate_test_cleanup_gate()
-                close_test_cleanup_gate()
-                close_test_control_channel()
+                cleanup = duplicate_test_cleanup_gate(context)
+                close_test_cleanup_gate(context)
+                close_test_control_channel(context)
                 close_sideband(reader, writer)
                 os.close(1)
                 os.close(2)
                 emit_test_event(
+                    context,
                     operation,
                     "detached_descendant_created",
                     pid=os.getpid(),
@@ -848,11 +845,11 @@ def main() -> None:
             os.close(acknowledge)
             assert os.read(acknowledged, 1) == b"1"
             os.close(acknowledged)
-            close_test_cleanup_gate()
+            close_test_cleanup_gate(context)
             consumed_bytes = 0
-            emit_test_event(operation, "parent_waiting_for_stdin")
+            emit_test_event(context, operation, "parent_waiting_for_stdin")
             while True:
-                command = wait_for_test_control(operation, "probe_stdin")
+                command = wait_for_test_control(context, operation, "probe_stdin")
                 request = command["request"]
                 expected_bytes = command["expected_bytes"]
                 assert isinstance(request, int), command
@@ -869,16 +866,19 @@ def main() -> None:
                     "queued_bytes": queued_bytes,
                 }
                 if consumed_bytes + queued_bytes < expected_bytes:
-                    emit_test_event(request, "stdin_write_pending", **details)
+                    emit_test_event(context, request, "stdin_write_pending", **details)
                     break
-                emit_test_event(request, "stdin_write_buffered", **details)
+                emit_test_event(context, request, "stdin_write_buffered", **details)
             emit_test_event(
+                context,
                 operation,
                 "parent_operation_stalled",
                 pid=os.getpid(),
                 process_group=os.getpgrp(),
             )
-            ownership = wait_for_test_control(operation, "observe_poll_ownership")
+            ownership = wait_for_test_control(
+                context, operation, "observe_poll_ownership"
+            )
             request = ownership["request"]
             prior_bytes = ownership["prior_bytes"]
             submitted_bytes = ownership["submitted_bytes"]
@@ -906,6 +906,7 @@ def main() -> None:
                 total_bytes,
             )
             emit_test_event(
+                context,
                 request,
                 "poll_ownership_observed",
                 target_operation=operation,
@@ -940,13 +941,13 @@ def main() -> None:
                     "prompt": "prompt head " + "p" * 20000 + " prompt tail> ",
                 },
             )
-            wait_for_test_control(0, "read_preview_input")
+            wait_for_test_control(context, 0, "read_preview_input")
             stdin = input()
             send(writer, {"kind": "input_received"})
             send_output(writer, f"received {stdin}\n")
             send(writer, {"kind": "completed"})
             wait_for_server_to_process_sideband(reader, writer)
-            emit_test_event(0, "preview_input_processed")
+            emit_test_event(context, 0, "preview_input_processed")
             continue
 
         if source == "language error":
@@ -970,7 +971,7 @@ def main() -> None:
             continue
 
         if source == "set controlled restart state":
-            controlled_restart_state = "old"
+            context.controlled_restart_state = "old"
             publish_marker(
                 temporary / "zod-controlled-restart-old-worker",
                 str(os.getpid()),
@@ -980,19 +981,19 @@ def main() -> None:
             continue
 
         if source == "inspect controlled restart state":
-            controlled_restart_evaluations += 1
+            context.controlled_restart_evaluations += 1
             with (temporary / "zod-controlled-restart-cell-evaluations").open(
                 "a",
                 encoding="utf-8",
             ) as evaluations:
                 evaluations.write(
-                    f"{os.getpid()} {controlled_restart_state} "
-                    f"{controlled_restart_evaluations}\n"
+                    f"{os.getpid()} {context.controlled_restart_state} "
+                    f"{context.controlled_restart_evaluations}\n"
                 )
             send_output(
                 writer,
-                f"zod controlled state: {controlled_restart_state}; "
-                f"evaluation={controlled_restart_evaluations}\n",
+                f"zod controlled state: {context.controlled_restart_state}; "
+                f"evaluation={context.controlled_restart_evaluations}\n",
             )
             send(writer, {"kind": "completed"})
             continue
@@ -1072,23 +1073,25 @@ def main() -> None:
             continue
 
         if source == "shutdown output checkpoints":
-            emit_test_event(0, "evaluation_started")
-            wait_for_test_control(0, "emit_output")
+            emit_test_event(context, 0, "evaluation_started")
+            wait_for_test_control(context, 0, "emit_output")
             send_output(writer, "before shutdown\n")
             send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
             send_output(writer, "after image\n")
             wait_for_server_to_process_sideband(reader, writer)
-            emit_test_event(0, "output_processed")
-            ownership = wait_for_test_control(0, "observe_poll_ownership")
+            emit_test_event(context, 0, "output_processed")
+            ownership = wait_for_test_control(context, 0, "observe_poll_ownership")
             request = ownership["request"]
             assert isinstance(request, int), ownership
             # Poll stdin reaches Zod only after the server claims the evaluation wait.
             assert os.read(0, 1) == b"p"
-            emit_test_event(request, "poll_ownership_observed", target_operation=0)
-            wait_for_test_control(0, "complete")
+            emit_test_event(
+                context, request, "poll_ownership_observed", target_operation=0
+            )
+            wait_for_test_control(context, 0, "complete")
             send(writer, {"kind": "completed"})
             wait_for_server_to_process_sideband(reader, writer)
-            emit_test_event(0, "completion_processed")
+            emit_test_event(context, 0, "completion_processed")
             continue
 
         if source == "complete before restart checkpoint":
@@ -1116,7 +1119,7 @@ def main() -> None:
                 writer,
                 [{"kind": "input_received"}],
             )
-            idle_input_received = True
+            context.idle_input_received = True
             continue
 
         if source == "resolve python while idle":
@@ -1179,7 +1182,7 @@ def main() -> None:
                 if library
             ]
             r_prepared = str(
-                prepared_r_library == expected_r_library
+                context.prepared_r_library == expected_r_library
                 or configured_r_libraries[:1] == [expected_r_library]
             ).lower()
             send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
@@ -1196,13 +1199,13 @@ def main() -> None:
             continue
 
         if source == "fail next r preparation":
-            fail_next_r_preparation = True
+            context.fail_next_r_preparation = True
             send(writer, {"kind": "completed"})
             continue
 
         if source == "fail next r preparation after output":
-            fail_next_r_preparation = True
-            emit_output_before_r_preparation_failure = True
+            context.fail_next_r_preparation = True
+            context.emit_output_before_r_preparation_failure = True
             send(writer, {"kind": "completed"})
             continue
 
@@ -1286,7 +1289,7 @@ def main() -> None:
         for output in ("zod: ", f"{payload}\n"):
             send_output(writer, output)
         send(writer, {"kind": "completed"})
-        if idle_input_received:
+        if context.idle_input_received:
             wait_for_server_to_process_sideband(reader, writer)
             publish_marker(temporary / "zod-idle-input-received")
-            idle_input_received = False
+            context.idle_input_received = False
