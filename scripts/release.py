@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
+import posixpath
 import re
 import select
 import shutil
@@ -12,6 +14,8 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections import deque
+from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +26,85 @@ TARGET_ARCHITECTURES = {
     "x86_64-apple-darwin": "x86_64",
     "aarch64-unknown-linux-gnu": "aarch64",
     "x86_64-unknown-linux-gnu": "x86_64",
+}
+LINUX_RELEASE_GLIBC = (2, 35)
+LINUX_RELEASE_CPP = {"GLIBCXX": (3, 4, 30), "CXXABI": (1, 3, 13)}
+# Numeric GLIBCXX_3.4.N / CXXABI_1.3.N policy ceilings, not host library versions.
+# https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json
+MANYLINUX_CPP = {
+    5: (8, 1),
+    12: (13, 3),
+    17: (19, 7),
+    24: (22, 10),
+    26: (22, 10),
+    27: (24, 11),
+    28: (24, 11),
+    31: (28, 12),
+    34: (29, 13),
+    35: (30, 13),
+    36: (30, 13),
+    37: (30, 13),
+    38: (30, 13),
+    39: (33, 15),
+    40: (33, 15),
+    41: (33, 15),
+    42: (34, 15),
+}
+# Named versions start at these pinned policy/architecture boundaries.
+MANYLINUX_NAMED = {
+    "GLIBC": {
+        "ABI_DT_RELR": (36, {"x86_64", "aarch64"}),
+        "ABI_DT_X86_64_PLT": (42, {"x86_64"}),
+        "ABI_GNU2_TLS": (42, {"x86_64"}),
+    },
+    "CXXABI": {
+        "TM_1": (17, {"x86_64", "aarch64"}),
+        "FLOAT128": (24, {"x86_64"}),
+    },
+}
+# GCC versions are sparse sets, with these additions at each policy boundary.
+# Use the same pinned auditwheel policy source as the C++ ceilings above.
+MANYLINUX_GCC_COMMON = {
+    "3.0",
+    "3.3",
+    "3.3.1",
+    "3.4",
+    "3.4.2",
+    "3.4.4",
+    "4.0.0",
+    "4.2.0",
+}
+MANYLINUX_GCC = {
+    "x86_64": {
+        12: {"4.3.0"},
+        17: {"4.7.0", "4.8.0"},
+        27: {"7.0.0"},
+        35: {"12.0.0"},
+        39: {"13.0.0", "14.0.0"},
+    },
+    "aarch64": {
+        17: {"4.3.0", "4.5.0", "4.7.0"},
+        26: {"7.0.0"},
+        34: {"11.0"},
+        39: {"13.0.0", "14.0", "14.0.0"},
+    },
+}
+# Runtime prerequisites, not a distro archive or build-package allowlist.
+LINUX_SYSTEM_LIBRARIES = {
+    "libc.so.6",
+    "libm.so.6",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libgcc_s.so.1",
+    "libstdc++.so.6",
+    "libcap.so.2",
+    "ld-linux-x86-64.so.2",
+    "ld-linux-aarch64.so.1",
+}
+LINUX_MACHINES = {
+    "x86_64": ("Advanced Micro Devices X86-64", "/lib64/ld-linux-x86-64.so.2"),
+    "aarch64": ("AArch64", "/lib/ld-linux-aarch64.so.1"),
 }
 
 
@@ -229,8 +312,320 @@ def smoke_mcp(
     require(not standard_error, f"MCP server wrote to stderr: {standard_error}")
 
 
-def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
-    data = f"mcp_console-{package_version()}.data/data"
+def expanded_tags(tag: str) -> set[str]:
+    fields = tag.split("-")
+    require(len(fields) == 3, f"invalid wheel tag: {tag}")
+    return {
+        "-".join(parts)
+        for parts in itertools.product(*(field.split(".") for field in fields))
+    }
+
+
+def wheel_identity(wheel: Path) -> tuple[str, set[str]]:
+    fields = wheel.name.removesuffix(".whl").split("-")
+    require(
+        len(fields) == 5 and fields[0] == "mcp_console",
+        f"unexpected wheel filename: {wheel.name}",
+    )
+    version = fields[1]
+    tags = expanded_tags("-".join(fields[2:]))
+    prefix = f"mcp_console-{version}.dist-info"
+    with zipfile.ZipFile(wheel) as archive:
+        metadata = BytesParser().parsebytes(archive.read(f"{prefix}/METADATA"))
+        require(
+            metadata["Name"] == "mcp-console" and metadata["Version"] == version,
+            "wheel filename and package metadata disagree",
+        )
+        metadata = BytesParser().parsebytes(archive.read(f"{prefix}/WHEEL"))
+        declared = set().union(
+            *(expanded_tags(tag) for tag in metadata.get_all("Tag", []))
+        )
+        require(tags == declared, "wheel filename and WHEEL tags disagree")
+        require(
+            metadata["Root-Is-Purelib"] == "false",
+            "wheel must not declare pure Python content",
+        )
+    return version, tags
+
+
+def inspect_linux_abi(
+    wheel: Path, version: str, tags: set[str], *, target: str | None, release: bool
+) -> dict[str, Any]:
+    architectures = set()
+    floors = []
+    for tag in tags:
+        platform = tag.rsplit("-", 1)[1]
+        match = re.fullmatch(r"manylinux_2_([0-9]+)_(x86_64|aarch64)", platform)
+        legacy = re.fullmatch(r"manylinux(1|2010|2014)_(x86_64|aarch64)", platform)
+        native = re.fullmatch(r"linux_(x86_64|aarch64)", platform)
+        require(bool(match or legacy or native), f"unsupported Linux wheel tag: {tag}")
+        if match:
+            floors.append((2, int(match[1])))
+            architectures.add(match[2])
+        elif legacy:
+            floors.append((2, {"1": 5, "2010": 12, "2014": 17}[legacy[1]]))
+            architectures.add(legacy[2])
+        else:
+            assert native is not None
+            architectures.add(native[1])
+    require(len(architectures) == 1, "wheel tags mix Linux architectures")
+    architecture = architectures.pop()
+    if target:
+        require(
+            target.endswith("-linux-gnu")
+            and TARGET_ARCHITECTURES[target] == architecture,
+            f"wheel does not match {target}: {wheel.name}",
+        )
+    if release:
+        require(
+            len(floors) == len(tags) and max(floors) <= LINUX_RELEASE_GLIBC,
+            "wheel tag exceeds the glibc 2.35 release floor",
+        )
+    ceilings: dict[str, list[tuple[int, ...]]] = {
+        "GLIBC": floors,
+        "GLIBCXX": [],
+        "CXXABI": [],
+    }
+    gcc_allowed: set[str] | None = None
+    for _, minor in floors:
+        require(
+            minor in MANYLINUX_CPP and (architecture == "x86_64" or minor >= 17),
+            f"unsupported manylinux C++ policy: manylinux_2_{minor}_{architecture}",
+        )
+        glibcxx, cxxabi = MANYLINUX_CPP[minor]
+        # Auditwheel's 2.26 policy has different C++ ceilings on ARM64.
+        if architecture == "aarch64" and minor == 26:
+            glibcxx, cxxabi = 24, 11
+        ceilings["GLIBCXX"].append((3, 4, glibcxx))
+        ceilings["CXXABI"].append((1, 3, cxxabi))
+        gcc_policy = MANYLINUX_GCC_COMMON | {
+            number
+            for since, numbers in MANYLINUX_GCC[architecture].items()
+            if since <= minor
+            for number in numbers
+        }
+        gcc_allowed = gcc_policy if gcc_allowed is None else gcc_allowed & gcc_policy
+    if release:
+        for family, ceiling in LINUX_RELEASE_CPP.items():
+            ceilings[family].append(ceiling)
+    limits = {family: min(values, default=None) for family, values in ceilings.items()}
+    named_allowed = {
+        family: {
+            number
+            for number, (since, supported) in versions.items()
+            if architecture in supported and all(minor >= since for _, minor in floors)
+        }
+        for family, versions in MANYLINUX_NAMED.items()
+    }
+    machine, loader = LINUX_MACHINES[architecture]
+    evidence = {}
+    # Model a Unix installation prefix; Python's version does not change its depth.
+    site_packages = "lib/pythonX.Y/site-packages"
+    schemes = {
+        "scripts": "bin",
+        "data": ".",
+        "purelib": site_packages,
+        "platlib": site_packages,
+    }
+    data_prefix = f"mcp_console-{version}.data/"
+    installed_elves: dict[str, str] = {}
+    rpaths: dict[str, tuple[str, ...]] = {}
+    needed_order: dict[str, list[str]] = {}
+    with zipfile.ZipFile(wheel) as archive, tempfile.TemporaryDirectory() as directory:
+        for member in archive.namelist():
+            with archive.open(member) as stream:
+                if stream.read(4) != b"\x7fELF":
+                    continue
+            if member.startswith(data_prefix):
+                scheme, relative = member.removeprefix(data_prefix).split("/", 1)
+                require(scheme in schemes, f"{member}: unsupported ELF install scheme")
+                installed = posixpath.normpath(
+                    posixpath.join(schemes[scheme], relative)
+                )
+            else:
+                installed = posixpath.join(site_packages, member)
+            installed_elves[installed] = member
+            elf = Path(directory) / "artifact"
+            elf.write_bytes(archive.read(member))
+            output = command_output(
+                ["readelf", "-h", "-l", "-d", "-V", "-W", str(elf)],
+                env=os.environ | {"LC_ALL": "C"},
+            )
+
+            def field(name: str) -> str | None:
+                match = re.search(rf"^\s*{name}:\s*(.+)$", output, re.MULTILINE)
+                return match[1].strip() if match else None
+
+            require(
+                field("Class") == "ELF64"
+                and field("Data") == "2's complement, little endian",
+                f"{member}: expected little-endian ELF64",
+            )
+            require(
+                field("Machine") == machine,
+                f"{member}: ELF machine does not match {architecture}",
+            )
+            interp = re.search(r"\[Requesting program interpreter: ([^]]+)\]", output)
+            require(
+                interp is None or interp[1] == loader,
+                f"{member}: unexpected ELF interpreter",
+            )
+            paths = re.findall(r"\((RPATH|RUNPATH)\).*\[([^]]*)\]", output)
+            search_paths: dict[str, list[str]] = {}
+            for kind, value in paths:
+                search_paths[kind] = []
+                for path in value.split(":"):
+                    path = path.replace("${ORIGIN}", "$ORIGIN")
+                    require(
+                        path == "$ORIGIN" or path.startswith("$ORIGIN/"),
+                        f"{member}: {kind} must be relative to $ORIGIN: {value}",
+                    )
+                    resolved = posixpath.normpath(
+                        posixpath.join(
+                            posixpath.dirname(installed),
+                            path.removeprefix("$ORIGIN").lstrip("/"),
+                        )
+                    )
+                    require(
+                        resolved != ".." and not resolved.startswith("../"),
+                        f"{member}: {kind} escapes the installed wheel: {value}",
+                    )
+                    search_paths[kind].append(resolved)
+            # RUNPATH suppresses this object's RPATH, and is never inherited.
+            rpaths[member] = (
+                tuple(search_paths.get("RPATH", []))
+                if "RUNPATH" not in search_paths
+                else ()
+            )
+            versions = re.findall(
+                r"Name: ((?:GLIBC|GLIBCXX|CXXABI|GCC)_[^\s]+)",
+                output.partition("Version needs section")[2],
+            )
+            requirements: dict[str, list[str]] = {
+                "GLIBC": [],
+                "GLIBCXX": [],
+                "CXXABI": [],
+                "GCC": [],
+            }
+            for symbol in versions:
+                family, number = symbol.split("_", 1)
+                numeric = re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", number) is not None
+                require(
+                    numeric or number in named_allowed.get(family, ()),
+                    f"{member}: unsupported symbol requirement {symbol}",
+                )
+                if family == "GCC":
+                    require(
+                        gcc_allowed is None or number in gcc_allowed,
+                        f"{member}: {symbol} is not permitted by the declared wheel policy",
+                    )
+                elif numeric:
+                    required = tuple(map(int, number.split(".")))
+                    ceiling = limits[family]
+                    require(
+                        ceiling is None or required <= ceiling,
+                        f"{member}: {symbol} exceeds the declared wheel/runtime floor",
+                    )
+                requirements[family].append(number)
+            needed_order[member] = re.findall(r"\(NEEDED\).*\[([^]]+)\]", output)
+            evidence[member] = {
+                "class": field("Class"),
+                "data": field("Data"),
+                "machine": field("Machine"),
+                "interpreter": interp[1] if interp else None,
+                "needed": sorted(needed_order[member]),
+                "rpath_runpath": dict(paths),
+                "search": search_paths.get("RUNPATH", search_paths.get("RPATH", [])),
+                "glibc": sorted(set(requirements["GLIBC"])),
+                "glibcxx": sorted(set(requirements["GLIBCXX"])),
+                "cxxabi": sorted(set(requirements["CXXABI"])),
+                "gcc": sorted(set(requirements["GCC"])),
+            }
+        commands = (
+            f"mcp_console-{version}.data/scripts/mcp-console",
+            *(
+                f"mcp_console-{version}.data/data/libexec/{name}"
+                for name in ("mcp-console-sandbox", "bwrap")
+            ),
+        )
+        for name in commands:
+            require(name in evidence, f"{name}: required wheel executable is not ELF")
+        checked: set[str] = set()
+
+        def check_dependencies(entry: str) -> None:
+            loaded_names: set[str] = set()
+            loaded_members = {entry}
+            pending: deque[tuple[str, tuple[str, ...]]] = deque([(entry, ())])
+            # glibc maps dependencies breadth-first, reusing already loaded objects.
+            # Each executable starts with its own loader state and search paths.
+            while pending:
+                member, inherited = pending.popleft()
+                checked.add(member)
+                elf = evidence[member]
+                # Each ancestor's paths use that ancestor's installed $ORIGIN.
+                ancestors = tuple(dict.fromkeys((*rpaths[member], *inherited)))
+                search = (
+                    elf["search"] if "RUNPATH" in elf["rpath_runpath"] else ancestors
+                )
+                for needed in needed_order[member]:
+                    # Slash-containing filenames bypass glibc's library search.
+                    require(
+                        "/" not in needed,
+                        f"{member}: unsupported DT_NEEDED filename {needed}; "
+                        "dependencies must be library names without /",
+                    )
+                    if needed in LINUX_SYSTEM_LIBRARIES or needed in loaded_names:
+                        continue
+                    dependency = next(
+                        (
+                            installed_elves[candidate]
+                            for path in search
+                            if (
+                                candidate := posixpath.normpath(
+                                    posixpath.join(path, needed)
+                                )
+                            )
+                            in installed_elves
+                        ),
+                        None,
+                    )
+                    require(
+                        dependency is not None,
+                        f"{member}: undeclared dependency {needed}",
+                    )
+                    loaded_names.add(needed)
+                    if dependency not in loaded_members:
+                        loaded_members.add(dependency)
+                        pending.append((dependency, ancestors))
+
+        needed_names = {name for elf in evidence.values() for name in elf["needed"]}
+        # Audit independent entry points separately; children inherit only their chain.
+        for member, elf in evidence.items():
+            if (
+                member in commands
+                or elf["interpreter"] is not None
+                or posixpath.basename(member) not in needed_names
+            ):
+                check_dependencies(member)
+        # Also audit unreferenced bundles, including closed dependency cycles.
+        for member in evidence:
+            if member not in checked:
+                check_dependencies(member)
+    return evidence
+
+
+def inspect_wheel_commands(
+    wheel: Path,
+    *,
+    linux: bool,
+    version: str,
+    tags: set[str],
+    target: str | None = None,
+    release: bool = False,
+    sandbox_pin: Path = Path("sandbox-runner.json"),
+) -> dict[str, Any]:
+    data = f"mcp_console-{version}.data/data"
+    evidence = {}
     with zipfile.ZipFile(wheel) as archive:
         members = archive.namelist()
         for name in ("mcp-console-sandbox", *(["bwrap"] if linux else [])):
@@ -262,9 +657,12 @@ def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
             )
 
         if linux:
+            evidence = inspect_linux_abi(
+                wheel, version, tags, target=target, release=release
+            )
             prefix = f"{data}/share/licenses/mcp-console"
             provenance = json.loads(archive.read(f"{prefix}/bubblewrap-SOURCE.json"))
-            pin = json.loads(Path("sandbox-runner.json").read_text())
+            pin = json.loads(sandbox_pin.read_text())
             source_archive = (
                 f"https://github.com/{pin['repository']}/archive/{pin['commit']}.tar.gz"
             )
@@ -285,13 +683,7 @@ def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
                     provenance.get(key) == expected,
                     f"Bubblewrap provenance has inconsistent {key}",
                 )
-            with tempfile.TemporaryDirectory() as directory:
-                elf = Path(directory) / "bwrap"
-                elf.write_bytes(helper)
-                dynamic = command_output(
-                    ["readelf", "-d", "-W", str(elf)], env=os.environ | {"LC_ALL": "C"}
-                )
-            needed = sorted(re.findall(r"\(NEEDED\).*\[([^]]+)\]", dynamic))
+            needed = evidence[f"{data}/libexec/bwrap"]["needed"]
             linkage = (
                 "dynamic"
                 if any(name.startswith("libcap.so.") for name in needed)
@@ -315,22 +707,49 @@ def inspect_wheel_commands(wheel: Path, *, linux: bool) -> None:
                     bool(archive.read(libcap_notice).strip()),
                     "Bubblewrap provenance has an empty libcap-NOTICE",
                 )
+    return {
+        "wheel": wheel.name,
+        "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "tags": sorted(tags),
+        "elf": evidence,
+    }
+
+
+def inspect_wheel(args: argparse.Namespace) -> None:
+    wheel = Path(args.wheel).resolve()
+    version, tags = wheel_identity(wheel)
+    evidence = inspect_wheel_commands(
+        wheel,
+        linux=True,
+        version=version,
+        tags=tags,
+        target=args.target,
+        release=args.release,
+        sandbox_pin=Path(args.sandbox_pin),
+    )
+    report = json.dumps(evidence, indent=2) + "\n"
+    if args.report:
+        Path(args.report).write_text(report, encoding="utf-8")
+    else:
+        print(report, end="")
 
 
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = Path(args.wheel).resolve()
-    cargo_bin = Path(args.cargo_bin).resolve()
-    version = package_version()
-
     require(wheel.is_file(), f"wheel does not exist: {wheel}")
-    require(cargo_bin.is_file(), f"Cargo binary does not exist: {cargo_bin}")
+    cargo_bin = Path(args.cargo_bin).resolve() if args.cargo_bin else None
     require(
-        os.access(cargo_bin, os.X_OK), f"Cargo binary is not executable: {cargo_bin}"
+        args.installed_only == (cargo_bin is None),
+        "provide a Cargo binary or select --installed-only",
     )
-    require(
-        wheel.name.startswith(f"mcp_console-{version}-"),
-        f"wheel version does not match {version}: {wheel.name}",
-    )
+    version, tags = wheel_identity(wheel)
+    if cargo_bin is not None:
+        require(cargo_bin.is_file(), f"Cargo binary does not exist: {cargo_bin}")
+        require(
+            os.access(cargo_bin, os.X_OK),
+            f"Cargo binary is not executable: {cargo_bin}",
+        )
+        require(version == package_version(), "wheel and Cargo versions differ")
     platform = wheel.name.rsplit("-", 1)[-1]
     require(
         platform.startswith(("macosx_", "manylinux", "linux_")),
@@ -338,7 +757,15 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     linux = not platform.startswith("macosx_")
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
-    inspect_wheel_commands(wheel, linux=linux)
+    inspect_wheel_commands(
+        wheel,
+        linux=linux,
+        version=version,
+        tags=tags,
+        target=args.target,
+        release=args.release,
+        sandbox_pin=Path(args.sandbox_pin),
+    )
 
     if args.target is not None:
         architecture = TARGET_ARCHITECTURES[args.target]
@@ -348,18 +775,30 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             f"wheel does not match {args.target}: {wheel.name}",
         )
 
-    expected_version = command_output([str(cargo_bin), "--version"])
+    expected_version = (
+        command_output([str(cargo_bin), "--version"])
+        if cargo_bin is not None
+        else f"mcp-console {version}"
+    )
     actual_version = command_output(
         ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--version"]
     )
-    require(actual_version == expected_version, "installed and Cargo versions differ")
+    reference = "Cargo" if cargo_bin is not None else "wheel metadata"
+    require(
+        actual_version == expected_version, f"installed and {reference} versions differ"
+    )
 
-    cargo_help = command_output([str(cargo_bin), "--help"], strip=False)
     wheel_help = command_output(
         ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--help"],
         strip=False,
     )
-    require(wheel_help == cargo_help, "installed and Cargo help output differ")
+    expected_help = (
+        command_output([str(cargo_bin), "--help"], strip=False)
+        if cargo_bin is not None
+        else wheel_help
+    )
+    if cargo_bin is not None:
+        require(wheel_help == expected_help, "installed and Cargo help output differ")
 
     run_command(["uv", "tool", "install", str(wheel)])
 
@@ -372,11 +811,11 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     require(
         command_output([str(installed), "--version"]) == expected_version,
-        "`uv` tool and Cargo versions differ",
+        f"`uv` tool and {reference} versions differ",
     )
     require(
-        command_output([str(installed), "--help"], strip=False) == cargo_help,
-        "`uv` tool and Cargo help output differ",
+        command_output([str(installed), "--help"], strip=False) == expected_help,
+        "`uv` tool and wheel help output differ",
     )
     public_runner = tool_bin / "mcp-console-sandbox"
     require(
@@ -387,7 +826,9 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
         sandbox_env["MCP_CONSOLE_HOME"] = str(Path(directory) / "console")
-        for executable in (cargo_bin, installed):
+        for executable in (
+            [cargo_bin, installed] if cargo_bin is not None else [installed]
+        ):
             run_command(
                 [str(executable), "sandbox", "--", "/usr/bin/true"],
                 env=sandbox_env,
@@ -541,12 +982,23 @@ def parser() -> argparse.ArgumentParser:
 
     smoke = commands.add_parser("smoke-wheel")
     smoke.add_argument("wheel")
-    smoke.add_argument("cargo_bin")
+    smoke.add_argument("cargo_bin", nargs="?")
+    smoke.add_argument("--installed-only", action="store_true")
+    smoke.add_argument("--sandbox-pin", default="sandbox-runner.json")
+    smoke.add_argument("--release", action="store_true")
     smoke.add_argument("--target", choices=sorted(TARGET_ARCHITECTURES))
     smoke.add_argument("--without-r", action="store_true")
     smoke.add_argument("--startup-timeout-seconds", type=float, default=1200.0)
     smoke.add_argument("--response-timeout-seconds", type=float, default=30.0)
     smoke.set_defaults(function=smoke_wheel)
+
+    inspect = commands.add_parser("inspect-wheel")
+    inspect.add_argument("wheel")
+    inspect.add_argument("--target", choices=sorted(TARGET_ARCHITECTURES))
+    inspect.add_argument("--release", action="store_true")
+    inspect.add_argument("--sandbox-pin", default="sandbox-runner.json")
+    inspect.add_argument("--report")
+    inspect.set_defaults(function=inspect_wheel)
 
     validate = commands.add_parser("validate-publish")
     validate.set_defaults(function=validate_publish)
