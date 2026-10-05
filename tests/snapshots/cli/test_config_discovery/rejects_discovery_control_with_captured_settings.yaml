@@ -1,0 +1,48 @@
+---
+selector: --config-env
+flag: before
+payload: ~
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: after
+payload: ~
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: before
+payload: not JSON
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: after
+payload: not JSON
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: before
+payload: ~
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: after
+payload: ~
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: before
+payload: not JSON
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: after
+payload: not JSON
+stderr: |
+  --no-project-config cannot be combined with --config-env or --settings-env
