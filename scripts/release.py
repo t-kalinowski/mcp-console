@@ -28,6 +28,27 @@ TARGET_ARCHITECTURES = {
 }
 LINUX_RELEASE_GLIBC = (2, 35)
 LINUX_RELEASE_CPP = {"GLIBCXX": (3, 4, 30), "CXXABI": (1, 3, 13)}
+# Numeric GLIBCXX_3.4.N / CXXABI_1.3.N policy ceilings, not host library versions.
+# https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json
+MANYLINUX_CPP = {
+    5: (8, 1),
+    12: (13, 3),
+    17: (19, 7),
+    24: (22, 10),
+    26: (22, 10),
+    27: (24, 11),
+    28: (24, 11),
+    31: (28, 12),
+    34: (29, 13),
+    35: (30, 13),
+    36: (30, 13),
+    37: (30, 13),
+    38: (30, 13),
+    39: (33, 15),
+    40: (33, 15),
+    41: (33, 15),
+    42: (34, 15),
+}
 # Runtime prerequisites, not a distro archive or build-package allowlist.
 LINUX_SYSTEM_LIBRARIES = {
     "libc.so.6",
@@ -320,6 +341,26 @@ def inspect_linux_abi(
             len(floors) == len(tags) and max(floors) <= LINUX_RELEASE_GLIBC,
             "wheel tag exceeds the glibc 2.35 release floor",
         )
+    ceilings: dict[str, list[tuple[int, ...]]] = {
+        "GLIBC": floors,
+        "GLIBCXX": [],
+        "CXXABI": [],
+    }
+    for _, minor in floors:
+        require(
+            minor in MANYLINUX_CPP and (architecture == "x86_64" or minor >= 17),
+            f"unsupported manylinux C++ policy: manylinux_2_{minor}_{architecture}",
+        )
+        glibcxx, cxxabi = MANYLINUX_CPP[minor]
+        # Auditwheel's 2.26 policy has different C++ ceilings on ARM64.
+        if architecture == "aarch64" and minor == 26:
+            glibcxx, cxxabi = 24, 11
+        ceilings["GLIBCXX"].append((3, 4, glibcxx))
+        ceilings["CXXABI"].append((1, 3, cxxabi))
+    if release:
+        for family, ceiling in LINUX_RELEASE_CPP.items():
+            ceilings[family].append(ceiling)
+    limits = {family: min(values, default=None) for family, values in ceilings.items()}
     machine, loader = LINUX_MACHINES[architecture]
     evidence = {}
     with zipfile.ZipFile(wheel) as archive, tempfile.TemporaryDirectory() as directory:
@@ -388,9 +429,7 @@ def inspect_linux_abi(
                     f"{member}: unsupported symbol requirement {symbol}",
                 )
                 required = tuple(map(int, number.split(".")))
-                ceiling = min(floors) if family == "GLIBC" and floors else None
-                if release and family != "GLIBC":
-                    ceiling = LINUX_RELEASE_CPP[family]
+                ceiling = limits[family]
                 require(
                     ceiling is None or required <= ceiling,
                     f"{member}: {symbol} exceeds the declared wheel/runtime floor",

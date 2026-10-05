@@ -467,13 +467,23 @@ class ReleaseScriptTests(ReleaseFixture):
         return environment, wheel, cargo_bin
 
     def write_wheel(
-        self, wheel: Path, *, omit: str | None = None, executable: bool = True
+        self,
+        wheel: Path,
+        *,
+        omit: str | None = None,
+        executable: bool = True,
+        glibc: str = "2.34",
     ) -> None:
         with zipfile.ZipFile(wheel, "w") as archive:
             linux = "linux" in wheel.name
+            elf_fields = {"versions": [f"GLIBC_{glibc}"]}
+            if linux and "aarch64" in wheel.name:
+                elf_fields.update(
+                    machine="AArch64", interpreter="/lib/ld-linux-aarch64.so.1"
+                )
             archive.writestr(
                 "mcp_console-0.0.2.data/scripts/mcp-console",
-                elf_fixture() if linux else b"fixture\n",
+                elf_fixture(**elf_fields) if linux else b"fixture\n",
             )
             archive.writestr(
                 "mcp_console-0.0.2.dist-info/METADATA",
@@ -508,9 +518,10 @@ class ReleaseScriptTests(ReleaseFixture):
                 contents: str | bytes = "fixture\n"
                 if linux and name in ("mcp-console-sandbox", "bwrap"):
                     contents = elf_fixture(
+                        **elf_fields,
                         needed=["libc.so.6", "libcap.so.2"]
                         if name == "bwrap"
-                        else ["libc.so.6"]
+                        else ["libc.so.6"],
                     )
                 if name == "bubblewrap-NOTICE":
                     contents = bubblewrap_notice(
@@ -520,7 +531,10 @@ class ReleaseScriptTests(ReleaseFixture):
                     pin = json.loads((ROOT / "sandbox-runner.json").read_text())
                     contents = json.dumps(
                         helper_metadata(
-                            pin, elf_fixture(needed=["libc.so.6", "libcap.so.2"])
+                            pin,
+                            elf_fixture(
+                                **elf_fields, needed=["libc.so.6", "libcap.so.2"]
+                            ),
                         )
                     )
                 archive.writestr(info, contents)
@@ -559,6 +573,7 @@ class ReleaseScriptTests(ReleaseFixture):
         defects = (
             ({"versions": ["GLIBC_2.36"]}, "GLIBC_2.36"),
             ({"versions": ["GLIBCXX_3.4.31"]}, "GLIBCXX_3.4.31"),
+            ({"versions": ["CXXABI_1.3.14"]}, "CXXABI_1.3.14"),
             ({"machine": "AArch64"}, "machine"),
             ({"interpreter": "/opt/builder/ld-linux.so"}, "interpreter"),
             ({"runpath": "/opt/builder/lib"}, "RUNPATH"),
@@ -598,6 +613,7 @@ class ReleaseScriptTests(ReleaseFixture):
             for platform, metadata_tag, diagnostic in (
                 ("manylinux_2_28_x86_64", None, "GLIBC_2.34"),
                 ("manylinux_2_39_x86_64", None, "release floor"),
+                ("manylinux_2_33_x86_64", None, "unsupported manylinux C++ policy"),
                 (
                     "manylinux_2_35_x86_64",
                     "py3-none-manylinux_2_35_aarch64",
@@ -624,6 +640,81 @@ class ReleaseScriptTests(ReleaseFixture):
                     )
                     self.assertNotEqual(result.returncode, 0, result.stdout)
                     self.assertIn(diagnostic, result.stderr)
+
+    def test_inspect_wheel_checks_cpp_symbols_against_every_advertised_policy(
+        self,
+    ) -> None:
+        for architecture in ("x86_64", "aarch64"):
+            policies = [
+                ("manylinux2014", 19, 7),
+                (
+                    "manylinux_2_26",
+                    22 if architecture == "x86_64" else 24,
+                    10 if architecture == "x86_64" else 11,
+                ),
+                ("manylinux_2_31", 28, 12),
+                ("manylinux_2_34", 29, 13),
+                ("manylinux_2_35", 30, 13),
+                ("manylinux_2_35.manylinux_2_34", 29, 13),
+                ("manylinux_2_39", 33, 15),
+            ]
+            if architecture == "x86_64":
+                policies[:0] = [("manylinux1", 8, 1), ("manylinux2010", 13, 3)]
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                environment, _, _ = self.smoke_environment(directory)
+                for policy, glibcxx, cxxabi in policies:
+                    platform = ".".join(
+                        f"{tag}_{architecture}" for tag in policy.split(".")
+                    )
+                    wheel = directory / f"mcp_console-0.0.2-py3-none-{platform}.whl"
+                    for symbols, rejected in (
+                        ([f"GLIBCXX_3.4.{glibcxx}", f"CXXABI_1.3.{cxxabi}"], None),
+                        ([f"GLIBCXX_3.4.{glibcxx + 1}"], f"GLIBCXX_3.4.{glibcxx + 1}"),
+                        ([f"CXXABI_1.3.{cxxabi + 1}"], f"CXXABI_1.3.{cxxabi + 1}"),
+                    ):
+                        self.write_wheel(
+                            wheel, glibc="2.5" if architecture == "x86_64" else "2.17"
+                        )
+                        member = "mcp_console/extra.so"
+                        with zipfile.ZipFile(wheel, "a") as archive:
+                            archive.writestr(
+                                member,
+                                elf_fixture(
+                                    machine="AArch64"
+                                    if architecture == "aarch64"
+                                    else "Advanced Micro Devices X86-64",
+                                    interpreter=None,
+                                    needed=["libstdc++.so.6"],
+                                    versions=symbols,
+                                ),
+                            )
+                        for release in (False, True):
+                            with self.subTest(
+                                platform=platform, symbols=symbols, release=release
+                            ):
+                                result = self.run_script(
+                                    "inspect-wheel",
+                                    str(wheel),
+                                    *(["--release"] if release else []),
+                                    cwd=directory,
+                                    env=environment,
+                                )
+                                if release and policy == "manylinux_2_39":
+                                    self.assertNotEqual(
+                                        result.returncode, 0, result.stdout
+                                    )
+                                    self.assertIn("release floor", result.stderr)
+                                elif rejected:
+                                    self.assertNotEqual(
+                                        result.returncode, 0, result.stdout
+                                    )
+                                    self.assertIn(rejected, result.stderr)
+                                    self.assertIn(member, result.stderr)
+                                else:
+                                    self.assertEqual(
+                                        result.returncode, 0, result.stderr
+                                    )
 
     def test_smoke_wheel_requires_a_private_companion_bundle(self) -> None:
         for defect in (
