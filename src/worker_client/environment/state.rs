@@ -26,6 +26,8 @@ pub(in crate::worker_client) struct Environment {
     /// Launch configuration commits with the managed executable and manifest.
     pub(in crate::worker_client) local_runtime: Option<crate::local_runtime::Selection>,
     pub(in crate::worker_client) custom_worker: bool,
+    /// Captured managed SQL choice, independent of the visible/native languages.
+    pub(in crate::worker_client) python_sql: bool,
     pub(in crate::worker_client) duckdb_extensions: BTreeSet<String>,
     /// R libraries that may have supplied DuckDB in the current worker generation.
     pub(in crate::worker_client) duckdb_r_targets: Vec<crate::resolver::ManagedR>,

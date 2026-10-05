@@ -66,6 +66,8 @@ pub(crate) struct Discovery {
     pub managed: bool,
     pub selections: Selections,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duckdb_extension_directory: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_r_home_bytes: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_has_uv: Option<bool>,

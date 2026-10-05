@@ -90,6 +90,7 @@ pub(crate) fn configure_launch(
 pub(crate) fn validate_result(environment: &WorkerEnvironment) -> Result<(), String> {
     let discovery = &environment.discovery;
     if discovery.managed
+        || discovery.duckdb_extension_directory.is_some()
         || environment.r.is_some()
         || environment.python.is_some()
         || discovery.native.is_some()
@@ -237,6 +238,7 @@ fn discover(configured: Option<&Path>) -> Result<WorkerEnvironment, String> {
     let environment = WorkerEnvironment {
         discovery: Discovery {
             managed: false,
+            duckdb_extension_directory: None,
             selections: Selections {
                 r_home,
                 python: None,

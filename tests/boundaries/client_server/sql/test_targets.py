@@ -21,6 +21,7 @@ from support.docker_sandbox import (
     workspace as sbx_workspace,
 )
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import SQL, requires
 from support.ssh import client_environment
@@ -57,6 +58,75 @@ def exercise_catalog(
         client.expect(
             python="import duckdb; assert isinstance(sql_connection(), duckdb.DuckDBPyConnection)"
         )
+
+
+@requires(SQL, EXTERNAL_SSH)
+@executions(DIRECT, SANDBOXED)
+def test_external_prepares_configured_python_extensions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with external_target() as external, tempfile.TemporaryDirectory() as directory:
+        local = Path(directory)
+        controller_cache = local / "controller-extensions"
+        config = local / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "target": external["target"],
+                    "sandbox": {"environment": external["environment"]},
+                    "sql": {"provider": "python"},
+                }
+            )
+        )
+        environment = client_environment(
+            local, config=external.get("ssh_config"), remote_path=external.get("path")
+        )
+        environment["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(controller_cache)
+        with McpClient(binary, execution.serve(), environment, local) as client:
+            client.initialize_and_list_tools()
+            prepared = client.send(
+                requirements={
+                    "action": "set",
+                    "python": ["duckdb==1.4.4"],
+                    "duckdb": ["fts"],
+                }
+            )
+            assert not prepared.get("isError"), prepared
+            client.expect(
+                r='stopifnot(as.character(packageVersion("duckdb")) != "1.4.4")'
+            )
+            client.expect(
+                "Success\n-------\n[0 rows]\n",
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            client.expect(
+                # fmt: python
+                python=code("""
+                    import duckdb
+
+                    assert duckdb.__version__ == "1.4.4"
+                    directory = (
+                        sql_connection()
+                        .execute("SELECT current_setting('extension_directory')")
+                        .fetchone()[0]
+                    )
+                    assert directory != "<controller-cache>"
+                    """).replace("'<controller-cache>'", repr(str(controller_cache)))
+            )
+            client.send(control="restart")
+            client.expect(
+                "Success\n-------\n[0 rows]\n",
+                sql="SET autoinstall_known_extensions = false; LOAD fts",
+            )
+            client.finish()
+        assert not controller_cache.exists()
+    return [
+        {
+            "configured_python_extensions_prepared_on_execution_host": True,
+            "restart": True,
+        }
+    ]
 
 
 @requires(SQL, EXTERNAL_SSH)

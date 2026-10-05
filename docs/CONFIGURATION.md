@@ -82,7 +82,8 @@ Restart retains the captured settings, even if the configuration file changes.
 `options` supports only `threads` (an integer from 1 through 2147483647) and `memory_limit` (a nonempty DuckDB memory-size string).
 DuckDB validates engine values during connection construction.
 These settings apply to the first managed connection, including background warmup.
-A Python provider needs DuckDB in its selected environment; in a managed session, prepare it through `requirements.python: [duckdb]` before SQL use.
+A Python provider needs DuckDB in its selected environment; managed Python includes it in startup defaults.
+After replacing or clearing requirements, include `duckdb` in `requirements.python` before SQL use.
 SQL demand does not reinstall packages removed from the session requirements.
 Unknown fields and options fail configuration decoding.
 YAML and ordered CLI overrides use the ordinary merge rules, for example `-c sql.options.threads=4`.

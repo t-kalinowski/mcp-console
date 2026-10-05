@@ -13,7 +13,6 @@ use crate::target_launch::transfer::{Io, duplicate};
 
 struct Context {
     local: bool,
-    mode: Mode,
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
@@ -41,6 +40,8 @@ impl Context {
             .as_deref()
             .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
         let configured_python = configured_python.and_then(|python| python.into_string().ok());
+        let duckdb_extension_directory =
+            resolver::cache::duckdb_extension_directory(&Default::default())?;
         if !matches!(mode, Mode::R) {
             let python =
                 resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
@@ -61,7 +62,6 @@ impl Context {
             return Ok((
                 Self {
                     local,
-                    mode,
                     bootstrap: None,
                     r: None,
                     python,
@@ -70,6 +70,7 @@ impl Context {
                 },
                 Discovery {
                     managed: false,
+                    duckdb_extension_directory,
                     selections: Selections {
                         r_home: None,
                         python: configured_python,
@@ -95,6 +96,7 @@ impl Context {
         };
         let discovery = Discovery {
             managed: bootstrap.is_some(),
+            duckdb_extension_directory,
             selections: Selections {
                 r_home: Some(home.to_string_lossy().into_owned()),
                 python: configured_python,
@@ -113,7 +115,6 @@ impl Context {
         Ok((
             Self {
                 local,
-                mode,
                 bootstrap,
                 r: None,
                 python,
@@ -216,7 +217,7 @@ impl Context {
                 extensions,
                 extension_directory,
             } => {
-                if !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
+                if !self.managed_python {
                     return Err("Python-backed DuckDB preparation requires managed Python".into());
                 }
                 resolver::resolve_python_duckdb_extensions(

@@ -73,10 +73,11 @@ impl Environment {
                 vec![]
             },
             python: if self.manages_python() {
-                if self
-                    .local_runtime
-                    .as_ref()
-                    .is_some_and(crate::local_runtime::Selection::python_only)
+                if self.python_sql
+                    || self
+                        .local_runtime
+                        .as_ref()
+                        .is_some_and(crate::local_runtime::Selection::python_only)
                 {
                     crate::worker_protocol::default_native_python_requirement_manifest().packages
                 } else {
@@ -85,7 +86,7 @@ impl Environment {
             } else {
                 vec![]
             },
-            duckdb: if managed_r {
+            duckdb: if managed_r && (!self.python_sql || self.manages_python()) {
                 super::super::DEFAULT_DUCKDB_EXTENSIONS
                     .iter()
                     .map(|s| (*s).into())

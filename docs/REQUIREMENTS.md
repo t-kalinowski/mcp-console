@@ -14,24 +14,27 @@ The retained environment combines an R library/declaration, a normalized Python 
 It lives in server memory, not across server processes.
 A plain restart reuses accepted requirements, including successful automatic additions, without resolving again.
 
-| Target/environment                    | Preparation                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Local/SSH with R and resolver support | Managed R, Python when not explicitly selected, and R-backed DuckDB extensions.                              |
-| Local/SSH without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.       |
-| Bare R-capable runtime                | Preinstalled packages/adapters; inspection only.                                                             |
-| Docker/SBX                            | Preinstalled image/template; inspection only. No implicit resolver or installation.                          |
-| Custom worker                         | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python. |
+| Target/environment                    | Preparation                                                                                                    |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Local/SSH with R and resolver support | Managed R, Python when not explicitly selected, and DuckDB extensions for the configured managed SQL provider. |
+| Local/SSH without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.         |
+| Bare R-capable runtime                | Preinstalled packages/adapters; inspection only.                                                               |
+| Docker/SBX                            | Preinstalled image/template; inspection only. No implicit resolver or installation.                            |
+| Custom worker                         | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python.   |
 
 The default optional declarations are:
 
 | Environment | Defaults                                                                    |
 | ----------- | --------------------------------------------------------------------------- |
 | R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr` |
-| Python      | `numpy`, `pandas`; also `duckdb` without R                                  |
+| Python      | `numpy`, `pandas`; also `duckdb` without R or with `sql.provider: python`   |
 | DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                          |
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
+DuckDB extension preparation uses the configured managed SQL provider and its candidate engine version, including before launch, live additions, and restart.
+It runs on the trusted execution host and uses the captured extension cache; it does not install through a worker connection or prepare extensions for an arbitrary user-selected DBI/DB-API connection.
+An explicitly selected non-managed Python retains its preinstalled extensions and receives no managed DuckDB defaults.
 Without R, an empty Python declaration omits DuckDB, but a user-selected DB-API connection can still provide SQL.
 
 Default preparation, built-in worker launch, and enabled R/Python initialization run in the background.

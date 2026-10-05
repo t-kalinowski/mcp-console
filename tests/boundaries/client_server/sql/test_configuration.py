@@ -18,6 +18,111 @@ from support.requirements import POSIX, R, SQL, requires
 from support.suites import run_this_suite
 
 
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_prepares_extensions_for_python_with_r_present(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for before_launch in (True, False):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            cache = workspace / "extensions"
+            env = dict(os.environ, MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(cache))
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps({"cache": "host", "sql": {"provider": "python"}})
+            )
+            with McpClient(binary, execution.serve(), env, workspace) as client:
+                client.initialize_and_list_tools()
+                prepared = client.send(
+                    requirements={
+                        "action": "set",
+                        "python": ["duckdb==1.4.4"],
+                        "duckdb": ["fts"] if before_launch else [],
+                    }
+                )
+                assert not prepared.get("isError"), prepared
+                client.expect(
+                    r='stopifnot(as.character(packageVersion("duckdb")) != "1.4.4")'
+                )
+                client.expect(
+                    # fmt: python
+                    python=code("""
+                        import duckdb
+                        import os
+
+                        assert duckdb.__version__ == "1.4.4"
+                        pid = os.getpid()
+                        managed = sql_connection()
+                        _ = managed.execute("CREATE TABLE retained AS SELECT 42 AS answer")
+                        """),
+                )
+                if not before_launch:
+                    prepared = client.send(requirements={"duckdb": ["fts"]})
+                    assert not prepared.get("isError"), prepared
+                client.expect(
+                    "Success\n-------\n[0 rows]\n",
+                    sql="SET autoinstall_known_extensions = false; LOAD fts",
+                )
+                client.expect(
+                    "Success\n-------\n[0 rows]\n",
+                    requirements={"python": ["six"], "duckdb": ["sqlite"]},
+                    sql="LOAD sqlite",
+                )
+                client.expect(
+                    # fmt: python
+                    python=code("""
+                        import six
+
+                        assert os.getpid() == pid
+                        assert sql_connection() is managed
+                        assert managed.execute("SELECT answer FROM retained").fetchone() == (42,)
+                        assert managed.execute(
+                            "SELECT bool_and(installed AND loaded) FROM duckdb_extensions() "
+                            "WHERE extension_name IN ('fts', 'sqlite_scanner')"
+                        ).fetchone() == (True,)
+                        """),
+                )
+                assert list(cache.glob("v1.4.4/**/fts.duckdb_extension"))
+                assert list(cache.glob("v1.4.4/**/sqlite_scanner.duckdb_extension"))
+                failed = client.send(
+                    control="restart",
+                    requirements={
+                        "action": "set",
+                        "python": ["six"],
+                        "duckdb": ["fts"],
+                    },
+                )
+                assert failed.get("isError"), failed
+                failure = failed["content"][0]["text"]
+                assert "include duckdb in requirements.python" in failure, failed
+                client.expect(
+                    python="assert os.getpid() == pid; assert sql_connection() is managed; "
+                    'assert managed.execute("SELECT answer FROM retained").fetchone() == (42,)'
+                )
+                client.send(control="restart")
+                client.expect(
+                    "Success\n-------\n[0 rows]\n",
+                    sql="SET autoinstall_known_extensions = false; LOAD fts; LOAD sqlite",
+                )
+                client.expect(
+                    python='import duckdb; assert duckdb.__version__ == "1.4.4"'
+                )
+                client.finish()
+    return [
+        {
+            "python_engine_extensions_with_r_present": [
+                "before_launch",
+                "live",
+                "combined_python_addition",
+                "restart",
+            ],
+            "missing_candidate_duckdb": failure,
+        }
+    ]
+
+
 @requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_selects_python_with_r_present(
@@ -47,6 +152,12 @@ def test_selects_python_with_r_present(
         ) as client:
             client.initialize_and_list_tools()
             client.expect(r="stopifnot(is.environment(globalenv()))")
+            inspected = client.send(requirements={"action": "get"})
+            assert "duckdb" in inspected["structuredContent"]["requirements"]["python"]
+            client.expect(
+                "Success\n-------\n[0 rows]\n",
+                sql="SET autoinstall_known_extensions = false; LOAD sqlite",
+            )
             client.expect(
                 # fmt: python
                 python=code("""

@@ -189,7 +189,7 @@ impl Client {
             } else {
                 None
             };
-            if self.0.python_only && duckdb_changed && python_candidate.is_none() {
+            if environment.python_sql && duckdb_changed && python_candidate.is_none() {
                 let extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
                 if let Err(failure) = self.resolve_python_duckdb_extensions_for_environment(
                     generation,
@@ -198,7 +198,7 @@ impl Client {
                 ) {
                     return self.finish_environment_resolution_failure(generation, intent, failure);
                 }
-            } else if !self.0.python_only
+            } else if !environment.python_sql
                 && !duckdb_extensions.is_empty()
                 && (duckdb_changed || managed_r.is_some())
             {
@@ -232,6 +232,7 @@ impl Client {
                 }
                 return Ok(PrepareResult::Prepared);
             }
+            let python_sql = environment.python_sql;
             drop(environment);
             return self.prepare_running(
                 generation,
@@ -239,6 +240,7 @@ impl Client {
                 python_packages,
                 managed_r,
                 duckdb_candidate,
+                python_sql,
             );
         }
 
@@ -362,6 +364,7 @@ impl Client {
         python_packages: Vec<String>,
         managed_r: Option<crate::resolver::ManagedR>,
         duckdb_extensions: Option<BTreeSet<String>>,
+        python_sql: bool,
     ) -> Result<PrepareResult, String> {
         self.ensure_generation(generation)?;
         let WorkerState::Running(running) = &mut *worker else {
@@ -422,10 +425,7 @@ impl Client {
             let result = running.prepare_python(
                 python_packages,
                 includes_r,
-                self.0
-                    .python_only
-                    .then(|| duckdb_extensions.clone())
-                    .flatten(),
+                python_sql.then(|| duckdb_extensions.clone()).flatten(),
                 commit,
             );
             match result {

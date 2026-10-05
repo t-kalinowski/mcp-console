@@ -71,7 +71,7 @@ impl Client {
         let managed = self
             .resolve_managed_r(&generation, &environment.r_resolver, requirements)
             .map_err(RuntimeRResolutionFailure::from)?;
-        if !environment.duckdb_extensions.is_empty() {
+        if !environment.python_sql && !environment.duckdb_extensions.is_empty() {
             let extensions = environment
                 .duckdb_extensions
                 .iter()
