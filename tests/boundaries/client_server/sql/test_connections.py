@@ -182,8 +182,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
-    client.send(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
-    assert last_tool_text(client) == "[done]"
+    client.expect(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
 
     # fmt: r
     r = code(r"""
@@ -444,11 +443,10 @@ def test_preserves_selected_python_duckdb_connection_state(
         console_sql_connection(connection)
         del connection
         """)
-    client.send(
+    client.expect(
         python=python,
         requirements={"python": ["duckdb==1.5.5"]},
     )
-    assert last_tool_text(client) == "[done]"
 
     client.send(sql="SELECT value + 1 AS answer FROM before_selection")
     preview = last_tool_text(client)
@@ -561,8 +559,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
 
         console_sql_connection(RecoverableConnection())
         """)
-    client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    client.expect(python=python)
 
     client.send(sql="EXIT")
     output = last_tool_text(client)
@@ -754,7 +751,13 @@ def test_interrupts_selected_python_dbapi_connection(
                 console_sql_connection(InterruptibleConnection())
                 print(started_path, release_path, sep="\n")
                 """)
-            client.send(python=python)
+            wait_for_evaluation_output(
+                client,
+                None,
+                "native SQL interrupt checkpoint paths",
+                python=python,
+                completion_timeout_seconds=client.response_timeout,
+            )
             setup = client.transcript[-1]["result"]
             paths = last_tool_text(client).splitlines()
             assert len(paths) == 2, setup
@@ -838,7 +841,13 @@ def test_interrupts_python_dbapi_provider_probe(
                 probe_release <- tempfile("mcp-console-sql-probe-release-")
                 cat(probe_started, probe_release, sep = "\n")
                 """)
-            client.send(r=r)
+            wait_for_evaluation_output(
+                client,
+                None,
+                "SQL provider probe checkpoint paths",
+                r=r,
+                completion_timeout_seconds=client.response_timeout,
+            )
             setup = client.transcript[-1]["result"]
             paths = setup["content"][0]["text"].splitlines()
             assert len(paths) == 2, setup
@@ -986,8 +995,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
         console_sql_connection(connection)
         sys.settrace(exit_sql_dispatch)
         """)
-    client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    client.expect(python=python)
 
     client.send(sql="ANSWER")
     assert "SystemExit: selected SQL dispatch exit" in last_tool_text(client)
