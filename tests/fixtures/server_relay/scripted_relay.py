@@ -1347,6 +1347,24 @@ def run_ansi_projection(relay: ScriptedRelay) -> None:
         relay.complete()
 
 
+def run_ansi_diagnostics(relay: ScriptedRelay) -> None:
+    directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+    relay.ready()
+    command = relay.receive()
+    assert command["kind"] == "evaluate", command
+    for message in json.loads(command["source"]):
+        with (directory / "diagnostic-release").open("rb", buffering=0) as checkpoint:
+            assert checkpoint.read(1) == b"1"
+        if message["kind"] == "native_stderr":
+            write_all(2, base64.b64decode(message["data"]))
+        else:
+            relay.send(message)
+    with (directory / "diagnostic-release").open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
+    relay.complete()
+    relay.retire()
+
+
 def run_ansi_polls(relay: ScriptedRelay) -> None:
     directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
     relay.ready()
@@ -1392,6 +1410,7 @@ def main() -> None:
         "preview_direct_allocations": run_preview_direct_allocations,
         "partial_utf8_polls": run_partial_utf8_polls,
         "ansi_projection": run_ansi_projection,
+        "ansi_diagnostics": run_ansi_diagnostics,
         "ansi_polls": run_ansi_polls,
         "preview_raw_prelude": run_preview_raw_prelude,
         "partial_utf8_completion": run_partial_utf8_completion,

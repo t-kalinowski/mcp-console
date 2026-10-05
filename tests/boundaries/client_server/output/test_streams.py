@@ -33,7 +33,11 @@ from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
+from support.checkpoints import (
+    FifoCheckpoint,
+    release_fixture_checkpoint,
+    wait_for_checkpoint,
+)
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.suites import run_this_suite
@@ -193,6 +197,99 @@ def test_finishes_ansi_at_producer_image_and_cell_boundaries(
                 session_directory(client) / f"outputs/call-{call_id:06}.log"
             ).read_bytes() == sample.encode()
         return client.finish()
+
+
+@requires(POSIX, PROCESS_EVENTS)
+@executions(DIRECT, SANDBOXED)
+def test_separates_native_diagnostics_from_worker_stderr(
+    binary: Path, execution: Execution
+) -> Transcript:
+    chunks = (
+        ("native_stderr", b"native \x1b[3"),
+        ("native_stderr", b"1m\xe2"),
+        ("native_stderr", b"\x82\xacred\x1b[0m\n"),
+        ("native_stderr", b"\x1b]0;hidden"),
+        ("native_stderr", b"\x07native string ended\n"),
+        ("native_stderr", b"native before \x1b]0;hidden"),
+        ("stderr_bytes", b"worker diagnostic\n"),
+        ("native_stderr", b"\x1b\\native after\n"),
+        ("stderr_bytes", b"worker before \x1b]0;hidden"),
+        ("native_stderr", b"native diagnostic\n"),
+        ("stderr_bytes", b"\x1b\\worker after\n"),
+    )
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        roots = ("--writable-root", temporary) if execution == SANDBOXED else ()
+        with (
+            closing(FifoCheckpoint.create(directory / "diagnostic-release")) as release,
+            McpClient(
+                binary,
+                execution.serve(
+                    "--worker",
+                    str(fixtures / "zod"),
+                    "--relay",
+                    str(fixtures / "server_relay/scripted_relay.py"),
+                    *roots,
+                ),
+                {
+                    **os.environ,
+                    "TMPDIR": temporary,
+                    "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": temporary,
+                    "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_diagnostics",
+                },
+            ) as client,
+            Events() as events,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                request = client.start_send(
+                    r=json.dumps(
+                        [
+                            {"kind": kind, "data": base64.b64encode(data).decode()}
+                            for kind, data in chunks
+                        ]
+                    ),
+                    timeout_ms=600_000,
+                )
+                raw = b""
+                sessions = (
+                    Path(client.temporary_directory.name) / ".agents/console/sessions"
+                )
+
+                def recorded() -> Path | None:
+                    for path in sessions.glob("*/outputs/call-000001.log"):
+                        events.watch_file(path)
+                        if path.read_bytes() == raw:
+                            return path
+                    return None
+
+                for _, data in chunks:
+                    release.release()
+                    raw += data
+                    # Recording occurs under the tape lock. Observing these bytes
+                    # before releasing the next writer proves ingestion order,
+                    # without cutting/resetting the unfinished ANSI sequence.
+                    log = wait_for_checkpoint(
+                        recorded,
+                        "diagnostic chunk retained before producer switch",
+                        root=sessions,
+                        recursive=True,
+                        client=client,
+                        events=events,
+                    )
+                release.release()
+                client.receive(request)
+                assert log.read_bytes() == raw
+                assert last_tool_text(client) == (
+                    "native €red\nnative string ended\n"
+                    "native before worker diagnostic\nnative after\n"
+                    "worker before native diagnostic\nworker after\n"
+                ), request
+                return client.finish()
+            finally:
+                for _ in range(len(chunks) + 1):
+                    release.release()
 
 
 @executions(DIRECT, SANDBOXED)

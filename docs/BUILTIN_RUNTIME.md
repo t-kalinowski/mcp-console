@@ -264,6 +264,7 @@ Previews project the following [ANSI controls](https://invisible-island.net/xter
 | Other complete CSI/ESC controls and decoded C1 controls                 | Suppress the control without screen or cursor emulation.                                                                                              |
 
 Parsing is incremental within one contiguous producer/response interval.
+Each native launcher or preparation diagnostic reader is a separate producer from worker stderr and other native readers.
 Producer switches, response cuts, images, notices, completion, and retirement discard incomplete controls.
 An unterminated control string suppresses the rest of that interval; its payload is never buffered.
 CSI syntax is inspected up to 128 bytes; longer sequences are suppressed through their final character.
