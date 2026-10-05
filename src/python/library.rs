@@ -9,6 +9,12 @@ mod services;
 // invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
+thread_local! {
+    // R can select a native connection before CPython exists. Retain that
+    // choice on the interpreter thread until the SQL adapter can own it.
+    static PENDING_R_SQL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
@@ -445,6 +451,9 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
     })?;
     if installed {
         PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+        if PENDING_R_SQL.with(|selected| selected.replace(false)) {
+            use_r_sql()?;
+        }
     }
     Ok(installed)
 }
@@ -729,6 +738,10 @@ pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
     })
 }
 
+pub(super) fn sql_needs_initialization() -> Result<bool, String> {
+    Ok(installed_sql_api()?.is_none() && !PENDING_R_SQL.with(|selected| selected.get()))
+}
+
 pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(super::SqlProvider::R);
@@ -742,6 +755,7 @@ pub(super) fn reset_managed_sql() -> Result<(), String> {
 
 pub(super) fn use_r_sql() -> Result<(), String> {
     let Some(api) = installed_sql_api()? else {
+        PENDING_R_SQL.with(|selected| selected.set(true));
         return Ok(());
     };
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))

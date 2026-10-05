@@ -14,7 +14,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, SQL, requires
+from support.requirements import POSIX, R, SQL, requires
 from support.suites import run_this_suite
 
 
@@ -273,6 +273,90 @@ def test_preserves_native_selection_and_reset(
             "reset_from_both_languages": True,
             "explicit_python_registration": True,
             "r_preview_with_python_file_owner": True,
+        }
+    ]
+
+
+@requires(SQL, R)
+@executions(DIRECT, SANDBOXED)
+def test_selected_r_connection_does_not_initialize_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_setup import deferred_selection_client
+
+    with deferred_selection_client(
+        binary, execution.serve("-c", "sql.provider=python")
+    ) as client:
+        client.expect(
+            # fmt: r
+            r=code("""
+                original_python <- Sys.getenv("RETICULATE_PYTHON", unset = NA_character_)
+                Sys.setenv(RETICULATE_PYTHON = "/mcp-console-missing-python")
+                retained_pid <- Sys.getpid()
+                retained_state <- new.env()
+                retained_state$answer <- 42L
+                native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+                DBI::dbBegin(native)
+                invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
+                console_sql_connection(native)
+                stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 42)
+                invisible()
+                """),
+        )
+        client.expect(
+            "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n",
+            sql="SELECT answer FROM selected",
+        )
+        client.expect(
+            "# A tibble: 1 × 1\n   answer\n  <int32>\n1      43\n",
+            sql="UPDATE selected SET answer = answer + 1 RETURNING answer",
+        )
+        client.expect(
+            # fmt: r
+            r=code("""
+                stopifnot(
+                  Sys.getpid() == retained_pid,
+                  retained_state$answer == 42L,
+                  identical(sql_connection(), native),
+                  !reticulate::py_available(initialize = FALSE),
+                  DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 43
+                )
+                DBI::dbRollback(native)
+                stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                if (is.na(original_python)) {
+                  Sys.unsetenv("RETICULATE_PYTHON")
+                } else {
+                  Sys.setenv(RETICULATE_PYTHON = original_python)
+                }
+                """),
+        )
+        # Starting Python later must preserve the earlier native R selection.
+        client.expect(python="import sqlite3")
+        client.expect(
+            "# A tibble: 1 × 1\n   answer\n  <int32>\n1       1\n",
+            sql="SELECT answer FROM selected",
+        )
+        client.expect(
+            # fmt: python
+            python=code("""
+                user = sqlite3.connect(":memory:")
+                _ = user.execute("CREATE TABLE selected AS SELECT 7 AS answer")
+                console_sql_connection(user)
+                """),
+        )
+        client.expect("answer\n------\n7\n", sql="SELECT answer FROM selected")
+        client.expect(
+            r="stopifnot(identical(sql_connection(), native), DBI::dbIsValid(native))"
+        )
+        client.finish()
+    return [
+        {
+            "selected_r_connection_with_missing_python": True,
+            "python_remains_uninitialized": True,
+            "native_identity_transaction_and_worker_state_retained": True,
+            "selection_survives_later_python_initialization": True,
+            "later_python_selection_takes_precedence": True,
         }
     ]
 

@@ -63,9 +63,6 @@ impl Bridge {
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        if !managed_is_r() && !crate::python::ensure_initialized()? {
-            return Ok(());
-        }
         match py_dbapi::dispatch(source)? {
             py_dbapi::Provider::Handled => Ok(()),
             provider @ (py_dbapi::Provider::Managed | py_dbapi::Provider::R) => {

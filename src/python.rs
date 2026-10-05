@@ -203,6 +203,10 @@ pub(crate) fn install_sql_runtime(source: &str) -> Result<bool, String> {
 }
 
 pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
+    if !crate::sql::managed_is_r() && library::sql_needs_initialization()? && !ensure_initialized()?
+    {
+        return Ok(SqlProvider::Handled);
+    }
     library::dispatch_sql(source)
 }
 
