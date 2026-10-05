@@ -5,8 +5,11 @@ import signal
 import subprocess
 import sys
 import tempfile
-import termios
 from pathlib import Path
+
+if os.name == "posix":
+    import termios
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 

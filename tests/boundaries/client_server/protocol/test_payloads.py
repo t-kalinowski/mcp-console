@@ -22,9 +22,9 @@ def test_accepts_long_multibyte_source_lines(
     long_value = "é" * 100_000
     assert len(long_value) == 100_000
     assert len(long_value.encode()) == 200_000
-    source = f'long_line_value <- "{long_value}"\nnchar(long_line_value)'
+    source = f'long_line_value <- "{long_value}"\nEncoding(long_line_value) <- "UTF-8"\nnchar(long_line_value)'
     client.send(r=source)
-    assert last_tool_text(client) == "[1] 100000\n"
+    assert last_tool_text(client) == "[1] 100000\n", last_tool_text(client)
     wire_message = client._last_serialized_message
     assert wire_message is not None
     assert long_value in wire_message

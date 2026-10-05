@@ -19,9 +19,12 @@ send:
     )
     assert os.environ["PYTHONPATH"] == os.environ["RETICULATE_PYTHONPATH"]
     assert builtins.peer_bootstrap_count == 1
-    assert builtins.peer_bootstrap == (sys.prefix, sys.prefix, sys.executable), (
-        builtins.peer_bootstrap
-    )
+    assert all(
+        os.path.samefile(a, b)
+        for a, b in zip(
+            builtins.peer_bootstrap, (sys.prefix, sys.prefix, sys.executable), strict=True
+        )
+    ), builtins.peer_bootstrap
     expected = [
         sys.executable,
         sys.prefix,
@@ -38,7 +41,10 @@ send:
     program = "import sys, json; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix]))"
     for command in (sys.executable, "python"):
         child = json.loads(subprocess.check_output([command, "-c", program], text=True))
-        assert child == expected, (child, expected)
+        assert all(os.path.samefile(a, b) for a, b in zip(child, expected, strict=True)), (
+            child,
+            expected,
+        )
     print("selected environment retained by interpreter and children")
 result:
   content:

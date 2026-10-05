@@ -82,7 +82,7 @@ def write_readelf_fixture(commands: Path) -> None:
     )
 
 
-class ReleaseScriptTests(unittest.TestCase):
+class ReleaseFixture(unittest.TestCase):
     def run_script(
         self,
         *arguments: str,
@@ -98,6 +98,9 @@ class ReleaseScriptTests(unittest.TestCase):
             check=False,
         )
 
+
+@unittest.skipUnless(os.name == "posix", "Unix executable and packaging fixtures")
+class ReleaseScriptTests(ReleaseFixture):
     def validation_environment(self, directory: Path) -> dict[str, str]:
         (directory / "Cargo.toml").write_text(
             '[package]\nversion = "0.0.2"\n', encoding="utf-8"
@@ -852,27 +855,6 @@ class ReleaseScriptTests(unittest.TestCase):
                 result = self.run_script(*command, cwd=directory, env=environment)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
 
-    def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            directory = Path(temporary_directory)
-            arm64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
-            x86_64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_x86_64.whl"
-            arm64.touch()
-            x86_64.touch()
-            for architecture in ("aarch64", "x86_64"):
-                (
-                    directory
-                    / f"mcp_console-0.0.2-py3-none-manylinux_2_39_{architecture}.whl"
-                ).touch()
-
-            result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-            x86_64.unlink()
-            result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("expected exactly four wheels", result.stderr)
-
     def test_stage_runner_exports_source_pin_without_a_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1411,6 +1393,30 @@ version = "0.0.0"
                     staged_files[name].write_bytes(contents)
 
 
+class PortableReleaseTests(ReleaseFixture):
+    def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            arm64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_arm64.whl"
+            x86_64 = directory / "mcp_console-0.0.2-py3-none-macosx_11_0_x86_64.whl"
+            arm64.touch()
+            x86_64.touch()
+            for architecture in ("aarch64", "x86_64"):
+                (
+                    directory
+                    / f"mcp_console-0.0.2-py3-none-manylinux_2_39_{architecture}.whl"
+                ).touch()
+
+            result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            x86_64.unlink()
+            result = self.run_script("verify-wheel-set", str(directory), cwd=ROOT)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("expected exactly four wheels", result.stderr)
+
+
+@unittest.skipUnless(os.name == "posix", "Unix Rscript executable fixture")
 class RuntimeSourceValidationTests(unittest.TestCase):
     def test_r_home_selects_the_syntax_checker_without_r_on_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

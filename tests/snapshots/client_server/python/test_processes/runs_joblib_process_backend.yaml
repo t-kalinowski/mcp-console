@@ -15,3 +15,13 @@ result:
       text: |
         [2, 1, 0, 1, 2]
   isError: false
+---
+send:
+  python: |-
+    from joblib.externals.loky import get_reusable_executor
+    get_reusable_executor().shutdown(wait=True)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false

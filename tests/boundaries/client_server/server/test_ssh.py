@@ -14,6 +14,15 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    SANDBOX,
+    SQL,
+    WORKER,
+    requires,
+)
 from support.assertions import (
     assert_result_content,
     last_result_text,
@@ -28,14 +37,6 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.r import install_r_startup, r_test_environment
-from support.requirements import (
-    NATIVE_FIXTURES,
-    PROCESS_EVENTS,
-    POSIX,
-    SANDBOX,
-    WORKER,
-    requires,
-)
 from support.ssh import SSH, configure, localhost, peer_environment
 from support.suites import run_this_suite
 
@@ -475,11 +476,13 @@ def _preinstalled_remote_runtime(
         )
 
 
+@requires(SQL)
 @requires(SSH, WORKER)
 def test_preinstalled_remote_runtime(binary: Path) -> TranscriptWithCompanions:
     return _preinstalled_remote_runtime(binary, DIRECT)
 
 
+@requires(SQL)
 @requires(SSH, WORKER, SANDBOX)
 def test_preinstalled_sandbox(binary: Path) -> TranscriptWithCompanions:
     return _preinstalled_remote_runtime(binary, SANDBOXED)
@@ -621,6 +624,7 @@ def test_direct_utf8_survives_launcher_diagnostics(binary: Path) -> Transcript:
     return [{"direct_stdout_and_stderr_utf8_preserved": True}]
 
 
+@requires(POSIX)
 def test_diagnostic_producers_keep_separate_utf8_decoders(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -734,6 +738,7 @@ def test_diagnostic_close_preserves_another_producers_progress(
                 evaluation.release()
 
 
+@requires(POSIX)
 def test_first_startup_failure_response_includes_diagnostics(
     binary: Path,
 ) -> Transcript:
@@ -786,36 +791,44 @@ def test_first_startup_failure_response_includes_diagnostics(
     return records
 
 
+@requires(POSIX)
 def test_unexpected_stdout(binary: Path) -> Transcript:
     return _peer(binary, "stdout")
 
 
+@requires(POSIX)
 def test_incompatible_remote_build(binary: Path) -> Transcript:
     return _peer(binary, "incompatible")
 
 
+@requires(POSIX)
 def test_rejects_remote_without_interpreter_bootstrap_protocol(
     binary: Path,
 ) -> Transcript:
     return _peer(binary, "prior-bootstrap-protocol")
 
 
+@requires(POSIX)
 def test_authentication_failure(binary: Path) -> Transcript:
     return _peer(binary, "auth")
 
 
+@requires(POSIX)
 def test_transport_loss_blocks_replacement(binary: Path) -> Transcript:
     return _peer(binary, "lost")
 
 
+@requires(POSIX)
 def test_remote_r_callback_cannot_run_local_resolvers(binary: Path) -> Transcript:
     return _peer(binary, "resolver")
 
 
+@requires(POSIX)
 def test_remote_python_callback_cannot_run_local_resolvers(binary: Path) -> Transcript:
     return _peer(binary, "resolver", "resolve_python")
 
 
+@requires(POSIX)
 def test_remote_python_version_callback_cannot_run_local_resolvers(
     binary: Path,
 ) -> Transcript:

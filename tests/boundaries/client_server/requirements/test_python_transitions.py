@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, requires
 from support.assertions import (
     last_tool_text,
     release_worker_callback_gate,
@@ -111,6 +112,7 @@ def test_owns_managed_python_transitions(
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
     binary: Path, execution: Execution
@@ -162,6 +164,7 @@ def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_preparation_restoration_and_live_noops(
     binary: Path, execution: Execution
@@ -393,6 +396,7 @@ def test_preserves_activation_interrupt_conditions(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_incompatible_live_libpython_before_activation(
     binary: Path, execution: Execution
@@ -406,6 +410,7 @@ def test_rejects_incompatible_live_libpython_before_activation(
     )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_idle_activation_failure_retains_worker_until_restart(
     binary: Path, execution: Execution

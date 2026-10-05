@@ -84,6 +84,8 @@ pub(crate) fn attach_bridge() -> Result<bool, String> {
 }
 
 pub(crate) fn reinstall_services() -> Result<(), String> {
+    #[cfg(windows)]
+    crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
     if library::initialized_selection()?.is_some() && library::services_installed()? {
         library::install_services()?;
     }
@@ -191,6 +193,8 @@ pub(crate) fn resolve_managed_import(
 }
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
     library::evaluate(source, filename)
 }
 

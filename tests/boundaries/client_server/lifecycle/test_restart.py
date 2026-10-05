@@ -29,7 +29,7 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
@@ -218,6 +218,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_discards_unread_stdin(
     binary: Path, execution: Execution
@@ -243,6 +244,7 @@ def test_restart_discards_unread_stdin(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_initial_startup_silently(
     binary: Path, execution: Execution

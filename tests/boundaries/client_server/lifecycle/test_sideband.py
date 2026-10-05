@@ -13,8 +13,10 @@ from support.normalization import code
 from support.records import Transcript
 from support.resolvers import resolve_managed_python
 from support.suites import run_this_suite
+from support.requirements import POSIX, requires
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_worker_adopts_both_pipes_and_isolates_fork_and_exec(
     binary: Path, execution: Execution

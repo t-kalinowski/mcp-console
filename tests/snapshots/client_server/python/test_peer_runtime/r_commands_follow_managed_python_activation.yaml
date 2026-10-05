@@ -23,8 +23,11 @@ send:
       selected <- reticulate::py_config()$python
       prefix <- reticulate::import("sys")$prefix
       stopifnot(identical(
-        unname(Sys.which(command)),
-        file.path(dirname(selected), command)
+        normalizePath(unname(Sys.which(command))),
+        normalizePath(file.path(
+          dirname(selected),
+          paste0(command, if (.Platform$OS.type == "windows") ".exe" else "")
+        ))
       ))
       output <- system2(command, stdout = TRUE)
       stopifnot(is.null(attr(output, "status")))
@@ -112,8 +115,11 @@ send:
       selected <- reticulate::py_config()$python
       prefix <- reticulate::import("sys")$prefix
       stopifnot(identical(
-        unname(Sys.which(command)),
-        file.path(dirname(selected), command)
+        normalizePath(unname(Sys.which(command))),
+        normalizePath(file.path(
+          dirname(selected),
+          paste0(command, if (.Platform$OS.type == "windows") ".exe" else "")
+        ))
       ))
       output <- system2(command, stdout = TRUE)
       stopifnot(is.null(attr(output, "status")))

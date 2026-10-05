@@ -18,6 +18,14 @@ from boundaries.client_server.python.test_startup import (
     isolated_python,
     selected_python,
 )
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    command,
+    requires,
+)
 from support.assertions import last_result_text
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint, wait_for_path
@@ -35,7 +43,6 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.records import Transcript
 from support.resolvers import ir_run_records, recording_ir_environment
-from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -127,6 +134,7 @@ def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
                     kill_processes([identity])
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_invalid_early_cell_does_not_poison_default_startup(
     binary: Path, execution: Execution
@@ -183,6 +191,7 @@ def test_invalid_early_cell_does_not_poison_default_startup(
                 release.release()
 
 
+@requires(POSIX)
 @requires(R)
 def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()

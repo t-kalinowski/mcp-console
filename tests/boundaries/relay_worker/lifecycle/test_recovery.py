@@ -17,7 +17,7 @@ from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import WORKER, requires
+from support.requirements import POSIX, WORKER, requires
 from support.suites import run_this_suite
 
 
@@ -42,6 +42,7 @@ def test_closes_each_pipe_direction_on_restart(
     return transcript
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_closes_pipes_with_unread_shutdown(
     binary: Path,

@@ -10,8 +10,7 @@ from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, command, requires
-from support.requirements import R
+from support.requirements import POSIX, R, command, requires
 from support.suites import run_this_suite
 
 

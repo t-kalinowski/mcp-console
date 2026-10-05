@@ -20,13 +20,14 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import SHARED_LIBRARY_FLAG
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_bounds_pending_output_and_resets_after_completion(
     binary: Path,
@@ -182,6 +183,7 @@ def test_orders_failure_and_replacement_output(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_raw_output_during_forced_stop(
     binary: Path,

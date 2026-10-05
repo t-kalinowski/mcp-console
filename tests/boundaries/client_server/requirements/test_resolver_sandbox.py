@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import R, SANDBOX, SQL, command, requires
 from support.assertions import (
     last_result_text,
     last_tool_text,
@@ -17,17 +18,18 @@ from support.assertions import (
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
 from support.ssh import SSH, configure, localhost, remote_command
 from boundaries.client_server.python.test_without_r import environment
 
 
+@requires(SQL)
 @requires(SANDBOX)
 def test_python_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
     return duckdb_cache(binary, r=False)
 
 
+@requires(SQL)
 @requires(SANDBOX, R, command("ir"))
 def test_r_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
     return duckdb_cache(binary, r=True)

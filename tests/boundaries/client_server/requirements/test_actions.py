@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, command, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -16,7 +17,6 @@ from support.normalization import code, normalize_python_resolution_error
 from support.r import isolated_r_home
 from support.records import Transcript
 from support.suites import run_this_suite
-from support.requirements import command, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     ir_run_records,
@@ -95,6 +95,7 @@ def test_inspection_completes_while_prepared_cells_overlap(
     ]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_empty_declaration_and_round_trip(
     binary: Path, execution: Execution
@@ -238,6 +239,7 @@ def test_inspection_validation(binary: Path, execution: Execution) -> Transcript
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_inspection_during_input_and_replacement_resolution(
     binary: Path, execution: Execution
@@ -284,6 +286,7 @@ def test_inspection_during_input_and_replacement_resolution(
             release.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupted_replacement_preserves_worker(
     binary: Path, execution: Execution
@@ -337,6 +340,7 @@ def test_interrupted_replacement_preserves_worker(
                 checkpoint.close()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_r_duckdb_replacement_failure_and_reset(
@@ -487,6 +491,7 @@ def test_large_manifest_round_trip(binary: Path, execution: Execution) -> Transc
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("yamark"))
 def test_records_requirement_boundaries(

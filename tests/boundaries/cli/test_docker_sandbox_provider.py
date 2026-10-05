@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.records import Transcript
 from support.suites import run_this_suite
+from support.requirements import POSIX, requires
 
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
 
@@ -80,6 +81,7 @@ def test_compute_provider_rejects_native_policy(binary: Path) -> Transcript:
     return records
 
 
+@requires(POSIX)
 def test_standalone_rejects_resolved_compute_provider(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)

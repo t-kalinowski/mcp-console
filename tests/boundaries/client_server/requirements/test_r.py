@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R_EVENT_LOOP, command, requires
 from support.assertions import (
     last_result_text,
     release_worker_callback_gate,
@@ -19,7 +20,6 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import command, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     ir_requirements,
@@ -36,6 +36,7 @@ def named_requirement_error(requirement: str) -> str:
     )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_unsupported_ir_version(
     binary: Path, execution: Execution
@@ -298,6 +299,7 @@ def test_prepares_r_requirements_after_worker_startup(
     return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_stops_live_preparation_for_idle_callback_input(
     binary: Path, execution: Execution
@@ -359,6 +361,7 @@ def test_stops_live_preparation_for_idle_callback_input(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"), command("uv"))
 def test_failed_mixed_preparation_retains_live_python_activation(
@@ -497,6 +500,7 @@ def test_failed_late_mixed_preparation_preserves_worker(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_evaluates_with_default_managed_r(

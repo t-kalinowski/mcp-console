@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from queue import SimpleQueue
+from threading import Thread
 from typing import Any, Self, TextIO
 
 from support.records import ToolResult, Transcript, TranscriptEntry
@@ -23,12 +25,43 @@ class TextReader:
         self.buffer = bytearray()
         self.eof = False
         self.closed = False
+        self.reader: Thread | None = None
+        if os.name == "nt" and not isinstance(stream, socket.socket):
+            # Winsock cannot select anonymous pipes. Blocking readers announce
+            # complete chunks through sockets so transport deadlines stay event-driven.
+            self.ready, self.wake = socket.socketpair()
+            self.chunks: SimpleQueue[bytes | OSError] = SimpleQueue()
+
+            def read_pipe() -> None:
+                while not self.closed:
+                    try:
+                        chunk = os.read(stream.fileno(), 64 * 1024)
+                    except OSError as error:
+                        chunk = error
+                    self.chunks.put(chunk)
+                    try:
+                        self.wake.sendall(b"1")
+                    except OSError:
+                        return
+                    if not chunk or isinstance(chunk, OSError):
+                        return
+
+            self.reader = Thread(target=read_pipe, daemon=True)
+            self.reader.start()
 
     def fileno(self) -> int:
-        return self.stream.fileno()
+        return (self.ready if self.reader is not None else self.stream).fileno()
 
     def fill(self) -> None:
-        chunk = os.read(self.fileno(), 64 * 1024)
+        if self.reader is not None:
+            self.ready.recv(1)
+            chunk = self.chunks.get()
+            if isinstance(chunk, OSError):
+                raise chunk
+        elif isinstance(self.stream, socket.socket):
+            chunk = self.stream.recv(64 * 1024)
+        else:
+            chunk = os.read(self.fileno(), 64 * 1024)
         self.buffer.extend(chunk)
         self.eof = not chunk
 
@@ -55,9 +88,35 @@ class TextReader:
         return result
 
     def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        if self.reader is not None:
+            self.ready.close()
+            self.wake.close()
+            if self.reader.is_alive():
+                import ctypes
+                from ctypes import wintypes
+
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenThread.argtypes = [
+                    wintypes.DWORD,
+                    wintypes.BOOL,
+                    wintypes.DWORD,
+                ]
+                kernel.OpenThread.restype = wintypes.HANDLE
+                kernel.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                handle = kernel.OpenThread(1, False, self.reader.native_id)
+                if handle:
+                    try:
+                        kernel.CancelSynchronousIo(handle)
+                    finally:
+                        kernel.CloseHandle(handle)
+            self.reader.join(timeout=SERVER_REAP_SECONDS)
+            assert not self.reader.is_alive(), "pipe reader did not retire"
         self.stream.close()
         self.eof = True
-        self.closed = True
 
 
 class McpClient:
@@ -81,6 +140,11 @@ class McpClient:
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
+        if os.name == "nt" and environment is not None and "TMPDIR" in environment:
+            environment = environment | {
+                "TEMP": environment["TMPDIR"],
+                "TMP": environment["TMPDIR"],
+            }
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )

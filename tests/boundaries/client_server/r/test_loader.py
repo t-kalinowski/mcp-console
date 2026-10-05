@@ -9,6 +9,7 @@ from contextlib import ExitStack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import LINUX_NATIVE, NON_UTF8_FILENAMES, POSIX, requires
 from support.assertions import collect_running_output, tool_text
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
@@ -17,10 +18,10 @@ from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
 from support.resolvers import bare_runtime_environment
 from support.execution import DIRECT
-from support.requirements import LINUX_NATIVE, NON_UTF8_FILENAMES, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @requires(LINUX_NATIVE)
 def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript:
     environment, _ = r_test_environment()

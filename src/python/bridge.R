@@ -82,7 +82,10 @@ base::local(
             ignore.case = TRUE
           ),
           conda = as.logical(metadata$conda),
-          virtualenv = if (reticulate:::is_virtualenv(root)) {
+          virtualenv = if (
+            file.exists(file.path(root, "pyvenv.cfg")) ||
+              reticulate:::is_virtualenv(root)
+          ) {
             root
           } else {
             ""

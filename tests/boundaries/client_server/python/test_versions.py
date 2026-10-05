@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R, requires
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -32,10 +33,10 @@ from support.resolvers import (
     write_python_executable,
     write_uv_python_inventories,
 )
-from support.requirements import R, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_uses_current_r_library_for_managed_python_resolution(
@@ -134,6 +135,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_validates_registry_only_python_requirements(
@@ -409,6 +411,7 @@ exit 97
         return json.loads(transcript_json)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_recovers_from_python_version_resolution_failure(
@@ -452,6 +455,7 @@ def test_recovers_from_python_version_resolution_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_resolves_python_version_inventory_semantics(
@@ -486,6 +490,7 @@ def test_resolves_python_version_inventory_semantics(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_resolves_python_version_constraint_semantics(
@@ -534,6 +539,7 @@ def test_resolves_python_version_constraint_semantics(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_falls_back_after_filtering_unsupported_python_versions(
@@ -581,6 +587,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_respects_system_python_preference_with_custom_install_directory(
@@ -635,6 +642,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_uses_reticulate_managed_uv_for_python_resolution(
@@ -790,6 +798,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_retains_managed_python_when_uv_caching_is_disabled(
@@ -828,6 +837,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_removes_disabled_uv_python_source_aliases(
@@ -859,6 +869,7 @@ def test_removes_disabled_uv_python_source_aliases(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_interrupts_python_cache_warmup_without_committing(
@@ -976,6 +987,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_stops_before_cache_warmup_after_python_resolver_interrupt(

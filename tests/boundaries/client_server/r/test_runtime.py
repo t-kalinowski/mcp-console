@@ -12,6 +12,7 @@ from boundaries.client_server.python.test_peer_runtime import (
     DEFER_R_STARTUP,
     defer_r_bootstrap,
 )
+from support.requirements import POSIX, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -21,6 +22,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_uses_selected_r_resource_directories(
     binary: Path, execution: Execution
@@ -166,6 +168,7 @@ def test_uses_selected_r_resource_directories(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_uses_selected_r_launcher_default_architecture(
     binary: Path, execution: Execution

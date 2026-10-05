@@ -10,13 +10,13 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R, requires
 from support.assertions import last_result_text
 from support import ssh
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
-from support.requirements import R, requires
 from support.linux_sandbox import retain_system_bwrap
 from boundaries.client_server.server.test_no_r import no_r_environment
 from support.resolvers import bare_runtime_environment
@@ -58,6 +58,7 @@ def test_rejects_invalid_remote_r_home(binary: Path) -> list:
             return rejected_selection(binary, root, environment)
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_retains_discovered_r_home_across_generations(
@@ -100,6 +101,7 @@ def test_retains_discovered_r_home_across_generations(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_r_absence_across_generations(
     binary: Path, execution: Execution

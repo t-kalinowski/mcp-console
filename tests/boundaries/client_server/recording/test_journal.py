@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, requires
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
 from support.normalization import code
@@ -17,7 +18,6 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment, startup_r_package
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 from support.ssh import configure, peer_environment
@@ -32,6 +32,7 @@ PNG_1X1 = (
 from boundaries.client_server._harness import wait_for_marker
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_materializes_records_only_for_console_use(
     binary: Path, execution: Execution
@@ -108,6 +109,7 @@ def test_materializes_records_only_for_console_use(
         return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_selects_existing_project_or_home_recording_directory(
     binary: Path, execution: Execution
@@ -185,6 +187,7 @@ def test_selects_existing_project_or_home_recording_directory(
     return records
 
 
+@requires(POSIX)
 def test_rejects_non_utf8_home_recording_path(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     with tempfile.TemporaryDirectory() as temporary:
@@ -223,6 +226,7 @@ def test_rejects_non_utf8_home_recording_path(binary: Path) -> Transcript:
         return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_continues_without_record_when_record_cannot_be_created(
     binary: Path,
@@ -271,6 +275,7 @@ def test_continues_without_record_when_record_cannot_be_created(
         return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_updates_quarto_without_rereading_journal(
     binary: Path, execution: Execution
@@ -320,6 +325,7 @@ def test_updates_quarto_without_rereading_journal(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_records_tool_calls_and_images(
     binary: Path, execution: Execution
@@ -556,6 +562,7 @@ def test_records_tool_calls_and_images(
         )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_disables_recording_after_transcript_failure(
     binary: Path, execution: Execution
@@ -621,6 +628,7 @@ def test_disables_recording_after_transcript_failure(
         return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_recording_after_cell_output_failure(
     binary: Path, execution: Execution
@@ -1038,6 +1046,7 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
             release.close()
 
 
+@requires(POSIX)
 def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -1094,6 +1103,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             release.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_startup_recording_failure_without_a_tool_call(
     binary: Path, execution: Execution
@@ -1140,6 +1150,7 @@ def test_reports_startup_recording_failure_without_a_tool_call(
             release.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_records_startup_without_a_tool_call(
     binary: Path, execution: Execution

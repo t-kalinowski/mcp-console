@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import SQL, requires
 from support.assertions import (
     assert_result_content,
     last_result_text,
@@ -27,10 +28,10 @@ from support.docker_sandbox import (
     workspace,
 )
 from support.normalization import code
-from support.requirements import requires
 from support.suites import run_this_suite
 
 
+@requires(SQL)
 @requires(DOCKER_SANDBOX)
 def test_mixed_runtime_shares_recordings_and_restart_without_native(
     binary: Path,

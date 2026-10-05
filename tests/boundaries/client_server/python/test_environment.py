@@ -19,13 +19,15 @@ from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.requirements import (
     OLD_PYTHON,
     OLD_PYTHON_EXECUTABLE,
+    POSIX,
     PROCESS_EVENTS,
+    R,
     requires,
 )
-from support.requirements import R
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
 
@@ -54,6 +56,7 @@ def bootstrap_diagnostic(client: McpClient, ending: str) -> str:
 
 @executions(DIRECT, SANDBOXED)
 @requires(R)
+@platform_snapshots("win32")
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -61,6 +64,15 @@ def test_preserves_configured_python_environment(
     environment["RETICULATE_PYTHON"] = "configured-by-user"
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
+    if os.name == "nt":
+        # Windows inspects explicit selections on the host before launching
+        # either interpreter; retain that earlier public startup failure.
+        result = client.send(requirements={"action": "get"})
+        assert result["isError"] is True, result
+        assert last_result_text(client) == "explicit Python executable is not on PATH"
+        transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
+        assert errors == "explicit Python executable is not on PATH\n", errors
+        return transcript + [{"stderr": errors}]
     expected = "Error: explicit Python executable is not on PATH\n"
     assert bootstrap_diagnostic(client, expected) == expected
     # fmt: r
@@ -524,6 +536,7 @@ def test_uses_200_column_default_after_r_initializes_python(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_prints_requirements_with_host_uv_cache(

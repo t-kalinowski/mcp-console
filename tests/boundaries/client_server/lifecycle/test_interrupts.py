@@ -15,7 +15,7 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import stop_process, stop_process_group
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
@@ -32,6 +32,7 @@ from boundaries.client_server._harness import (
 )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_worker_with_sigint(
     binary: Path, execution: Execution
