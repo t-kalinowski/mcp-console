@@ -9,19 +9,19 @@ use unix as native;
 #[cfg(windows)]
 use windows as native;
 
-pub(super) use native::Child;
+use native::Child;
+pub(crate) use native::resolver_command;
 use native::{interrupt_resolver, stop_resolver};
-pub(crate) use native::{resolver_command, spawn_resolver};
 
 use std::io;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::ChildStdin;
 use std::process::ExitStatus;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 
 use crate::process_exit::ChildExitWaiter;
 
@@ -71,6 +71,7 @@ enum ResolverEvent {
         clear_marker: Option<Arc<AtomicU8>>,
     },
     Exited(Result<(), String>),
+    IoFailed(String),
 }
 
 enum ResolverInterrupt {
@@ -86,7 +87,6 @@ pub(crate) struct ResolverOutput {
 }
 
 pub(crate) struct ResolverProcess {
-    exit: Mutex<Option<ChildExitWaiter>>,
     events: Sender<ResolverEvent>,
     event_receiver: Receiver<ResolverEvent>,
     control: Arc<AtomicU8>,
@@ -98,7 +98,6 @@ impl ResolverProcess {
     pub(crate) fn new() -> Self {
         let (events, event_receiver) = mpsc::channel();
         Self {
-            exit: Mutex::new(None),
             events,
             event_receiver,
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
@@ -116,20 +115,56 @@ impl ResolverProcess {
         })
     }
 
-    // Mark the spawned child active before publishing its stop handle. An
-    // interrupt in that gap must wait for the child's actual signal result.
-    pub(crate) fn watch_exit(&self, pid: u32) {
+    pub(crate) fn spawn(
+        &self,
+        command: &mut Command,
+        input: Option<Vec<u8>>,
+    ) -> io::Result<ResolverInvocation> {
+        let endpoints = native::prepare_io(command, input.is_some())?;
+        let child = native::spawn_resolver(command);
+        // Command owns the synchronous child endpoints, too. Release them on
+        // both spawn results before any I/O or EOF observation can begin.
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = child?;
         self.cleanup.store(false, Ordering::SeqCst);
         *self.waiting.lock().expect("resolver phase lock") = true;
         let events = self.events.clone();
-        match ChildExitWaiter::start_observing(pid, move |result| {
+        let observation = match ChildExitWaiter::start_cancellable(child.id(), move |result| {
             let _ = events.send(ResolverEvent::Exited(result));
         }) {
-            Ok(exit) => *self.exit.lock().expect("resolver observer lock") = Some(exit),
+            Ok(exit) => Some(exit),
             Err(error) => {
                 let _ = self.events.send(ResolverEvent::Exited(Err(error)));
+                None
             }
-        }
+        };
+        let stdout = read_output(endpoints.stdout, self.events.clone(), "stdout");
+        let stderr = read_output(endpoints.stderr, self.events.clone(), "stderr");
+        let input = input.map(|bytes| {
+            let mut writer = endpoints.input.expect("resolver input endpoint");
+            let events = self.events.clone();
+            thread::spawn(move || {
+                let result = writer.write_all(&bytes);
+                if let Err(error) = &result {
+                    let _ = events.send(ResolverEvent::IoFailed(format!(
+                        "failed to write resolver stdin: {error}"
+                    )));
+                }
+                result
+            })
+        });
+        Ok(ResolverInvocation {
+            child,
+            observation,
+            input,
+            stdout,
+            stderr,
+            input_cancel: endpoints.input_cancel,
+            output_cancel: endpoints.output_cancel,
+        })
     }
 
     fn finish_wait(&self, kind: &str) -> Result<(), String> {
@@ -141,7 +176,7 @@ impl ResolverProcess {
                     let _ = reply.send(Ok(()));
                 }
                 ResolverEvent::Cancel => cancelled = true,
-                ResolverEvent::Exited(_) => {}
+                ResolverEvent::Exited(_) | ResolverEvent::IoFailed(_) => {}
             }
         }
         *waiting = false;
@@ -152,34 +187,68 @@ impl ResolverProcess {
         }
     }
 
-    pub(crate) fn wait(
+    pub(crate) fn collect(
         &self,
-        child: &mut Child,
-        input: Receiver<io::Result<()>>,
-        stdout: Receiver<io::Result<Vec<u8>>>,
-        stderr: Receiver<io::Result<Vec<u8>>>,
+        mut invocation: ResolverInvocation,
         program: &Path,
         kind: &str,
+        on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<ResolverOutput, String> {
-        wait_for_resolver(self, child, input, stdout, stderr, program, kind)
-    }
-
-    pub(crate) fn abort(
-        &self,
-        child: &mut Child,
-        program: &Path,
-        kind: &str,
-    ) -> Result<(), String> {
-        let result = self.stop(child, program, kind);
-        let _ = self.finish_wait(kind);
-        result.map(|_| ())
-    }
-
-    fn stop(&self, child: &mut Child, program: &Path, kind: &str) -> Result<ExitStatus, String> {
-        let mut exit = self.exit.lock().expect("resolver observer lock").take();
-        let result = stop_resolver(child, program, kind, exit.as_mut());
-        self.cleanup.store(result.is_ok(), Ordering::SeqCst);
-        result
+        let primary = on_started(self.stop_handle())
+            .and_then(|()| wait_for_resolver_exit(&mut invocation.child, self, program, kind))
+            .err();
+        let mut failure = ResolverFailure {
+            primary,
+            cleanup: Vec::new(),
+        };
+        let retirement = invocation.retire(program, kind);
+        self.cleanup.store(retirement.confirmed(), Ordering::SeqCst);
+        if let Err(error) = &retirement.process {
+            failure.record_cleanup(error.clone());
+        }
+        if let Err(error) = &retirement.observation {
+            failure.record_cleanup(error.clone());
+        }
+        if let Ok(Some(error)) = &retirement.observation {
+            failure.record_cleanup(format!(
+                "failed to wait for {kind} resolver `{}`: {error}",
+                program.display()
+            ));
+        }
+        if let Err(error) = self.finish_wait(kind) {
+            failure.primary.get_or_insert(error);
+        }
+        let write_result = match retirement.input {
+            None => Ok(()),
+            Some(Ok(result)) => result,
+            Some(Err(_)) => {
+                failure.record_cleanup(format!("{kind} resolver stdin writer task failed"));
+                Ok(())
+            }
+        };
+        let stdout = collect_output(retirement.stdout, "stdout", &mut failure);
+        let stderr = collect_output(retirement.stderr, "stderr", &mut failure);
+        if let Some(mut error) = failure.into_message() {
+            // A cleanup error must not erase the operation's captured diagnostic.
+            let diagnostic = String::from_utf8_lossy(&stderr);
+            let ordinary = String::from_utf8_lossy(&stdout);
+            let detail = if diagnostic.trim().is_empty() {
+                ordinary.trim()
+            } else {
+                diagnostic.trim()
+            };
+            if !detail.is_empty() {
+                error.push_str(": ");
+                error.push_str(detail);
+            }
+            return Err(error);
+        }
+        Ok(ResolverOutput {
+            status: retirement.process.expect("confirmed resolver status"),
+            write_result,
+            stdout,
+            stderr,
+        })
     }
 }
 
@@ -254,66 +323,137 @@ fn clear_control(state: &AtomicU8, control: u8, marked: bool) {
     }
 }
 
-pub(crate) fn completed_write() -> Receiver<io::Result<()>> {
-    let (sender, receiver) = mpsc::channel();
-    sender
-        .send(Ok(()))
-        .expect("resolver completion receiver should be available");
-    receiver
+struct Endpoints {
+    input: Option<Box<dyn Write + Send>>,
+    stdout: Box<dyn Read + Send>,
+    stderr: Box<dyn Read + Send>,
+    input_cancel: native::Cancel,
+    output_cancel: native::Cancel,
 }
 
-pub(crate) fn read_output(
-    mut output: impl io::Read + Send + 'static,
-) -> Receiver<io::Result<Vec<u8>>> {
-    let (sender, receiver) = mpsc::channel();
-    let _ = thread::spawn(move || {
+/// Evidence only for this materializer's native process scope and owned tasks;
+/// it says nothing about preparation transport or outer compute retirement.
+struct ResolverRetirement {
+    process: Result<ExitStatus, String>,
+    observation: Result<Option<String>, String>,
+    input: Option<thread::Result<io::Result<()>>>,
+    stdout: thread::Result<(Vec<u8>, io::Result<()>)>,
+    stderr: thread::Result<(Vec<u8>, io::Result<()>)>,
+}
+
+impl ResolverRetirement {
+    fn confirmed(&self) -> bool {
+        self.process.is_ok()
+            && self.observation.is_ok()
+            && self.input.as_ref().is_none_or(Result::is_ok)
+            && self.stdout.is_ok()
+            && self.stderr.is_ok()
+    }
+}
+
+/// Owned resources for one subprocess, distinct from reusable control state.
+/// Process confirmation never stands in for observation or I/O task settlement.
+pub(crate) struct ResolverInvocation {
+    child: Child,
+    observation: Option<ChildExitWaiter>,
+    input: Option<JoinHandle<io::Result<()>>>,
+    stdout: JoinHandle<(Vec<u8>, io::Result<()>)>,
+    stderr: JoinHandle<(Vec<u8>, io::Result<()>)>,
+    input_cancel: native::Cancel,
+    output_cancel: native::Cancel,
+}
+
+impl ResolverInvocation {
+    fn retire(mut self, program: &Path, kind: &str) -> ResolverRetirement {
+        // Registration, process and I/O failures share this path. Wake stdin
+        // independently, then retain the output tail through native retirement.
+        drop(self.input_cancel);
+        let process = stop_resolver(&mut self.child, program, kind, self.observation.as_mut());
+        let observation = self
+            .observation
+            .as_mut()
+            .map_or(Ok(None), ChildExitWaiter::cancel_and_finish);
+        drop(self.output_cancel);
+        // Join every task before publishing any terminal evidence, even when
+        // process retirement failed. A joined task may itself report I/O error.
+        ResolverRetirement {
+            process,
+            observation,
+            input: self.input.map(|task| task.join()),
+            stdout: self.stdout.join(),
+            stderr: self.stderr.join(),
+        }
+    }
+}
+
+fn read_output(
+    mut output: Box<dyn Read + Send>,
+    events: Sender<ResolverEvent>,
+    name: &'static str,
+) -> JoinHandle<(Vec<u8>, io::Result<()>)> {
+    thread::spawn(move || {
         let mut bytes = Vec::new();
-        let result = output.read_to_end(&mut bytes).map(|_| bytes);
-        let _ = sender.send(result);
-    });
-    receiver
+        let result = output.read_to_end(&mut bytes).map(|_| ());
+        if let Err(error) = &result {
+            let _ = events.send(ResolverEvent::IoFailed(format!(
+                "failed to read resolver {name}: {error}"
+            )));
+        }
+        (bytes, result)
+    })
 }
 
-pub(super) fn write_input(mut input: ChildStdin, bytes: Vec<u8>) -> Receiver<io::Result<()>> {
-    let (sender, receiver) = mpsc::channel();
-    let _ = thread::spawn(move || {
-        let _ = sender.send(input.write_all(&bytes));
-    });
-    receiver
+struct ResolverFailure {
+    primary: Option<String>,
+    cleanup: Vec<String>,
 }
 
-fn receive_result<T>(
-    receiver: Receiver<io::Result<T>>,
+impl ResolverFailure {
+    fn record_cleanup(&mut self, error: String) {
+        if self.primary.as_ref() != Some(&error) && !self.cleanup.contains(&error) {
+            self.cleanup.push(error);
+        }
+    }
+
+    fn into_message(self) -> Option<String> {
+        let errors: Vec<_> = self.primary.into_iter().chain(self.cleanup).collect();
+        (!errors.is_empty()).then(|| errors.join("; "))
+    }
+}
+
+fn collect_output(
+    result: thread::Result<(Vec<u8>, io::Result<()>)>,
     name: &str,
-    kind: &str,
-) -> Result<io::Result<T>, String> {
-    receiver
-        .recv()
-        .map_err(|_| format!("{kind} resolver {name} task stopped"))
+    failure: &mut ResolverFailure,
+) -> Vec<u8> {
+    match result {
+        Ok((bytes, result)) => {
+            if let Err(error) = result {
+                failure.record_cleanup(format!("failed to read resolver {name}: {error}"));
+            }
+            bytes
+        }
+        Err(_) => {
+            failure.record_cleanup(format!("resolver {name} reader task failed"));
+            Vec::new()
+        }
+    }
 }
 
 fn wait_for_resolver_exit(
     child: &mut Child,
-    events: &Receiver<ResolverEvent>,
+    resolver: &ResolverProcess,
     program: &Path,
     kind: &str,
-    resolver: &ResolverProcess,
-) -> Result<ExitStatus, String> {
-    let stop = |child: &mut Child| resolver.stop(child, program, kind);
+) -> Result<(), String> {
     loop {
-        match events.recv() {
-            Ok(ResolverEvent::Cancel) => {
-                stop(child)?;
-                return Err(format!("{kind} resolution cancelled"));
-            }
+        match resolver.event_receiver.recv() {
+            Ok(ResolverEvent::Cancel) => return Err(format!("{kind} resolution cancelled")),
             Ok(ResolverEvent::Interrupt {
                 reply,
                 clear_marker,
             }) => match interrupt_resolver(child) {
-                Ok(ResolverInterrupt::Signaled) => {
-                    let _ = reply.send(Ok(()));
-                }
-                Ok(ResolverInterrupt::AlreadyExited) => {
+                Ok(ResolverInterrupt::Signaled | ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));
                 }
                 Err(error) => {
@@ -325,52 +465,21 @@ fn wait_for_resolver_exit(
                         program.display()
                     );
                     let _ = reply.send(Err(message.clone()));
-                    let _ = stop(child);
                     return Err(message);
                 }
             },
-            Ok(ResolverEvent::Exited(Ok(()))) => {
-                return stop(child);
+            Ok(ResolverEvent::Exited(result)) => {
+                return result.map_err(|error| {
+                    format!(
+                        "failed to wait for {kind} resolver `{}`: {error}",
+                        program.display()
+                    )
+                });
             }
-            Ok(ResolverEvent::Exited(Err(error))) => {
-                let _ = stop(child);
-                return Err(format!(
-                    "failed to wait for {kind} resolver `{}`: {error}",
-                    program.display()
-                ));
-            }
-            Err(_) => {
-                let _ = stop(child);
-                return Err(format!("{kind} resolver exit task stopped"));
-            }
+            Ok(ResolverEvent::IoFailed(error)) => return Err(error),
+            Err(_) => return Err(format!("{kind} resolver exit task stopped")),
         }
     }
-}
-
-fn wait_for_resolver(
-    resolver: &ResolverProcess,
-    child: &mut Child,
-    input: Receiver<io::Result<()>>,
-    stdout: Receiver<io::Result<Vec<u8>>>,
-    stderr: Receiver<io::Result<Vec<u8>>>,
-    program: &Path,
-    kind: &str,
-) -> Result<ResolverOutput, String> {
-    let status = wait_for_resolver_exit(child, &resolver.event_receiver, program, kind, resolver);
-    let phase_result = resolver.finish_wait(kind);
-    let status = status?;
-    phase_result?;
-    let write_result = receive_result(input, "stdin writer", kind)?;
-    let stdout = receive_result(stdout, "stdout reader", kind)?
-        .map_err(|error| format!("failed to read resolver stdout: {error}"))?;
-    let stderr = receive_result(stderr, "stderr reader", kind)?
-        .map_err(|error| format!("failed to read resolver stderr: {error}"))?;
-    Ok(ResolverOutput {
-        status,
-        write_result,
-        stdout,
-        stderr,
-    })
 }
 
 fn settle_observation(exit: Option<&mut ChildExitWaiter>) {

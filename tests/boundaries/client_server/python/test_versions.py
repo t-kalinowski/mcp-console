@@ -424,6 +424,8 @@ def test_recovers_from_python_version_resolution_failure(
         assert real_uv is not None, "real uv is required"
         failure_marker = temporary / "fail-version-resolution"
         environment = os.environ.copy()
+        # Keep the fixture record in a granted resolver cache.
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(uv)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(temporary / "uv.jsonl")
@@ -740,6 +742,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         environment["RETICULATE_UV"] = "managed"
         environment["R_USER_CACHE_DIR"] = str(r_user_cache)
         environment["IR_CACHE_DIR"] = host_ir_cache
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["UV_CACHE_DIR"] = str(temporary / "wrong-cache")
         environment["UV_PYTHON_INSTALL_DIR"] = str(temporary / "wrong-python")
         environment["PATH"] = os.pathsep.join((str(fake_bin), original_path))
@@ -754,7 +757,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         client = stack.enter_context(
             McpClient(
                 binary,
-                execution.serve(),
+                execution.serve("-c", "cache=host"),
                 environment,
                 current_directory=temporary,
             )

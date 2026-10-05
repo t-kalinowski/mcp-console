@@ -18,6 +18,11 @@ mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analys
 
 See [resolver settings](RESOLVER.md), [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
 
+Local sandboxed sessions use Console-specific caches by default.
+The top-level `cache: host` setting or `-c cache=host` opts into host installations and cache locations.
+`--no-sandbox` defaults to host caches.
+See [cache locations](RESOLVER.md#cache-locations) for platform paths and execution-target limits.
+
 ## Console home
 
 The home Console directory is `~/.agents/console`.

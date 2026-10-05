@@ -71,6 +71,7 @@ def grant_resolver_cache(workspace: Path, cache: Path) -> None:
     config.write_text(
         json.dumps(
             {
+                "cache": "host",
                 "resolver": {
                     "filesystem": {
                         "entries": [
@@ -88,7 +89,7 @@ def grant_resolver_cache(workspace: Path, cache: Path) -> None:
                         "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache / "duckdb"),
                         "MPLCONFIGDIR": str(cache / "matplotlib"),
                     },
-                }
+                },
             }
         )
     )
@@ -437,7 +438,9 @@ exec "{shutil.which("uv")}" "$@"
         )
         if execution is SANDBOXED:
             grant_resolver_cache(workspace, cache)
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             client.expect(
                 "user cache selected\n",
@@ -499,7 +502,9 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
                 env.pop("UV_CACHE_DIR", None)
                 if execution is SANDBOXED:
                     grant_resolver_cache(workspace, root / "shared-uv")
-            with McpClient(binary, execution.serve(), env, workspace) as client:
+            with McpClient(
+                binary, execution.serve("-c", "cache=host"), env, workspace
+            ) as client:
                 client.initialize_and_list_tools()
                 client.expect(
                     "relative startup paths retained\n",
@@ -556,7 +561,9 @@ def non_utf8_environment_preparation(binary: Path, execution: Execution) -> Tran
                     }
                 )
             )
-        with McpClient(binary, execution.serve(), env, root) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, root
+        ) as client:
             client.initialize_and_list_tools()
             # Host preparation accepts unrelated non-UTF-8 values. The explicit
             # resolver environment keeps native preparation usable while the
@@ -1159,7 +1166,9 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with McpClient(installed_console(binary), execution.serve(), env) as client:
+            with McpClient(
+                installed_console(binary), execution.serve("-c", "cache=host"), env
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
@@ -1227,7 +1236,9 @@ def automatic_activation_failure_requires_restart(
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.expect(python="identity = object(); steps = []")
             initial = client.send(requirements={"action": "get"})["structuredContent"][
@@ -1272,7 +1283,9 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
         root = Path(directory)
         env = preparation_environment(root)
         (root / "mode").write_text("success")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.send(python="import os; worker_pid = os.getpid()")
             before = (root / "resolutions.log").read_text()
@@ -1365,7 +1378,9 @@ def test_limits_live_python_additions_to_new_idle_distributions(
         root = Path(directory)
         env = preparation_environment(root)
         (root / "mode").write_text("success")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.expect(
                 python="import os; worker_pid = os.getpid(); identity = object()",
@@ -1440,7 +1455,9 @@ def test_live_python_failure_and_interrupt_preserve_accepted_state(
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with McpClient(installed_console(binary), execution.serve(), env) as client:
+            with McpClient(
+                installed_console(binary), execution.serve("-c", "cache=host"), env
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     python="import os; worker_pid = os.getpid(); identity = object()"
@@ -1514,7 +1531,9 @@ def live_python_rejects_incompatible_library_before_activation(
     with preparation_directory() as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 # fmt: python
@@ -1577,7 +1596,9 @@ def live_python_activation_failure_requires_restart(
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             # Separate fd 2 from the sideband deterministically. Activation
             # diagnostics must arrive before their preparation result even
@@ -1650,7 +1671,9 @@ def test_failed_managed_preparation_preserves_worker_and_input(
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with McpClient(binary, execution.serve(), env, workspace) as client:
+            with McpClient(
+                binary, execution.serve("-c", "cache=host"), env, workspace
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     # fmt: python
@@ -1820,7 +1843,9 @@ def test_preparation_pins_result_files(
         env = preparation_environment(root)
         unrelated = root / "unrelated"
         unrelated.write_text("unrelated host contents")
-        with McpClient(binary, execution.serve(), env, Path(workspace)) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, Path(workspace)
+        ) as client:
             client.initialize_and_list_tools()
             client.send(python="retained = 42")
             for mode in ("replace-output", "replace-inspection"):
@@ -1849,7 +1874,9 @@ def test_retries_failed_prestart_python_preparation(
         workspace = Path(directory) / "workspace"
         workspace.mkdir()
         env = preparation_environment(root)
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             for mode in ("failure", "inspection"):
                 (root / "mode").write_text(mode)
@@ -1909,7 +1936,9 @@ def test_shutdown_cancels_sans_r_python_preparation(
             os.mkfifo(root / "alive")
             alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
             try:
-                with McpClient(binary, execution.serve(), env, workspace) as client:
+                with McpClient(
+                    binary, execution.serve("-c", "cache=host"), env, workspace
+                ) as client:
                     client.initialize_and_list_tools()
                     # MCP readiness precedes discovery. Wait for its retained
                     # result before measuring the operation's resolver checkpoint.

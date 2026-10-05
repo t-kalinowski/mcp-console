@@ -32,7 +32,15 @@ pub(crate) fn command(settings: SandboxSettings, parent: u32) -> Result<Command,
 
 fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String> {
     let workspace = std::env::current_dir().map_err(|error| error.to_string())?;
-    let caches = super::cache::writable_roots(&settings)?;
+    // Explicit entries already define the write grants, including Console caches.
+    let caches = if settings
+        .get("filesystem")
+        .is_some_and(|filesystem| filesystem.get("entries").is_some())
+    {
+        Vec::new()
+    } else {
+        super::cache::writable_roots(&settings)?
+    };
     let filesystem = settings.entry("filesystem").or_insert_with(|| json!({}));
     if let Value::Object(filesystem) = filesystem {
         filesystem.entry("kind").or_insert("restricted".into());
