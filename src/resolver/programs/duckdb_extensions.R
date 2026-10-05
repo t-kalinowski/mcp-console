@@ -20,7 +20,7 @@ base::local({
       dbdir = ":memory:",
       config = list(
         # Local preparation and workers share one captured extension cache.
-        # Remote preparation keeps DuckDB core's native default.
+        # An unset directory retains DuckDB core's native default.
         extension_directory = Sys.getenv(
           "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
         ),

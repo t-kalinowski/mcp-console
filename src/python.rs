@@ -104,14 +104,6 @@ pub(crate) fn ensure_initialized() -> Result<bool, String> {
     let selection = SELECTION
         .get()
         .ok_or("Python capability is not configured")?;
-    if crate::worker::bootstrapping()
-        && selection.python.is_none()
-        && std::env::var_os("MCP_CONSOLE_EXECUTION_COMPUTE").is_some()
-    {
-        // Prepared targets already probed genuine Python absence. Preserve
-        // their R-only capability instead of entering unresolved R discovery.
-        return Ok(true);
-    }
     if !crate::worker::r_initialized()
         && let Some(python) = &selection.python
     {

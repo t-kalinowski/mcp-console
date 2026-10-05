@@ -16,12 +16,10 @@ stderr: >
 ---
 override: target.command=[far, faz]
 stderr: >
-  configuration with CLI overrides: local host targets use the launch
-  directory and built-in command; target.workspace and target.command
-  require SSH or Docker
+  configuration with CLI overrides: target: unknown field `target`,
+  expected one of `cache`, `python`, `extends`, `sandbox`, `resolver`
 ---
 override: "unknown={baz: [far, faz]}"
 stderr: >
   configuration with CLI overrides: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `extends`, `sandbox`, `resolver`,
-  `target`
+  expected one of `cache`, `python`, `extends`, `sandbox`, `resolver`

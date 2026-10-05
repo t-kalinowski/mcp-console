@@ -1,5 +1,0 @@
----
-native_selection_preserved: true
-permission_checks_require_native_capability: true
-no_security_downgrade: true
-containers_absent: true

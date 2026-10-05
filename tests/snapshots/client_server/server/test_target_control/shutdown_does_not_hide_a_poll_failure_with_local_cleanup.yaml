@@ -1,4 +1,0 @@
----
-requested_control: shutdown
-poll_failure_retained: true
-provider_creation: false

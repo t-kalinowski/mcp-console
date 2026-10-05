@@ -1,5 +1,0 @@
----
-host_read: true
-cache_write: true
-host_write_allowed: true
-execution_host: ssh

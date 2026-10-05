@@ -9,7 +9,6 @@ use serde_json::Value;
 pub(super) struct Envelope<'a> {
     #[serde(flatten)]
     pub event: Event<'a>,
-    pub schema_version: u64,
     pub run_id: &'a str,
     pub sequence: u64,
     pub at: String,
@@ -23,23 +22,14 @@ pub(super) enum Event<'a> {
         working_directory: &'a str,
         dynamic_resolution: Option<bool>,
         python_preparation: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target: Option<&'a Value>,
     },
     EnvironmentDiscovered {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        target: Option<&'a Value>,
     },
     StartupFailed {
         message: &'a str,
-    },
-    TargetGeneration {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        container_id: Option<&'a str>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sandbox: Option<&'a crate::target_launch::SandboxIdentity>,
     },
     PythonEnvironmentAccepted {
         packages: &'a [String],

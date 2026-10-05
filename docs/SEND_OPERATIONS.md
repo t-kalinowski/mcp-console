@@ -59,7 +59,7 @@ Later environment/worker-start failures follow the ordinary later-cell retry bou
 Decoding and structural checks precede side effects: unknown fields/types, multiple or configured-disabled languages, incompatible get/reset payloads, set/reset with interrupt, standalone preparation with nonempty stdin, and interrupt-plus-requirements without a cell are rejected first.
 Runtime-capability checks precede execution/preparation, though an early accepted cell can report such an error through its polling result.
 
-Bare/prepared targets reject mutations before control, stdin, or evaluation.
+Bare workers reject mutations before control, stdin, or evaluation.
 Python-only sessions reject **all** interrupt-plus-requirements combinations before signaling or queuing input, including retained requirements.
 
 Requirement-content errors normally precede effects too.
@@ -105,7 +105,7 @@ Idle polls return immediately.
 
 Transport setup and retirement have their own deadlines, not a total resolver installation deadline.
 Interrupt targets active resolver work; connection closure cancels and retires it.
-See the target guides for provider-specific limits.
+See [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 ## Preparation and failure
 
@@ -133,6 +133,6 @@ Polling consumes its observed interval, including omitted text.
 Get returns the complete manifest in structured content, not a truncated declaration.
 
 [Raw cell logs](RECORDING.md) are flushed at response cuts and can be read while evaluation continues.
-Paths refer to the controller, including remote targets.
+Paths refer to the local Console server.
 Reading a file does not move the polling cursor; resubmitting code is not output retrieval.
 [Architecture](ARCHITECTURE.md#output-and-delivery) covers response recovery and the limits of delivery guarantees.
