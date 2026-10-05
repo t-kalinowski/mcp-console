@@ -181,6 +181,9 @@ Each target CLI settles its child exit observation, input, and output tasks befo
 Before provider launch, that evidence covers only local command retirement.
 After the probe owner launches, setup also requires the generation's provider receipt, including receipts carried with workload errors.
 Confirmed cleanup does not turn a workload or infrastructure failure into successful setup or suppress it during connection shutdown.
+Connection closure that refuses the next preparation stage is separate from control of a completed operation.
+It permits a quiet exit only after the refused stage's cleanup is confirmed.
+Errors closing the preparation connection remain visible.
 
 Interrupt targets the active resolver, otherwise the current worker.
 It is not retried against a replacement.
