@@ -1,5 +1,15 @@
 ---
 send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
   python: "while True: pass"
   timeout_ms: 1
 result:
