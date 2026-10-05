@@ -153,6 +153,8 @@ def checkpoint_uv_environment(
 def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
     real_ir = shutil.which("ir", path=environment.get("PATH"))
     assert real_ir is not None, "ir is required"
+    # Record the result inside an explicitly granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     identity = directory / "resolved-r-library"
     fake_bin = directory / "fixture-r-bin"
     fake_bin.mkdir()

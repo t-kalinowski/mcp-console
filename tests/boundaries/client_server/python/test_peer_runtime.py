@@ -558,6 +558,7 @@ def test_idle_preparation_keeps_r_uninitialized(
         (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
         environment = dict(os.environ, RETICULATE_PYTHONPATH=str(modules))
         environment.pop("RETICULATE_PYTHON", None)
+        environment["UV_TOOL_DIR"] = str(root)
         arguments = root / "uv-arguments"
         environment.update(
             RETICULATE_UV=str(
@@ -568,9 +569,9 @@ def test_idle_preparation_keeps_r_uninitialized(
             MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD=str(arguments),
         )
         serve = (
-            execution.serve("--writable-root", str(root))
+            execution.serve("-c", "cache=host", "--writable-root", str(root))
             if execution == SANDBOXED
-            else execution.serve()
+            else execution.serve("-c", "cache=host")
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
