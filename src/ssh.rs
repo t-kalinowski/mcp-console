@@ -15,6 +15,7 @@ pub(crate) mod lease;
 
 pub(crate) const PROTOCOL: Protocol = Protocol("SSH");
 pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
+#[cfg(unix)]
 pub(crate) const SETUP_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub(crate) struct Session {
@@ -23,6 +24,7 @@ pub(crate) struct Session {
     languages: crate::cell::Languages,
     pub(crate) blocked: Arc<Mutex<Option<String>>>,
     pub preparation: Option<preparation::Preparation>,
+    #[cfg(unix)]
     pub(crate) status: lease::status::Status,
     generation: Arc<std::sync::atomic::AtomicU64>,
     discovery: Option<preparation::Discovery>,
@@ -40,6 +42,7 @@ impl Session {
             languages,
             blocked: Arc::default(),
             preparation: None,
+            #[cfg(unix)]
             status: Default::default(),
             generation: Arc::default(),
             discovery: None,
@@ -61,7 +64,18 @@ impl Session {
             .map_err(|_| "SSH session lock poisoned")?
         {
             Some(error) => Err(error.clone()),
-            None => self.status.check(),
+            None => self.check_recovery(),
+        }
+    }
+
+    pub(crate) fn check_recovery(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            self.status.check()
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(())
         }
     }
 
@@ -158,6 +172,7 @@ impl Session {
     }
 }
 
+#[cfg(unix)]
 pub(crate) fn ssh_command(
     target: &crate::settings::Target,
     operation: &str,

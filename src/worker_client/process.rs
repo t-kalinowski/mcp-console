@@ -1026,12 +1026,15 @@ fn start_relay_event_reader(
     thread::spawn(move || {
         let output: Box<dyn Read> = match &target {
             Some(generation) => {
+                #[cfg(unix)]
                 let output: Box<dyn Read> = match generation.ssh_session() {
                     Some(session) => Box::new(crate::ssh::lease::status::Output::new(
                         output, session, false,
                     )),
                     None => Box::new(output),
                 };
+                #[cfg(not(unix))]
+                let output: Box<dyn Read> = Box::new(output);
                 Box::new(generation.output(output, recording))
             }
             None => Box::new(output),

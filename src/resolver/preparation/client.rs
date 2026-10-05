@@ -301,6 +301,8 @@ impl Preparation {
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        #[cfg(not(unix))]
+        let _ = &ssh;
         let native = command.get_args().next() == Some("sandbox".as_ref());
         #[cfg(unix)]
         command

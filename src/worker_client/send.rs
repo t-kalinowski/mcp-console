@@ -53,7 +53,7 @@ impl Client {
                 ssh.available()?;
             }
             if request.cell.is_some() {
-                ssh.status.check()?;
+                ssh.check_recovery()?;
             }
         }
         // Admission does not depend on discovery or readiness. The established
