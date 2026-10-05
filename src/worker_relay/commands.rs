@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::io::{Cancellation, cancellation_pipe, set_nonblocking};
+use super::routing::Operation;
 use super::supervisor::{Control, FailureReporter};
 use crate::jsonl::JsonlBuffer;
 use crate::readiness::wait_for_io;
@@ -74,45 +75,23 @@ impl CommandReader {
                             return;
                         }
                     };
-                    let message = match command {
-                        RelayCommand::Evaluate { language, source } => {
-                            ServerMessage::Evaluate { language, source }
-                        }
-                        RelayCommand::PrepareR { library } => ServerMessage::PrepareR { library },
-                        RelayCommand::RResolved { library } => ServerMessage::RResolved { library },
-                        RelayCommand::RResolutionFailed { failure, message } => {
-                            ServerMessage::RResolutionFailed { failure, message }
-                        }
-                        RelayCommand::PreparePython { packages } => {
-                            ServerMessage::PreparePython { packages }
-                        }
-                        RelayCommand::PythonResolved { python, native } => {
-                            ServerMessage::PythonResolved { python, native }
-                        }
-                        RelayCommand::PythonResolutionFailed { message } => {
-                            ServerMessage::PythonResolutionFailed { message }
-                        }
-                        RelayCommand::PythonVersionResolved { version } => {
-                            ServerMessage::PythonVersionResolved { version }
-                        }
-                        RelayCommand::PythonVersionResolutionFailed { message } => {
-                            ServerMessage::PythonVersionResolutionFailed { message }
-                        }
-                        RelayCommand::Stdin { data } => {
+                    let message = match Operation::from(command) {
+                        Operation::Worker(message) => message,
+                        Operation::Stdin { data } => {
                             if stdin.send(StdinWrite::Write(data.into_bytes())).is_err() {
                                 failures.report("worker stdin writer stopped".to_string());
                                 return;
                             }
                             continue;
                         }
-                        RelayCommand::Interrupt { request_id } => {
+                        Operation::Interrupt { request_id } => {
                             if controls.send(Control::Interrupt { request_id }).is_err() {
                                 failures.report("relay supervisor stopped".to_string());
                                 return;
                             }
                             continue;
                         }
-                        RelayCommand::Shutdown { grace_millis } => {
+                        Operation::Shutdown { grace_millis } => {
                             let deadline = Instant::now() + Duration::from_millis(grace_millis);
                             if controls
                                 .send(Control::Shutdown {

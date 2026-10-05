@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
+use super::routing::Operation;
 use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
 use crate::windows::{Event, Pipe};
@@ -273,54 +274,28 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
             }
-            Ok(Control::Command(command)) => match command {
-                RelayCommand::Interrupt { request_id } => {
+            Ok(Control::Command(command)) => match Operation::from(command) {
+                Operation::Interrupt { request_id } => {
                     interrupt.set();
                     events.send_supervisor(RelayEvent::InterruptResult {
                         request_id,
                         error: None,
                     });
                 }
-                RelayCommand::Shutdown { grace_millis } => {
+                Operation::Shutdown { grace_millis } => {
                     stopping.store(true, Ordering::SeqCst);
                     events.send_supervisor(RelayEvent::ShutdownStarted);
                     deadline = Some(Instant::now() + Duration::from_millis(grace_millis));
                     send_stdin.take();
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
-                RelayCommand::Stdin { data } => {
+                Operation::Stdin { data } => {
                     if let Some(stdin) = &send_stdin {
                         let _ = stdin.send(data);
                     }
                 }
-                RelayCommand::Evaluate { language, source } => {
-                    let _ = send_sideband.send(ServerMessage::Evaluate { language, source });
-                }
-                RelayCommand::PrepareR { library } => {
-                    let _ = send_sideband.send(ServerMessage::PrepareR { library });
-                }
-                RelayCommand::RResolved { library } => {
-                    let _ = send_sideband.send(ServerMessage::RResolved { library });
-                }
-                RelayCommand::RResolutionFailed { failure, message } => {
-                    let _ =
-                        send_sideband.send(ServerMessage::RResolutionFailed { failure, message });
-                }
-                RelayCommand::PreparePython { packages } => {
-                    let _ = send_sideband.send(ServerMessage::PreparePython { packages });
-                }
-                RelayCommand::PythonResolved { python, native } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolved { python, native });
-                }
-                RelayCommand::PythonResolutionFailed { message } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolutionFailed { message });
-                }
-                RelayCommand::PythonVersionResolved { version } => {
-                    let _ = send_sideband.send(ServerMessage::PythonVersionResolved { version });
-                }
-                RelayCommand::PythonVersionResolutionFailed { message } => {
-                    let _ = send_sideband
-                        .send(ServerMessage::PythonVersionResolutionFailed { message });
+                Operation::Worker(message) => {
+                    let _ = send_sideband.send(message);
                 }
             },
         }
