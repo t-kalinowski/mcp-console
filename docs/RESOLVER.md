@@ -97,6 +97,7 @@ Workers link the warmed font cache into their private Matplotlib directory.
 Host Matplotlib configuration remains selected independently of this cache.
 
 Explicit cache environment values remain effective, including inherited values.
+Empty cache values use the Console defaults.
 An explicit `resolver.filesystem.entries` retains the existing host cache layout and requires its matching write grants.
 `--no-sandbox`, Windows preparation, and SSH preparation retain host cache selection.
 No broker protocol, cache lease, or automatic cache deletion is added.

@@ -26,6 +26,15 @@ from boundaries.client_server.python.test_without_r import environment
 
 @requires(SANDBOX)
 def test_default_caches_use_console_namespace(binary: Path) -> Transcript:
+    return console_cache_defaults(binary, configured_empty=False)
+
+
+@requires(SANDBOX)
+def test_empty_cache_overrides_use_console_defaults(binary: Path) -> Transcript:
+    return console_cache_defaults(binary, configured_empty=True)
+
+
+def console_cache_defaults(binary: Path, *, configured_empty: bool) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory).resolve()
         tools = root / "bin"
@@ -44,6 +53,31 @@ def test_default_caches_use_console_namespace(binary: Path) -> Transcript:
         ):
             env.pop(name, None)
         payload = home / ".cache/mcp-console/resolver/payload"
+        if configured_empty:
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "resolver": {
+                            "environment": {
+                                name: ""
+                                for name in (
+                                    "UV_CACHE_DIR",
+                                    "UV_PYTHON_INSTALL_DIR",
+                                    "UV_TOOL_DIR",
+                                    "IR_CACHE_DIR",
+                                    "R_USER_CACHE_DIR",
+                                    "RENV_PATHS_ROOT",
+                                    "PKG_CACHE_DIR",
+                                    "MPLCONFIGDIR",
+                                    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
+                                )
+                            }
+                        }
+                    }
+                )
+            )
         with McpClient(binary, ("serve",), env, root) as client:
             client.initialize_and_list_tools()
             client.expect(
@@ -62,7 +96,10 @@ def test_default_caches_use_console_namespace(binary: Path) -> Transcript:
         assert not (home / ".cache/uv").exists()
         assert not (home / "Library/Caches/uv").exists()
         assert not (home / "Library/Application Support/uv").exists()
-    return [{"default_caches": "console-owned", "empty_xdg": "HOME fallback"}]
+    result = {"default_caches": "console-owned", "empty_xdg": "HOME fallback"}
+    if configured_empty:
+        result["empty_cache_overrides"] = "Console defaults"
+    return [result]
 
 
 @requires(SANDBOX)

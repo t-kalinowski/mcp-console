@@ -51,7 +51,12 @@ pub(crate) fn isolated_defaults(mut settings: SandboxSettings) -> Result<Sandbox
         .as_object_mut()
         .ok_or("resolver.environment must be a mapping")?;
     for (name, value) in defaults {
-        environment.entry(name).or_insert(value);
+        if environment
+            .get(&name)
+            .is_none_or(|value| value.as_str() == Some(""))
+        {
+            environment.insert(name, value);
+        }
     }
     Ok(settings)
 }
