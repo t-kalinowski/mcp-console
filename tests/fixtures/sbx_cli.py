@@ -225,14 +225,21 @@ elif args[0] == "exec":
             3,
             {
                 "confirmed": mode != "probe-unconfirmed",
-                "error": "probe validation failed" if mode == "probe-failed" else None,
+                "error": "probe validation failed"
+                if mode in ("probe-failed", "probe-failed-gate")
+                else None,
             },
         )
+        if mode == "probe-failed-gate":
+            gate()
     else:
         frame(2, {"kind": "ready"})
         initializing = mode == "bootstrap-input"
         if initializing:
             frame(2, {"kind": "input_requested", "prompt": "target startup> "})
+            assert (root / "prompt-ready").is_fifo()
+            with (root / "prompt-ready").open("wb", buffering=0) as stream:
+                stream.write(b"1")
         else:
             frame(2, {"kind": "runtime_initialized", "interrupted": False})
         for line in source:
@@ -261,6 +268,12 @@ elif args[0] == "exec":
                         frame(2, {"kind": "console_output", "data": "x" * 32768})
                 frame(2, {"kind": "console_output", "data": "provider peer\n"})
                 frame(2, {"kind": "completed"})
+            elif command["kind"] == "interrupt":
+                with (root / "interrupts").open("a") as stream:
+                    stream.write(json.dumps(command) + "\n")
+                frame(
+                    2, {"kind": "interrupt_result", "request_id": command["request_id"]}
+                )
             elif command["kind"] == "shutdown":
                 frame(2, {"kind": "shutdown_started"})
                 frame(2, {"kind": "worker_exited", "code": 0})

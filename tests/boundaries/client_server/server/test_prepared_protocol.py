@@ -2,11 +2,13 @@
 
 import json
 import sys
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.docker_sandbox import calls, cli_peer, configure, workspace
 from support.requirements import POSIX, requires
@@ -93,15 +95,19 @@ def test_prepared_bootstrap_withholds_and_runs_first_cell_once(binary: Path) -> 
         environment = cli_peer(root / "peer")
         configure(root, template=TEMPLATE)
         (root / "peer/mode").write_text("bootstrap-input")
-        with McpClient(binary, ("serve",), environment, root) as client:
+        with (
+            closing(FifoCheckpoint.create(root / "peer/prompt-ready")) as prompt,
+            McpClient(binary, ("serve",), environment, root) as client,
+        ):
             client.initialize_and_list_tools()
             # A short deadline admits the cell while the prepared worker's
             # startup prompt blocks initialization. Polling must not replay it.
+            client.send(python="first_cell = 42", timeout_ms=0)
+            prompt.wait("prepared worker emitted its startup prompt")
             wait_for_evaluation_output(
                 client,
                 '[input requested: "target startup> "]\n[waiting for stdin]',
                 "prepared worker startup prompt",
-                python="first_cell = 42",
                 timeout_ms=10,
             )
             client.send(timeout_ms=0)
