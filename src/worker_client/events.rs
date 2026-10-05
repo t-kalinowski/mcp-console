@@ -265,7 +265,7 @@ fn dispatch_worker_events(
                                 // Aborting the sole writer can leave a partial
                                 // command. Its EOF failure describes transport,
                                 // not cleanup. Other Fatal messages and the
-                                // launcher's/provider's retirement still gate replacement.
+                                // launcher's retirement still gate replacement.
                                 let aborted_frame = commands.is_aborted()
                                     && (message == PARTIAL_COMMAND_EOF
                                         || message

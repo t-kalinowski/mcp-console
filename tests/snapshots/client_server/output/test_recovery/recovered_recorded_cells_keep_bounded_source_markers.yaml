@@ -39,23 +39,23 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8033
+        text_bytes: 8068
         concat:
           - |
             [worker stopped: in-memory state lost]
             [starting new worker]
             cell 0 head
           - repeat: x
-            count: 2484
+            count: 2548
           - |-
 
-            [output preview: omitted 30297 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 32793 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 30233 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 32793 raw bytes retained, 0 raw bytes not retained]
 
             [done]
             [worker stopped: in-memory state lost]
             [starting new worker]
 
-            [output preview: omitted 983832 rendered UTF-8 bytes across 30 output intervals; 0 generated notice bytes not retained; 983832 raw bytes retained, 0 raw bytes not retained; raw cell log paths and per-cell counts: .agents/console/sessions/<run ID>/internal/events.jsonl (Console server recording workspace; controller for remote targets); unretained text is unavailable]
+            [output preview: omitted 983832 rendered UTF-8 bytes across 30 output intervals; 0 generated notice bytes not retained; 983832 raw bytes retained, 0 raw bytes not retained; raw cell log paths and per-cell counts: .agents/console/sessions/<run ID>/internal/events.jsonl (Console server recording workspace); unretained text is unavailable]
             [done]
           - repeat: |-
 
@@ -68,9 +68,9 @@ result:
             [worker stopped: in-memory state lost]
             [starting new worker]
 
-            [output preview: omitted 30299 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000033.log (Console server recording workspace; controller for remote targets); 32795 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 30235 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000033.log (Console server recording workspace); 32795 raw bytes retained, 0 raw bytes not retained]
           - repeat: x
-            count: 2482
+            count: 2546
           - |-
 
             cell 31 tail

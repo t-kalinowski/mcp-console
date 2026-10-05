@@ -43,7 +43,6 @@ impl ConsoleServer {
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        target: Option<(crate::settings::Target, Vec<PathBuf>)>,
         python: Option<PathBuf>,
         resolver: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
@@ -58,7 +57,6 @@ impl ConsoleServer {
             worker.is_none(),
             &sandbox_settings,
             no_sandbox,
-            target.as_ref().map(|(target, _)| target),
         );
         let runtime = Arc::new(startup::Runtime {
             worker: crate::worker_client::Client::pending(),
@@ -75,17 +73,7 @@ impl ConsoleServer {
             runtime,
             prelaunch,
             move |started, diagnostics| {
-                let configuration = if let Some((target, roots)) = target {
-                    crate::worker_client::ClientConfiguration::target(
-                        target,
-                        roots,
-                        no_sandbox,
-                        sandbox_settings,
-                        python,
-                        diagnostics,
-                        started,
-                    )?
-                } else if let Some(program) = worker {
+                let configuration = if let Some(program) = worker {
                     crate::worker_client::ClientConfiguration::new(
                         program,
                         relay,
@@ -103,13 +91,11 @@ impl ConsoleServer {
                         started,
                     )?
                 };
-                let target = configuration.target_metadata();
-                let transcript = crate::transcript::Transcript::with_target(
+                let transcript = crate::transcript::Transcript::configured(
                     recording_directory,
                     configuration.dynamic_resolution(),
                     configuration.python_preparation(),
                     !configuration.python_only(),
-                    target,
                 );
                 Ok(startup::PreparedRuntime {
                     configuration,
@@ -452,7 +438,6 @@ pub async fn run(
     relay: Option<PathBuf>,
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
-    target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
     resolver: crate::settings::SandboxSettings,
 ) -> Result<(), Box<dyn Error>> {
@@ -466,7 +451,6 @@ pub async fn run(
         relay,
         no_sandbox,
         sandbox_settings,
-        target,
         python,
         resolver,
     )

@@ -26,13 +26,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8038
+        text_bytes: 8007
         concat:
           - repeat: x
             count: 3776
           - |
 
-            [output preview: omitted 1073734277 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 1073741824 raw bytes retained, 5 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+            [output preview: omitted 1073734277 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 1073741824 raw bytes retained, 5 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
           - repeat: x
             count: 3771
           - |

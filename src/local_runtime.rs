@@ -24,7 +24,6 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
     // In managed sessions, None leaves R declarations and selection hints lazy.
-    // In prepared targets, None records genuine Python absence after discovery.
     pub(crate) python: Option<Python>,
 }
 
@@ -77,38 +76,6 @@ impl Selection {
             },
             on_started,
         )
-    }
-
-    #[cfg(any(unix, windows))]
-    pub(crate) fn python_on_host(
-        configured: Option<OsString>,
-        resolver: &crate::resolver::ManagedPythonResolverConfiguration,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Option<ManagedPython>), String> {
-        let (mut selection, managed) = Self::python_with(
-            configured,
-            resolver.has_uv(),
-            crate::resolver::cache::duckdb_extension_directory(&Default::default())?,
-            |started| {
-                crate::resolver::resolve_python_manifest_for_remote(
-                    crate::worker_protocol::default_native_python_requirement_manifest(),
-                    resolver,
-                    None,
-                    None,
-                    started,
-                )
-            },
-            |executable, started| crate::python::inspect_native(executable, started),
-            on_started,
-        )?;
-        if let Some(Python {
-            selected, explicit, ..
-        }) = &mut selection.python
-            && explicit.is_some()
-        {
-            *explicit = Some(OsString::from(&selected.embedding.python));
-        }
-        Ok((selection, managed))
     }
 
     #[cfg(any(unix, windows))]

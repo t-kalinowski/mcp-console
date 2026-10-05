@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.snapshots import platform_snapshots
 from support.client import McpClient
+from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import SANDBOX, requires
@@ -20,27 +21,6 @@ from support.suites import run_this_suite
 
 
 CONFIG = ".agents/console/config.yaml"
-
-
-@requires(SANDBOX)
-def test_explicit_native_provider_preserves_native_configuration(
-    binary: Path,
-) -> Transcript:
-    with TemporaryDirectory() as directory:
-        host = Path(directory)
-        config = host / CONFIG
-        config.parent.mkdir(parents=True)
-        tools = []
-        for sandbox in ({}, {"provider": "native"}):
-            config.write_text(json.dumps({"sandbox": sandbox}))
-            with McpClient(
-                binary, ("serve", "--worker", "unused-worker"), current_directory=host
-            ) as client:
-                client.initialize_and_list_tools()
-                tools.append(client.transcript[-1]["result"])
-                client.finish()
-        assert tools[0] == tools[1]
-    return [{"explicit_native_provider_preserves_native_schema_and_policy": True}]
 
 
 def accepted(binary: Path, host: Path, *arguments: str) -> None:
@@ -92,8 +72,19 @@ def test_requirements_get_exposes_builtin_prelaunch_failure(binary: Path) -> Tra
         root = Path(directory)
         config = root / CONFIG
         config.parent.mkdir(parents=True)
-        config.write_text("sandbox: {network: full}\n", encoding="utf-8")
-        with McpClient(binary, ("serve",), current_directory=root) as client:
+        config.write_text(
+            json.dumps({"python": sys.executable, "sandbox": {"network": "full"}}),
+            encoding="utf-8",
+        )
+        # Reject worker policy without depending on cold R preparation first.
+        tools = root / "bin"
+        tools.mkdir()
+        retain_system_bwrap(tools)
+        environment = os.environ.copy()
+        environment.pop("R_HOME", None)
+        environment.pop("RHOME", None)
+        environment["PATH"] = str(tools)
+        with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
             result = client.send(requirements={"action": "get"})
             assert result.get("isError"), result
@@ -222,7 +213,7 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
         ("tagged unknown field", "!custom {profile: default}", "profile"),
         ("sandbox type", "sandbox: false", "sandbox"),
         ("tagged sandbox type", "sandbox: !custom false", "sandbox"),
-        ("tagged nested sequence", "target: !custom {command: !args [42]}", "command"),
+        ("tagged nested sequence", "sandbox: !custom [!args [42]]", "sandbox"),
         ("sandbox sequence", "sandbox: []", "sandbox"),
         ("owned protocol", "sandbox: {version: 2}", "version is managed by Console"),
         (

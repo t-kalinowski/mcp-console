@@ -2,8 +2,6 @@
 
 On macOS and Linux, local dependency preparation runs inside the native sandbox runner.
 The existing preparation process, including discovery, installation, package builds, Python inspection, and DuckDB extension installation, uses one resolver policy.
-SSH preparation retains execution-host permissions; its resolver sandbox is deferred.
-Prepared Docker and Docker Sandbox sessions use preinstalled packages and do not run this resolver.
 `serve --no-sandbox` uses ordinary host permissions.
 Windows retains its host resolver and Job lifecycle; its native runner does not support managed proxy routing.
 
@@ -44,6 +42,7 @@ This preserves reads without adding resolver write grants for host package locat
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
 Workers link the warmed font cache into their private Matplotlib directory.
 Host Matplotlib configuration remains selected independently of this cache.
+Font-cache warmup selects the persistent cache explicitly so a read-only host configuration directory cannot redirect it to temporary storage.
 Explicitly selected Python uses its preinstalled packages and DuckDB extensions.
 Host R and installed resolver executables remain readable.
 On macOS, keep uv on `PATH` or select an installed executable with `RETICULATE_UV`.
@@ -59,8 +58,6 @@ Or launch with `mcp-console serve -c cache=host`.
 Custom workers that need no dependency preparation can use this setting to start without `HOME` or `XDG_CACHE_HOME`.
 This retains resolver sandboxing on macOS/Linux while restoring host cache selection and its default write grants.
 `serve --no-sandbox` defaults to host caches; `cache: console` with `--no-sandbox` is rejected to avoid executing Console cache artifacts in a session that disables sandboxing.
-The setting applies to local sessions.
-SSH retains its existing execution-host caches and permissions; Docker/SBX use preinstalled environments.
 Windows redirects cache paths but still prepares dependencies with host permissions.
 
 ## Configuration
@@ -83,6 +80,7 @@ Create custom writable directories before launch on Linux, where absent roots ca
 With `cache: console`, the default resolver write grant covers only the Console cache root, in addition to private temporary storage.
 Explicit `filesystem.entries` must include that root when preparation needs persistent writes.
 With `cache: host`, default cache grants cover the locations and direct environment overrides listed below.
+Default resolver cache grants include metadata directories such as `.git`, so preparation can populate complete dependency checkouts without workspace metadata masks in shared caches.
 Console does not inspect uv configuration files to discover additional writable paths.
 In Console cache mode, the captured `UV_CACHE_DIR` overrides a config-file `cache-dir`.
 In host cache mode, if `UV_CONFIG_FILE` or `uv.toml` selects a custom `cache-dir`, set the matching `resolver.environment.UV_CACHE_DIR` or grant that path in `resolver.filesystem.entries`.

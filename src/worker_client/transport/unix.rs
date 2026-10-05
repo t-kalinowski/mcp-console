@@ -5,7 +5,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
 
 pub(super) type Notifier = PipeWriter;
-pub(in crate::worker_client) type RelayInput = crate::target_launch::transfer::Io<ChildStdin>;
+pub(in crate::worker_client) type RelayInput = crate::process_io::Io<ChildStdin>;
 
 pub(in crate::worker_client) fn configure_stdio(command: &mut Command) {
     command
@@ -55,7 +55,7 @@ impl PreparedTransport {
             .stdout
             .take()
             .expect("piped worker relay stdout should be available");
-        let input = RelayInput::new(input, Some(self.writer_aborted), None)?;
+        let input = RelayInput::new(input, Some(self.writer_aborted))?;
         let stderr = child.stderr.take().expect("piped launcher stderr");
         let exited = self
             .output_exit

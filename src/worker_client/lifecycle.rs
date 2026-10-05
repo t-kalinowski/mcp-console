@@ -1309,7 +1309,7 @@ impl Client {
         Err(message.to_string())
     }
 
-    pub(super) fn clear_resolver_stop_handle(
+    pub(crate) fn clear_resolver_stop_handle(
         &self,
         expected: &WorkerGeneration,
     ) -> Result<(), String> {
@@ -1350,20 +1350,12 @@ impl Client {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let local = client
+            let preparation = client
                 .0
-                .local_preparation
+                .resolver_preparation
                 .lock()
-                .expect("local preparation lock")
+                .expect("preparation lock")
                 .clone();
-            let preparation = local.or_else(|| {
-                client
-                    .0
-                    .target
-                    .as_ref()
-                    .and_then(crate::target_session::Session::ssh_preparation)
-                    .cloned()
-            });
             // Queue relay shutdown and resolver cancellation before Close can
             // retire the preparation host and its control-input pipe.
             let (allowance, errors) = stop_handles.request_shutdown(deadline);

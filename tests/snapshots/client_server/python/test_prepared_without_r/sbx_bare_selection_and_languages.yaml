@@ -1,4 +1,0 @@
----
-bare_python_path_is_target_workspace_relative: true
-language_restrictions_preserved: true
-restart_retains_selection: true

@@ -29,6 +29,26 @@ bare_mcp_console <- function() {
   launcher
 }
 
+managed_python_mcp_console <- function() {
+  binary <- real_mcp_console()
+  directory <- tempfile("mcp-console-python-")
+  dir.create(directory)
+  uv <- Sys.which("uv")
+  stopifnot(nzchar(uv), file.symlink(uv, file.path(directory, "uv")))
+  launcher <- file.path(directory, "mcp-console")
+  writeLines(
+    c(
+      "#!/bin/sh",
+      "unset R_TESTS R_HOME RHOME RETICULATE_UV RETICULATE_PYTHON",
+      sprintf("export PATH=%s", shQuote(directory)),
+      sprintf("exec %s \"$@\"", shQuote(binary))
+    ),
+    launcher
+  )
+  Sys.chmod(launcher, "0755")
+  launcher
+}
+
 with_path <- function(path, code) {
   old <- Sys.getenv("PATH")
   on.exit(Sys.setenv(PATH = old), add = TRUE)
@@ -209,7 +229,8 @@ inspect_requirements <- function(send) {
 
 test_that("requirements actions preserve scalar fields and empty lists", {
   with_temp_working_directory({
-    send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
+    # Exercise declaration serialization without rebuilding unrelated R packages.
+    send <- console_tool(path = managed_python_mcp_console(), no_sandbox = TRUE)
     startup <- inspect_requirements(send)
     # Inspect the committed default environment after worker readiness.
     expect_true(startup$prepared)

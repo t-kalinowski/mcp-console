@@ -4,7 +4,6 @@ import re
 import signal
 import subprocess
 import sys
-import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,8 +32,6 @@ ROOT = Path(__file__).resolve().parents[3]
 def preparation(
     binary: Path, root: Path, environment: dict[str, str]
 ) -> Iterator[tuple]:
-    with (ROOT / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     process = subprocess.Popen(
         [binary, "resolve"],
         stdin=subprocess.PIPE,
@@ -60,22 +57,15 @@ def preparation(
 
     def receive(description: str) -> object:
         try:
-            return json.loads(reader.readline(timeout=10))
+            line = reader.readline(timeout=10)
+            assert line, (description, process.wait(timeout=10), process.stderr.read())
+            return json.loads(line)
         except TimeoutError:
             raise AssertionError(f"timed out waiting for {description}") from None
 
     try:
-        send(
-            {
-                "Open": {
-                    "build": build,
-                    "workspace": "",
-                    "selections": {"r_home": None, "python": None},
-                    "mode": "PythonOnly",
-                }
-            }
-        )
-        assert receive("hello") == {"Hello": {"build": build}}
+        send({"Open": {"mode": "PythonOnly"}})
+        assert receive("hello") == "Hello"
         discovery = receive("discovery")["Completed"]
         assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
         yield process, send, receive
@@ -405,7 +395,7 @@ def cleanup_failure(
                 stderr = process.stderr.read()
                 assert (
                     process.returncode != 0
-                    and "remote preparation retirement is unconfirmed" in stderr
+                    and "preparation retirement is unconfirmed" in stderr
                 ), stderr
                 os.kill(leader, 0)
                 assert not (root / "early-reap").exists()

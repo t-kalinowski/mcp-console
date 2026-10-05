@@ -28,6 +28,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
     ProcessIdentity,
     capture_process_identity,
+    host_process_id,
     kill_processes,
 )
 from support.normalization import code
@@ -52,7 +53,10 @@ class StartupFixture:
     def wait_for_resolver(self) -> None:
         self.started.wait("first-use resolver")
         identity = self.root / "identity"
-        pids = set(map(int, identity.read_text(encoding="utf-8").split()))
+        pids = {
+            host_process_id(int(pid), self.client.process.pid)
+            for pid in identity.read_text(encoding="utf-8").split()
+        }
         assert len(pids) == 2, pids
         self.identities = [capture_process_identity(pid) for pid in pids]
         for pid in pids:

@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 from threading import Thread
-import tomllib
 import unittest
 
 from windows_gate import Gate
@@ -39,17 +38,7 @@ class Resolver:
             self.messages.put(None)
 
         Thread(target=read, daemon=True).start()
-        build = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
-        self.send(
-            {
-                "Open": {
-                    "build": build,
-                    "workspace": "",
-                    "selections": {},
-                    "mode": mode,
-                }
-            }
-        )
+        self.send({"Open": {"mode": mode}})
 
     def send(self, message):
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
@@ -62,8 +51,7 @@ class Resolver:
         return message
 
     def ready(self):
-        build = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
-        assert self.receive() == {"Hello": {"build": build}}
+        assert self.receive() == "Hello"
         discovery = self.receive()["Completed"]
         assert discovery["confirmed"], discovery
         assert "Ok" in discovery["result"], discovery
@@ -384,7 +372,7 @@ class WindowsResolver(unittest.TestCase):
                     # held. An observer join before that allowance hangs here.
                     self.assertNotEqual(resolver.process.wait(timeout=10), 0)
                     self.assertIn(
-                        "remote preparation retirement is unconfirmed",
+                        "preparation retirement is unconfirmed",
                         resolver.process.stderr.read().decode(errors="replace"),
                     )
                     self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)

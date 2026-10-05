@@ -30,10 +30,7 @@ def configure(workspace: Path, value: object) -> None:
 def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
     yaml = code("""
         !configuration
-        !key target: !target
-          transport: !transport {kind: !kind local}
-          compute: !compute {kind: !kind host}
-          command: !command null
+        !key cache: !cache host
         sandbox: !policy
           environment: !environment {LABEL: !text tagged}
           filesystem: !filesystem {entries: !entries []}
@@ -222,7 +219,7 @@ def test_inline_strings_and_objects_without_project_file(binary: Path) -> Transc
 def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, {"sandbox": False, "target": ["invalid"]})
+        configure(workspace, {"sandbox": False, "python": ["invalid"]})
         overrides = (
             "-c",
             "sandbox.environment.KEEP=first",
@@ -231,7 +228,7 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
             "-c",
             "sandbox.environment={FINAL: last}",
             "-c",
-            "target=null",
+            "python=null",
         )
         with McpClient(
             binary,
@@ -243,7 +240,7 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
             assert stderr == "", stderr
         assert json.loads((workspace / CONFIG).read_text()) == {
             "sandbox": False,
-            "target": ["invalid"],
+            "python": ["invalid"],
         }
     return [{"overrides": list(overrides), "initialized": True}]
 
@@ -487,7 +484,7 @@ def test_validates_effective_configuration(binary: Path) -> Transcript:
         ("extends=true", "boolean"),
         ("extends=42", "integer"),
         ("extends=1.5", "floating point"),
-        ("target.command=[far, faz]", "local host target"),
+        ("target.command=[far, faz]", "unknown field"),
         ("unknown={baz: [far, faz]}", "unknown field"),
     )
     records = []

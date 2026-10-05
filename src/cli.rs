@@ -52,7 +52,7 @@ pub enum Command {
         #[command(flatten)]
         overrides: ConfigOverrides,
 
-        /// Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
+        /// Run evaluated code and dependency resolution with host permissions
         #[arg(long)]
         no_sandbox: bool,
 
@@ -80,32 +80,6 @@ pub enum Command {
     /// Run the internal host resolver
     #[command(hide = true)]
     Resolve,
-
-    #[command(hide = true)]
-    DockerOwner,
-    #[command(hide = true)]
-    DockerLaunch,
-    #[command(hide = true)]
-    DockerProbe,
-    #[command(hide = true)]
-    ImageRuntimeProbe {
-        #[arg(long)]
-        python: Option<PathBuf>,
-    },
-    #[command(hide = true)]
-    DockerSandboxOwner,
-    #[command(hide = true)]
-    DockerSandboxLaunch,
-    #[command(hide = true)]
-    DockerSandboxProbe,
-
-    /// Launch the built-in runtime for an authenticated SSH controller
-    #[command(hide = true)]
-    SshLaunch,
-
-    /// Prepare dependencies for an authenticated SSH controller
-    #[command(hide = true)]
-    SshPrepare,
 
     /// Run the internal worker relay
     #[command(hide = true)]

@@ -38,7 +38,6 @@ struct QuartoWriter {
     metadata_known: bool,
     sources: Vec<QuartoSource>,
     environment_boundaries: bool,
-    target: Option<Value>,
 }
 
 struct QuartoSource {
@@ -55,7 +54,6 @@ impl Writers {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        target: Option<&Value>,
     ) -> Self {
         Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
@@ -65,7 +63,6 @@ impl Writers {
                 dynamic_resolution,
                 python_preparation,
                 r_available,
-                target,
             ),
         }
     }
@@ -82,10 +79,9 @@ impl Writers {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        target: Option<&Value>,
     ) {
         self.quarto
-            .configure(dynamic_resolution, python_preparation, r_available, target);
+            .configure(dynamic_resolution, python_preparation, r_available);
     }
 }
 
@@ -96,7 +92,6 @@ impl QuartoWriter {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        target: Option<&Value>,
     ) -> Self {
         let mut writer = Self {
             path,
@@ -108,7 +103,6 @@ impl QuartoWriter {
             metadata_known: false,
             sources: Vec::new(),
             environment_boundaries: false,
-            target: target.cloned(),
         };
         if dynamic_resolution && r_available {
             writer.r_requirements.extend(
@@ -133,13 +127,7 @@ impl QuartoWriter {
         writer
     }
 
-    fn configure(
-        &mut self,
-        dynamic_resolution: bool,
-        python_preparation: bool,
-        r_available: bool,
-        target: Option<&Value>,
-    ) {
+    fn configure(&mut self, dynamic_resolution: bool, python_preparation: bool, r_available: bool) {
         self.dynamic_resolution = dynamic_resolution;
         self.r_available = r_available;
         self.metadata_known = true;
@@ -161,7 +149,6 @@ impl QuartoWriter {
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-        self.target = target.cloned();
     }
 
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
@@ -222,8 +209,7 @@ impl QuartoWriter {
                 }
                 changed
             }
-            Event::TargetGeneration { .. }
-            | Event::ArtifactCreated { .. }
+            Event::ArtifactCreated { .. }
             | Event::CellOutput { .. }
             | Event::SessionOutput { .. }
             | Event::StartupFailed { .. }
@@ -242,18 +228,10 @@ impl QuartoWriter {
             "# Configure the unknown environment before enabling execution.\n"
         } else if self.environment_boundaries {
             "# Recreate the environments at the recorded boundaries before enabling execution.\n"
-        } else if self
-            .target
-            .as_ref()
-            .and_then(|target| target.pointer("/runtime/kind"))
-            .and_then(Value::as_str)
-            == Some("python")
-        {
-            "# Execute these cells in the preinstalled target environment recorded below.\n"
         } else {
             "# Run `ir render transcript.qmd` in a prepared environment to execute these cells.\n"
         });
-        if self.metadata_known && !self.r_available && self.target.is_none() {
+        if self.metadata_known && !self.r_available {
             document.push_str(
                 "# IR rendering requires R on the render host, including for Python-only documents.\n",
             );
@@ -265,23 +243,8 @@ impl QuartoWriter {
         if !self.metadata_known {
             document.push_str("mcp-console:\n  environment: unknown\n---\n\n");
             document.push_str(
-                "Runtime discovery did not complete. The target and preparation capabilities are unknown.\n\n",
+                "Runtime discovery did not complete. Preparation capabilities are unknown.\n\n",
             );
-        } else if let Some(target) = &self.target {
-            document.push_str("---\n\n");
-            write!(
-                document,
-                r#"<!-- Cells ran on {} target {}. Files and environments remain remote. Prepare them before rendering here. -->
-
-"#,
-                match target.pointer("/compute/kind").and_then(Value::as_str) {
-                    Some("docker") => "Docker",
-                    Some("docker_sandbox") => "Docker Sandbox",
-                    _ => "SSH",
-                },
-                target
-            )
-            .expect("writing to a String cannot fail");
         } else {
             document.push_str("knitr:\n  opts_knit:\n    root.dir: ");
             document.push_str(&yaml_string(&self.working_directory));
@@ -466,12 +429,11 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             dynamic_resolution,
             python_preparation,
             r_available,
-            target,
         } => {
             document.push_str("## Runtime discovery\n\n");
             push_json(
                 document,
-                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available, "target": target }),
+                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available }),
             )
         }
         Event::PythonEnvironmentAccepted { packages } => {
@@ -481,32 +443,16 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         Event::SessionStarted {
             session,
             working_directory,
-            target,
             ..
         } => {
-            let mut metadata = json!({
+            let metadata = json!({
                 "session": session,
                 "run_id": envelope.run_id,
                 "started_at": envelope.at,
                 "working_directory": working_directory,
             });
-            if let Some(target) = target {
-                metadata["target"] = (*target).clone();
-            }
             document.push_str("## Session\n\n");
             push_json(document, &metadata)
-        }
-        Event::TargetGeneration {
-            container_id,
-            sandbox,
-        } => {
-            if let Some(sandbox) = sandbox {
-                document.push_str("## MicroVM generation\n\n");
-                push_json(document, &json!({ "sandbox": sandbox }))
-            } else {
-                document.push_str("## Container generation\n\n");
-                push_json(document, &json!({ "container_id": container_id }))
-            }
         }
         Event::RequirementsSelected {
             call_id,

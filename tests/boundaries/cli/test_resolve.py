@@ -6,7 +6,6 @@ import re
 import signal
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -24,9 +23,6 @@ from support.suites import run_this_suite
 
 @requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
-    root = Path(__file__).resolve().parents[3]
-    with (root / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     with TemporaryDirectory() as temporary:
         uv = Path(temporary) / "uv"
         uv.write_text(
@@ -60,24 +56,13 @@ esac
             process.stdin.flush()
 
         def receive() -> object:
-            line = process.stdout.readline()
-            assert line, process.stderr.read()
-            return json.loads(line)
+            return json.loads(process.stdout.readline())
 
         try:
-            send(
-                {
-                    "Open": {
-                        "build": build,
-                        "workspace": "",
-                        "selections": {"r_home": None, "python": None},
-                        "mode": "PythonOnly",
-                    }
-                }
-            )
+            send({"Open": {"mode": "PythonOnly"}})
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"build": build}}, hello
+            assert hello == "Hello", hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
@@ -133,39 +118,6 @@ esac
             process.wait(timeout=10)
 
 
-def test_open_validates_build_and_payload_shape(binary: Path) -> Transcript:
-    build = subprocess.check_output([binary, "--version"], text=True).split()[1]
-    opened = {
-        "build": build,
-        "workspace": "",
-        "selections": {"r_home": None, "python": None},
-        "mode": "PythonOnly",
-    }
-    cases = (
-        ({**opened, "build": "incompatible-build"}, "incompatible"),
-        (
-            {key: value for key, value in opened.items() if key != "build"},
-            "missing field `build`",
-        ),
-        ({**opened, "build": 123}, "invalid type"),
-        ({**opened, "unexpected": True}, "unknown field `unexpected`"),
-    )
-    records = []
-    for payload, expected in cases:
-        result = subprocess.run(
-            [binary, "resolve"],
-            input=json.dumps({"Open": payload}) + "\n",
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode != 0, result
-        assert not result.stdout, result.stdout
-        assert expected in result.stderr, result.stderr
-        records.append({"error": result.stderr})
-    return records
-
-
 @requires(NATIVE_FIXTURES)
 def test_close_settles_resolver_observation_before_reaping(binary: Path) -> Transcript:
     return observe_resolver(binary, fail=False)
@@ -200,8 +152,6 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
         }
         if fail:
             environment["MCP_CONSOLE_TEST_OBSERVER_FAIL"] = "1"
-        with (Path(__file__).resolve().parents[3] / "Cargo.toml").open("rb") as source:
-            build = tomllib.load(source)["package"]["version"]
         process = subprocess.Popen(
             [binary, "resolve"],
             stdin=subprocess.PIPE,
@@ -213,25 +163,13 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
         )
         try:
             assert process.stdin is not None and process.stdout is not None
-            process.stdin.write(
-                json.dumps(
-                    {
-                        "Open": {
-                            "build": build,
-                            "workspace": "",
-                            "selections": {"r_home": None, "python": None},
-                            "mode": "PythonOnly",
-                        }
-                    }
-                )
-                + "\n"
-            )
+            process.stdin.write(json.dumps({"Open": {"mode": "PythonOnly"}}) + "\n")
             process.stdin.flush()
             opened = [
                 json.loads(line)
                 for line in read_lines(process.stdout, 2, "preparation open")
             ]
-            assert opened[0] == {"Hello": {"build": build}}, opened
+            assert opened[0] == "Hello", opened
             assert opened[1]["Completed"]["confirmed"] is True, opened
             process.stdin.write(
                 json.dumps(
