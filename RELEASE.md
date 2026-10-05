@@ -124,7 +124,7 @@ Use `aarch64-unknown-linux-gnu` on ARM64; emulation is rejected.
 Only the wheel and minimal release/installation harness enter the runtime containers.
 The no-R image contains standalone Python 3.13 and uv, while the R image additionally retains separately prepared language libraries and resolver metadata.
 Preparation uses serial make and `CXX17FLAGS=-O0 -g0` to bound DuckDB build memory; these settings do not affect the distributed wheel.
-Compilers, development packages, build directories, source archives, and cached CMake are excluded from the final runtime.
+Compilers, development packages, build directories, and cached CMake are excluded from the final runtime.
 Normal sandboxed startup keeps the documented Console cache policy.
 
 The probes require native namespace support and run in disposable containers with `SYS_ADMIN`, unconfined seccomp, and unconfined AppArmor.
@@ -138,7 +138,7 @@ Keep ARM64 and x86_64 reports separate.
 Both independent controlled-Jammy builds at source `d26f9771` used Rust 1.95.0, GCC 11, Maturin 1.15.0, and the unchanged companion pin.
 All three shipped ELF executables required at most GLIBC 2.34, with matching `manylinux_2_34` filename/WHEEL tags, no GLIBCXX/CXXABI requirements, and no RPATH/RUNPATH or extra ELF members.
 Clean runtime tests used Ubuntu 22.04 with glibc 2.35, libgcc/libstdc++ 12.3, libcap 2.44, Python 3.13.16, uv 0.12.22, and R 4.6.1 for R-present coverage.
-ARM64 passed no-R and R-present startup, language and installed acceptance; x86_64 no-R passed and R-present validation is pending.
+Both native architectures passed no-R and R-present startup, language, bounded shutdown, loader resolution, and installed acceptance.
 The native older-runner rehearsal remains required before release.
 
 ## One-time PyPI setup

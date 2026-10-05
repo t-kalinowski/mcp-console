@@ -55,11 +55,8 @@ RUN uv tool run --isolated --python 3.13 --from r-lib-ir ir run \
     --rscript /usr/bin/Rscript --with tidyverse --with reticulate --with DBI \
     --with duckdb --with arrow --with nanoarrow --with yyjsonr \
     --isolated --vanilla -e 'sessionInfo()'
-# Keep installed libraries and resolver metadata, not compilation/download inputs.
-RUN rm -rf /opt/console-cache/mcp-console/dependencies/uv \
-    /opt/console-cache/mcp-console/dependencies/R/pkgcache/src \
-    /opt/console-cache/mcp-console/dependencies/R/pkgcache/pkg \
-    /opt/console-cache/mcp-console/dependencies/renv/source
+# Preserve the prepared dependency cache; CMake is only a preparation tool.
+RUN uv cache clean cmake
 
 FROM r-runtime AS with-r
 COPY --from=r-preparation /opt/console-cache /opt/console-cache
