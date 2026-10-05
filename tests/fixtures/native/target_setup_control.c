@@ -103,10 +103,10 @@ static void gate(int target_cancel) {
 }
 
 static int observed_poll(struct pollfd *fds, nfds_t count, int timeout) {
-    // The controller's command exit/cancel wait has two POLLIN descriptors and
+    // The command exit/control/I/O-abort wait has three POLLIN descriptors and
     // its setup allowance. Observer/output and MCP waits have no such deadline.
-    bool command_wait = mode && count == 2 && timeout >= 0 &&
-        fds[0].events == POLLIN && fds[1].events == POLLIN;
+    bool command_wait = mode && count == 3 && timeout >= 0 &&
+        fds[0].events == POLLIN && fds[1].events == POLLIN && fds[2].events == POLLIN;
     if (!command_wait || strcmp(mode, "input-error") == 0 || strcmp(mode, "read-error") == 0 || atomic_exchange(&used, true)) {
         return poll(fds, count, timeout);
     }

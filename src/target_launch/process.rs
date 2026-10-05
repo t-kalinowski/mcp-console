@@ -172,6 +172,17 @@ pub(crate) struct CommandReport {
     pub status: Option<std::process::ExitStatus>,
 }
 
+/// An I/O failure retires only this command. The operation's control token
+/// remains available for subsequent provider cleanup commands.
+#[derive(Clone)]
+struct CommandAbort(Arc<Mutex<Option<io::PipeWriter>>>);
+
+impl CommandAbort {
+    fn abort(&self) {
+        self.0.lock().expect("target command abort lock").take();
+    }
+}
+
 pub(crate) fn run_setup(
     command: Command,
     cancel: &Cancel,
@@ -199,7 +210,8 @@ pub(crate) fn run(
 fn write_input(
     mut stdin: ChildStdin,
     bytes: &[u8],
-    cancel: &Cancel,
+    cancel: &io::PipeReader,
+    aborted: &io::PipeReader,
     deadline: Option<Instant>,
 ) -> Result<Option<ChildStdin>, String> {
     let flags = unsafe { libc::fcntl(stdin.as_raw_fd(), libc::F_GETFL) };
@@ -213,11 +225,12 @@ fn write_input(
         let events = poll(
             &[
                 (stdin.as_raw_fd(), libc::POLLOUT),
-                (cancel.reader.as_raw_fd(), libc::POLLIN),
+                (cancel.as_raw_fd(), libc::POLLIN),
+                (aborted.as_raw_fd(), libc::POLLIN),
             ],
             deadline,
         )?;
-        if events[1] != 0 {
+        if events[1] != 0 || events[2] != 0 {
             return Ok(None); // I/O abort; logical cause remains with the owner.
         }
         match stdin.write(remaining) {
@@ -237,7 +250,7 @@ fn write_input(
 fn collect<R: Read + AsRawFd>(
     source: R,
     stopped: io::PipeReader,
-    cancel: Cancel,
+    abort: CommandAbort,
     label: &'static str,
 ) -> (Vec<u8>, io::Result<()>) {
     let mut bytes = Vec::new();
@@ -252,7 +265,7 @@ fn collect<R: Read + AsRawFd>(
             }
         });
     if result.is_err() {
-        cancel.cancel();
+        abort.abort();
     }
     (bytes, result)
 }
@@ -301,6 +314,9 @@ pub(crate) fn run_report(
     let (stopped, stop_output) = io::pipe().map_err(|error| error.to_string())?;
     let stdout_stop = stopped.try_clone().map_err(|error| error.to_string())?;
     let stderr_stop = stopped.try_clone().map_err(|error| error.to_string())?;
+    let (io_aborted, abort) = io::pipe().map_err(|error| error.to_string())?;
+    let abort = CommandAbort(Arc::new(Mutex::new(Some(abort))));
+    let input_abort = io_aborted.try_clone().map_err(|error| error.to_string())?;
     crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
     let mut child = {
         // Command admission and control acceptance share the setup lock. Once
@@ -328,30 +344,31 @@ pub(crate) fn run_report(
         }
     };
     let diagnostic_task = diagnostics.map(|(reader, output)| {
-        let cancel = cancel.clone();
+        let abort = abort.clone();
         std::thread::spawn(move || {
             let result = crate::process_output::forward(reader, stopped, output);
             if result.is_err() {
-                cancel.cancel();
+                abort.abort();
             }
             result
         })
     });
     let output = child.stdout.take().map(|stdout| {
-        let cancel = cancel.clone();
-        std::thread::spawn(move || collect(stdout, stdout_stop, cancel, label))
+        let abort = abort.clone();
+        std::thread::spawn(move || collect(stdout, stdout_stop, abort, label))
     });
     let stderr = child.stderr.take().map(|stderr| {
-        let cancel = cancel.clone();
-        std::thread::spawn(move || collect(stderr, stderr_stop, cancel, label))
+        let abort = abort.clone();
+        std::thread::spawn(move || collect(stderr, stderr_stop, abort, label))
     });
     let writer = input.map(|input| {
         let stdin = child.stdin.take().expect("piped setup input");
         let cancel = cancel.clone();
+        let abort = abort.clone();
         std::thread::spawn(move || {
-            let result = write_input(stdin, &input.bytes, &cancel, deadline);
+            let result = write_input(stdin, &input.bytes, &cancel.reader, &input_abort, deadline);
             if result.is_err() {
-                cancel.cancel();
+                abort.abort();
             }
             result
         })
@@ -376,11 +393,12 @@ pub(crate) fn run_report(
             &[
                 (exited.as_raw_fd(), libc::POLLIN),
                 (cancel.reader.as_raw_fd(), libc::POLLIN),
+                (io_aborted.as_raw_fd(), libc::POLLIN),
             ],
             deadline,
         ) {
             Ok(events) => {
-                aborted = events[1] != 0;
+                aborted = events[1] != 0 || events[2] != 0;
                 if events[0] != 0
                     && let Some(exit) = exit.as_mut()
                     && let Err(error) = exit.wait(Duration::ZERO)

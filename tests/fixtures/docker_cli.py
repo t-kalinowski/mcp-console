@@ -15,6 +15,51 @@ with (root / "calls").open("a") as stream:
     )
 mode = (root / "mode").read_text() if (root / "mode").exists() else ""
 
+if mode == "stop-oversized":
+    # A fake daemon establishes orchestration only, not real container cleanup.
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    identity = "a" * 64
+    state = root / "containers"
+    if arguments == ["context", "inspect"]:
+        print(
+            json.dumps(
+                [
+                    {
+                        "Name": "default",
+                        "Endpoints": {"docker": {"Host": "unix:///unused-docker-peer"}},
+                    }
+                ]
+            )
+        )
+    elif "image" in arguments:
+        assert arguments[arguments.index("image") + 1] == "inspect"
+        print(json.dumps([{"Id": "sha256:" + "b" * 64, "Os": "linux"}]))
+    else:
+        operation = arguments[arguments.index("container") + 1]
+        if operation == "create":
+            assert not state.exists()
+            state.write_text(identity)
+            print(identity)
+        elif operation == "start":
+            # Consume the full request before failing the target attachment.
+            length = int.from_bytes(sys.stdin.buffer.read(4), "big")
+            assert len(sys.stdin.buffer.read(length)) == length
+            sys.exit("fixture: target attachment failed")
+        elif operation == "stop":
+            assert arguments[-1] == state.read_text()
+            sys.stdout.buffer.write(b"x" * (1024 * 1024 + 1))
+            sys.stdout.buffer.flush()
+            signal.pause()  # The command owner must abort this CLI on overflow.
+        elif operation == "rm":
+            assert arguments[-1] == state.read_text()
+            state.unlink()
+            print(identity)
+        else:
+            assert operation == "ls"
+            if state.exists():
+                print(state.read_text())
+    raise SystemExit(0)
+
 if mode == "registry-peer" and "pull" in arguments:
     # A deterministic registry response still resolves and launches a real image.
     result = subprocess.run(

@@ -175,6 +175,7 @@ Provider setup, command, and retirement allowances have different owners; none i
 
 Target setup retains the first accepted interrupt or shutdown for its complete capture/probe operation.
 The I/O token only wakes work; a poll, read, or write failure does not create a requested control.
+Command I/O failures abort that command without closing the operation's control token, so required provider cleanup commands remain admissible.
 Completion closes control admission, so a later interrupt cannot target the completed setup or its successor.
 Each target CLI settles its child exit observation, input, and output tasks before setup publishes terminal evidence.
 Before provider launch, that evidence covers only local command retirement.
