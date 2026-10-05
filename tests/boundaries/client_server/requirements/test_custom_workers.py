@@ -771,7 +771,7 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
             "zod background sideband\n"
             "[output produced while idle]\n"
             "zod: combined cell\n"
-        )
+        ), last_tool_text(client)
         client.send()
         assert last_tool_text(client) == "\n[idle]"
 

@@ -387,9 +387,7 @@ exit 97
         uv_record.write_text("", encoding="utf-8")
         # fmt: r
         r = code(rf"""
-            reticulate::py_require({
-              json.dumps(runtime_rejected)
-            })
+            reticulate::py_require({json.dumps(runtime_rejected)})
             invisible(reticulate::py_config())
             """)
         client.send(r=r)

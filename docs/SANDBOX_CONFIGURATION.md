@@ -13,7 +13,7 @@ See [SBX](DOCKER_SANDBOX.md).
 For project editing:
 
 ```yaml
-extends: ':workspace'
+extends: :workspace
 ```
 
 `:workspace` grants workspace writes while `.git`, `.agents`, `.codex`, and `.claude` are readable but protected from writes by default.
@@ -35,7 +35,7 @@ Metadata protections are **defaults, not mandatory ceilings**.
 For example:
 
 ```yaml
-extends: ':workspace'
+extends: :workspace
 sandbox:
   filesystem:
     entries:

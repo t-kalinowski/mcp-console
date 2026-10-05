@@ -355,7 +355,11 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             evaluation = client.start_send(
                 r="report runtime R resolution failure",
             )
-            resolver_started.wait("permission-denied runtime R resolver")
+            try:
+                resolver_started.wait("permission-denied runtime R resolver")
+            except AssertionError:
+                client.receive(evaluation)
+                raise AssertionError(evaluation) from None
             namespace_group = int(resolver_group_record.read_text(encoding="utf-8"))
             resolver_group = host_process_id(namespace_group, client.process.pid)
             resolver_identity = capture_process_identity(resolver_group)
