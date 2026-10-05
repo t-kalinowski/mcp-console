@@ -69,6 +69,7 @@ R availability is discovered inside the resolver after its environment policy ap
 Resolver and worker policies preserve the server's Python selection: `python` in Console YAML, otherwise the server's `RETICULATE_PYTHON`.
 Omit both to use managed Python.
 Configuration and host cache paths are captured at Console startup and retained across preparation calls and worker restarts.
+Custom workers can start without `HOME` when they do not request host preparation; launching a sandboxed resolver still requires an absolute `HOME`.
 Changes to a running worker's environment do not reconfigure the resolver.
 The `resolver` mapping applies only to local sandboxed preparation.
 

@@ -13,7 +13,11 @@ pub(crate) fn isolated_defaults(mut settings: SandboxSettings) -> Result<Sandbox
     {
         return Ok(settings);
     }
-    let home = environment_path(&settings, "HOME").ok_or("resolver sandbox requires HOME")?;
+    // Custom workers can run without host preparation. Leave defaults unset
+    // when HOME is absent; launching the resolver still requires an absolute HOME.
+    let Some(home) = environment_path(&settings, "HOME") else {
+        return Ok(settings);
+    };
     if !home.is_absolute() {
         return Err("resolver sandbox requires an absolute HOME".into());
     }
