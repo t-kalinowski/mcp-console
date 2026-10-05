@@ -169,6 +169,10 @@ The server integrates a local native launcher as an ordinary child; successful m
 Unconfirmed retirement blocks replacement.
 Worker, relay, and native retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
 
+Connection closure that refuses the next preparation stage is separate from control of a completed operation.
+It permits a quiet exit only after the refused stage's cleanup is confirmed.
+Errors closing the preparation connection remain visible.
+
 Interrupt targets the active resolver, otherwise the current worker.
 It is not retried against a replacement.
 Each materializer invocation owns its child, non-reaping exit observer, stdin writer, and stdout/stderr readers.

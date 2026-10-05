@@ -42,6 +42,7 @@ This preserves reads without adding resolver write grants for host package locat
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
 Workers link the warmed font cache into their private Matplotlib directory.
 Host Matplotlib configuration remains selected independently of this cache.
+Font-cache warmup selects the persistent cache explicitly so a read-only host configuration directory cannot redirect it to temporary storage.
 Explicitly selected Python uses its preinstalled packages and DuckDB extensions.
 Host R and installed resolver executables remain readable.
 On macOS, keep uv on `PATH` or select an installed executable with `RETICULATE_UV`.
@@ -79,6 +80,7 @@ Create custom writable directories before launch on Linux, where absent roots ca
 With `cache: console`, the default resolver write grant covers only the Console cache root, in addition to private temporary storage.
 Explicit `filesystem.entries` must include that root when preparation needs persistent writes.
 With `cache: host`, default cache grants cover the locations and direct environment overrides listed below.
+Default resolver cache grants include metadata directories such as `.git`, so preparation can populate complete dependency checkouts without workspace metadata masks in shared caches.
 Console does not inspect uv configuration files to discover additional writable paths.
 In Console cache mode, the captured `UV_CACHE_DIR` overrides a config-file `cache-dir`.
 In host cache mode, if `UV_CONFIG_FILE` or `uv.toml` selects a custom `cache-dir`, set the matching `resolver.environment.UV_CACHE_DIR` or grant that path in `resolver.filesystem.entries`.

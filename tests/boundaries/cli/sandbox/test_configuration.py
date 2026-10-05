@@ -20,6 +20,7 @@ from support.requirements import (
     LINUX_SANDBOX,
     MACOS_SANDBOX,
     NESTED_PROCFS,
+    POSIX,
     SANDBOX,
     requires,
 )
@@ -266,6 +267,47 @@ def test_environment_overrides_and_arguments_are_literal(binary: Path) -> Transc
         }
         transcript.append({"inherit_environment": inherit, "stdout": result.stdout})
     return transcript
+
+
+@requires(POSIX, SANDBOX)
+def test_disabled_inheritance_ignores_non_utf8_host_environment(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "sandbox": {
+                        "inherit_environment": False,
+                        "environment": {"VALUE": "controlled"},
+                    }
+                }
+            )
+        )
+        environment = os.environ.copy()
+        environment[os.fsdecode(b"UNRELATED_NAME_\xff")] = "unused"
+        environment["UNRELATED_VALUE"] = os.fsdecode(b"unused-\xff")
+        result = subprocess.run(
+            [
+                binary,
+                "sandbox",
+                "--",
+                sys.executable,
+                "-c",
+                "import os; print(os.environ['VALUE']); assert 'UNRELATED_VALUE' not in os.environ",
+            ],
+            cwd=root,
+            env=environment,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == "", result.stderr
+        assert result.stdout == "controlled\n", result.stdout
+        return [{"stdout": result.stdout}]
 
 
 @requires(SANDBOX)

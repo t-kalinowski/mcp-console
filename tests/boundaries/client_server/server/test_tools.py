@@ -16,6 +16,7 @@ from support.client import McpClient
 from support.evidence import compact_text
 from support.previews import compact_previews
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import bare_runtime_environment
@@ -172,6 +173,7 @@ def _initializes_and_lists_tools(
         if python_only:
             python_bin = Path(library) / "bin"
             python_bin.mkdir()
+            retain_system_bwrap(python_bin, environment.get("PATH"))
             if python_managed:
                 (python_bin / "uv").symlink_to(shutil.which("uv"))
             else:

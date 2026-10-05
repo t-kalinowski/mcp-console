@@ -111,6 +111,8 @@ Cwd is selected by the caller's process API, not a configuration `command`/`cwd`
 `environment` supplies workload overrides; `inherit_environment: false` makes that the complete ordinary workload map.
 In native execution these values apply after helper setup, so they cannot select host helpers, move setup storage, or inject host-loader code.
 The trusted launch environment still controls frontend loading and helper selection.
+When inheritance is disabled in application policy, Console omits non-UTF-8 host environment names and values from the native launch environment.
+They cannot contribute to the selected workload environment.
 
 For `serve`, Console reapplies the selected R/Python generation environment and resolution policy after workload controls, even without inheritance.
 Workload settings do not configure trusted resolvers.

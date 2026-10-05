@@ -60,6 +60,14 @@ def wait_for_worker_ready(client: McpClient, description: str) -> None:
     client.transcript[poll_start:] = [submitted]
 
 
+def wait_for_prepared_ready(client: McpClient) -> str:
+    """Drain provider startup diagnostics before checking an evaluation's output."""
+    result = client.send(timeout_ms=60_000)
+    output = tool_text(result)
+    assert output.endswith("\n[idle]"), output
+    return output.removesuffix("\n[idle]")
+
+
 def entry_result_text(entry: TranscriptEntry) -> str:
     result = entry["result"]
     assert isinstance(result, dict), result

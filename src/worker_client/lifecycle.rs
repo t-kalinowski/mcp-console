@@ -1309,7 +1309,7 @@ impl Client {
         Err(message.to_string())
     }
 
-    pub(super) fn clear_resolver_stop_handle(
+    pub(crate) fn clear_resolver_stop_handle(
         &self,
         expected: &WorkerGeneration,
     ) -> Result<(), String> {

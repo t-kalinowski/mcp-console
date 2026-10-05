@@ -1112,7 +1112,15 @@ def test_retains_automatic_additions_after_import_errors(
         )
         for name in ("UV_FIND_LINKS", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL"):
             env.pop(name, None)
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        # The index is a host loopback fixture, so preparation must share its
+        # network namespace. Worker network policy remains independently selected.
+        with McpClient(
+            installed_console(binary),
+            execution.serve(
+                "-c", "resolver.network=enabled", "-c", "resolver.proxy=null"
+            ),
+            env,
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 python="import os; worker_pid = os.getpid(); steps = []; identity = object()"

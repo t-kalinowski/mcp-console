@@ -251,7 +251,7 @@ mod platform {
         let matplotlib_cache_directory = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE")
             .map(std::path::absolute)
             .transpose()?
-            .or_else(|| inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache"));
+            .or_else(matplotlib_cache_directory);
         let matplotlib_config_directory =
             inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all
@@ -336,6 +336,10 @@ mod platform {
         regular_file(&config_directory?.join("matplotlibrc"))
     }
 
+    pub(crate) fn matplotlib_cache_directory() -> Option<PathBuf> {
+        inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache")
+    }
+
     fn inherited_matplotlib_directory(xdg_variable: &str, xdg_default: &str) -> Option<PathBuf> {
         let directory = match std::env::var_os("MPLCONFIGDIR") {
             Some(directory) if !directory.is_empty() => PathBuf::from(directory),
@@ -405,4 +409,4 @@ mod platform {
     }
 }
 
-pub(crate) use platform::link_matplotlib_caches;
+pub(crate) use platform::{link_matplotlib_caches, matplotlib_cache_directory};

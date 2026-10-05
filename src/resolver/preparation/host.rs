@@ -298,6 +298,7 @@ pub(super) fn run() -> Result<(), String> {
         }
     });
     let output_events = events.clone();
+    let (output_drained, drained) = mpsc::channel();
     let output_task = thread::spawn(move || {
         let result = (|| {
             #[cfg(unix)]
@@ -312,6 +313,7 @@ pub(super) fn run() -> Result<(), String> {
         if let Err(error) = result {
             let _ = output_events.send(Event::OutputFailed(error));
         }
+        let _ = output_drained.send(());
     });
     outgoing
         .send(Output::Hello {
@@ -433,11 +435,17 @@ pub(super) fn run() -> Result<(), String> {
     drop(input_task);
     if failure.is_none() && confirmed {
         let _ = outgoing.send(Output::Closed);
-    } else {
+    }
+    drop(outgoing);
+    if failure.is_some() || !confirmed {
+        if !confirmed {
+            // Preserve the queued failure and control receipts before retiring I/O.
+            // A peer that stops reading must still not hold an unconfirmed owner.
+            let _ = drained.recv_timeout(std::time::Duration::from_secs(1));
+        }
         #[cfg(unix)]
         drop(output_cancel);
     }
-    drop(outgoing);
     #[cfg(unix)]
     let _ = output_task.join();
     #[cfg(windows)]
