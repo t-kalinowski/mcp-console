@@ -270,7 +270,7 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                     code("""
                         import json, struct, sys
 
-                        payload = json.dumps({"version": 999, "build": "incompatible"}).encode()
+                        payload = json.dumps({"build": "incompatible"}).encode()
                         sys.stdout.buffer.write(bytes([1]) + struct.pack(">I", len(payload)) + payload)
                         sys.stdout.buffer.flush()
                         """)

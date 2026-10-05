@@ -52,7 +52,7 @@ fn launch(
         .map_err(|error| error.to_string())?;
     let bootstrap: Bootstrap = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid {} bootstrap: {error}", protocol.0))?;
-    protocol.compatible(bootstrap.version, &bootstrap.build)?;
+    protocol.compatible(&bootstrap.build)?;
     if compute.is_none() && bootstrap.python.is_some() {
         return Err("prepared Python probe selection is unavailable for SSH launch".into());
     }
@@ -154,7 +154,6 @@ fn launch(
     let hello = serde_json::to_vec(&Hello {
         container_id: None,
         sandbox: None,
-        version: protocol.version(),
         build: env!("CARGO_PKG_VERSION").into(),
     })
     .map_err(|error| error.to_string())?;

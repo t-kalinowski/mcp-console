@@ -300,7 +300,6 @@ impl ComputeState {
             probe,
             bootstrap: Bootstrap {
                 languages: self.languages,
-                version: target_launch::VERSION,
                 build: env!("CARGO_PKG_VERSION").into(),
                 workspace: target.workspace.clone(),
                 policy: policy.clone(),

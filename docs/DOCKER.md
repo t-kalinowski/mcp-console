@@ -17,6 +17,9 @@ docker build -f examples/docker/Dockerfile -t my-console:analysis .
 ```
 
 It builds Linux Console and its pinned native companion, and installs R, Python, and analysis dependencies.
+Build the image with the same Console release as the controller, or the same source revision for development builds.
+The internal protocols are unversioned; rebuild the image when updating the controller.
+Console checks the package build identity, but equal development package versions alone do not establish matching code.
 Do not copy controller executables or libraries into the image.
 Builds use Docker's context and `.dockerignore`, registry authentication, and network access.
 
@@ -81,7 +84,7 @@ Workload environment settings do not configure Docker or image builds.
 
 ## Environment and sandbox selection
 
-A disposable probe checks Console package/protocol compatibility, the existing workspace, native policy where applicable, and installed runtimes.
+A disposable probe checks Console package build identity, the existing workspace, native policy where applicable, and installed runtimes.
 The descriptor is accepted only after confirmed probe-container removal.
 It does not initialize an analysis interpreter or open a SQL catalog.
 

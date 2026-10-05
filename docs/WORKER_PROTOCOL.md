@@ -3,7 +3,7 @@
 This private interface connects one relay to one worker generation, including custom workers selected by `serve --worker PATH`.
 [Architecture](ARCHITECTURE.md) explains ownership; [relay protocol](RELAY_PROTOCOL.md) defines the outer transport.
 The schemas in [`src/worker_protocol.rs`](../src/worker_protocol.rs), incremental framing in [`src/jsonl.rs`](../src/jsonl.rs), native endpoints selected by [`src/sideband.rs`](../src/sideband.rs), and executable boundary tests are authoritative.
-There is no sideband version negotiation; incompatible changes must also update target-envelope compatibility.
+The sideband is unversioned and evolves in lockstep with the relay and target envelope; update both endpoints and fixtures together.
 
 ## Launch and transport
 

@@ -115,7 +115,10 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             while b'"completed"' not in data:
                 tag, body = read_frame(process.stdout)
                 if tag == 1:
-                    assert json.loads(body)["version"] == 10
+                    build = subprocess.check_output(
+                        [binary, "--version"], text=True
+                    ).split()[1]
+                    assert json.loads(body) == {"build": build}, body
                 else:
                     assert tag == 2, (tag, body)
                     data.extend(body)
@@ -150,8 +153,8 @@ def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
             (root / "missing", {}, "cannot access remote target.workspace"),
             (file, {}, "is not a directory"),
             (Path("relative"), {}, "absolute"),
-            (root, {"version": 3}, "incompatible SSH bootstrap"),
-            (root, {"version": 999}, "incompatible SSH bootstrap"),
+            (root, {"unexpected": True}, "unknown field `unexpected`"),
+            (root, {"build": 123}, "invalid type"),
             (root, {"build": "incompatible-build"}, "incompatible SSH bootstrap"),
             (
                 root,

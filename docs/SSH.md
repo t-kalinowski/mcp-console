@@ -6,7 +6,10 @@ Console does not install R, create the workspace, or synchronize files.
 
 ## Configure a target
 
-Prepare a compatible Console installation and an existing remote directory, then save this in the controller's `.agents/console/config.yaml`:
+Install the same Console release on the controller and remote host, and prepare an existing remote directory.
+Pin the remote installation to the controller's `mcp-console --version` result with `uv tool install --reinstall 'mcp-console==<release>'`, replacing `<release>` with that version.
+For development, build both installations from the same source revision; equal package versions alone do not establish matching code.
+Save this in the controller's `.agents/console/config.yaml`:
 
 ```yaml
 extends: :workspace
@@ -83,10 +86,11 @@ Private requests contain validated requirements and runtime selections, not cell
 Results can commit only after a compatible response and confirmed resolver cleanup.
 A normal installation failure preserves the accepted environment and current worker.
 A missing or malformed result, transport loss, or uncertain cleanup blocks further preparation and replacement; the operation is not replayed.
-The [target envelope](RELAY_PROTOCOL.md#target-launch-envelope) owns version negotiation and framing.
-Launch protocol version 10 distinguishes interrupted bootstrap from other incomplete setup, carries the controller’s enabled-language selection and requires built-in interpreter-bootstrap completion after transport readiness; older executables are rejected before evaluation even when package versions match.
-Preparation protocol version 6 adds required conversion metadata to inspected Python identities.
-Version 5 peers are rejected during negotiation, even when Console package versions match; update the controller and remote executable together.
+The [target envelope](RELAY_PROTOCOL.md#target-launch-envelope) owns framing and the Console build check.
+Launch and preparation are unversioned and evolve in lockstep; update the controller and remote executable together.
+Use an explicit `target.command` for a pinned installation when remote command lookup would select another release.
+Both connections retain field validation and authenticated SSH transport.
+Launch carries the controller's enabled languages and requires built-in interpreter-bootstrap completion after transport readiness; preparation requires conversion metadata in inspected Python identities.
 
 SSH preparation runs with the remote account's host permissions, independently of the worker's network policy.
 The [local resolver policy](RESOLVER.md) is not forwarded to SSH hosts; remote resolver sandboxing is deferred.

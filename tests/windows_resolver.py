@@ -42,7 +42,6 @@ class Resolver:
         self.send(
             {
                 "Open": {
-                    "version": 6,
                     "build": build,
                     "workspace": "",
                     "selections": {},
@@ -62,7 +61,8 @@ class Resolver:
         return message
 
     def ready(self):
-        assert "Hello" in self.receive()
+        build = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
+        assert self.receive() == {"Hello": {"build": build}}
         discovery = self.receive()["Completed"]
         assert discovery["confirmed"], discovery
         assert "Ok" in discovery["result"], discovery

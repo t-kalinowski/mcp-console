@@ -1,5 +1,5 @@
 #![cfg_attr(not(unix), allow(dead_code))]
-//! Versioned target bootstrap and envelope around unchanged relay JSONL.
+//! Target bootstrap and envelope around relay JSONL, evolving in lockstep.
 use crate::ssh::preparation;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
@@ -21,10 +21,6 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v11 requires conversion metadata in prepared Python identities.
-// SSH launch stays at v10; its identities use preparation protocol v6.
-pub(crate) const VERSION: u32 = 11;
-pub(crate) const SSH_VERSION: u32 = 10;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;
@@ -62,7 +58,6 @@ pub(crate) fn run(
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Bootstrap {
-    pub version: u32,
     pub build: String,
     #[serde(default = "crate::cell::Languages::all")]
     pub languages: crate::cell::Languages,
@@ -124,7 +119,6 @@ pub(crate) fn enter_workspace(workspace: &str) -> Result<(), String> {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Hello {
-    pub version: u32,
     pub build: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_id: Option<String>,
@@ -228,7 +222,7 @@ impl<R: Read> Output<R> {
             HELLO if !self.hello => {
                 let hello: Hello = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
                 self.protocol
-                    .compatible(hello.version, &hello.build)
+                    .compatible(&hello.build)
                     .map_err(io::Error::other)?;
                 if let (Some(recording), Some(id)) = (&self.recording, &hello.container_id) {
                     recording.target_generation(Some(id), None);
@@ -303,19 +297,10 @@ impl<R: Read> Read for Output<R> {
 }
 
 impl Protocol {
-    pub fn version(&self) -> u32 {
-        if self.0 == "SSH" {
-            SSH_VERSION
-        } else {
-            VERSION
-        }
-    }
-
-    pub fn compatible(&self, version: u32, build: &str) -> Result<(), String> {
-        let expected = self.version();
-        if version != expected || build != env!("CARGO_PKG_VERSION") {
+    pub fn compatible(&self, build: &str) -> Result<(), String> {
+        if build != env!("CARGO_PKG_VERSION") {
             return Err(format!(
-                "incompatible {} bootstrap: expected protocol {expected}, Console {}; received protocol {version}, Console {build}",
+                "incompatible {} bootstrap: expected Console {}; received Console {build}",
                 self.0,
                 env!("CARGO_PKG_VERSION")
             ));

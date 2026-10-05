@@ -125,21 +125,13 @@ elif args[0] == "exec":
     probe = args[-1] == "docker-sandbox-probe"
     if (probe and mode == "probe-gate") or (not probe and mode == "launch-gate"):
         gate()
-    frame(
-        1,
-        {
-            "version": (
-                10
-                if mode == "prior-python-metadata-protocol"
-                else 3
-                if mode == "probe-version"
-                else 8
-                if mode == "prior-bootstrap-protocol"
-                else bootstrap["version"]
-            ),
-            "build": "unsupported" if mode == "probe-build" else bootstrap["build"],
-        },
-    )
+    assert "version" not in bootstrap, bootstrap
+    hello = {"build": "unsupported" if mode == "probe-build" else bootstrap["build"]}
+    if mode == "probe-unknown":
+        hello["unexpected"] = True
+    if mode == "missing-build":
+        hello.pop("build")
+    frame(1, hello)
     if probe and mode == "probe-closed-output":
         # Keep the attachment pipe open until this peer exits, so the owner
         # cannot cancel the peer before its next write hits the closed reader.
@@ -191,7 +183,7 @@ elif args[0] == "exec":
         }
         if mode == "r-only-probe":
             runtime["native"]["python"] = None
-        if mode == "prior-python-metadata-protocol":
+        if mode == "missing-python-metadata":
             runtime["native"]["python"]["selected"].pop("metadata")
         if mode == "native-managed":
             runtime["native"]["python"]["managed"] = True

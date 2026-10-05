@@ -1,4 +1,4 @@
 ---
-version: 6
+unversioned_open: true
 runtime_selections_preserved: true
 local_policy_not_forwarded: true

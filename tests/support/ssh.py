@@ -33,12 +33,11 @@ CONFIG = ".agents/console/config.yaml"
 def bootstrap(
     binary: Path, workspace: Path, *, policy=None, no_sandbox=False, **values
 ) -> bytes:
-    version = subprocess.check_output([binary, "--version"], text=True).split()[1]
+    build = subprocess.check_output([binary, "--version"], text=True).split()[1]
     body = json.dumps(
         {
-            "version": 10,
             "provider": "native",
-            "build": version,
+            "build": build,
             "workspace": str(workspace),
             "policy": policy or {},
             "no_sandbox": no_sandbox,

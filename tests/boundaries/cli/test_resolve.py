@@ -59,13 +59,14 @@ esac
             process.stdin.flush()
 
         def receive() -> object:
-            return json.loads(process.stdout.readline())
+            line = process.stdout.readline()
+            assert line, process.stderr.read()
+            return json.loads(line)
 
         try:
             send(
                 {
                     "Open": {
-                        "version": 6,
                         "build": build,
                         "workspace": "",
                         "selections": {"r_home": None, "python": None},
@@ -75,7 +76,7 @@ esac
             )
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"version": 6, "build": build}}, hello
+            assert hello == {"Hello": {"build": build}}, hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
@@ -131,6 +132,39 @@ esac
             process.wait(timeout=10)
 
 
+def test_open_validates_build_and_payload_shape(binary: Path) -> Transcript:
+    build = subprocess.check_output([binary, "--version"], text=True).split()[1]
+    opened = {
+        "build": build,
+        "workspace": "",
+        "selections": {"r_home": None, "python": None},
+        "mode": "PythonOnly",
+    }
+    cases = (
+        ({**opened, "build": "incompatible-build"}, "incompatible"),
+        (
+            {key: value for key, value in opened.items() if key != "build"},
+            "missing field `build`",
+        ),
+        ({**opened, "build": 123}, "invalid type"),
+        ({**opened, "unexpected": True}, "unknown field `unexpected`"),
+    )
+    records = []
+    for payload, expected in cases:
+        result = subprocess.run(
+            [binary, "resolve"],
+            input=json.dumps({"Open": payload}) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode != 0, result
+        assert not result.stdout, result.stdout
+        assert expected in result.stderr, result.stderr
+        records.append({"error": result.stderr})
+    return records
+
+
 @requires(NATIVE_FIXTURES)
 def test_close_settles_resolver_observation_before_reaping(binary: Path) -> Transcript:
     return observe_resolver(binary, fail=False)
@@ -181,7 +215,6 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                 json.dumps(
                     {
                         "Open": {
-                            "version": 6,
                             "build": build,
                             "workspace": "",
                             "selections": {"r_home": None, "python": None},
@@ -196,7 +229,7 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                 json.loads(line)
                 for line in read_lines(process.stdout, 2, "preparation open")
             ]
-            assert opened[0] == {"Hello": {"version": 6, "build": build}}, opened
+            assert opened[0] == {"Hello": {"build": build}}, opened
             assert opened[1]["Completed"]["confirmed"] is True, opened
             process.stdin.write(
                 json.dumps(

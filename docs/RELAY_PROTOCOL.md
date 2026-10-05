@@ -3,7 +3,7 @@
 This private interface connects the server to one generation's relay.
 [`src/relay_protocol.rs`](../src/relay_protocol.rs) defines its frames; [`src/worker_relay.rs`](../src/worker_relay.rs) and [`src/worker_client/process.rs`](../src/worker_client/process.rs) implement the endpoints.
 Windows uses the same JSONL frames with named pipes, process handles, and cooperative interrupt events; see [Windows execution](WINDOWS.md).
-It has no independent negotiation; incompatible wire changes require a target-envelope version change.
+Console-owned internal protocols are unversioned and evolve in lockstep; update both endpoints and fixtures together.
 
 ## Process boundary
 
@@ -28,19 +28,17 @@ The [worker protocol](WORKER_PROTOCOL.md) owns the inherited fd and worker-messa
 ## Target launch envelope
 
 SSH, Docker, and SBX wrap unchanged relay JSONL using [`src/target_launch.rs`](../src/target_launch.rs).
-The current launch version is **11** for Docker/SBX and **10** for SSH, with matching Console package version required independently.
-Version 11 requires conversion metadata in the Python identity returned by Docker/SBX runtime probes; version 10 peers are rejected before decoding those identities.
-Version 10 distinguishes interrupted interpreter bootstrap from other incomplete setup.
-Version 9 carries enabled languages captured on the controller; execution-host ambient values and workload policy cannot replace that selection.
-Version 8 introduced the built-in interpreter-bootstrap completion event after transport readiness, preventing older target workers from leaving an admitted cell waiting indefinitely.
-Increment launch compatibility for incompatible envelope or relay changes, even between development builds sharing a package version.
-SSH preparation has its own protocol and connection.
+The envelope and separate SSH preparation connection have no protocol version or negotiation.
+Both endpoints check the Console package build identity and validate the current payload shape.
+Deploy the same Console release at both ends, or build both from the same source revision for development; equal development package versions alone do not establish matching code.
+SSH installations, Docker images, and SBX templates must be updated together with the controller; see their installation guides below.
+The pinned native companion retains its separately owned configuration and artifact checks.
 
 Controller input begins with a four-byte unsigned big-endian length and at most 1 MiB of UTF-8 JSON bootstrap:
 
 | Field                                    | Meaning                                                                                                          |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `version`, `build`                       | Launch version and Console package version.                                                                      |
+| `build`                                  | Console package build identity.                                                                                  |
 | `languages`                              | Controller-selected `r`, `python`, and `sql` booleans; omitted by private launch-only callers means all enabled. |
 | `workspace`                              | Existing absolute execution-host directory.                                                                      |
 | `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection.                                                        |
@@ -49,13 +47,15 @@ Controller input begins with a four-byte unsigned big-endian length and at most 
 | `python`                                 | Optional Python selection for Docker/SBX probes only; rejected by SSH.                                           |
 
 Consume exactly the bootstrap, forwarding every subsequent byte to relay stdin, including bytes received in the same read.
-Validate compatibility before worker startup; relay `ready` does not substitute for this check.
+Validate the build and bootstrap fields before worker startup; relay `ready` does not substitute for these checks.
+Enabled languages come from the controller, and prepared Python identities require conversion metadata.
+Built-in interpreter initialization reports completion and interruption separately from transport readiness.
 
 Helper stdout frames contain a one-byte tag, four-byte unsigned big-endian length, and at most 64 KiB of payload:
 
 | Tag | Payload and phase                                                                                                               |
 | --- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `1` | JSON hello: `version`, `build`, optional authoritative `container_id` or `sandbox: {name, id}`.                                 |
+| `1` | JSON hello: `build`, optional authoritative `container_id` or `sandbox: {name, id}`.                                            |
 | `2` | Raw relay stdout bytes; chunks need not align with JSONL frames. Invalid during probes.                                         |
 | `3` | Terminal JSON `{confirmed: boolean, error: string or null}`, followed by EOF. Setup rejection may send this without a hello.    |
 | `4` | Typed prepared-runtime result, exactly once after compatible hello during a Docker/SBX probe. Invalid for SSH or worker launch. |
@@ -63,7 +63,7 @@ Helper stdout frames contain a one-byte tag, four-byte unsigned big-endian lengt
 The prepared descriptor rejects managed state, contradictory selections, unknown fields, and relative native paths.
 It supports R-only, Python-only, and combined preinstalled runtimes.
 Target paths remain opaque metadata on the controller; launch validates them again inside the target without rediscovery or fallback.
-Unexpected stdout, bad versions, oversized/truncated frames, missing terminal confirmation, or trailing bytes are transport errors.
+Unexpected stdout, mismatched builds, malformed fields, oversized/truncated frames, missing terminal confirmation, or trailing bytes are transport errors.
 Diagnostics use stderr.
 
 Docker/SBX ownership helpers consume a bounded owner request, create the resource, and forward its inner envelope through an outer envelope carrying authoritative resource identity.

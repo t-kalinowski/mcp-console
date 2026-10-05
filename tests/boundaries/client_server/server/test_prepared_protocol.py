@@ -175,19 +175,18 @@ def test_presentation_is_independent_of_prepared_runtime(binary: Path) -> list:
 
 
 @requires(POSIX)
-def test_rejects_target_without_interpreter_bootstrap_protocol(binary: Path) -> list:
+def test_rejects_target_with_missing_build_identity(binary: Path) -> list:
     with workspace() as root:
         environment = cli_peer(root / "peer")
         configure(root, template=TEMPLATE)
-        (root / "peer/mode").write_text("prior-bootstrap-protocol")
+        (root / "peer/mode").write_text("missing-build")
         with McpClient(binary, ("serve",), environment, root) as client:
             error = client.startup_error()
-            assert "expected protocol 11" in error, error
-            assert "received protocol 8" in error, error
+            assert "missing field `build`" in error, error
             client.stdin.close()
             assert client.stdout.read(timeout=30) == ""
             diagnostics = client.stderr.read(timeout=30)
-            assert "expected protocol 11" in diagnostics, diagnostics
+            assert "missing field `build`" in diagnostics, diagnostics
             assert client.process.wait(timeout=5) != 0
         operations = calls(root)
         executions = [call["args"] for call in operations if call["args"][0] == "exec"]
@@ -196,7 +195,7 @@ def test_rejects_target_without_interpreter_bootstrap_protocol(binary: Path) -> 
         )
         assert not (root / "peer/vms").exists()
         return [
-            {"older_target_rejected": True, "probe_retired_before_worker_launch": True}
+            {"missing_build_rejected": True, "probe_retired_before_worker_launch": True}
         ]
 
 
@@ -204,7 +203,7 @@ def test_rejects_target_without_interpreter_bootstrap_protocol(binary: Path) -> 
 def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> list:
     records = []
     for mode, expected in (
-        ("probe-version", "expected protocol 11"),
+        ("probe-unknown", "unknown field `unexpected`"),
         ("probe-build", "incompatible Docker Sandbox bootstrap"),
         ("missing-runtime", "no runtime result"),
         ("duplicate-runtime", "unexpected stdout"),

@@ -212,7 +212,6 @@ impl Preparation {
         {
             let command = session.command_for("ssh-prepare")?;
             let open = Input::Open {
-                version: super::VERSION,
                 build: env!("CARGO_PKG_VERSION").into(),
                 workspace: session.target.workspace.clone(),
                 selections,
@@ -254,7 +253,6 @@ impl Preparation {
         }
         command.arg("resolve");
         let open = Input::Open {
-            version: super::VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: String::new(),
             selections: Selections::default(),
@@ -643,9 +641,9 @@ fn run(
                         let _ = reply.send(Ok(false));
                     }
                 }
-                Event::Received(Ok(Output::Hello { version, build })) if !hello => {
-                    if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-                        return Err(format!("incompatible {owner} protocol or Console build"));
+                Event::Received(Ok(Output::Hello { build })) if !hello => {
+                    if build != env!("CARGO_PKG_VERSION") {
+                        return Err(format!("incompatible {owner} Console build"));
                     }
                     hello = true;
                     setup_deadline = None;

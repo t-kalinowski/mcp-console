@@ -427,7 +427,6 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
                 frame(
                     {
                         "Open": {
-                            "version": 6,
                             "build": version,
                             "workspace": str(remote),
                             "selections": {"r_home": None, "python": None},
@@ -436,7 +435,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
                 )
             )
             process.stdin.flush()
-            assert "Hello" in read_message()
+            assert read_message() == {"Hello": {"build": version}}
             assert read_message()["Completed"]["id"] == 0
             process.stdin.write(frame({"Run": {"id": 1, "operation": "Bootstrap"}}))
             process.stdin.flush()

@@ -14,6 +14,8 @@ Source and public acceptance tests settle disagreements with prose.
   Verify an internal refactor against existing public tests; do not test private helpers.
 - Preserve generation ownership and confirmed-retirement barriers.
   Submitted code is shell-class capability; dependency preparation is a separate trusted host operation, not protected by the worker sandbox.
+- Console-owned internal protocols evolve in lockstep and are not independently versioned.
+  Update both endpoints and fixtures together; preserve external protocol versions and component/artifact identity checks.
 - Prefer event-driven waits with explicit cancellation over polling.
   Add abstractions for implemented responsibilities, not planned features.
   Reassess large files rather than enforcing a line limit; retain one Cargo package until a concrete crate boundary emerges.

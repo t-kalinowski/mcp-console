@@ -27,7 +27,8 @@ def frame(tag: int, value: object) -> None:
 
 length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
 bootstrap = json.loads(sys.stdin.buffer.read(length))
-frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
+assert "version" not in bootstrap, bootstrap
+frame(1, {"build": bootstrap["build"]})
 frame(2, {"kind": "ready"})
 for line in sys.stdin.buffer:
     command = json.loads(line)

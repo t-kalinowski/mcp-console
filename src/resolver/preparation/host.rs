@@ -307,7 +307,6 @@ pub(super) fn run(local: bool) -> Result<(), String> {
         super::read(&mut input)?
     };
     let Input::Open {
-        version,
         build,
         workspace,
         mut selections,
@@ -316,8 +315,8 @@ pub(super) fn run(local: bool) -> Result<(), String> {
     else {
         return Err("expected SSH preparation open".into());
     };
-    if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-        return Err("incompatible SSH preparation protocol or Console build".into());
+    if build != env!("CARGO_PKG_VERSION") {
+        return Err("incompatible SSH preparation Console build".into());
     }
     #[cfg(unix)]
     if !local {
@@ -396,7 +395,6 @@ pub(super) fn run(local: bool) -> Result<(), String> {
     });
     outgoing
         .send(Output::Hello {
-            version: super::VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
         })
         .map_err(|_| "preparation output stopped")?;

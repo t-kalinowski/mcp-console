@@ -43,7 +43,6 @@ pub(super) fn run() -> Result<(), String> {
                 &request.bootstrap,
                 request.probe,
                 Hello {
-                    version: target_launch::VERSION,
                     build: env!("CARGO_PKG_VERSION").into(),
                     container_id: None,
                     sandbox: Some(identity.clone()),

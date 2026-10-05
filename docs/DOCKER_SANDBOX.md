@@ -24,7 +24,9 @@ Console does not install SBX, log in, reset global policy, alter credentials, or
 The [example template](../examples/docker-sandbox/Dockerfile) builds Linux Console and preinstalls R, Python, and analysis packages using Docker's `shell-docker` template.
 It creates `/workspace`, starts no coding agent, and requires no model-provider authentication.
 Its final image contains no native companion: this provider never discovers or invokes that executable.
-The template and controller need compatible Console package and target-protocol versions.
+Build the template with the same Console release as the controller, or the same source revision for development builds.
+The internal protocols are unversioned; rebuild and import the template when updating the controller.
+Console checks the package build identity, but equal development package versions alone do not establish matching code.
 
 ```sh
 docker build -f examples/docker-sandbox/Dockerfile -t mcp-console-sandbox:analysis .
@@ -95,7 +97,7 @@ Standalone `sandbox -- COMMAND` rejects compute enforcement rather than silently
 
 ## Runtime and policy
 
-A disposable probe checks the workspace, package/protocol compatibility, and installed runtimes under the effective workload environment.
+A disposable probe checks the workspace, Console package build identity, and installed runtimes under the effective workload environment.
 It uses the same prepared-runtime selection as Docker without initializing an analysis interpreter or SQL catalog.
 R requires a usable shared library; genuine absence selects native Python, while a broken selected runtime is an error.
 With R but no Python executable, R and SQL remain available.

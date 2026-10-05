@@ -5,10 +5,10 @@ result:
   content:
     - type: text
       text: >-
-        [worker relay stdout read failed: incompatible SSH bootstrap: expected
-        Console 0.0.4; received Console incompatible-build; additionally failed
-        to stop the worker: remote retirement is unconfirmed (SSH exit is not a
-        cleanup barrier)]
+        [worker relay stdout read failed: unknown field `unexpected`, expected
+        one of `build`, `container_id`, `sandbox` at line 1 column 31;
+        additionally failed to stop the worker: remote retirement is unconfirmed
+        (SSH exit is not a cleanup barrier)]
   isError: true
 ---
 send:

@@ -59,20 +59,18 @@ def test_local_resolver_policy_preserves_ssh_open_protocol(binary: Path):
                 client.finish()
             opened = json.loads(record.with_suffix(".open").read_text())
             assert set(opened) == {
-                "version",
                 "build",
                 "workspace",
                 "selections",
                 "mode",
             }, opened
-            assert opened["version"] == 6
             assert opened["selections"] == {
                 "r_home": "/selected/R",
                 "python": "/selected/python",
             }
         return [
             {
-                "version": 6,
+                "unversioned_open": True,
                 "runtime_selections_preserved": True,
                 "local_policy_not_forwarded": True,
             }
@@ -121,9 +119,8 @@ def test_discovery_outlives_connection_setup_timeout(binary):
 
 
 @requires(SSH)
-def test_python_preparation_preserves_v3_peer_compatibility(binary):
+def test_python_preparation_preserves_r_present_request_shape(binary):
     # Retain the original R-present request shape without selected_python.
-    # The peer negotiates the current preparation protocol independently.
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         record = root / "requests"

@@ -53,7 +53,8 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
+    assert "version" not in bootstrap["Open"], bootstrap
+    preparation_frame({"Hello": {"build": bootstrap["Open"]["build"]}})
     if mode in {"discovery-diagnostics", "discovery-image"}:
         print("preparation detail", file=sys.stderr, flush=True)
         with (log.parent / "discovery-started").open("wb", buffering=0) as signal:
@@ -140,18 +141,14 @@ if mode == "auth":
 if mode == "stdout":
     print("unexpected login banner", flush=True)
     sys.exit(0)
-frame(
-    1,
-    {
-        "version": 999
-        if mode == "incompatible"
-        else 9
-        if mode == "prior-bootstrap-protocol"
-        else bootstrap["version"],
-        "build": bootstrap["build"],
-    },
-)
-if mode in {"incompatible", "prior-bootstrap-protocol"}:
+assert "version" not in bootstrap, bootstrap
+hello = {
+    "build": "incompatible-build" if mode == "incompatible" else bootstrap["build"]
+}
+if mode == "unknown-hello-field":
+    hello["unexpected"] = True
+frame(1, hello)
+if mode in {"incompatible", "unknown-hello-field"}:
     # Rejected handshakes cannot publish Ready on the closed event transport.
     sys.exit(0)
 frame(2, {"kind": "ready"})
@@ -191,7 +188,7 @@ if (
             "interrupted": os.environ["CONSOLE_BOOTSTRAP_COMPLETE"] == "0",
         },
     )
-elif mode not in {"bootstrap-interrupted", "prior-bootstrap-protocol"}:
+elif mode != "bootstrap-interrupted":
     frame(2, {"kind": "runtime_initialized", "interrupted": False})
 for line in sys.stdin.buffer:
     command = json.loads(line)

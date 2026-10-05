@@ -39,13 +39,14 @@ def complete(id, value, confirmed=True):
 opened = read()["Open"]
 if mode == "capture-open":
     Path(record).with_suffix(".open").write_text(json.dumps(opened))
-assert opened["version"] == 6
+assert "version" not in opened, opened
 assert opened["mode"] == "Auto"
 write(
     {
         "Hello": {
-            "version": 3 if mode == "incompatible" else 6,
-            "build": opened["build"],
+            "build": "incompatible-build"
+            if mode == "incompatible"
+            else opened["build"],
         }
     }
 )
@@ -108,7 +109,7 @@ while (message := read()) is not None:
         if mode.startswith("default-extension-"):
             Path(record).with_suffix(".closed").touch()
             if mode == "default-extension-close-failure":
-                write({"Hello": {"version": 4, "build": opened["build"]}})
+                write({"Hello": {"build": opened["build"]}})
                 break
         write("Closed")
         break

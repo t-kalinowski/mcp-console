@@ -43,7 +43,6 @@ pub(super) fn run() -> Result<(), String> {
                 Hello {
                     container_id: container.id.clone(),
                     sandbox: None,
-                    version: target_launch::VERSION,
                     build: env!("CARGO_PKG_VERSION").into(),
                 },
                 super::PROTOCOL,

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub(crate) use crate::resolver::preparation;
-use crate::target_launch::{self, Bootstrap, Protocol, Retirement, SSH_VERSION};
+use crate::target_launch::{self, Bootstrap, Protocol, Retirement};
 
 pub(crate) const PROTOCOL: Protocol = Protocol("SSH");
 pub(crate) const RETIREMENT_GRACE: Duration = Duration::from_secs(6);
@@ -86,7 +86,6 @@ impl Session {
         target_launch::encode(&Bootstrap {
             python: None,
             languages: self.languages,
-            version: SSH_VERSION,
             build: env!("CARGO_PKG_VERSION").into(),
             workspace: self.target.workspace.clone(),
             policy: policy.clone(),
