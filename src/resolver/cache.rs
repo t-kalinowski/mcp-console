@@ -4,6 +4,63 @@ use crate::settings::SandboxSettings;
 use serde_json::Value;
 use std::path::PathBuf;
 
+pub(crate) fn isolated_defaults(mut settings: SandboxSettings) -> Result<SandboxSettings, String> {
+    // An explicit filesystem policy owns its cache grants and locations.
+    if settings
+        .get("filesystem")
+        .and_then(|value| value.get("entries"))
+        .is_some()
+    {
+        return Ok(settings);
+    }
+    let home = environment_path(&settings, "HOME").ok_or("resolver sandbox requires HOME")?;
+    if !home.is_absolute() {
+        return Err("resolver sandbox requires an absolute HOME".into());
+    }
+    let root = environment_path(&settings, "XDG_CACHE_HOME")
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| home.join(".cache"))
+        .join("mcp-console/resolver/payload");
+    let mut defaults = serde_json::Map::new();
+    for (name, directory) in [
+        ("UV_CACHE_DIR", "uv/cache"),
+        ("UV_PYTHON_INSTALL_DIR", "uv/python"),
+        ("UV_TOOL_DIR", "uv/tools"),
+        ("IR_CACHE_DIR", "ir"),
+        ("R_USER_CACHE_DIR", "r"),
+        ("RENV_PATHS_ROOT", "renv"),
+        ("PKG_CACHE_DIR", "pak"),
+        ("MPLCONFIGDIR", "matplotlib"),
+        (
+            crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY,
+            "extensions",
+        ),
+    ] {
+        let path = environment_path(&settings, name).unwrap_or_else(|| root.join(directory));
+        defaults.insert(
+            name.into(),
+            path.to_str()
+                .ok_or("resolver policy paths must be UTF-8")?
+                .into(),
+        );
+    }
+    let environment = settings
+        .entry("environment")
+        .or_insert_with(|| Value::Object(Default::default()));
+    let environment = environment
+        .as_object_mut()
+        .ok_or("resolver.environment must be a mapping")?;
+    for (name, value) in defaults {
+        if environment
+            .get(&name)
+            .is_none_or(|value| value.as_str() == Some(""))
+        {
+            environment.insert(name, value);
+        }
+    }
+    Ok(settings)
+}
+
 fn environment_path(settings: &SandboxSettings, name: &str) -> Option<PathBuf> {
     let inherit = settings.get("inherit_environment") != Some(&Value::Bool(false));
     settings
@@ -69,13 +126,18 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         env("UV_PYTHON_INSTALL_DIR").unwrap_or_else(|| xdg_data.join("uv/python")),
         env("UV_TOOL_DIR").unwrap_or_else(|| xdg_data.join("uv/tools")),
         env("IR_CACHE_DIR").unwrap_or_else(|| r_cache.join("R/ir")),
+        // tools::R_user_dir appends R/<package> even to R_USER_CACHE_DIR.
         r_cache.join("R/reticulate"),
         duckdb_extension_directory(settings)?.expect("absolute resolver HOME"),
         env("MPLCONFIGDIR").unwrap_or_else(|| xdg_cache.join("matplotlib")),
         env("RENV_PATHS_ROOT").unwrap_or_else(|| r_cache.join("R/renv")),
         r_cache.join("R/pkgcache"),
     ];
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos")
+        && ["UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_TOOL_DIR"]
+            .into_iter()
+            .any(|name| env(name).is_none())
+    {
         // uv retains existing installations in its pre-XDG native locations.
         caches.extend([
             home.join("Library/Caches/uv"),
@@ -93,6 +155,27 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         if let Some(path) = env(name) {
             caches.push(path);
         }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS mktemp and shell here-documents use Darwin's user temporary
+        // directory even when the native runner supplies a private TMPDIR.
+        let temporary = std::process::Command::new("/usr/bin/getconf")
+            .arg("DARWIN_USER_TEMP_DIR")
+            .output()
+            .map_err(|error| {
+                format!("cannot locate the macOS user temporary directory: {error}")
+            })?;
+        if !temporary.status.success() {
+            return Err("cannot locate the macOS user temporary directory".into());
+        }
+        let temporary = String::from_utf8(temporary.stdout)
+            .map_err(|_| "resolver policy paths must be UTF-8")?;
+        let temporary = PathBuf::from(temporary.trim_end_matches('\n'));
+        if !temporary.is_absolute() {
+            return Err("macOS user temporary directory must be absolute".into());
+        }
+        caches.push(temporary);
     }
     Ok(caches)
 }
