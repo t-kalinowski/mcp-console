@@ -193,12 +193,14 @@ fn retirement(
     let sideband_eof = scenario == "retirement_sideband";
     let mut stdin_ready = ready.try_clone()?;
     let stdin_marker = marker.with_extension("stdin");
+    let (stdin_closed_tx, stdin_closed_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut bytes = Vec::new();
         io::stdin().read_to_end(&mut bytes).unwrap();
         std::fs::write(stdin_marker, bytes).unwrap();
         if sideband_eof {
             writeln!(stdin_ready, "stdin closed").unwrap();
+            stdin_closed_tx.send(()).unwrap();
         }
     });
     let mut ready = ready;
@@ -230,6 +232,11 @@ fn retirement(
         } else if sideband_eof && command.contains("evaluate") {
             writer.take();
         } else if command.trim() == "{\"kind\":\"shutdown\"}" {
+            if sideband_eof {
+                // Retirement closes stdin and sends shutdown concurrently.
+                // Publish the EOF checkpoint before acknowledging shutdown.
+                stdin_closed_rx.recv().unwrap();
+            }
             writeln!(ready, "shutdown")?;
         }
     }
