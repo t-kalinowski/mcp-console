@@ -1,0 +1,4 @@
+---
+interrupted_reset_preserves_r_selection_after_python_initializes: true
+native_identity_and_transaction_retained: true
+successful_retry_restores_existing_python_catalog: true

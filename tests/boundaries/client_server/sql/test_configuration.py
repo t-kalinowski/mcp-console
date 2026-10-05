@@ -690,6 +690,103 @@ def test_selected_r_connection_does_not_initialize_python(
     ]
 
 
+@requires(POSIX, SQL, R)
+@executions(DIRECT, SANDBOXED)
+def test_interrupted_reset_preserves_selected_r_connection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_setup import deferred_selection_client
+
+    with tempfile.TemporaryDirectory() as temporary:
+        python = Path(temporary) / ".venv/bin/python"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", python.parent.parent],
+            check=True,
+        )
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, "duckdb"],
+            check=True,
+            capture_output=True,
+        )
+        with deferred_selection_client(
+            binary, execution.serve("-c", "sql.provider=python")
+        ) as client:
+            client.expect(
+                r=f"Sys.setenv(RETICULATE_PYTHON = {json.dumps(str(python))})"
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                    invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+                    DBI::dbBegin(native)
+                    invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 43"))
+                    console_sql_connection(native)
+                    reset_error <- NULL
+                    options(reticulate.python.beforeInitialized = function() {
+                      options(reticulate.python.beforeInitialized = NULL)
+                      stop(structure(
+                        list(message = "SQL reset initialization interrupt", call = NULL),
+                        class = c("interrupt", "condition")
+                      ))
+                    })
+                    invisible()
+                    """),
+            )
+            client.send(
+                # fmt: r
+                r=code("""
+                    tryCatch(
+                      console_sql_connection(NULL),
+                      error = function(condition) reset_error <<- conditionMessage(condition)
+                    )
+                    invisible()
+                    """),
+            )
+            assert "SQL reset initialization interrupt" in last_tool_text(client)
+            # Resumed Python setup must retain the R selection while opening a usable
+            # managed catalog. R SQL cells still run inside the user's transaction.
+            client.expect(
+                # fmt: python
+                python=code("""
+                    managed = sql_connection()
+                    _ = managed.execute("CREATE TABLE durable AS SELECT 42 AS answer")
+                    assert managed.execute("SELECT answer FROM durable").fetchone() == (42,)
+                    """),
+            )
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      43\n",
+                sql="SELECT answer FROM selected",
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    stopifnot(
+                      identical(sql_connection(), native),
+                      DBI::dbIsValid(native),
+                      identical(
+                        reset_error,
+                        "Python initialization is incomplete; SQL connection was not reset"
+                      )
+                    )
+                    console_sql_connection(NULL)
+                    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 43)
+                    DBI::dbRollback(native)
+                    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                    """),
+            )
+            client.expect(python="assert sql_connection() is managed")
+            client.expect("answer\n------\n42\n", sql="SELECT answer FROM durable")
+            client.finish()
+    return [
+        {
+            "interrupted_reset_preserves_r_selection_after_python_initializes": True,
+            "native_identity_and_transaction_retained": True,
+            "successful_retry_restores_existing_python_catalog": True,
+        }
+    ]
+
+
 @requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_r_selection_preserves_live_global_lookup(

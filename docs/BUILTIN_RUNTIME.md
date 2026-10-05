@@ -201,6 +201,7 @@ R `sql_connection()` returns its selected R-owned connection even while SQL cell
 With a Python managed default and no selected R connection, it reports guidance to use Python `sql_connection()`; no native handle is proxied.
 Python `sql_connection()` is available with the Python managed default and returns its active Python connection.
 Reset from either language restores the configured managed provider and the same managed catalog without closing user connections or changing their transactions.
+If initializing Python during an R reset is interrupted or fails, the reset reports an error and preserves the selected R connection; retry the reset after initialization succeeds.
 R previews of user DBI connections use a private in-memory rendering catalog when the default belongs to Python; they do not open the configured database through a second engine.
 
 R submits cells through `DBI::dbSendQuery()`.

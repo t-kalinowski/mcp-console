@@ -211,10 +211,10 @@ pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
 }
 
 pub(crate) fn reset_managed_sql() -> Result<(), String> {
-    if ensure_initialized()? {
-        library::reset_managed_sql()?;
+    if !ensure_initialized()? {
+        return Err("Python initialization is incomplete; SQL connection was not reset".into());
     }
-    Ok(())
+    library::reset_managed_sql()
 }
 
 pub(crate) fn use_r_sql() -> Result<(), String> {
