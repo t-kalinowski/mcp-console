@@ -201,7 +201,7 @@ def test_prepares_extensions_for_python_with_r_present(
     ]
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_selects_python_with_r_present(
     binary: Path, execution: Execution
@@ -261,7 +261,7 @@ def test_selects_python_with_r_present(
     ]
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_r_database_path_is_captured_before_directory_changes(
     binary: Path, execution: Execution
@@ -269,7 +269,7 @@ def test_r_database_path_is_captured_before_directory_changes(
     return exercise_captured_database_path(binary, execution, "r")
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_python_database_path_is_captured_before_directory_changes(
     binary: Path, execution: Execution
@@ -401,7 +401,7 @@ def exercise_captured_database_path(
     return records
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_persists_database_and_captured_options(
     binary: Path, execution: Execution
@@ -519,7 +519,7 @@ def assert_native_catalog(client: McpClient, provider: str) -> None:
         )
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_native_selection_and_reset(
     binary: Path, execution: Execution
@@ -787,7 +787,7 @@ def test_interrupted_reset_preserves_selected_r_connection(
     ]
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_r_selection_preserves_live_global_lookup(
     binary: Path, execution: Execution
@@ -856,7 +856,7 @@ def test_sql_only_uses_hidden_python_provider(
     return [{"sql_only_hidden_python": True, "restart_selection": True}]
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_invalid_engine_option_does_not_fall_back(
     binary: Path, execution: Execution
@@ -901,7 +901,7 @@ def test_invalid_engine_option_does_not_fall_back(
     return records
 
 
-@requires(SQL, POSIX)
+@requires(SQL, POSIX, R)
 @executions(DIRECT, SANDBOXED)
 def test_configured_warmup_keeps_discovery_and_first_cell_ordering(
     binary: Path, execution: Execution
@@ -960,7 +960,7 @@ def test_configured_warmup_keeps_discovery_and_first_cell_ordering(
     ]
 
 
-@requires(SQL)
+@requires(SQL, R)
 @executions(SANDBOXED)
 def test_database_path_does_not_grant_write_access(
     binary: Path, execution: Execution
