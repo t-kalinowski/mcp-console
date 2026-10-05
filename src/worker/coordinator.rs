@@ -1,10 +1,12 @@
 use std::error::Error;
 use std::io;
 
-use super::core::{CommandReadiness, emit_output, take_worker_failure};
+#[cfg(all(test, unix))]
+use super::activity::CommandReadiness;
+use super::core::{emit_output, take_worker_failure};
 use super::input::finish_console_stdin_operation;
 use super::r_integration::Integration;
-use super::{core, interrupt};
+use super::{activity, bootstrap, core, interrupt};
 use crate::cell::{Cell, Language};
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
 
@@ -24,8 +26,7 @@ pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
-    #[cfg(windows)]
-    crate::windows::configure_worker_stdio()?;
+    bootstrap::configure_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
         crate::local_runtime::WorkerSelection {
@@ -38,10 +39,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
         .r
         .then(crate::local_runtime::r_installation)
         .transpose()?;
-    #[cfg(target_os = "linux")]
-    if let Some(installation) = &r_installation {
-        reexec_with_r_library_path(&installation.home, &reader, &writer)?;
-    }
+    bootstrap::prepare_r_library_path(r_installation.as_ref(), &reader, &writer)?;
     // The launcher owns this directory through confirmed worker retirement.
     // R's session tempdir is a child, never the owner of Python/SQL storage.
     let temporary =
@@ -61,52 +59,9 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
     coordinator.run(bootstrap_runtimes)
 }
 
-#[cfg(target_os = "linux")]
-fn reexec_with_r_library_path(
-    r_home: &std::path::Path,
-    reader: &crate::sideband::Reader,
-    writer: &crate::sideband::Writer,
-) -> Result<(), Box<dyn Error>> {
-    use std::os::unix::process::CommandExt;
-
-    let library = r_home.join("lib");
-    let mut paths: Vec<_> = std::env::var_os("LD_LIBRARY_PATH")
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default();
-    if paths.first() == Some(&library) {
-        return Ok(());
-    }
-    paths.insert(0, library);
-    // The ELF loader reads LD_LIBRARY_PATH at exec, before native R packages
-    // need to resolve libR.so and its companion libraries.
-    let mut command = std::process::Command::new(std::env::current_exe()?);
-    command
-        .args(std::env::args_os().skip(1))
-        .env("LD_LIBRARY_PATH", std::env::join_paths(paths)?);
-    crate::sideband::configure_exec(reader, writer, &mut command)?;
-    Err(command.exec().into())
-}
-
 impl Coordinator {
-    #[cfg(windows)]
     fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
-        loop {
-            r.idle()?;
-            let message = match core::next_command()? {
-                CommandReadiness::Ready(message) => Some(message),
-                CommandReadiness::Waiting => core::receive_idle_command()?,
-            };
-            // The relay signals interrupts before forwarding the next command,
-            // but their watcher may still be publishing native/Python state.
-            interrupt::finish_windows_publication().map_err(|error| error.to_string())?;
-            r.idle()?;
-            if let Some(message) = take_worker_failure() {
-                return Err(message);
-            }
-            if let Some(message) = message {
-                return Ok(message);
-            }
-        }
+        activity::wait_for_message(r)
     }
 
     fn run(&mut self, bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
@@ -243,26 +198,6 @@ impl Coordinator {
             }
         }
         Ok(true)
-    }
-
-    #[cfg(unix)]
-    fn wait_for_message(r: &Integration) -> Result<ServerMessage, String> {
-        loop {
-            let sideband_fd = match core::next_command()? {
-                CommandReadiness::Ready(message) => return Ok(message),
-                CommandReadiness::Waiting(descriptor) => descriptor,
-            };
-            // R activity must service callbacks before the next wait. The
-            // native wait also wakes for interrupts and input shutdown.
-            if r.wait_for_activity(sideband_fd)? {
-                return core::receive_server_message();
-            }
-
-            r.idle()?;
-            if let Some(message) = take_worker_failure() {
-                return Err(message);
-            }
-        }
     }
 }
 
