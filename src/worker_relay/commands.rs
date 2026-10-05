@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::io::{Cancellation, cancellation_pipe, set_nonblocking};
+use super::lifecycle::WORKER_SHUTDOWN_GRACE;
 use super::routing::Operation;
 use super::supervisor::{Control, FailureReporter};
 use crate::jsonl::JsonlBuffer;
@@ -14,7 +15,6 @@ use crate::relay_protocol::{PARTIAL_COMMAND_EOF, RelayCommand};
 use crate::worker_protocol::ServerMessage;
 
 const READ_CHUNK_SIZE: usize = 8 * 1024;
-pub(super) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
 pub(super) struct CommandReader {
     cancel: Cancellation,
@@ -49,9 +49,8 @@ impl CommandReader {
                 let mut chunk = [0_u8; READ_CHUNK_SIZE];
                 match input.read(&mut chunk) {
                     Ok(0) if !buffer.has_buffered_data() => {
-                        let _ = controls.send(Control::Shutdown {
+                        let _ = controls.send(Control::ControllerEof {
                             deadline: Instant::now() + WORKER_SHUTDOWN_GRACE,
-                            report_acceptance: false,
                         });
                         return;
                     }
@@ -93,13 +92,7 @@ impl CommandReader {
                         }
                         Operation::Shutdown { grace_millis } => {
                             let deadline = Instant::now() + Duration::from_millis(grace_millis);
-                            if controls
-                                .send(Control::Shutdown {
-                                    deadline,
-                                    report_acceptance: true,
-                                })
-                                .is_err()
-                            {
+                            if controls.send(Control::Shutdown { deadline }).is_err() {
                                 failures.report("relay supervisor stopped".to_string());
                                 return;
                             }

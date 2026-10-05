@@ -19,6 +19,11 @@ from support.relay_commands import (
     assert_forwarding,
     command_batch,
 )
+from support.relay_lifecycle import (
+    LIFECYCLE_COMMANDS,
+    assert_exit_tail,
+    assert_failure_tail,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -421,56 +426,46 @@ class WindowsRelay(unittest.TestCase):
         assert_forwarding(marker, receipts, tail)
 
     def test_fatal_precedes_sideband_closure(self):
-        process, _, _, _ = self.start("invalid_sideband")
-        process.stdin.write(b'{"kind":"evaluate","language":"r","source":"42"}\n')
+        process, kernel, worker, _ = self.start("invalid_sideband")
+        process.stdin.write(
+            json.dumps(LIFECYCLE_COMMANDS["invalid_sideband"]).encode() + b"\n"
+        )
         process.stdin.flush()
         # Keep the input open: the malformed sideband must initiate retirement.
         process.wait(timeout=10)
         events = self.finish(process)
-        kinds = [event["kind"] for event in events]
-        fatal = next(event for event in events if event["kind"] == "fatal")
-        self.assertIn(
-            "worker sideband read failed: unknown variant `broken`", fatal["message"]
+        self.assertEqual(kernel.WaitForSingleObject(worker, 0), 0)
+        assert_failure_tail(
+            events,
+            "worker sideband read failed: unknown variant `broken`",
+            {"kind": "worker_exited", "code": 1},
         )
-        self.assertLess(kinds.index("fatal"), kinds.index("worker_sideband_closed"))
 
     def test_stdin_write_failure_retires_worker(self):
-        process, _, _, _ = self.start("closed_stdin")
-        process.stdin.write(b'{"kind":"stdin","data":"hello"}\n')
+        process, kernel, worker, _ = self.start("closed_stdin")
+        process.stdin.write(
+            json.dumps(LIFECYCLE_COMMANDS["closed_stdin"]).encode() + b"\n"
+        )
         process.stdin.flush()
         process.wait(timeout=10)
         events = self.finish(process)
-        self.assertTrue(
-            any(
-                event["kind"] == "fatal"
-                and "worker stdin write failed:" in event["message"]
-                for event in events
-            ),
+        self.assertEqual(kernel.WaitForSingleObject(worker, 0), 0)
+        assert_failure_tail(
             events,
+            "worker stdin write failed:",
+            {"kind": "worker_exited", "code": 1},
         )
 
     def test_drains_sideband_after_exit(self):
         process, kernel, worker, _ = self.start("exit_tail")
-        process.stdin.write(b'{"kind":"evaluate","language":"r","source":"42"}\n')
+        process.stdin.write(
+            json.dumps(LIFECYCLE_COMMANDS["exit_tail"]).encode() + b"\n"
+        )
         process.stdin.flush()
         # Fill the relay's bounded event queue before allowing stdout to drain.
         self.assertEqual(kernel.WaitForSingleObject(worker, 10000), 0)
         events = self.finish(process)
-        self.assertEqual(
-            [event["data"] for event in events if event["kind"] == "console_output"],
-            [f"{index:04}" for index in range(1024)],
-        )
-        self.assertEqual(
-            events[-6:],
-            [
-                {"kind": "image", "data": "eA==", "mime_type": "image/png"},
-                {"kind": "completed"},
-                {"kind": "stdout_closed"},
-                {"kind": "stderr_closed"},
-                {"kind": "worker_sideband_closed"},
-                {"kind": "worker_exited", "code": 0},
-            ],
-        )
+        assert_exit_tail(events)
 
     def test_r_home_environment_precedence(self):
         # Exercise R startup directly, independently of third-party resolver
@@ -537,25 +532,13 @@ class WindowsRelay(unittest.TestCase):
 
     def test_retains_failure_discovered_during_exit_drain(self):
         process, kernel, worker, _ = self.start("exit_invalid")
-        process.stdin.write(b'{"kind":"evaluate","language":"r","source":"42"}\n')
+        process.stdin.write(
+            json.dumps(LIFECYCLE_COMMANDS["exit_invalid"]).encode() + b"\n"
+        )
         process.stdin.flush()
         self.assertEqual(kernel.WaitForSingleObject(worker, 10000), 0)
         events = self.finish(process)
-        self.assertEqual(
-            [event["data"] for event in events if event["kind"] == "console_output"],
-            [f"{index:04}" for index in range(1024)],
-        )
-        self.assertEqual(
-            [event["kind"] for event in events[-5:]],
-            [
-                "stdout_closed",
-                "stderr_closed",
-                "fatal",
-                "worker_sideband_closed",
-                "worker_exited",
-            ],
-        )
-        self.assertIn("unknown variant `broken`", events[-3]["message"])
+        assert_exit_tail(events, invalid=True)
 
 
 if __name__ == "__main__":
