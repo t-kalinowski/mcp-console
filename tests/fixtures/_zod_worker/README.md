@@ -9,6 +9,9 @@ Python loads the sibling package from the launcher's directory, so callers can u
 `protocol.py` owns the separate sideband read/write pipes and JSONL messages.
 `control.py` operates on the context's fixture FIFOs and owns markers and causal gates.
 `io.py` owns raw stdin/output operations, and `startup.py` composes startup scenarios.
+`output.py`, `input.py`, and `preparation.py` contain named handlers for their scenario groups.
+Preparation callbacks retain at most one interleaved message in the context for the next receive-loop iteration.
+Ordinary handler returns resume receiving; `LoopAction.STOP` preserves paths that returned from `main()`.
 
 Importing the package defines helpers without opening descriptors, consuming environment variables, installing signal handlers, or starting the worker.
 The launcher calls `main()` to perform setup.

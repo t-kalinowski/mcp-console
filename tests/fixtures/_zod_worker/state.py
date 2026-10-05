@@ -1,8 +1,13 @@
 """Persistent state for one worker; constructing it has no runtime effects."""
 
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, TextIO
+
+
+class LoopAction(Enum):
+    STOP = "stop"
 
 
 @dataclass

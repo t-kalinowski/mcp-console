@@ -1,6 +1,5 @@
 """Deterministic worker loop and scenario-local state."""
 
-import base64
 import errno
 import io
 import json
@@ -12,7 +11,7 @@ import tempfile
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TextIO
 
 from .control import (
     close_test_cleanup_gate,
@@ -34,23 +33,18 @@ from .io import (
     write_all,
 )
 from .protocol import (
-    ConsoleKind,
     close_sideband,
     open_sideband,
     send,
-    send_batch,
     send_output,
     wait_for_server_to_process_sideband,
 )
 from .startup import configure_startup
-from .state import WorkerContext
-
-
-PENDING_TEXT_BUDGET = 8 * 1024 * 1024
-PNG_1X1 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
-    "AAAAASUVORK5CYII="
-)
+from .state import LoopAction, WorkerContext
+from . import input as input_scenarios
+from . import output as output_scenarios
+from . import preparation as preparation_scenarios
+from .output import PNG_1X1
 
 
 def emit_background_stderr(root: Path, reader: TextIO, writer: TextIO) -> None:
@@ -115,14 +109,6 @@ def main() -> None:
             os.environ.get("ZOD_RETAIN_BLOCKED_SIDEBAND") == "1"
         )
 
-    def receive_resolver_response(expected_kind: str) -> dict[str, Any]:
-        while True:
-            response = json.loads(reader.readline())
-            if response["kind"] == expected_kind:
-                return response
-            assert context.queued_message is None, response
-            context.queued_message = response
-
     while True:
         if context.block_next_sideband_write is not None:
             assert reader.read(1) != ""
@@ -160,31 +146,7 @@ def main() -> None:
             return
 
         if message_kind == "prepare_r":
-            assert set(message) == {"kind", "library"}
-            if context.fail_next_r_preparation:
-                context.fail_next_r_preparation = False
-                if context.emit_output_before_r_preparation_failure:
-                    context.emit_output_before_r_preparation_failure = False
-                    output = "before failed preparation\n"
-                    send_output(writer, output)
-                    send(
-                        writer,
-                        {
-                            "kind": "image",
-                            "data": PNG_1X1,
-                            "mime_type": "image/png",
-                        },
-                    )
-                send(
-                    writer,
-                    {
-                        "kind": "r_preparation_failed",
-                        "message": "zod rejected R preparation",
-                    },
-                )
-                continue
-            context.prepared_r_library = message["library"]
-            send(writer, {"kind": "r_prepared", "library": context.prepared_r_library})
+            preparation_scenarios.prepare_r(context, message)
             continue
 
         assert message_kind == "evaluate"
@@ -423,72 +385,27 @@ def main() -> None:
             os._exit(86)
 
         if source == "overflow cell retention limit":
-            release = temporary / "zod-release-retention-output"
-            completed = temporary / "zod-retention-completed"
-            os.mkfifo(completed)
-            os.mkfifo(release)
-            with release.open("rb", buffering=0) as checkpoint:
-                assert checkpoint.read(1) == b"1"
-            for _ in range(128):
-                send_output(writer, "x" * PENDING_TEXT_BUDGET)
-            send_output(writer, "tail\n")
-            send(writer, {"kind": "completed"})
-            wait_for_server_to_process_sideband(reader, writer)
-            with completed.open("wb", buffering=0) as checkpoint:
-                assert checkpoint.write(b"1") == 1
+            output_scenarios.overflow_cell_retention_limit(context, source)
             continue
 
         if source == "overflow cell output file":
-            release = temporary / "zod-release-spooled-output"
-            processed = temporary / "zod-spooled-output-processed"
-            os.mkfifo(processed)
-            os.mkfifo(release)
-            for character, length in (
-                ("x", 3 * PENDING_TEXT_BUDGET + 7),
-                ("y", PENDING_TEXT_BUDGET + 7),
-            ):
-                with release.open("rb", buffering=0) as checkpoint:
-                    assert checkpoint.read(1) == b"1"
-                send_output(writer, character * length)
-                if character == "y":
-                    send(writer, {"kind": "completed"})
-                wait_for_server_to_process_sideband(reader, writer)
-                with processed.open("wb", buffering=0) as checkpoint:
-                    assert checkpoint.write(b"1") == 1
+            output_scenarios.overflow_cell_output_file(context, source)
             continue
 
         if source == "overflow console output":
-            send_output(writer, "x" * (PENDING_TEXT_BUDGET + 7))
-            send(writer, {"kind": "completed"})
+            output_scenarios.overflow_console_output(context, source)
             continue
 
         if source == "preview image limit":
-            send_output(writer, "before oversized image\n")
-            data = base64.b64encode(b"\0" * (6 * 1024 * 1024 + 3)).decode("ascii")
-            send(writer, {"kind": "image", "data": data, "mime_type": "image/png"})
-            send_output(writer, "before accepted image\n")
-            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
-            send_output(writer, "after accepted image\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_image_limit(context, source)
             continue
 
         if source in {"preview allocation image", "preview allocation image and text"}:
-            send(
-                writer,
-                {
-                    "kind": "image",
-                    "data": "A" * (8 * 1024 * 1024),
-                    "mime_type": "image/png",
-                },
-            )
-            if source.endswith("and text"):
-                send_output(writer, "preview head\n" + "x" * 32768 + "\npreview tail\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_allocation_image(context, source)
             continue
 
         if source == "preview rejected image":
-            send(writer, {"kind": "image", "data": "AAAA", "mime_type": "m" * 65537})
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_rejected_image(context, source)
             continue
 
         if source == "preview invalid oversized image":
@@ -511,43 +428,15 @@ def main() -> None:
                 signal.pause()
 
         if source == "preview recovery intervals":
-            directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
-            release = directory / "preview-release"
-            processed = directory / "preview-processed"
-            for index in range(3):
-                with release.open("rb", buffering=0) as checkpoint:
-                    assert checkpoint.read(1) == b"1"
-                send_output(
-                    writer,
-                    f"interval {index} head\n"
-                    + "x" * 32768
-                    + f"\ninterval {index} tail\n",
-                )
-                wait_for_server_to_process_sideband(reader, writer)
-                with processed.open("wb", buffering=0) as checkpoint:
-                    assert checkpoint.write(b"1") == 1
-            with release.open("rb", buffering=0) as checkpoint:
-                assert checkpoint.read(1) == b"1"
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_recovery_intervals(context, source)
             continue
 
         if source.startswith("preview recovery cell "):
-            number = int(source.removeprefix("preview recovery cell "))
-            send_output(
-                writer,
-                f"cell {number} head\n" + "x" * 32768 + f"\ncell {number} tail\n",
-            )
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_recovery_cell(context, source)
             continue
 
         if source == "preview alternating bytes":
-            for index in range(8192):
-                send_output(
-                    writer,
-                    "b" if index % 2 else "a",
-                    ConsoleKind.DIAGNOSTIC if index % 2 else ConsoleKind.OUTPUT,
-                )
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_alternating_bytes(context, source)
             continue
 
         if source in {
@@ -555,22 +444,7 @@ def main() -> None:
             "preview unicode suffix",
             "preview unicode replacement",
         }:
-            send_output(writer, "preview head\n")
-            unit, count = (
-                ("ab", 100000)
-                if source == "preview same producer"
-                else ("a€🙂b", 10000)
-            )
-            for _ in range(count):
-                send_output(writer, unit)
-            if source == "preview unicode suffix":
-                send_output(writer, "\b🙂\b\r\n")
-            elif source == "preview unicode replacement":
-                send_output(writer, "\b" * 8192 + "\r\bfinal 🙂\bframe\r\n")
-            else:
-                send_output(writer, "\n")
-            send_output(writer, "preview tail: final diagnostic\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_producer_suffix(context, source)
             continue
 
         if source in {
@@ -579,26 +453,7 @@ def main() -> None:
             "preview many tiny events",
             "preview redraw",
         }:
-            send_output(writer, "preview head\n")
-            if source == "preview huge line":
-                send_output(writer, "x" * (2 * PENDING_TEXT_BUDGET))
-            elif source in {"preview tiny events", "preview many tiny events"}:
-                for index in range(
-                    100000 if source == "preview many tiny events" else 12000
-                ):
-                    send_output(
-                        writer,
-                        "ab",
-                        ConsoleKind.DIAGNOSTIC if index % 2 else ConsoleKind.OUTPUT,
-                    )
-            else:
-                for _ in range(5000):
-                    send_output(writer, "\r" + "x" * 2048)
-                send_output(writer, "\rprogress final")
-            send_output(writer, "\npreview tail: final diagnostic\n")
-            send(writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
-            send_output(writer, "after final image\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.preview_large_output(context, source)
             continue
 
         if source == "exit zero":
@@ -629,42 +484,15 @@ def main() -> None:
                 signal.pause()
 
         if source == "emit stdout":
-            release = temporary / "zod-release-stdout-completion"
-            os.mkfifo(release)
-            write_all(1, b"zod stdout ")
-            for part in ("👩", "🏽", "\u200d", "💻", "\n"):
-                write_all(1, part.encode())
-            emit_large_output(1, b"")
-            with release.open("rb", buffering=0) as checkpoint:
-                assert checkpoint.read(1) == b"1"
-            send(writer, {"kind": "completed"})
+            output_scenarios.emit_stdout(context, source)
             continue
 
         if source == "redraw across polls":
-            send_output(writer, "output 10%\r")
-            wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(temporary / "zod-redraw-ready")
-            while not (temporary / "zod-release-redraw").exists():
-                time.sleep(0.01)
-
-            send_output(writer, "output 100%\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.redraw_across_polls(context, source)
             continue
 
         if source == "stress redraws":
-            payload = "x" * 2048
-            send_batch(
-                writer,
-                [
-                    {
-                        "kind": ConsoleKind.OUTPUT,
-                        "data": f"\rstress {index}: {payload}",
-                    }
-                    for index in range(100)
-                ],
-            )
-            send_output(writer, "\rstress final\nuseful output\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.stress_redraws(context, source)
             continue
 
         if source in {"exit after invalid stdout", "exit after invalid stderr"}:
@@ -918,45 +746,15 @@ def main() -> None:
                 signal.pause()
 
         if source == "request input":
-            send(writer, {"kind": "input_requested", "prompt": "zod> "})
-            stdin = input()
-            send(writer, {"kind": "input_received"})
-            send_output(writer, f"zod stdin: {stdin}\n")
-            send(writer, {"kind": "completed"})
-            wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(temporary / "zod-prompted-input-processed")
+            input_scenarios.request_input(context, source)
             continue
 
         if source == "preview prompt":
-            send_output(
-                writer,
-                "prompt output head\n"
-                + "x" * (2 * PENDING_TEXT_BUDGET)
-                + "\nprompt output tail\n",
-            )
-            send(
-                writer,
-                {
-                    "kind": "input_requested",
-                    "prompt": "prompt head " + "p" * 20000 + " prompt tail> ",
-                },
-            )
-            wait_for_test_control(context, 0, "read_preview_input")
-            stdin = input()
-            send(writer, {"kind": "input_received"})
-            send_output(writer, f"received {stdin}\n")
-            send(writer, {"kind": "completed"})
-            wait_for_server_to_process_sideband(reader, writer)
-            emit_test_event(context, 0, "preview_input_processed")
+            input_scenarios.preview_prompt(context, source)
             continue
 
         if source == "language error":
-            send_output(
-                writer,
-                "zod language error\n",
-                ConsoleKind.DIAGNOSTIC,
-            )
-            send(writer, {"kind": "completed"})
+            output_scenarios.language_error(context, source)
             continue
 
         if source == "wait for stdin close":
@@ -999,56 +797,19 @@ def main() -> None:
             continue
 
         if source == "request input after timeout":
-            temporary = Path(tempfile.gettempdir())
-            waiting = temporary / "zod-waiting-to-request-input"
-            publish_marker(waiting)
-            while not (temporary / "zod-release-input-request").exists():
-                time.sleep(0.01)
-            send_output(writer, "before")
-            send(writer, {"kind": "input_requested", "prompt": "late> "})
-            send_output(writer, "during")
-            send_output(writer, " request\n")
-            stdin = input()
-            send(writer, {"kind": "input_received"})
-            send_output(writer, f"zod stdin: {stdin}\n")
-            # Prove that the receipt has cleared the provisional request before
-            # the client polls, so the fixed grace cannot add another boundary.
-            wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(temporary / "zod-input-received")
-            send(writer, {"kind": "completed"})
+            input_scenarios.request_input_after_timeout(context, source)
             continue
 
         if source == "input without request then request input":
-            first = input()
-            send(writer, {"kind": "input_requested", "prompt": "second> "})
-            second = input()
-            send(writer, {"kind": "input_received"})
-            send_output(writer, f"zod stdin: {first}|{second}\n")
-            send(writer, {"kind": "completed"})
-            wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(temporary / "zod-combined-input-processed")
+            input_scenarios.input_without_request_then_request_input(context, source)
             continue
 
         if source in {"input without request", "input length without request"}:
-            stdin = input()
-            output = (
-                f"zod stdin: {stdin}\n"
-                if source == "input without request"
-                else f"zod stdin length: {len(stdin.encode())}\n"
-            )
-            send_output(writer, output)
-            send(writer, {"kind": "completed"})
+            input_scenarios.input_without_request(context, source)
             continue
 
         if source == "read fd 0 directly":
-            chunks = []
-            while not chunks or not chunks[-1].endswith(b"\n"):
-                chunk = os.read(0, 3)
-                assert chunk, "Zod received stdin EOF before a complete line"
-                chunks.append(chunk)
-            stdin = b"".join(chunks).decode()
-            send_output(writer, f"zod fd 0: {stdin!r}\n")
-            send(writer, {"kind": "completed"})
+            input_scenarios.read_fd_zero_directly(context, source)
             continue
 
         if source == "probe sandbox":
@@ -1069,7 +830,7 @@ def main() -> None:
             continue
 
         if source == "complete silently":
-            send(writer, {"kind": "completed"})
+            output_scenarios.complete_silently(context, source)
             continue
 
         if source == "shutdown output checkpoints":
@@ -1101,70 +862,19 @@ def main() -> None:
             continue
 
         if source == "request input while idle":
-            release = temporary / "zod-release-idle-input-request"
-            os.mkfifo(release)
-            send(writer, {"kind": "completed"})
-            publish_marker(temporary / "zod-idle-input-cell-completed")
-            with release.open("rb", buffering=0) as checkpoint:
-                assert checkpoint.read(1) == b"1"
-            send(writer, {"kind": "input_requested", "prompt": "idle> "})
-            wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(temporary / "zod-idle-input-request-processed")
-            try:
-                value = input()
-            except EOFError:
+            if (
+                input_scenarios.request_input_while_idle(context, source)
+                is LoopAction.STOP
+            ):
                 return
-            assert value == "continue"
-            send_batch(
-                writer,
-                [{"kind": "input_received"}],
-            )
-            context.idle_input_received = True
             continue
 
         if source == "resolve python while idle":
-            send_batch(
-                writer,
-                [
-                    {"kind": "completed"},
-                    {
-                        "kind": "resolve_python_version",
-                        "request": {"constraints": [">=3.11"]},
-                    },
-                ],
-            )
-            receive_resolver_response("python_version_resolution_failed")
-            requirements = {"packages": ["numpy", "pandas", "idle-package"]}
-            send(
-                writer,
-                {
-                    "kind": "resolve_python",
-                    "request": {
-                        "requirements": requirements,
-                        "retained_requirements": requirements,
-                    },
-                },
-            )
-            receive_resolver_response("python_resolution_failed")
+            preparation_scenarios.resolve_python_while_idle(context, source)
             continue
 
         if source == "report runtime R resolution failure":
-            send(
-                writer,
-                {
-                    "kind": "resolve_r",
-                    "packages": ["blockedresolver"],
-                },
-            )
-            response = receive_resolver_response("r_resolution_failed")
-            send_output(
-                writer,
-                (
-                    "zod R resolution failure: "
-                    f"{response['failure']}: {response['message']}\n"
-                ),
-            )
-            send(writer, {"kind": "completed"})
+            preparation_scenarios.report_runtime_r_resolution_failure(context, source)
             continue
 
         if source == "report process group":
@@ -1173,96 +883,38 @@ def main() -> None:
             continue
 
         if source == "report managed R requirement":
-            expected_r_library = Path(
-                os.environ["MCP_CONSOLE_TEST_R_LIBRARY_IDENTITY"]
-            ).read_text(encoding="utf-8")
-            configured_r_libraries = [
-                library
-                for library in os.environ.get("R_LIBS", "").split(os.pathsep)
-                if library
-            ]
-            r_prepared = str(
-                context.prepared_r_library == expected_r_library
-                or configured_r_libraries[:1] == [expected_r_library]
-            ).lower()
-            send_output(writer, f"zod R requirement: prepared={r_prepared}\n")
-            send(writer, {"kind": "completed"})
+            preparation_scenarios.report_managed_r_requirement(context, source)
             continue
 
         if source == "report raw R library bytes":
-            libraries = os.environb.get(b"R_LIBS", b"").split(os.pathsep.encode())
-            preserved = any(path.endswith(b"/ambient-\xff") for path in libraries)
-            send_output(
-                writer, f"zod raw R library: preserved={str(preserved).lower()}\n"
-            )
-            send(writer, {"kind": "completed"})
+            preparation_scenarios.report_raw_r_library_bytes(context, source)
             continue
 
         if source == "fail next r preparation":
-            context.fail_next_r_preparation = True
-            send(writer, {"kind": "completed"})
+            preparation_scenarios.fail_next_r_preparation(context, source)
             continue
 
         if source == "fail next r preparation after output":
-            context.fail_next_r_preparation = True
-            context.emit_output_before_r_preparation_failure = True
-            send(writer, {"kind": "completed"})
+            preparation_scenarios.fail_next_r_preparation_after_output(context, source)
             continue
 
         if source == "report managed python activation":
-            send(
-                writer,
-                {
-                    "kind": "python_activated",
-                    "requirements": {"packages": ["numpy", "pandas"]},
-                },
-            )
+            preparation_scenarios.report_managed_python_activation(context, source)
             continue
 
         if source == "emit console kinds":
-            send_output(writer, "zod output\n")
-            send_output(writer, "zod diagnostic\n", ConsoleKind.DIAGNOSTIC)
-            send(writer, {"kind": "completed"})
+            output_scenarios.emit_console_kinds(context, source)
             continue
 
         if source == "emit image":
-            send_output(writer, "before image\n")
-            send(
-                writer,
-                {
-                    "kind": "image",
-                    "data": PNG_1X1,
-                    "mime_type": "image/png",
-                },
-            )
-            send_output(writer, "after image\n")
-            send(writer, {"kind": "completed"})
+            output_scenarios.emit_image(context, source)
             continue
 
         if source in {
             "emit image before completion",
             "emit output and image before completion",
         }:
-            publish_marker(temporary / "zod-image-evaluation-started")
-            while not (temporary / "zod-release-image").exists():
-                time.sleep(0.01)
-            if source == "emit output and image before completion":
-                send_output(writer, "before pending image\n")
-            send(
-                writer,
-                {
-                    "kind": "image",
-                    "data": PNG_1X1,
-                    "mime_type": "image/png",
-                },
-            )
-            if source == "emit output and image before completion":
-                send_output(writer, "after pending image\n")
-            wait_for_server_to_process_sideband(reader, writer)
-            publish_marker(temporary / "zod-image-processed")
-            while not (temporary / "zod-release-image-completion").exists():
-                time.sleep(0.01)
-            send(writer, {"kind": "completed"})
+            output_scenarios.emit_image_before_completion(context, source)
             continue
 
         if source == "complete after timeout":
