@@ -103,6 +103,12 @@ Every visible top-level expression may autoprint.
 Parse errors reject the whole cell without running earlier expressions or changing `.Last.value`, `.Traceback`, history, task callbacks, or `options(error)`.
 Evaluation and print errors are console outcomes; they preserve earlier effects and leave the worker usable.
 
+R's native bootstrap and event APIs are component-local to Unix and Windows.
+Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
+Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
+Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
+Windows installs an interrupt-delivery callback; its idle command wait does not service R event handlers.
+
 On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.

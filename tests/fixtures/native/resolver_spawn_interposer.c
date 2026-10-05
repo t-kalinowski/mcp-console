@@ -8,15 +8,19 @@
 #include <unistd.h>
 
 static atomic_uint fork_count = 0;
+static int sandboxed_owner = 0;
 
 static int is_resolver(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
     const char *child = getenv("MCP_CONSOLE_TEST_SPAWN_CHILD");
-    return server != NULL && strtol(server, NULL, 10) ==
-        (child != NULL ? getppid() : getpid());
+    return sandboxed_owner || (server != NULL && strtol(server, NULL, 10) ==
+        (child != NULL ? getppid() : getpid()));
 }
 
 __attribute__((constructor)) static void prevent_child_injection(void) {
+    // Resolver settings identify the owner beyond the native launcher boundary.
+    sandboxed_owner = getenv("MCP_CONSOLE_TEST_SPAWN_OWNER") != NULL;
+    unsetenv("MCP_CONSOLE_TEST_SPAWN_OWNER");
     if (is_resolver()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
         unsetenv("LD_PRELOAD");
