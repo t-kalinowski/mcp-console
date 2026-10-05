@@ -551,6 +551,12 @@ def inspect_linux_abi(
             ancestors = tuple(dict.fromkeys((*rpaths[member], *inherited)))
             search = elf["search"] if "RUNPATH" in elf["rpath_runpath"] else ancestors
             for needed in elf["needed"]:
+                # glibc opens slash-containing filenames directly, bypassing search.
+                require(
+                    "/" not in needed,
+                    f"{member}: unsupported DT_NEEDED filename {needed}; "
+                    "dependencies must be library names without /",
+                )
                 if needed in LINUX_SYSTEM_LIBRARIES:
                     continue
                 dependency = next(

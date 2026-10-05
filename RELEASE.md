@@ -65,6 +65,8 @@ Wheel smoke verifies notices, source identity, helper digest, and actual linkage
 `scripts/release.py inspect-wheel WHEEL --target TARGET --report abi.json` checks every ELF member, including private helpers and additional native libraries.
 It checks architecture, loader, declared system libraries, loader paths, and symbol requirements against every advertised wheel tag; filename and WHEEL metadata must agree.
 Loader paths and bundled dependencies resolve within the installed Unix prefix: wheel scripts go under `bin`, data under the prefix, and Python libraries under `lib/pythonX.Y/site-packages`.
+`DT_NEEDED` dependencies must be library names without `/`; filename dependencies bypass loader search paths and are unsupported by the audit.
+In particular, relative filenames depend on the launch directory even when a matching library exists under RPATH/RUNPATH.
 `$ORIGIN` paths may traverse between these installed directories but must stay within the prefix; reports retain archive-member keys and use prefix-relative search paths.
 Bundled dependencies inherit `DT_RPATH` along their loading chain, with each ancestor's paths resolved against its own installed `$ORIGIN`.
 `DT_RUNPATH` applies only to direct dependencies and suppresses RPATH lookup for that object's direct dependencies; independent executables do not share loader paths.

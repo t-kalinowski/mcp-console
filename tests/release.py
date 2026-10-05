@@ -718,6 +718,52 @@ class ReleaseScriptTests(ReleaseFixture):
                     evidence = json.loads(report.read_text())["elf"]
                     self.assertEqual(evidence[member]["search"], [library_directory])
 
+    def test_inspect_wheel_rejects_relative_dependency_filenames(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            executable = "mcp_console-0.0.2.data/scripts/mcp-console"
+            for kind in ("rpath", "runpath"):
+                for needed in (
+                    "libfixture.so",
+                    "./libfixture.so",
+                    "bin/subdir/libfixture.so",
+                ):
+                    with self.subTest(kind=kind, needed=needed):
+                        self.write_wheel(wheel)
+                        rewrite_wheel(
+                            wheel,
+                            {
+                                executable: elf_fixture(
+                                    needed=[needed], **{kind: "$ORIGIN/.."}
+                                )
+                            },
+                        )
+                        # A matching file under the search path must not make a
+                        # cwd-relative DT_NEEDED filename pass the audit.
+                        with zipfile.ZipFile(wheel, "a") as archive:
+                            archive.writestr(
+                                "mcp_console-0.0.2.data/data/"
+                                + ("bin/subdir/" if needed.startswith("bin/") else "")
+                                + "libfixture.so",
+                                elf_fixture(interpreter=None),
+                            )
+                        result = self.run_script(
+                            "inspect-wheel",
+                            str(wheel),
+                            "--release",
+                            cwd=directory,
+                            env=environment,
+                        )
+                        if needed == "libfixture.so":
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                        else:
+                            self.assertNotEqual(result.returncode, 0, result.stdout)
+                            self.assertIn(executable, result.stderr)
+                            self.assertIn("DT_NEEDED filename", result.stderr)
+                            self.assertIn(needed, result.stderr)
+
     def test_inspect_wheel_inherits_rpath_only_along_dependency_chains(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
