@@ -305,6 +305,9 @@ class WindowsWorkflow(unittest.TestCase):
             "windows_cargo.py",
             "windows_resolver.py",
             "windows_sandbox.py",
+            "support/__init__.py",
+            "support/relay_commands.py",
+            "support/relay_lifecycle.py",
         ):
             path = self.root / "tests" / name
             path.parent.mkdir(exist_ok=True)
