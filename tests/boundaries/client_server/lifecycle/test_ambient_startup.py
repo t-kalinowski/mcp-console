@@ -31,6 +31,7 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
         library.mkdir()
         record = temporary / "reticulate-calls"
         environment["MCP_CONSOLE_TEST_RETICULATE_RECORD"] = str(record)
+        environment["UV_TOOL_DIR"] = str(temporary)
         subprocess.run(
             [
                 rscript.with_name("R.exe" if os.name == "nt" else "R"),
@@ -56,7 +57,10 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             )
 
         with McpClient(
-            binary, execution.serve(), environment, current_directory=temporary
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=temporary,
         ) as client:
             client.initialize_and_list_tools()
             tools = client.transcript[-1]["result"]["tools"]

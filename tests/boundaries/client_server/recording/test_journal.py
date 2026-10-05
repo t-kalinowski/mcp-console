@@ -338,7 +338,7 @@ def test_records_tool_calls_and_images(
         record_resolved_r_library(environment, workspace)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
             current_directory=workspace,
             umask=0,
