@@ -75,13 +75,23 @@ impl Sql {
     }
 
     pub fn from_environment() -> Result<Self, String> {
-        let settings = match std::env::var(ENVIRONMENT) {
+        let mut settings: Self = match std::env::var(ENVIRONMENT) {
             Ok(value) => serde_json::from_str(&value)
                 .map_err(|error| format!("invalid SQL settings: {error}"))?,
             Err(std::env::VarError::NotPresent) => Self::default(),
             Err(error) => return Err(format!("cannot read SQL settings: {error}")),
         };
         settings.validate()?;
+        // Capture on the execution host before interpreter hooks can change cwd.
+        // The database need not exist yet, so do not canonicalize it.
+        if settings.database != ":memory:" && std::path::Path::new(&settings.database).is_relative()
+        {
+            settings.database = std::path::absolute(&settings.database)
+                .map_err(|error| format!("cannot resolve sql.database: {error}"))?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "sql.database workspace path must be UTF-8")?;
+        }
         Ok(settings)
     }
 }

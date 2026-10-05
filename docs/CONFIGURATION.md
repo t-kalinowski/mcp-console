@@ -74,6 +74,7 @@ Model-visible languages and interpreter initialization order do not select the m
 
 `database` defaults to `:memory:`.
 File paths resolve on the execution host, relative to the worker workspace; the controller does not inspect or expand them.
+The worker anchors relative paths before interpreter startup hooks or user cells run, so changing directories does not change the managed database, including after restart.
 Parent directories must already exist.
 `read_only` defaults to false and requires a file-backed database.
 A persistent catalog survives worker restart; an in-memory catalog belongs to its worker generation.

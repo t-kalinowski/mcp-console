@@ -443,7 +443,9 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
         }
         library.api
     };
-    let source = CString::new(source)
+    let settings =
+        serde_json::to_string(&crate::sql::settings_json()?).map_err(|error| error.to_string())?;
+    let source = CString::new(format!("{source}\n_settings = _json.loads({settings})\n"))
         .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
     let installed = api.with_gil(|api| unsafe {
         let result = api.run_module_result(c"_mcp_console_sql", &source)?;

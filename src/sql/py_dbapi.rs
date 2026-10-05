@@ -37,6 +37,13 @@ pub extern "C-unwind" fn mcp_console_sql_take_restore_request() -> harp::Result<
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
+pub extern "C-unwind" fn mcp_console_sql_settings() -> harp::Result<SEXP> {
+    let settings = super::settings_json().map_err(|error| harp::anyhow!("{error}"))?;
+    Ok(harp::object::RObject::from(settings).sexp)
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
 pub extern "C-unwind" fn mcp_console_sql_default_is_r() -> harp::Result<SEXP> {
     Ok(harp::object::RObject::from(super::managed_is_r()).sexp)
 }

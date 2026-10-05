@@ -2,7 +2,7 @@ base::local(
   {
     managed_connection <- NULL
     rendering_connection <- NULL
-    settings_json <- Sys.getenv("MCP_CONSOLE_SQL_SETTINGS", "{}")
+    settings_json <- .Call("mcp_console_sql_settings")
     selected_connection <- NULL
     source <- NULL
     printer_ready <- FALSE

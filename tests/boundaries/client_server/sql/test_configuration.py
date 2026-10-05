@@ -15,6 +15,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.r import install_r_startup, r_test_environment
 from support.requirements import POSIX, R, SQL, requires
 from support.suites import run_this_suite
 
@@ -258,6 +259,146 @@ def test_selects_python_with_r_present(
             "memory_limit": "244.1 MiB",
         }
     ]
+
+
+@requires(SQL)
+@executions(DIRECT, SANDBOXED)
+def test_r_database_path_is_captured_before_directory_changes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return exercise_captured_database_path(binary, execution, "r")
+
+
+@requires(SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_database_path_is_captured_before_directory_changes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return exercise_captured_database_path(binary, execution, "python")
+
+
+def exercise_captured_database_path(
+    binary: Path, execution: Execution, provider: str
+) -> Transcript:
+    records = []
+    for change_at in ("cell", "startup_hook"):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary).resolve()
+            for directory in ("data", "first/data", "second/data"):
+                (workspace / directory).mkdir(parents=True)
+            environment, _ = r_test_environment()
+            environment["MCP_CONSOLE_HOME"] = str(workspace / "console-home")
+            workload = {}
+            configuration = {
+                "sql": {"provider": provider, "database": "data/analysis.duckdb"}
+            }
+            if change_at == "cell":
+                # Omitting SQL from the tool surface skips managed warmup.
+                environment["MCP_CONSOLE_LANGUAGES"] = provider
+            elif provider == "r":
+                install_r_startup(
+                    workspace,
+                    environment,
+                    f"setwd({json.dumps(str(workspace / 'first'))})\n",
+                )
+                workload = {
+                    name: environment[name]
+                    for name in (
+                        "R_LIBS",
+                        "R_DEFAULT_PACKAGES",
+                        "MCP_CONSOLE_TEST_BOOTSTRAP_SCRIPT",
+                    )
+                }
+            else:
+                python = workspace / ".venv/bin/python"
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "venv",
+                        "--without-pip",
+                        python.parent.parent,
+                    ],
+                    check=True,
+                )
+                subprocess.run(
+                    ["uv", "pip", "install", "--python", python, "duckdb"],
+                    check=True,
+                    capture_output=True,
+                )
+                configuration["python"] = str(python)
+                site = Path(
+                    subprocess.check_output(
+                        [
+                            python,
+                            "-c",
+                            "import sysconfig; print(sysconfig.get_path('purelib'))",
+                        ],
+                        text=True,
+                    ).strip()
+                )
+                (site / "sitecustomize.py").write_text(
+                    # fmt: python
+                    code(f"""
+                        import os
+                        import sys
+
+                        if sys.argv[0] != "-c":
+                            os.chdir({str(workspace / "first")!r})
+                        """)
+                )
+            configuration["sandbox"] = {"environment": workload}
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(json.dumps(configuration))
+            arguments = execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            )
+            with McpClient(binary, arguments, environment, workspace) as client:
+                client.initialize_and_list_tools()
+                for restart in (False, True):
+                    if restart:
+                        client.send(control="restart")
+                    directory = workspace / ("second" if restart else "first")
+                    if provider == "r":
+                        client.expect(
+                            r=f"setwd({json.dumps(str(directory))})"
+                            if change_at == "cell"
+                            else f"stopifnot(getwd() == {json.dumps(str(workspace / 'first'))})"
+                        )
+                        client.expect(
+                            r='invisible(DBI::dbExecute(sql_connection(), "CREATE TABLE durable AS SELECT 42 AS answer"))'
+                            if not restart
+                            else 'stopifnot(DBI::dbGetQuery(sql_connection(), "SELECT answer FROM durable")[[1L]] == 42)'
+                        )
+                    else:
+                        client.expect(
+                            requirements={"python": ["duckdb"]}
+                            if change_at == "cell"
+                            else None,
+                            python=f"import os; os.chdir({str(directory)!r})"
+                            if change_at == "cell"
+                            else f"import os; assert os.getcwd() == {str(workspace / 'first')!r}",
+                        )
+                        client.expect(
+                            python='_ = sql_connection().execute("CREATE TABLE durable AS SELECT 42 AS answer")'
+                            if not restart
+                            else 'assert sql_connection().execute("SELECT answer FROM durable").fetchone() == (42,)'
+                        )
+                    assert (workspace / "data/analysis.duckdb").is_file(), list(
+                        workspace.glob("**/*.duckdb")
+                    )
+                    assert not (workspace / "first/data/analysis.duckdb").exists()
+                    assert not (workspace / "second/data/analysis.duckdb").exists()
+                client.finish()
+            records.append(
+                {
+                    "provider": provider,
+                    "directory_changed_at": change_at,
+                    "captured_workspace_catalog_after_restart": True,
+                }
+            )
+    return records
 
 
 @requires(SQL)

@@ -1,0 +1,8 @@
+---
+provider: r
+directory_changed_at: cell
+captured_workspace_catalog_after_restart: true
+---
+provider: r
+directory_changed_at: startup_hook
+captured_workspace_catalog_after_restart: true

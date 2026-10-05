@@ -283,7 +283,7 @@ _native_storage = None
 _native_extension_directory = None
 _native_prepared_source = None
 _managed_connection = None
-_settings = _json.loads(_os.environ.get("MCP_CONSOLE_SQL_SETTINGS", "{}"))
+_settings = None  # Supplied from the worker's captured settings during installation.
 
 
 def enable_native(managed: bool) -> None:

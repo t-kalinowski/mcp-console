@@ -9,6 +9,11 @@ pub(crate) fn configure() -> Result<(), String> {
         .map_err(|_| "SQL settings already captured".into())
 }
 
+pub(crate) fn settings_json() -> Result<String, String> {
+    serde_json::to_string(SETTINGS.get().expect("worker SQL settings captured"))
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) fn managed_is_r() -> bool {
     match SETTINGS
         .get()
