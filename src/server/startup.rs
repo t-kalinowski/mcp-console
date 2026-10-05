@@ -67,6 +67,10 @@ impl Startup {
                         },
                         diagnostics,
                     )?;
+                    // Completed discovery no longer owns interrupt delivery.
+                    // Prepared-target cancellation handles otherwise keep claiming
+                    // interrupts after their probe has retired.
+                    initialize_worker.clear_resolver_stop_handle(&generation)?;
                     // Early control calls can launch once worker configuration
                     // is published. Replay their pending records before that.
                     task_recording.configure(prepared.transcript);

@@ -299,6 +299,19 @@ elif args[0] == "exec":
                     for _ in range(2048):
                         frame(2, {"kind": "console_output", "data": "x" * 32768})
                 frame(2, {"kind": "console_output", "data": "provider peer\n"})
+                if mode != "interrupt-cell":
+                    frame(2, {"kind": "completed"})
+            elif command["kind"] == "interrupt":
+                assert mode == "interrupt-cell", command
+                frame(
+                    2,
+                    {
+                        "kind": "interrupt_result",
+                        "request_id": command["request_id"],
+                        "error": None,
+                    },
+                )
+                frame(2, {"kind": "console_output", "data": "provider interrupted\n"})
                 frame(2, {"kind": "completed"})
             elif command["kind"] == "shutdown":
                 frame(2, {"kind": "shutdown_started"})

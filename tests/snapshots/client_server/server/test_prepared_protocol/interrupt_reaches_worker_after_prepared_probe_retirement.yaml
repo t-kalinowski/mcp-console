@@ -1,0 +1,22 @@
+---
+send:
+  python: "while True: pass"
+  timeout_ms: 1
+result:
+  content:
+    - type: text
+      text: |-
+        provider peer
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 100
+result:
+  content:
+    - type: text
+      text: |
+        provider interrupted
+  isError: false

@@ -20,6 +20,30 @@ TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
 
 
 @requires(POSIX)
+def test_interrupt_reaches_worker_after_prepared_probe_retirement(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("interrupt-cell")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            wait_for_evaluation_output(
+                client,
+                "provider peer\n\n[running; poll with an empty send]",
+                "prepared evaluation admitted",
+                python="while True: pass",
+                timeout_ms=1,
+            )
+            client.send(control="interrupt", timeout_ms=100)
+            assert last_result_text(client) == "provider interrupted\n", (
+                last_result_text(client)
+            )
+            client.finish()
+        assert not (root / "peer/vms").exists()
+        return client.transcript[3:]
+
+
+@requires(POSIX)
 def test_empty_python_selection_describes_target_defaults(binary: Path) -> list:
     records = []
     for kind, target in (
