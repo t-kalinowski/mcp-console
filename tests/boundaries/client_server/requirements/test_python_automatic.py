@@ -623,13 +623,32 @@ def test_reports_automatic_python_resolution_failure(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        client.send(python="import sys; print(sys.executable)")
+        # fmt: python
+        python = code("""
+            import json
+            import os
+            import sys
+
+            prior_module = json
+            prior_state = {"answer": 42}
+            prior_pid = os.getpid()
+            print(sys.executable)
+            """)
+        client.send(python=python)
         executable = last_result_text(client).strip()
         client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
 
+        # fmt: python
+        python = code("""
+            automatic_failure_attempts = globals().get("automatic_failure_attempts", 0) + 1
+            prior_state["answer"] += 1
+            import sklearn
+
+            automatic_failure_suffix = True
+            """)
         output = send_and_collect_runtime_python_resolution(
             client,
-            python="import sklearn",
+            python=python,
         )
         for expected in (
             "ModuleNotFoundError",
@@ -650,8 +669,22 @@ def test_reports_automatic_python_resolution_failure(
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')
         assert last_result_text(client) == "[1] FALSE\n"
-        client.send(python="6 * 7")
-        assert last_result_text(client) == "42\n"
+        # fmt: python
+        python = code("""
+            import json
+
+            (
+                json is prior_module,
+                json.loads('{"answer": 42}')["answer"],
+                prior_state["answer"],
+                automatic_failure_attempts,
+                "automatic_failure_suffix" not in globals(),
+                os.getpid() == prior_pid,
+            )
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == "(True, 42, 43, 1, True, True)\n"
+        assert len(uv_tool_run_requirements(record)) == baseline + 1
         return client.finish()
 
 
