@@ -19,6 +19,20 @@ static struct joiner *joiners;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 
+static void corrupt_preparation(int signal) {
+    (void)signal;
+    // Leave the process and stderr alive after the controller rejects stdout.
+    if (write(STDOUT_FILENO, "null\n", 5) != 5) _exit(125);
+    for (;;) pause();
+}
+
+__attribute__((constructor)) static void install_preparation_fault(void) {
+    if (getenv("MCP_CONSOLE_TEST_REAP_CORRUPT") == NULL) return;
+    struct sigaction action = { .sa_handler = corrupt_preparation };
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGUSR1, &action, NULL) < 0) _exit(126);
+}
+
 static ssize_t native_write(int fd, const void *bytes, size_t count) {
 #ifdef __APPLE__
     return write(fd, bytes, count);
@@ -58,7 +72,8 @@ static bool resolver(pid_t pid) {
 
 static int deny_termination(pid_t pid, int signal) {
     const char *denied = getenv("MCP_CONSOLE_TEST_REAP_DENY_KILL");
-    if (signal == SIGKILL && denied != NULL && resolver(pid)) {
+    if (signal == SIGKILL && denied != NULL && resolver(pid) &&
+        (getenv("MCP_CONSOLE_TEST_REAP_DENY_ONCE") == NULL || access(denied, F_OK) != 0)) {
         int marker = open(denied, O_WRONLY | O_CREAT, 0600);
         if (marker < 0) _exit(124);
         close(marker);
@@ -81,7 +96,7 @@ static bool joined(void) {
 
 static pid_t gated_waitpid(pid_t pid, int *status, int options) {
     bool held = pid > 0 && resolver(pid);
-    if (held) {
+    if (held && getenv("MCP_CONSOLE_TEST_REAP_CORRUPT") == NULL) {
         // Closed and EOF have reached the controller. Hold the actual reap
         // until its owner is joined, including a join that started earlier.
         pthread_mutex_lock(&lock);
