@@ -55,7 +55,7 @@ impl PreparedTransport {
             .stdout
             .take()
             .expect("piped worker relay stdout should be available");
-        let input = RelayInput::new(input, Some(self.writer_aborted), None)?;
+        let input = RelayInput::new(input, Some(self.writer_aborted))?;
         let stderr = child.stderr.take().expect("piped launcher stderr");
         let exited = self
             .output_exit

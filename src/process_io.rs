@@ -1,9 +1,8 @@
-//! Bounded, cancellable descriptor transfer for child processes.
+//! Cancellable descriptor I/O for child processes.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::time::Instant;
 
 pub(crate) fn duplicate(descriptor: RawFd) -> Result<File, String> {
     let fd = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 3) };
@@ -13,10 +12,7 @@ pub(crate) fn duplicate(descriptor: RawFd) -> Result<File, String> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-pub(crate) fn poll(
-    descriptors: &[(RawFd, libc::c_short)],
-    deadline: Option<Instant>,
-) -> Result<Vec<libc::c_short>, String> {
+fn poll(descriptors: &[(RawFd, libc::c_short)]) -> Result<Vec<libc::c_short>, String> {
     let mut descriptors = descriptors
         .iter()
         .map(|&(fd, events)| libc::pollfd {
@@ -26,19 +22,9 @@ pub(crate) fn poll(
         })
         .collect::<Vec<_>>();
     loop {
-        let timeout = deadline.map_or(-1, |deadline| {
-            deadline
-                .saturating_duration_since(Instant::now())
-                .as_millis()
-                .min(i32::MAX as u128) as i32
-        });
-        let result =
-            unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, timeout) };
+        let result = unsafe { libc::poll(descriptors.as_mut_ptr(), descriptors.len() as _, -1) };
         if result > 0 {
             return Ok(descriptors.iter().map(|event| event.revents).collect());
-        }
-        if result == 0 {
-            return Err("target operation deadline exceeded".into());
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
@@ -50,15 +36,10 @@ pub(crate) fn poll(
 pub(crate) struct Io<T> {
     inner: T,
     cancelled: Option<io::PipeReader>,
-    deadline: Option<Instant>,
 }
 
 impl<T: AsRawFd> Io<T> {
-    pub(crate) fn new(
-        inner: T,
-        cancelled: Option<io::PipeReader>,
-        deadline: Option<Instant>,
-    ) -> Result<Self, String> {
+    pub(crate) fn new(inner: T, cancelled: Option<io::PipeReader>) -> Result<Self, String> {
         let flags = unsafe { libc::fcntl(inner.as_raw_fd(), libc::F_GETFL) };
         if flags < 0
             || unsafe { libc::fcntl(inner.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
@@ -66,27 +47,20 @@ impl<T: AsRawFd> Io<T> {
         {
             return Err(io::Error::last_os_error().to_string());
         }
-        Ok(Self {
-            inner,
-            cancelled,
-            deadline,
-        })
+        Ok(Self { inner, cancelled })
     }
 
     fn wait(&self, events: libc::c_short) -> io::Result<()> {
-        let ready = poll(
-            &[
-                (self.inner.as_raw_fd(), events),
-                (
-                    self.cancelled.as_ref().map_or(-1, AsRawFd::as_raw_fd),
-                    libc::POLLIN,
-                ),
-            ],
-            self.deadline,
-        )
+        let ready = poll(&[
+            (self.inner.as_raw_fd(), events),
+            (
+                self.cancelled.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+                libc::POLLIN,
+            ),
+        ])
         .map_err(io::Error::other)?;
         if ready[1] != 0 {
-            return Err(io::Error::other("target transfer cancelled"));
+            return Err(io::Error::other("process transfer cancelled"));
         }
         Ok(())
     }
@@ -127,7 +101,7 @@ impl<T: AsRawFd + Write> Write for Io<T> {
                     return Err(error);
                 }
                 if event.revents != 0 {
-                    return Err(io::Error::other("target transfer cancelled"));
+                    return Err(io::Error::other("process transfer cancelled"));
                 }
             }
             match self.inner.write(buffer) {
@@ -137,25 +111,16 @@ impl<T: AsRawFd + Write> Write for Io<T> {
                         io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
                     ) =>
                 {
-                    // Bootstrap has no input owner yet. After one supplies a
-                    // cancellation pipe, let that owner arbitrate input closure
-                    // independently of this backpressured output stream.
-                    let ready = poll(
-                        &[
-                            (self.inner.as_raw_fd(), libc::POLLOUT),
-                            (
-                                self.cancelled.as_ref().map_or(-1, AsRawFd::as_raw_fd),
-                                libc::POLLIN,
-                            ),
-                            (if self.cancelled.is_none() { 0 } else { -1 }, 0),
-                        ],
-                        self.deadline,
-                    )
+                    let ready = poll(&[
+                        (self.inner.as_raw_fd(), libc::POLLOUT),
+                        (
+                            self.cancelled.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+                            libc::POLLIN,
+                        ),
+                    ])
                     .map_err(io::Error::other)?;
-                    if ready[1] != 0 || ready[2] != 0 {
-                        return Err(io::Error::other(
-                            "target connection closed or transfer cancelled",
-                        ));
+                    if ready[1] != 0 {
+                        return Err(io::Error::other("process transfer cancelled"));
                     }
                 }
                 result => return result,

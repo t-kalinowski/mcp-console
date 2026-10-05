@@ -74,7 +74,7 @@ impl Client {
             },
         };
         let early_python = match (&python_candidate, early_resolver) {
-            (Some(candidate), Some(resolver)) if resolver.has_direct_local_uv() => {
+            (Some(candidate), Some(resolver)) if resolver.has_uv() => {
                 Some(self.resolve_managed_python_host(
                     generation,
                     candidate.clone(),
@@ -86,15 +86,14 @@ impl Client {
             _ => None,
         };
         let pending_python = if let RResolver::Pending(setup) = &environment.r_resolver {
-            let mut python = setup.python_resolver.clone();
+            let python = setup.python_resolver.clone();
             let mut stop_handle = None;
-            let result = setup.bootstrap.prepare(
-                &mut python,
-                |handle: crate::resolver::ResolverStopHandle| {
+            let result = setup
+                .bootstrap
+                .prepare(|handle: crate::resolver::ResolverStopHandle| {
                     stop_handle = Some(handle.clone());
                     self.register_resolver_stop_handle(generation, handle)
-                },
-            );
+                });
             self.clear_resolver_stop_handle(generation)
                 .map_err(EnvironmentResolutionFailure::Operation)?;
             let resolver = classify_resolver_result(result, stop_handle.as_ref())?;
@@ -157,7 +156,6 @@ impl Client {
                     let mut stop_handle = None;
                     let result = r_resolver.resolve_uv(
                         managed_r,
-                        &resolver,
                         |handle: crate::resolver::ResolverStopHandle| {
                             stop_handle = Some(handle.clone());
                             self.register_resolver_stop_handle(generation, handle)
@@ -320,9 +318,9 @@ impl Client {
             super::super::RResolver::Discover => {
                 let existing = self
                     .0
-                    .local_preparation
+                    .resolver_preparation
                     .lock()
-                    .expect("local preparation lock")
+                    .expect("preparation lock")
                     .clone();
                 let preparation = if let Some(existing) = existing {
                     existing
@@ -340,9 +338,9 @@ impl Client {
                         opened.map_err(EnvironmentResolutionFailure::Operation)?;
                     *self
                         .0
-                        .local_preparation
+                        .resolver_preparation
                         .lock()
-                        .expect("local preparation lock") = Some(preparation.clone());
+                        .expect("preparation lock") = Some(preparation.clone());
                     preparation
                 };
                 preparation.call(
@@ -354,17 +352,9 @@ impl Client {
                 configuration.resolve_r(requirements, on_started)
             }
             super::super::RResolver::Disabled => {
-                let message = if let Some(session) = &self.0.target
-                    && !session.is_ssh()
-                {
-                    format!(
-                        "dynamic environment resolution is unavailable for {} targets; install packages in the image and start a new server session",
-                        session.protocol().0
-                    )
-                } else {
-                    crate::local_runtime::RESOLUTION_UNAVAILABLE.into()
-                };
-                return Err(EnvironmentResolutionFailure::Host(message));
+                return Err(EnvironmentResolutionFailure::Host(
+                    crate::local_runtime::RESOLUTION_UNAVAILABLE.into(),
+                ));
             }
             super::super::RResolver::Pending(_) => {
                 unreachable!("built-in bootstrap must be prepared before R resolution")
@@ -421,18 +411,12 @@ impl Client {
             let mut stop_handle = None;
             let local = self
                 .0
-                .local_preparation
+                .resolver_preparation
                 .lock()
-                .expect("local preparation lock")
+                .expect("preparation lock")
                 .clone();
-            let preparation = local.as_ref().or_else(|| {
-                self.0
-                    .target
-                    .as_ref()
-                    .and_then(crate::target_session::Session::ssh_preparation)
-            });
             let result = crate::resolver::execution::resolve_duckdb_extensions(
-                preparation,
+                local.as_ref(),
                 managed_r,
                 extensions,
                 |handle| {

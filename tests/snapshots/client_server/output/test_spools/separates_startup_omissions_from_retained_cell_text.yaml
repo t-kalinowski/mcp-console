@@ -7,15 +7,15 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8055
+        text_bytes: 8152
         concat:
           - repeat: s
-            count: 3904
+            count: 3968
           - |
 
-            [output preview: omitted 8380819 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace; controller for remote targets); 8388615 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 8380691 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace); 8388615 raw bytes retained, 0 raw bytes not retained]
           - repeat: s
-            count: 3892
+            count: 3956
           - |
             cell output
   isError: false

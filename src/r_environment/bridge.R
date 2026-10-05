@@ -2,10 +2,7 @@ base::local(
   {
     managed <- base::.libPaths()[[1L]]
     temporary_library <- NULL
-    if (
-      base::identical(base::Sys.getenv("MCP_CONSOLE_SANDBOX"), "1") ||
-        base::nzchar(base::Sys.getenv("MCP_CONSOLE_EXECUTION_COMPUTE"))
-    ) {
+    if (base::identical(base::Sys.getenv("MCP_CONSOLE_SANDBOX"), "1")) {
       temporary_library <- base::tempfile(
         "mcp-console-library-",
         tmpdir = base::tempdir()

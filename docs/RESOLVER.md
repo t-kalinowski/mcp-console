@@ -2,8 +2,6 @@
 
 On macOS and Linux, local dependency preparation runs inside the native sandbox runner.
 The existing preparation process, including discovery, installation, package builds, Python inspection, and DuckDB extension installation, uses one resolver policy.
-SSH preparation retains execution-host permissions; its resolver sandbox is deferred.
-Prepared Docker and Docker Sandbox sessions use preinstalled packages and do not run this resolver.
 `serve --no-sandbox` uses ordinary host permissions.
 Windows retains its host resolver and Job lifecycle; its native runner does not support managed proxy routing.
 
@@ -59,8 +57,6 @@ Or launch with `mcp-console serve -c cache=host`.
 Custom workers that need no dependency preparation can use this setting to start without `HOME` or `XDG_CACHE_HOME`.
 This retains resolver sandboxing on macOS/Linux while restoring host cache selection and its default write grants.
 `serve --no-sandbox` defaults to host caches; `cache: console` with `--no-sandbox` is rejected to avoid executing Console cache artifacts in a session that disables sandboxing.
-The setting applies to local sessions.
-SSH retains its existing execution-host caches and permissions; Docker/SBX use preinstalled environments.
 Windows redirects cache paths but still prepares dependencies with host permissions.
 
 ## Configuration

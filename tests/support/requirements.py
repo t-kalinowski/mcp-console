@@ -110,12 +110,6 @@ R_EVENT_LOOP = Requirement(
     POSIX.available,
     "Windows idle R callback integration is deferred",
 )
-REMOTE_CONTROLLERS = Requirement(
-    "remote controllers",
-    sys.platform in {"darwin", "linux"},
-    "Windows SSH/Docker/SBX controllers are deferred",
-)
-
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 FRAMEWORK_PYTHON = Path(
     "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"

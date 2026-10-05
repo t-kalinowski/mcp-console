@@ -18,13 +18,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8095
+        text_bytes: 8064
         concat:
           - repeat: x
             count: 3776
           - |
 
-            [output preview: omitted 25158279 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 25165827 raw bytes retained, 4 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+            [output preview: omitted 25158279 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 25165827 raw bytes retained, 4 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
           - repeat: x
             count: 3776
           - |-
@@ -40,13 +40,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8134
+        text_bytes: 8103
         concat:
           - repeat: y
             count: 3904
           - |
 
-            [output preview: omitted 8380807 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 25165827 raw bytes retained, 8388619 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+            [output preview: omitted 8380807 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 25165827 raw bytes retained, 8388619 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
           - repeat: y
             count: 3904
   isError: false

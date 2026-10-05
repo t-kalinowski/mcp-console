@@ -332,7 +332,7 @@ struct Endpoints {
 }
 
 /// Evidence only for this materializer's native process scope and owned tasks;
-/// it says nothing about preparation transport or outer compute retirement.
+/// it says nothing about preparation transport or worker retirement.
 struct ResolverRetirement {
     process: Result<ExitStatus, String>,
     observation: Result<Option<String>, String>,

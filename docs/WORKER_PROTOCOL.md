@@ -216,11 +216,11 @@ Generation checks prevent an old receipt from committing into a replacement.
 
 The relay concurrently closes fd 0 and attempts `shutdown`; the worker must not require both signals in a particular order.
 It exits without acknowledgment, or the relay forcibly terminates and reaps the direct child after the supplied grace.
-Remaining descendants and private storage belong to the selected runner or compute provider, not this sideband.
+Remaining descendants and private storage belong to the native runner, not this sideband.
 
 Outside intentional retirement, unexpected sideband EOF or worker exit, including status zero, fails the generation.
 The relay drains within its bounded allowances and reports closure and process outcome through the outer protocol.
-Those events do not prove sandbox, remote-host, container, or VM retirement.
+Those events do not prove native sandbox retirement.
 See [relay retirement](RELAY_PROTOCOL.md#retirement-and-failure).
 
 ## Custom-worker conformance

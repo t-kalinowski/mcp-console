@@ -15,7 +15,7 @@ Restart creates a new generation.
 Old callbacks, stdin, and evaluations must not reach the replacement.
 
 **Server / controller** — The process speaking MCP to the client.
-It owns admission, requirements, bounded responses, and recording, even when execution is remote.
+It owns admission, requirements, bounded responses, and recording.
 
 **Relay** — The process between server and worker.
 It translates the worker's sideband and standard streams into relay events, delivers signals, and reaps its direct worker.
@@ -27,15 +27,12 @@ The built-in worker coordinates R, Python, and SQL on one execution thread; a cu
 **Sideband** — Private framed messages between relay and worker, separate from stdin, stdout, and stderr.
 It carries commands, semantic output, and completion.
 
-**Target / execution host** — Where code runs: the local host, an SSH host, a Docker container, or a Docker Sandbox microVM.
-Target paths belong there, not necessarily on the controller.
+**Execution host** — The host running the MCP client and Console.
+The server, resolver, relay, and worker share that host.
 
 **Native runner** — The verified private sandbox executable.
 It owns native policy enforcement, temporary storage, and descendant supervision.
 Console integrates it as an ordinary child process.
-
-**Compute provider** — An outer execution boundary such as Docker or Docker Sandbox.
-Disabling the inner native sandbox does not remove that boundary.
 
 **Preparation owner / resolver** — Trusted execution-host machinery that selects interpreters and prepares dependencies outside the worker sandbox.
 The server owns the requested manifest and decides whether to accept results.
@@ -48,10 +45,10 @@ A resolved environment is a concrete result of preparing that declaration.
 Resolving a candidate is not the same as publishing it or committing the retained manifest.
 
 **Retirement / cleanup receipt** — Stopping an owned resource and obtaining the owner's confirmation that its cleanup contract completed.
-Transport exit alone is not proof of remote or compute-resource retirement.
+Stream closure alone is not proof of process retirement or native cleanup.
 
 **Output cut** — A finite boundary in the server's ordered output tape used to construct one response.
 It is not a global timestamp order across streams.
 
-**Recording** — Controller-side files containing calls, source, input, output, and artifacts.
+**Recording** — Server-side files containing calls, source, input, output, and artifacts.
 Recordings are unredacted and are not live-state checkpoints.

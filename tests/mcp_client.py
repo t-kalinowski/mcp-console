@@ -712,64 +712,6 @@ class MarkerTests(unittest.TestCase):
 
 
 @unittest.skipUnless(POSIX.available, POSIX.reason)
-class ColdProviderBudgetTests(unittest.TestCase):
-    def test_docker_callback_case_keeps_its_cold_transport_budget(self) -> None:
-        case = runpy.run_path(
-            str(ROOT / "tests/boundaries/client_server/server/test_docker_setup.py")
-        )["test_callbacks_cannot_prepare_controller_packages"]
-        output = (
-            "dynamic environment resolution is unavailable for Docker targets; "
-            "install packages in the image and start a new server session\n"
-            "dynamic environment resolution is unavailable\n"
-            "dynamic environment resolution is unavailable\n"
-        )
-
-        class ColdClient(ScriptedClient):
-            def __enter__(self) -> ColdClient:
-                return self
-
-            def __exit__(self, *exc: object) -> None:
-                pass
-
-            def initialize_and_list_tools(self) -> None:
-                pass
-
-            def finish(self) -> list[dict[str, object] | None]:
-                return [None] * 3 + self.transcript
-
-        client = ColdClient([{"content": [{"type": "text", "text": output}]}])
-
-        def collect(
-            *arguments: Any,
-            completion_timeout_seconds: float = 3,
-            **send_arguments: Any,
-        ) -> str:
-            self.assertEqual(completion_timeout_seconds, client.response_timeout)
-            return wait_for_evaluation_output(
-                *arguments,
-                completion_timeout_seconds=completion_timeout_seconds,
-                **send_arguments,
-            )
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "peer").mkdir()
-            with patch.dict(
-                case.__globals__,
-                image=lambda: "fixture-image",
-                workspace=lambda: nullcontext(root),
-                cli_peer=lambda path: {},
-                configure=lambda *args, **kwargs: None,
-                McpClient=lambda *args: client,
-                wait_for_evaluation_output=collect,
-            ):
-                result = case(Path("unused-binary"))
-        self.assertEqual(client.calls, [{"r": "42"}])
-        self.assertEqual(client.response_timeout, 600)
-        self.assertEqual(result[0]["result"]["content"][0]["text"], output)
-
-
-@unittest.skipUnless(POSIX.available, POSIX.reason)
 class CheckpointTests(unittest.TestCase):
     @unittest.skipUnless(PROCESS_EVENTS.available, PROCESS_EVENTS.reason)
     def test_owner_exit_wakes_pending_marker_wait_with_evidence(self) -> None:

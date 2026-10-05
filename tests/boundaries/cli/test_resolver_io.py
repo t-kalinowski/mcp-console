@@ -68,15 +68,13 @@ def preparation(
         send(
             {
                 "Open": {
-                    "version": 6,
+                    "version": 7,
                     "build": build,
-                    "workspace": "",
-                    "selections": {"r_home": None, "python": None},
                     "mode": "PythonOnly",
                 }
             }
         )
-        assert receive("hello") == {"Hello": {"version": 6, "build": build}}
+        assert receive("hello") == {"Hello": {"version": 7, "build": build}}
         discovery = receive("discovery")["Completed"]
         assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
         yield process, send, receive
@@ -406,7 +404,7 @@ def cleanup_failure(
                 stderr = process.stderr.read()
                 assert (
                     process.returncode != 0
-                    and "remote preparation retirement is unconfirmed" in stderr
+                    and "preparation retirement is unconfirmed" in stderr
                 ), stderr
                 os.kill(leader, 0)
                 assert not (root / "early-reap").exists()

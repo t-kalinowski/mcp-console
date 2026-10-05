@@ -43,10 +43,8 @@ class Resolver:
         self.send(
             {
                 "Open": {
-                    "version": 6,
+                    "version": 7,
                     "build": build,
-                    "workspace": "",
-                    "selections": {},
                     "mode": mode,
                 }
             }
@@ -384,7 +382,7 @@ class WindowsResolver(unittest.TestCase):
                     # held. An observer join before that allowance hangs here.
                     self.assertNotEqual(resolver.process.wait(timeout=10), 0)
                     self.assertIn(
-                        "remote preparation retirement is unconfirmed",
+                        "preparation retirement is unconfirmed",
                         resolver.process.stderr.read().decode(errors="replace"),
                     )
                     self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)

@@ -6,9 +6,7 @@ Review it before starting Console.
 
 ## Project configuration
 
-`sandbox.provider: native` is the default for local, SSH, and ordinary Docker.
-Docker Sandbox selects `compute`, which accepts only `provider`, `environment`, and `inherit_environment` under `sandbox`; native fields, top-level `extends`, and CLI writable roots are invalid.
-See [SBX](DOCKER_SANDBOX.md).
+The `sandbox` mapping configures native enforcement on the local host.
 
 For project editing:
 
@@ -96,7 +94,7 @@ sandbox:
 The runner owns host normalization, matching, local-network checks, and routing.
 An empty allowlist allows no destinations.
 A supplied enabled proxy enforces managed routing even with `network: enabled`, subject to explicit local-binding exceptions.
-Proxy endpoints are execution-host addresses, including SSH/Docker.
+Proxy endpoint addresses are interpreted on the Console host.
 
 ## Resolver policy
 
@@ -115,7 +113,7 @@ In native execution these values apply after helper setup, so they cannot select
 The trusted launch environment still controls frontend loading and helper selection.
 
 For `serve`, Console reapplies the selected R/Python generation environment and resolution policy after workload controls, even without inheritance.
-Workload settings do not configure trusted resolvers; supported remote runtime selections are conveyed separately.
+Workload settings do not configure trusted resolvers.
 Ordinary application launches preserve `MCP_CONSOLE_SANDBOX=1`; the marker is not authorization.
 
 Settings are captured once and retained across initial launch, restart, and failure recovery.
@@ -123,9 +121,7 @@ When selected configuration requires it, a no-op native preflight validates poli
 Children receive captured values, never a filename to rediscover.
 Ambient private transport variables cannot select policy.
 
-For targets, see [SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md).
-`--no-sandbox` still parses target configuration and preserves the outer provider; it is not a way to bypass malformed configuration or unsupported SBX fields.
-Standalone `sandbox` remains local and rejects compute-provider enforcement.
+`--no-sandbox` still validates configuration before launch.
 
 ## Explicit complete policy
 
