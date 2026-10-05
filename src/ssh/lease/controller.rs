@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,8 +44,20 @@ pub(super) fn run(operation: &str) -> io::Result<()> {
     engine.destination = Some(Destination::Local(status::Writer::new(
         duplicate(1).map_err(io::Error::other)?,
     )));
-    engine.stderr = Some(duplicate(2).map_err(io::Error::other)?);
-    for fd in [0, 1, 2] {
+    // Replayed remote diagnostics need a nonblocking destination, but fd 2 is
+    // inherited from the server. O_NONBLOCK is an open-file-description flag,
+    // so changing a duplicate would also change the server's stderr. Isolate
+    // replay behind a pipe and let a blocking forwarding thread own fd 2.
+    let (diagnostic_reader, diagnostic_writer) = io::pipe()?;
+    let mut diagnostic_reader = File::from(OwnedFd::from(diagnostic_reader));
+    let diagnostic_writer = File::from(OwnedFd::from(diagnostic_writer));
+    nonblocking(diagnostic_writer.as_raw_fd())?;
+    engine.stderr = Some(diagnostic_writer);
+    let _diagnostic_forwarder = thread::spawn(move || {
+        let mut stderr = io::stderr().lock();
+        let _ = io::copy(&mut diagnostic_reader, &mut stderr);
+    });
+    for fd in [0, 1] {
         nonblocking(fd)?;
     }
     let (received, notification) = io::pipe()?;

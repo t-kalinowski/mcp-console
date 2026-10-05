@@ -56,7 +56,9 @@ impl<R: Read> Read for Output<R> {
             }
             let mut tag = [0];
             if self.reader.read(&mut tag)? == 0 {
-                self.session.status.set(self.preparation, false);
+                // EOF is not a recovery result. If the adapter previously
+                // reported recovery, keep admission closed until the outer
+                // protocol classifies retirement or cleanup uncertainty.
                 return Ok(0);
             }
             let bytes =
