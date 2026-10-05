@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
+from support.checkpoints import FifoCheckpoint
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import (
@@ -56,6 +57,68 @@ def test_drains_sideband_after_exit(binary: Path) -> Transcript:
 @requires(WORKER, PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_retains_failure_discovered_during_exit_drain(binary: Path) -> Transcript:
     return [assert_exit_tail(lifecycle_events(binary, "exit_invalid"), invalid=True)]
+
+
+@requires(WORKER, PROCESS_EVENTS, NATIVE_FIXTURES)
+def test_setup_failure_reaps_child_before_terminal_publication(
+    binary: Path,
+) -> Transcript:
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/relay_worker/lifecycle.py"
+    with tempfile.TemporaryDirectory() as directory, Events() as exits:
+        root = Path(directory)
+        gates = {
+            name: FifoCheckpoint.create(root / name)
+            for name in ("entered", "release", "ready")
+        }
+        process = subprocess.Popen(
+            [binary, "worker-relay", sys.executable, fixture, "setup_failure"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={
+                **os.environ,
+                LOADER_VARIABLE: str(build_interposer(root, "relay_setup_failure")),
+                "TMPDIR": directory,
+                "MCP_CONSOLE_HOME": directory,
+                "TEST_WORKER_PID": str(root / "worker-pid"),
+                "TEST_WORKER_READY": str(root / "ready"),
+                "MCP_CONSOLE_TEST_SETUP_ENTERED": str(root / "entered"),
+                "MCP_CONSOLE_TEST_SETUP_RELEASE": str(root / "release"),
+            },
+            start_new_session=True,
+        )
+        try:
+            gates["entered"].wait("relay setup reached post-spawn pipe creation")
+            gates["ready"].wait("worker wrote raw and semantic setup output")
+            worker = capture_process_identity(int((root / "worker-pid").read_text()))
+            exits.watch_process(worker[0])
+            gates["release"].release()
+            assert exits.wait(10) == {worker[0]}, "setup failure did not retire worker"
+            output, errors = process.communicate(timeout=10)
+            assert process.returncode == 0 and errors == b"", (
+                process.returncode,
+                errors,
+            )
+            assert live_processes([worker]) == [], "setup failure did not reap worker"
+            events = [json.loads(line) for line in output.splitlines()]
+            # Unstarted raw readers still drain; the unstarted sideband reader
+            # contributes no Ready or other semantic frames.
+            assert events[:2] == [
+                {"kind": "stdout", "data": "setup stdout\n"},
+                {"kind": "stderr", "data": "setup stderr\n"},
+            ], events
+            assert_failure_tail(
+                events[2:],
+                "failed to create worker stdin cancellation pipe: Input/output error (os error 5)",
+                {"kind": "worker_signaled", "signal": signal.SIGKILL},
+            )
+            return events
+        finally:
+            if process.poll() is None:
+                stop_process_group(process.pid)
+            process.communicate(timeout=10)
+            for gate in gates.values():
+                gate.close()
 
 
 def lifecycle_events(binary: Path, scenario: str) -> list[dict]:

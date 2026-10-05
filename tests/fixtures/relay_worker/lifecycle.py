@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -13,7 +14,13 @@ if scenario == "closed_stdin":
 Path(os.environ["TEST_WORKER_PID"]).write_text(str(os.getpid()))
 with os.fdopen(reader, "rb") as source, os.fdopen(writer, "wb", buffering=0) as sink:
     sink.write(b'{"kind":"ready"}\n')
-    if scenario == "closed_stdin":
+    if scenario == "setup_failure":
+        os.write(1, b"setup stdout\n")
+        os.write(2, b"setup stderr\n")
+        with open(os.environ["TEST_WORKER_READY"], "wb", buffering=0) as ready:
+            ready.write(b"1")
+        signal.pause()
+    elif scenario == "closed_stdin":
         # The relay must retire us when the independent stdin writer fails.
         source.read()
     else:
