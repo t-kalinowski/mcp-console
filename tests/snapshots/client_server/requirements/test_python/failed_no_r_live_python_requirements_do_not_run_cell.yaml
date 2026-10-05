@@ -49,17 +49,7 @@ result:
           },
           "prepared": true,
           "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
+            "r": [],
             "python": []
           }
         }
@@ -73,30 +63,8 @@ result:
       exclude_newer: ~
     prepared: true
     runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
+      r: []
       python: []
-  isError: false
----
-send:
-  r: |
-    reticulate_namespace <- asNamespace("reticulate")
-    unlockBinding("py_require", reticulate_namespace)
-    assign("py_require", function(...) stop("tool entered reticulate declaration"),
-           envir = reticulate_namespace)
-    lockBinding("py_require", reticulate_namespace)
-result:
-  content:
-    - type: text
-      text: "[done]"
   isError: false
 ---
 send:
@@ -169,17 +137,7 @@ result:
           },
           "prepared": true,
           "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
+            "r": [],
             "python": []
           }
         }
@@ -193,16 +151,7 @@ result:
       exclude_newer: ~
     prepared: true
     runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
+      r: []
       python: []
   isError: false
 ---
@@ -265,17 +214,7 @@ result:
           },
           "prepared": true,
           "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
+            "r": [],
             "python": []
           }
         }
@@ -290,16 +229,7 @@ result:
       exclude_newer: ~
     prepared: true
     runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
+      r: []
       python: []
   isError: false
 ---
