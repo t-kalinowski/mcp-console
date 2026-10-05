@@ -121,10 +121,12 @@ impl Startup {
         // connection cancellation with confirmed cleanup; retain other failures.
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed
-            && control
-                .resolver
-                .as_ref()
-                .is_none_or(|resolver| resolver.cleanup_confirmed())
+            && control.resolver.as_ref().is_none_or(|resolver| {
+                resolver.cleanup_confirmed()
+                    && resolver.control_outcome()
+                        == Some(crate::resolver::ResolverControlOutcome::Cancelled)
+                    && resolver.failure_is_controlled()
+            })
         {
             Ok(())
         } else {

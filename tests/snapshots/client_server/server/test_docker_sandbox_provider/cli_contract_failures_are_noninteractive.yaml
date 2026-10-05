@@ -17,6 +17,12 @@ fake_provider: create-failed
 startup_error: |-
   fixture: create rejected
   Docker Sandbox command failed with exit status: 1; Docker Sandbox create used shared sources []; shared paths must already exist. Setup requires login, initialized provider policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>' (creation ID unavailable) retirement is unconfirmed: creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
-  Docker Sandbox command failed with exit status: 1
-stderr: |
-  Docker Sandbox command failed with exit status: 1
+  Docker Sandbox command failed with exit status: 1; Docker Sandbox create used shared sources []; shared paths must already exist. Setup requires login, initialized provider policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>' (creation ID unavailable) retirement is unconfirmed: creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
+stderr: >
+  Docker Sandbox command failed with exit status: 1; Docker Sandbox create
+  used shared sources []; shared paths must already exist. Setup requires
+  login, initialized provider policy, an available template, and
+  virtualization; see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM
+  '<owned-microvm>' (creation ID unavailable) retirement is unconfirmed:
+  creation returned no identity; an empty listing cannot confirm
+  retirement of an unacknowledged creation

@@ -3,11 +3,26 @@ fake_provider: true
 cancelled: create-unacknowledged
 owned_resources_absent: true
 unacknowledged_creation_remains_unconfirmed: true
+standard_error: >
+  Docker Sandbox setup cancelled; Docker Sandbox create used shared
+  sources []; shared paths must already exist. Setup requires login,
+  initialized provider policy, an available template, and virtualization;
+  see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>'
+  (creation ID unavailable) retirement is unconfirmed: creation returned
+  no identity; an empty listing cannot confirm retirement of an
+  unacknowledged creation
 ---
 fake_provider: true
 cancelled: create-gate
 owned_resources_absent: true
 unacknowledged_creation_remains_unconfirmed: true
+standard_error: >
+  Docker Sandbox setup cancelled; Docker Sandbox create used shared
+  sources []; shared paths must already exist. Setup requires login,
+  initialized provider policy, an available template, and virtualization;
+  see docs/DOCKER_SANDBOX.md; Docker Sandbox microVM '<owned-microvm>'
+  (<microvm-id>) retirement is unconfirmed: removal was observed, but
+  creation was not acknowledged and may still be in flight
 ---
 fake_provider: true
 cancelled: probe-gate

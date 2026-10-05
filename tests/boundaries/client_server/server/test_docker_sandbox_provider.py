@@ -31,6 +31,23 @@ from support.suites import run_this_suite
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
 
 
+def assert_cancelled_creation_error(root: Path, error: str, *, removed: bool) -> str:
+    normalized = normalize_recording([error], root)[0]
+    identity = "<microvm-id>" if removed else "creation ID unavailable"
+    reason = (
+        "removal was observed, but creation was not acknowledged and may still be in flight"
+        if removed
+        else "creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation"
+    )
+    assert normalized == (
+        "Docker Sandbox setup cancelled; Docker Sandbox create used shared sources []; "
+        "shared paths must already exist. Setup requires login, initialized provider "
+        "policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; "
+        f"Docker Sandbox microVM '<owned-microvm>' ({identity}) retirement is unconfirmed: {reason}\n"
+    ), normalized
+    return normalized
+
+
 @contextmanager
 def signal_client(
     binary: Path,
@@ -182,7 +199,9 @@ def test_cancelled_creation_and_probe_retire_owned_resources(binary: Path) -> li
                     else "removal was observed, but creation was not acknowledged"
                 )
                 assert expected in diagnostics, diagnostics
-                assert error == "Docker Sandbox setup cancelled\n", error
+                assert_cancelled_creation_error(
+                    root, error, removed=mode == "create-gate"
+                )
             records.append(
                 {
                     "fake_provider": True,
@@ -190,6 +209,11 @@ def test_cancelled_creation_and_probe_retire_owned_resources(binary: Path) -> li
                     "owned_resources_absent": True,
                     "unacknowledged_creation_remains_unconfirmed": mode.startswith(
                         "create-"
+                    ),
+                    **(
+                        {"standard_error": normalize_recording([error], root)[0]}
+                        if mode.startswith("create-")
+                        else {}
                     ),
                 }
             )
@@ -286,7 +310,7 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                         checkpoints["retirement"].wait(
                             "ordinary owner reached its retirement frame"
                         )
-                        assert not (root / "peer/vms").exists()
+                        assert not (root / "peer/vms").exists(), (phase, calls(root))
                         # Cancellation has completed. Handlers still need a live
                         # pipe throughout retirement-frame delivery.
                         for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
@@ -345,7 +369,9 @@ def test_signal_wakeups_coalesce_during_setup_and_retirement(binary: Path) -> li
                 )[0], "owner attempted more than one retirement frame"
                 assert not (root / "peer/vms").exists()
                 (session,) = (root / ".agents/console/sessions").iterdir()
-                if phase != "blocked-output":
+                if phase == "creation":
+                    assert_cancelled_creation_error(root, stderr, removed=True)
+                elif phase != "blocked-output":
                     assert stderr == "Docker Sandbox setup cancelled\n", stderr
                 if phase == "creation":
                     diagnostics = (session / "outputs/session.log").read_text()
@@ -614,14 +640,10 @@ def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
                 client.initialize_and_list_tools()
                 reached.wait("provider output drained without a send", timeout=15)
                 client.request("ping")
-                # Setup cancellation has no compute retirement receipt. Retain
-                # its failure while requiring the CLI to exit before shutdown.
-                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
-                assert stderr == (
-                    "Docker Sandbox setup cancelled; install standalone sbx v0.42.1 "
-                    "or newer and complete Docker login and policy setup before "
-                    "starting Console; see docs/DOCKER_SANDBOX.md\n"
-                ), stderr
+                # Version capture owns no compute resource. Its local CLI and
+                # diagnostic task must retire before successful shutdown.
+                _, stderr = client.finish_with_standard_error()
+                assert stderr == "", stderr
         (session,) = (root / ".agents/console/sessions").iterdir()
         assert (
             session / "outputs/session.log"
@@ -639,7 +661,7 @@ def test_startup_diagnostics_are_owned_before_any_send(binary: Path) -> list:
                 "recorded_provider_bytes": 340000,
                 "tool_calls": 0,
                 "setup_cancelled": True,
-                "exit_status": 1,
+                "exit_status": 0,
                 "standard_error": stderr,
             }
         ]
