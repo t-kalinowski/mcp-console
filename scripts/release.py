@@ -49,6 +49,11 @@ MANYLINUX_CPP = {
     41: (33, 15),
     42: (34, 15),
 }
+# Named CXXABI versions start at these policy/architecture boundaries.
+MANYLINUX_CXXABI_NAMED = {
+    "TM_1": (17, {"x86_64", "aarch64"}),
+    "FLOAT128": (24, {"x86_64"}),
+}
 # GCC versions are sparse sets, with these additions at each policy boundary.
 # Use the same pinned auditwheel policy source as the C++ ceilings above.
 MANYLINUX_GCC_COMMON = {
@@ -396,6 +401,11 @@ def inspect_linux_abi(
         for family, ceiling in LINUX_RELEASE_CPP.items():
             ceilings[family].append(ceiling)
     limits = {family: min(values, default=None) for family, values in ceilings.items()}
+    cxxabi_named_allowed = {
+        number
+        for number, (since, supported) in MANYLINUX_CXXABI_NAMED.items()
+        if architecture in supported and all(minor >= since for _, minor in floors)
+    }
     machine, loader = LINUX_MACHINES[architecture]
     evidence = {}
     # Model a Unix installation prefix; Python's version does not change its depth.
@@ -479,8 +489,9 @@ def inspect_linux_abi(
             }
             for symbol in versions:
                 family, number = symbol.split("_", 1)
+                numeric = re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", number) is not None
                 require(
-                    re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", number) is not None,
+                    numeric or (family == "CXXABI" and number in cxxabi_named_allowed),
                     f"{member}: unsupported symbol requirement {symbol}",
                 )
                 if family == "GCC":
@@ -488,7 +499,7 @@ def inspect_linux_abi(
                         gcc_allowed is None or number in gcc_allowed,
                         f"{member}: {symbol} is not permitted by the declared wheel policy",
                     )
-                else:
+                elif numeric:
                     required = tuple(map(int, number.split(".")))
                     ceiling = limits[family]
                     require(

@@ -889,6 +889,83 @@ class ReleaseScriptTests(ReleaseFixture):
                                         result.returncode, 0, result.stderr
                                     )
 
+    def test_inspect_wheel_checks_named_cxxabi_against_every_advertised_policy(
+        self,
+    ) -> None:
+        for architecture in ("x86_64", "aarch64"):
+            arm = architecture == "aarch64"
+            named = {"TM_1"} if arm else {"TM_1", "FLOAT128"}
+            policies = [
+                ("manylinux2014", {"TM_1"}),
+                ("manylinux_2_24", named),
+                ("manylinux_2_34", named),
+                ("manylinux_2_35", named),
+                ("manylinux_2_35.manylinux2014", {"TM_1"}),
+            ]
+            if not arm:
+                policies[:0] = [("manylinux2010", set())]
+                policies.append(("manylinux_2_35.manylinux2010", set()))
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                environment, _, _ = self.smoke_environment(directory)
+                for policy, permitted in policies:
+                    platform = ".".join(
+                        f"{tag}_{architecture}" for tag in policy.split(".")
+                    )
+                    wheel = directory / f"mcp_console-0.0.2-py3-none-{platform}.whl"
+                    names = ["TM_1", "FLOAT128"]
+                    if policy == "manylinux_2_35":
+                        names.append("UNKNOWN")
+                    for number in names:
+                        self.write_wheel(wheel, glibc="2.17" if arm else "2.5")
+                        member = (
+                            "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox"
+                        )
+                        rewrite_wheel(
+                            wheel,
+                            {
+                                member: elf_fixture(
+                                    machine="AArch64"
+                                    if arm
+                                    else "Advanced Micro Devices X86-64",
+                                    interpreter="/lib/ld-linux-aarch64.so.1"
+                                    if arm
+                                    else "/lib64/ld-linux-x86-64.so.2",
+                                    needed=["libstdc++.so.6"],
+                                    versions=["CXXABI_1.3.1", f"CXXABI_{number}"],
+                                )
+                            },
+                        )
+                        for release in (False, True):
+                            with self.subTest(
+                                platform=platform, number=number, release=release
+                            ):
+                                report = directory / "abi.json"
+                                result = self.run_script(
+                                    "inspect-wheel",
+                                    str(wheel),
+                                    *(["--release"] if release else []),
+                                    "--report",
+                                    str(report),
+                                    cwd=directory,
+                                    env=environment,
+                                )
+                                if number not in permitted:
+                                    self.assertNotEqual(
+                                        result.returncode, 0, result.stdout
+                                    )
+                                    self.assertIn(f"CXXABI_{number}", result.stderr)
+                                    self.assertIn(member, result.stderr)
+                                else:
+                                    self.assertEqual(
+                                        result.returncode, 0, result.stderr
+                                    )
+                                    evidence = json.loads(report.read_text())
+                                    self.assertEqual(
+                                        evidence["elf"][member]["cxxabi"],
+                                        ["1.3.1", number],
+                                    )
+
     def test_inspect_wheel_checks_gcc_symbols_against_every_advertised_policy(
         self,
     ) -> None:
@@ -1081,6 +1158,15 @@ class ReleaseScriptTests(ReleaseFixture):
                     directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
                 )
                 self.write_wheel(wheel)
+                rewrite_wheel(
+                    wheel,
+                    {
+                        "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox": elf_fixture(
+                            needed=["libstdc++.so.6"],
+                            versions=["CXXABI_FLOAT128", "CXXABI_TM_1"],
+                        )
+                    },
+                )
                 cargo_bin.unlink()
                 (directory / "Cargo.toml").unlink()
                 empty = directory / "empty-workspace"

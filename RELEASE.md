@@ -66,7 +66,8 @@ Wheel smoke verifies notices, source identity, helper digest, and actual linkage
 It checks architecture, loader, declared system libraries, loader paths, and symbol requirements against every advertised wheel tag; filename and WHEEL metadata must agree.
 Loader paths and bundled dependencies resolve within the installed Unix prefix: wheel scripts go under `bin`, data under the prefix, and Python libraries under `lib/pythonX.Y/site-packages`.
 `$ORIGIN` paths may traverse between these installed directories but must stay within the prefix; reports retain archive-member keys and use prefix-relative search paths.
-GLIBCXX/CXXABI ceilings follow the advertised [manylinux policies](https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json), including architecture differences and legacy aliases; multiple tags use the strictest ceiling.
+Numeric GLIBCXX/CXXABI ceilings follow the advertised [manylinux policies](https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json), including architecture differences and legacy aliases; multiple tags use the strictest ceiling.
+Named CXXABI versions must be permitted by every advertised policy: `TM_1` from manylinux 2.17 on both architectures, and `FLOAT128` from 2.24 on x86_64 only.
 GCC requirements from libgcc use each tag's exact architecture-specific permitted versions; sparse version sets cannot be validated with a numeric ceiling.
 An unrecognized policy is rejected rather than inferred from the build host.
 `--release` additionally enforces the glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
