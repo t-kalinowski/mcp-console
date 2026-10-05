@@ -14,6 +14,13 @@ pub(crate) mod process {
         pub fn check(&self) -> Result<(), String> {
             Err("target execution is unavailable on this platform".into())
         }
+        pub fn finish<T>(
+            &self,
+            result: Result<T, super::super::SetupFailure>,
+            _: bool,
+        ) -> Result<T, String> {
+            result.map_err(|error| error.message(super::super::Protocol("target"), None))
+        }
     }
     impl crate::resolver::ResolverControl for Cancel {
         fn stop(&self) -> Result<(), String> {
@@ -46,6 +53,28 @@ pub(crate) mod process {
         _: OutputMode,
         _: Option<OwnerInput>,
     ) -> Result<Vec<u8>, String> {
+        Err("target execution is unavailable on this platform".into())
+    }
+    pub(crate) struct CommandReport {
+        pub output: Vec<u8>,
+        pub result: Result<(), super::super::SetupFailure>,
+    }
+    pub(crate) fn run_report(
+        _: std::process::Command,
+        _: &Cancel,
+        _: Option<Instant>,
+        _: OutputMode,
+        _: Option<OwnerInput>,
+    ) -> Result<CommandReport, super::super::SetupFailure> {
+        Err("target execution is unavailable on this platform".into())
+    }
+    pub(crate) fn run_setup(
+        _: std::process::Command,
+        _: &Cancel,
+        _: Option<Instant>,
+        _: OutputMode,
+        _: Option<OwnerInput>,
+    ) -> Result<Vec<u8>, super::super::SetupFailure> {
         Err("target execution is unavailable on this platform".into())
     }
 }

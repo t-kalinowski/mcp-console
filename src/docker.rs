@@ -58,10 +58,10 @@ impl Endpoint {
         command
     }
 
-    fn capture(cancel: &process::Cancel) -> Result<Self, String> {
+    fn capture(cancel: &process::Cancel) -> Result<Self, target_launch::SetupFailure> {
         let mut command = Command::new("docker");
         command.args(["context", "inspect"]);
-        let output = process::run(
+        let output = process::run_setup(
             command,
             cancel,
             Some(Instant::now() + COMMAND_TIMEOUT),
@@ -131,15 +131,18 @@ fn tls_arguments(path: PathBuf) -> Vec<String> {
 }
 
 impl Captured {
-    pub fn capture(target: Target, cancel: &process::Cancel) -> Result<Self, String> {
+    pub fn capture(
+        target: Target,
+        cancel: &process::Cancel,
+    ) -> Result<Self, target_launch::SetupFailure> {
         let endpoint = Endpoint::capture(cancel)?;
         let Compute::Docker(docker) = &target.compute else {
             unreachable!("Docker compute selected")
         };
-        let inspect = |reference: &str| -> Result<Value, String> {
+        let inspect = |reference: &str| -> Result<Value, target_launch::SetupFailure> {
             let mut command = endpoint.command();
             command.args(["image", "inspect", "--", reference]);
-            let bytes = process::run(
+            let bytes = process::run_setup(
                 command,
                 cancel,
                 Some(Instant::now() + COMMAND_TIMEOUT),
@@ -157,7 +160,7 @@ impl Captured {
             let pull = || {
                 let mut command = endpoint.command();
                 command.args(["image", "pull", "--", reference]);
-                process::run(
+                process::run_setup(
                     command,
                     cancel,
                     None,
@@ -174,7 +177,12 @@ impl Captured {
                 Pull::Never => inspect(reference)?,
                 Pull::IfMissing => match inspect(reference) {
                     Ok(image) => image,
-                    Err(error) if error.contains("No such image:") => {
+                    Err(error)
+                        if error
+                            .error
+                            .as_ref()
+                            .is_some_and(|message| message.contains("No such image:")) =>
+                    {
                         pull()?;
                         inspect(reference)?
                     }
@@ -202,7 +210,7 @@ impl Captured {
                     .arg(&build.dockerfile)
                     .arg("--")
                     .arg(&build.context);
-                process::run(
+                process::run_setup(
                     command,
                     cancel,
                     None,

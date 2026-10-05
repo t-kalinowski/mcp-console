@@ -58,6 +58,45 @@ def test_cancelled_image_setup_before_readiness(binary: Path) -> Transcript:
         ]
 
 
+@requires(POSIX)
+def test_stop_output_failure_preserves_removal_and_absence_check(
+    binary: Path,
+) -> Transcript:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        (root / "peer/mode").write_text("stop-oversized")
+        configure(root, "fixture:image")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.startup_error()
+            client.stdin.close()
+            assert client.stdout.read(timeout=15) == ""
+            error = client.stderr.read(timeout=15)
+            assert client.process.wait(timeout=5) == 1, error
+        operations = [
+            args[args.index("container") + 1]
+            for call in peer_calls(root)
+            if "container" in (args := call["args"])
+        ]
+        assert operations == ["create", "start", "stop", "rm", "ls"], (
+            operations,
+            error,
+        )
+        assert not (root / "peer/containers").exists()
+        assert "failed to fill whole buffer" in error, error
+        assert "retirement is unconfirmed" not in error, error
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        assert (session / "outputs/session.log").read_text() == (
+            "fixture: target attachment failed\n"
+        )
+        return [
+            {
+                "stop_output_exceeded_capture_limit": True,
+                "forced_removal_and_absence_query_completed": True,
+                "stderr": normalize_recording([error], root)[0],
+            }
+        ]
+
+
 @requires(DOCKER)
 def test_cancelled_creation_uses_ownership_token(binary: Path) -> Transcript:
     reference = image()

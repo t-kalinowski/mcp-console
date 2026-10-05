@@ -2,6 +2,7 @@
 //! Concrete adapters own creation, identity, policy, and retirement receipts.
 use super::process::Cancel;
 use super::transfer::{Io, duplicate, poll};
+use crate::resolver::ResolverControl;
 use crate::target_launch::{self, Bootstrap, Hello, Retired};
 use std::io::{self, BufRead, Read, Write};
 use std::os::fd::AsRawFd;
@@ -96,7 +97,7 @@ pub(crate) fn run(
             None,
         ) && events[0] != 0
         {
-            watch_cancel.cancel();
+            let _ = watch_cancel.stop();
         }
     });
     let (input_done, input_completion) =
@@ -105,7 +106,7 @@ pub(crate) fn run(
     let input_cancel = cancel.clone();
     let input_watcher = std::thread::spawn(move || {
         if input_watch.wait(input_completion).is_err() {
-            input_cancel.cancel();
+            let _ = input_cancel.stop();
         }
     });
     let retired = operation(&cancel);
