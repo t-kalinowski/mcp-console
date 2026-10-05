@@ -21,6 +21,7 @@ from support.normalization import (
     normalize_python_traceback_paths,
 )
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     initialize_python_and_record_baseline,
     recording_uv_environment,
@@ -88,6 +89,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     binary: Path,
@@ -117,9 +119,9 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     session = next((workspace / ".agents/console" / "sessions").iterdir())
     relative_output = Path("outputs/call-000001.log")
     public_output = (
-        f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
+        f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
     )
-    assert f"raw cell log: {public_output}" in output
+    assert f"raw cell log: {public_output}" in output, output[len(prefix) :]
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )
@@ -130,6 +132,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
     binary: Path, execution: Execution

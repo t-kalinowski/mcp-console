@@ -989,6 +989,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_retain_package_requirements_before_python_initializes(
     binary: Path,
@@ -1055,6 +1056,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_python_activation_before_later_cell_failure(
     binary: Path,

@@ -2845,8 +2845,8 @@ def test_accepts_parent_components_in_selected_executable(
                         import sys
 
                         selected = os.environ["RETICULATE_PYTHON"]
-                        assert "/../" in selected
-                        assert sys.executable == selected
+                        assert "/../" in selected.replace(os.sep, "/")
+                        assert os.path.samefile(sys.executable, selected)
                         assert os.path.samefile(sys.prefix, "environment")
                         assert sys.prefix != sys.base_prefix
                         child = subprocess.check_output(

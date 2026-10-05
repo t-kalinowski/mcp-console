@@ -34,6 +34,7 @@ from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_and_reports_result(
     binary: Path, execution: Execution
@@ -48,6 +49,7 @@ def test_interrupts_and_reports_result(
     return client.finish_active()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     binary: Path,
@@ -78,6 +80,7 @@ def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
@@ -238,6 +241,7 @@ def test_control_only_interrupt_preserves_controlled_completion_marker(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_orders_stdin_before_new_evaluation(
     binary: Path,
@@ -417,6 +421,7 @@ def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_ce
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_cell(
     binary: Path,
@@ -728,6 +733,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(

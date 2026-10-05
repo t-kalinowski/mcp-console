@@ -28,6 +28,7 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
 from support.records import ToolResult, Transcript
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     checkpoint_uv_environment,
     send_and_collect_runtime_python_resolution,
@@ -1157,6 +1158,7 @@ def test_remote_managed_identity_survives_restart(
 
 
 @requires(R, command("uv"))
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_shared_managed_bootstrap_and_replacement(
     binary: Path, execution: Execution
@@ -1215,14 +1217,21 @@ def test_shared_managed_bootstrap_and_replacement(
                         sys.base_exec_prefix,
                     ]
                     program = "import sys, json; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix]))"
-                    child = json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))
-                    assert all(os.path.samefile(a, b) for a, b in zip(child, expected, strict=True)), (
-                        child,
-                        expected,
+                    assert (
+                        json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))
+                        == expected
                     )
                     assert os.environ["VIRTUAL_ENV"] == sys.prefix
                     print("managed identity and child environment agree")
                     """)
+                if os.name == "nt":
+                    # uv's Windows installation aliases can change spelling
+                    # between embedding and a child while retaining identity.
+                    source = source.replace(
+                        'assert (\n    json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))\n    == expected\n)',
+                        'child = json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))\n'
+                        "assert all(os.path.samefile(a, b) for a, b in zip(child, expected, strict=True)), (child, expected)",
+                    )
                 client.expect(
                     "managed identity and child environment agree\n",
                     python=source,
@@ -1231,9 +1240,14 @@ def test_shared_managed_bootstrap_and_replacement(
                     client.expect(
                         r="stopifnot(isTRUE(reticulate::py_config()$ephemeral))",
                     )
+                prefix_check = (
+                    "os.path.samefile(sys.base_prefix, peer_library)"
+                    if os.name == "nt"
+                    else "sys.base_prefix == peer_library"
+                )
                 client.expect(
                     "live import retained objects\n",
-                    python="import more_itertools; assert id(peer_object) == peer_id; assert sys.base_prefix == peer_library; print('live import retained objects')",
+                    python=f"import more_itertools; assert id(peer_object) == peer_id; assert {prefix_check}; print('live import retained objects')",
                 )
                 client.send(python="raise ValueError('after accepted activation')")
                 assert last_result_text(client).endswith(

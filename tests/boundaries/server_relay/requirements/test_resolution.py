@@ -95,6 +95,7 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_send_timeout_includes_blocked_requirements_resolver(

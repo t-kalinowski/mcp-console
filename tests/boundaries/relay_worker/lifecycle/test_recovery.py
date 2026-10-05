@@ -21,6 +21,7 @@ from support.requirements import POSIX, WORKER, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_closes_each_pipe_direction_on_restart(
     binary: Path, execution: Execution
@@ -131,6 +132,7 @@ def test_closes_pipes_with_unread_shutdown(
             process.stderr.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_after_worker_segfault(
     binary: Path, execution: Execution

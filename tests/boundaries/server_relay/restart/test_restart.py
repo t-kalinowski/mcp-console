@@ -28,6 +28,7 @@ from support.suites import run_this_suite
 from support.requirements import POSIX, requires
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     binary: Path,

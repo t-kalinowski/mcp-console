@@ -33,6 +33,7 @@ from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript:
     client = ServerRelayClient(binary, "shutdown", execution=execution)
@@ -42,6 +43,7 @@ def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript
     return client.finish_shutdown()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_shutdown_precedes_blocked_resolver_cancellation(

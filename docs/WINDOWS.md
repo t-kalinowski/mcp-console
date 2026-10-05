@@ -109,6 +109,7 @@ The built-in worker uses the C runtime's inherited stdin descriptor because R su
 After R compatibility calls, Console restores that table from the live CRT descriptors so Python subprocesses can inherit stdio.
 Deferred R startup synchronizes the Win32 and CRT environment views before restoring default packages.
 Python bootstrap uses native separators when R supplies a forward-slash executable path, so CPython finds the selected virtualenv's `pyvenv.cfg`.
+R's `commandArgs()` retains the selected launcher and the full interactive startup arguments, matching the Unix worker's interpreter identity.
 Live Python activation also updates an already imported Joblib process backend's interpreter selection; virtualenv launchers must not retain handles intended for its task processes.
 
 ## Validation

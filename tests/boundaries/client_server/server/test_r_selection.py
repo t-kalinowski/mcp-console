@@ -21,6 +21,7 @@ from support.linux_sandbox import retain_system_bwrap
 from boundaries.client_server.server.test_no_r import no_r_environment
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
+from support.snapshots import platform_snapshots
 
 
 def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) -> list:
@@ -37,6 +38,7 @@ def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) ->
         return [{"stderr": error.replace(str(root), "<workspace>")}]
 
 
+@platform_snapshots("win32")
 def test_rejects_invalid_local_r_home(binary: Path) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -142,6 +144,7 @@ def test_retains_r_absence_across_generations(
             return client.finish()
 
 
+@platform_snapshots("win32")
 def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()

@@ -16,6 +16,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
 from support.r import isolated_r_home
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 from support.resolvers import (
     checkpoint_uv_environment,
@@ -214,6 +215,7 @@ def test_empty_declaration_and_round_trip(
 
 
 @executions(DIRECT, SANDBOXED)
+@platform_snapshots("win32")
 def test_inspection_validation(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()

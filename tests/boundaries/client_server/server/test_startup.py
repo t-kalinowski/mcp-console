@@ -20,6 +20,7 @@ from support.assertions import last_result_text
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.r import r_test_environment
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
@@ -353,6 +354,7 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
         return client.finish()
 
 
+@platform_snapshots("win32")
 def test_first_send_uses_background_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment = os.environ.copy()
