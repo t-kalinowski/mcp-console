@@ -1,0 +1,8 @@
+---
+startup_error: >-
+  Docker Sandbox launch stream ended before confirmed retirement: failed
+  to fill whole buffer
+stderr: >
+  Docker Sandbox launch stream ended before confirmed retirement: failed
+  to fill whole buffer
+removed_once: true

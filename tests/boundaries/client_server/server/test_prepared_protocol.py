@@ -300,7 +300,7 @@ def test_failed_probe_preserves_diagnostic_during_owner_hello(binary: Path) -> l
                 for name in (
                     "owner-header",
                     "owner-release",
-                    "owner-cancelled",
+                    "owner-exit-handled",
                     "peer-ready",
                     "peer-release",
                     "abort",
@@ -316,8 +316,8 @@ def test_failed_probe_preserves_diagnostic_during_owner_hello(binary: Path) -> l
             checkpoints["peer-ready"].wait("inner HELLO flushed before peer SIGPIPE")
             checkpoints["owner-header"].wait("outer HELLO header accepted by stdout")
             checkpoints["peer-release"].release()
-            checkpoints["owner-cancelled"].wait(
-                "failed attachment cancelled forwarding"
+            checkpoints["owner-exit-handled"].wait(
+                "owner reacted to failed attachment before payload dispatch"
             )
             checkpoints["owner-release"].release()
             client.receive(pending)
@@ -348,7 +348,7 @@ def test_failed_probe_preserves_diagnostic_during_owner_hello(binary: Path) -> l
         assert expected in error, evidence
         assert expected in diagnostics, evidence
         assert "BrokenPipeError" not in diagnostics, evidence
-        return [{"failed_probe_diagnostic_preserved": True, "removed_once": True}]
+        return [{"startup_error": error, "stderr": diagnostics, "removed_once": True}]
 
 
 if __name__ == "__main__":

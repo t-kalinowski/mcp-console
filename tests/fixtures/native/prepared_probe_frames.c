@@ -24,8 +24,10 @@ static int (*native_poll)(struct pollfd *, nfds_t, int);
 // Receipts concern the owner -> controller pipe, never the attachment pipe.
 static bool selected;
 static struct stat output_identity;
-static int header_ready, release_payload, cancellation_ready, abort_gate, receipts;
+static int header_ready, release_payload, exit_handled, abort_gate, receipts;
 static _Thread_local int cancellation_reader = -1;
+static _Thread_local int owner_cancellation = -1, output_completion = -1;
+static _Thread_local bool attachment_exited;
 static _Thread_local unsigned char header[5];
 static _Thread_local size_t header_bytes;
 static _Thread_local uint32_t payload_length, payload_bytes;
@@ -88,7 +90,7 @@ static void gate_payload(void) {
         // consume it or change the subsequent production poll's result.
         if (waits[2].revents != 0) {
             record("cancellation-ready", waits[2].revents);
-            notify(cancellation_ready);
+            notify(exit_handled);
             waits[2].fd = -1;
         }
         // Test cancellation releases this gate without fabricating cancellation
@@ -116,15 +118,30 @@ __attribute__((constructor)) static void initialize(void) {
     unsetenv("LD_PRELOAD");
     header_ready = open_checkpoint(root, "owner-header", O_RDWR);
     release_payload = open_checkpoint(root, "owner-release", O_RDWR);
-    cancellation_ready = open_checkpoint(root, "owner-cancelled", O_RDWR);
+    exit_handled = open_checkpoint(root, "owner-exit-handled", O_RDWR);
     abort_gate = open_checkpoint(root, "abort", O_RDWR);
     receipts = open_checkpoint(root, "owner-frames", O_WRONLY | O_APPEND);
     if (fstat(STDOUT_FILENO, &output_identity) < 0) _exit(94);
 }
 
 static int observed_poll(struct pollfd *fds, nfds_t count, int timeout) {
+    // The owner has observed attachment exit and now waits for output completion.
+    // Notify before the real wait so the test can release the HELLO payload.
+    // The old runtime instead reaches real cancellation readiness in the gate.
+    if (selected && attachment_exited && count == 2 &&
+        fds[0].fd == owner_cancellation && fds[1].fd == output_completion) {
+        attachment_exited = false;
+        record("draining-output", 0);
+        notify(exit_handled);
+    }
     int result = poll(fds, count, timeout);
     int error = errno;
+    if (selected && count == 3 && result > 0 && fds[2].revents != 0 &&
+        fds[0].events == POLLIN && fds[1].events == POLLIN && fds[2].events == POLLIN) {
+        owner_cancellation = fds[0].fd;
+        output_completion = fds[1].fd;
+        attachment_exited = true;
+    }
     // Io::write checks its real cancellation pipe before every write. Remember
     // that reader on the writing thread, not an unrelated owner/input watcher.
     if (selected && count == 1 && timeout == 0 && fds[0].events == POLLIN) {
