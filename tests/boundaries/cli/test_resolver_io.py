@@ -18,6 +18,7 @@ from support.events import Events
 from support.records import Transcript
 from support.native import LOADER_VARIABLE, build_interposer
 from support.requirements import (
+    LINUX_SANDBOX,
     MACOS_SANDBOX,
     NATIVE_FIXTURES,
     PROCESS_EVENTS,
@@ -186,6 +187,22 @@ def test_success_closes_inherited_output_before_next_operation(
     return inherited_output(binary, "success")
 
 
+@requires(LINUX_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_success_without_pidfd_open(binary: Path) -> Transcript:
+    transcript = []
+    for error in ("EPERM", "ENOSYS"):
+        transcript.append({"pidfd_open": error})
+        transcript.extend(inherited_output(binary, "success", pidfd_error=error))
+    return transcript
+
+
+@requires(LINUX_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_failed_stop_without_pidfd_open_cancels_live_observation(
+    binary: Path,
+) -> Transcript:
+    return cleanup_failure(binary, observation_failed=False, pidfd_error="EPERM")
+
+
 @requires(PROCESS_EVENTS)
 def test_success_bounds_drain_from_continuously_writing_descendant(
     binary: Path,
@@ -304,7 +321,17 @@ def test_stdin_failure_retires_live_materializer_and_preserves_diagnostic(
             fail.close()
 
 
-def cleanup_failure(binary: Path, *, observation_failed: bool) -> Transcript:
+def deny_pidfds(root: Path, environment: dict[str, str], error: str) -> None:
+    library = str(build_interposer(root, "resolver_pidfd"))
+    environment[LOADER_VARIABLE] = ":".join(
+        filter(None, (environment.get(LOADER_VARIABLE), library))
+    )
+    environment["MCP_CONSOLE_TEST_PIDFD_ERRNO"] = error
+
+
+def cleanup_failure(
+    binary: Path, *, observation_failed: bool, pidfd_error: str | None = None
+) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
         gates = {
@@ -327,6 +354,8 @@ def cleanup_failure(binary: Path, *, observation_failed: bool) -> Transcript:
         }
         if observation_failed:
             environment["MCP_CONSOLE_TEST_OBSERVER_FAIL"] = "1"
+        if pidfd_error is not None:
+            deny_pidfds(root, environment, pidfd_error)
         try:
             with preparation(binary, root, environment) as (process, send, receive):
                 send(
@@ -391,7 +420,9 @@ def cleanup_failure(binary: Path, *, observation_failed: bool) -> Transcript:
                 gate.close()
 
 
-def inherited_output(binary: Path, mode: str) -> Transcript:
+def inherited_output(
+    binary: Path, mode: str, *, pidfd_error: str | None = None
+) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
         retired: set[str] = set()
@@ -428,7 +459,7 @@ def inherited_output(binary: Path, mode: str) -> Transcript:
                         "MCP_CONSOLE_TEST_STDIN_BLOCKED": str(root / "blocked"),
                     }
                 )
-            elif mode == "interrupt":
+            elif mode == "interrupt" or pidfd_error is not None:
                 environment.update(
                     {
                         LOADER_VARIABLE: str(
@@ -442,6 +473,8 @@ def inherited_output(binary: Path, mode: str) -> Transcript:
                         "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
                     }
                 )
+            if pidfd_error is not None:
+                deny_pidfds(root, environment, pidfd_error)
             with preparation(binary, root, environment) as (process, send, receive):
                 operation = {"PythonVersion": {"constraints": [">=3.12"]}}
                 request = operation
@@ -462,10 +495,10 @@ def inherited_output(binary: Path, mode: str) -> Transcript:
                     gates["blocked"].wait(
                         "materializer stdin writer reached actual backpressure"
                     )
-                elif mode == "interrupt":
-                    gates["entered"].wait(
-                        "live-child probe held before event registration"
-                    )
+                elif mode == "interrupt" or pidfd_error is not None:
+                    gates["entered"].wait("live-child exit probe held")
+                    if pidfd_error is not None:
+                        gates["release"].release()
                 elif mode == "stream":
                     gates["streaming"].wait("descendant is continuously writing stderr")
                 leader = int((root / "leader").read_text())
