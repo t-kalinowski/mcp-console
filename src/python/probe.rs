@@ -155,7 +155,7 @@ fn parse_output(output: &[u8]) -> Result<serde_json::Value, Error> {
 
 #[cfg(windows)]
 pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
-    use crate::resolver::process::{ResolverProcess, completed_write, read_output, spawn_resolver};
+    use crate::resolver::process::ResolverProcess;
     let output = crate::worker::with_python_interrupt(|started| {
         let resolver = ResolverProcess::new();
         let mut command = Command::new(executable);
@@ -164,23 +164,11 @@ pub(super) fn inspect(executable: &str) -> Result<serde_json::Value, Error> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = spawn_resolver(&mut command).map_err(|error| error.to_string())?;
-        let stdout = read_output(child.stdout.take().unwrap());
-        let stderr = read_output(child.stderr.take().unwrap());
-        resolver.watch_exit(child.id());
+        let invocation = resolver
+            .spawn(&mut command, None)
+            .map_err(|error| error.to_string())?;
         let path = std::path::Path::new(executable);
-        if let Err(error) = started(resolver.stop_handle()) {
-            resolver.abort(&mut child, path, "Python inspection")?;
-            return Err(error);
-        }
-        let output = resolver.wait(
-            &mut child,
-            completed_write(),
-            stdout,
-            stderr,
-            path,
-            "Python inspection",
-        )?;
+        let output = resolver.collect(invocation, path, "Python inspection", started)?;
         if !output.status.success() {
             return Err(format!(
                 "{}: {}{}",

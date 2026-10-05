@@ -424,6 +424,8 @@ def test_recovers_from_python_version_resolution_failure(
         assert real_uv is not None, "real uv is required"
         failure_marker = temporary / "fail-version-resolution"
         environment = os.environ.copy()
+        # Keep the fixture record in a granted resolver cache.
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(uv)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(temporary / "uv.jsonl")
