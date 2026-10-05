@@ -91,7 +91,7 @@ def lifecycle_events(binary: Path, scenario: str) -> list[dict]:
             )
             process.stdin.flush()
             # Keep input open and downstream output unread until direct-worker
-            # exit. Tail scenarios saturate the bounded event queue before drain.
+            # exit. Retirement must still deliver the complete sideband tail.
             assert exits.wait(10) == {worker[0]}, "worker did not retire"
             command_input = process.stdin
             process.stdin = None

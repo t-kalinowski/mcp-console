@@ -5,11 +5,12 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
+use super::lifecycle::{self, FirstFailure};
 use super::routing::Operation;
 use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
@@ -26,7 +27,7 @@ enum Control {
 #[derive(Clone)]
 struct Controls {
     sender: mpsc::Sender<Control>,
-    failure: Arc<OnceLock<String>>,
+    failure: FirstFailure,
 }
 
 impl Controls {
@@ -34,7 +35,7 @@ impl Controls {
         if let Control::Failed(message) = &control {
             // Preserve the first error even when a reader reports it during
             // retirement. Collecting it must not drain a live command queue.
-            let _ = self.failure.set(message.clone());
+            self.failure.record(message.clone());
         }
         self.sender.send(control)
     }
@@ -47,7 +48,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     let (sender, commands) = mpsc::channel();
     let controls = Controls {
         sender,
-        failure: Arc::new(OnceLock::new()),
+        failure: FirstFailure::default(),
     };
     let failed = controls.clone();
     let (events, mut event_writer) = event_writer::start(move |message| {
@@ -68,15 +69,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     } = match start_worker(program, arguments, controls.clone()) {
         Ok(worker) => worker,
         Err(message) => {
-            event_writer.begin_retirement();
-            events.send_supervisor(RelayEvent::Fatal {
-                message: message.clone(),
-            });
-            events.finish();
-            return match event_writer.join() {
-                Ok(()) => Err(message),
-                Err(error) => Err(format!("{message}; additionally {error}")),
-            };
+            return lifecycle::report_startup_failure(&events, event_writer, message);
         }
     };
     let input_controls = controls.clone();
@@ -312,19 +305,14 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     for task in tasks {
         task.join().map_err(|_| "worker I/O task panicked")?;
     }
-    events.send_supervisor(RelayEvent::StdoutClosed);
-    events.send_supervisor(RelayEvent::StderrClosed);
-    if let Some(message) = controls.failure.get() {
-        events.send_supervisor(RelayEvent::Fatal {
-            message: message.clone(),
-        });
-    }
-    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
-    events.send_supervisor(RelayEvent::WorkerExited {
-        code: status.code().unwrap_or(1),
-    });
-    events.finish();
-    event_writer.join()
+    lifecycle::finish(
+        &events,
+        event_writer,
+        controls.failure.message(),
+        Some(RelayEvent::WorkerExited {
+            code: status.code().unwrap_or(1),
+        }),
+    )
 }
 
 struct StartedWorker {

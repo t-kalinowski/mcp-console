@@ -1,12 +1,13 @@
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use super::commands::WORKER_SHUTDOWN_GRACE;
 use super::commands::{CommandReader, SidebandWrite, SidebandWriter, StdinWrite, StdinWriter};
-use super::event_writer::{self, EventSender, EventWriter};
+use super::event_writer::{self, EventSender};
+use super::lifecycle::{self, FirstFailure, collect_error, report_startup_failure};
 use super::streams::{OutputReader, OutputStream, SidebandReader, drain_unstarted_output};
 use crate::process_exit::ChildExitWaiter;
 use crate::relay_protocol::RelayEvent;
@@ -102,60 +103,26 @@ pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
     event_writer.begin_retirement();
     let mut finish_error = worker.cancel_and_join(&events);
 
-    events.send_supervisor(RelayEvent::StdoutClosed);
-    events.send_supervisor(RelayEvent::StderrClosed);
-    let reported_failure = failures.take();
-    if let Some(message) = reported_failure.as_ref() {
-        events.send_supervisor(RelayEvent::Fatal {
-            message: message.clone(),
-        });
-    }
-    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
-    if let Some(status) = status {
-        let outcome = match (status.code(), status.signal()) {
-            (Some(code), _) => RelayEvent::WorkerExited { code },
-            (None, Some(signal)) => RelayEvent::WorkerSignaled { signal },
-            (None, None) => RelayEvent::Fatal {
-                message: "worker exited without an exit code or signal".to_string(),
-            },
-        };
-        events.send_supervisor(outcome);
-    }
-    events.finish();
-    collect_error(&mut finish_error, event_writer.join());
+    let reported_failure = failures.message();
+    let outcome = status.map(|status| match (status.code(), status.signal()) {
+        (Some(code), _) => RelayEvent::WorkerExited { code },
+        (None, Some(signal)) => RelayEvent::WorkerSignaled { signal },
+        (None, None) => RelayEvent::Fatal {
+            message: "worker exited without an exit code or signal".to_string(),
+        },
+    });
+    collect_error(
+        &mut finish_error,
+        lifecycle::finish(&events, event_writer, reported_failure, outcome),
+    );
 
     // Do not repeat an exact retirement failure after publishing it as the
     // authoritative Fatal event. Preserve a richer cleanup error that the
     // first-failure reporter could not publish.
-    if retirement_error.as_ref() != reported_failure.as_ref() {
+    if retirement_error.as_ref() != reported_failure {
         collect_error(&mut finish_error, retirement_error.map_or(Ok(()), Err));
     }
     finish_error.map_or(Ok(()), Err)
-}
-
-fn collect_error(current: &mut Option<String>, result: Result<(), String>) {
-    let Err(error) = result else {
-        return;
-    };
-    match current {
-        Some(current) => current.push_str(&format!("; additionally {error}")),
-        None => *current = Some(error),
-    }
-}
-
-fn report_startup_failure(
-    events: &EventSender,
-    mut event_writer: EventWriter,
-    error: String,
-) -> Result<(), String> {
-    event_writer.begin_retirement();
-    events.send_supervisor(RelayEvent::Fatal {
-        message: error.clone(),
-    });
-    events.finish();
-    let mut error = Some(error);
-    collect_error(&mut error, event_writer.join());
-    Err(error.expect("startup failure should be retained"))
 }
 
 fn supervise_worker(
@@ -521,41 +488,25 @@ impl Drop for WorkerLifecycle {
 #[derive(Clone)]
 pub(super) struct FailureReporter {
     controls: mpsc::Sender<Control>,
-    message: Arc<Mutex<Option<String>>>,
+    failure: FirstFailure,
 }
 
 impl FailureReporter {
     fn new(controls: mpsc::Sender<Control>) -> Self {
         Self {
             controls,
-            message: Arc::new(Mutex::new(None)),
+            failure: FirstFailure::default(),
         }
     }
 
     pub(super) fn report(&self, message: String) {
-        let first = {
-            let mut reported = self
-                .message
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if reported.is_some() {
-                false
-            } else {
-                *reported = Some(message.clone());
-                true
-            }
-        };
-        if !first {
-            return;
+        if self.failure.record(message.clone()) {
+            let _ = self.controls.send(Control::Stop { message });
         }
-        let _ = self.controls.send(Control::Stop { message });
     }
 
-    fn take(&self) -> Option<String> {
-        self.message
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
+    fn message(&self) -> Option<&String> {
+        self.failure.message()
     }
 }
 
