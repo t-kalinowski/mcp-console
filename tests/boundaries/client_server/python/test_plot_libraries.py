@@ -48,7 +48,10 @@ def plot_client(
         )
         environment.pop("MATPLOTLIBRC", None)
         with McpClient(
-            binary, execution.serve(), environment, current_directory=workspace
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             wait_for_worker_ready(client, "plot library preparation readiness")

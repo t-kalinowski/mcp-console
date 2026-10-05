@@ -553,7 +553,9 @@ def test_r_bootstrap_resolves_python_version_and_import(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             ),
             environment,
             root,
@@ -782,7 +784,9 @@ def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = Fal
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             ),
             environment,
             root,

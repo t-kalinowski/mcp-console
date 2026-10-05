@@ -185,7 +185,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
             directory,
             substitute_requirement=(module, "pydash"),
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -254,7 +254,7 @@ def test_infers_python_distributions_for_normal_import_forms(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -313,7 +313,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=directory,
         )
@@ -390,7 +390,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             directory,
             fail_requirement=prefix,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
         client.expect(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
@@ -523,7 +523,7 @@ def test_does_not_reenter_automatic_python_resolution(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -578,7 +578,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -619,7 +619,7 @@ def test_reports_automatic_python_resolution_failure(
             directory,
             fail_requirement=requirement,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -668,7 +668,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
             directory,
             substitute_requirement=(inferred, "py-yaml12"),
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -715,7 +715,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -758,7 +758,7 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=directory,
         )
@@ -818,7 +818,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -857,7 +857,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         environment, record = recording_uv_environment(directory)
         environment["RETICULATE_PYTHON"] = str(managed_python)
         environment["PYTHONNODEBUGRANGES"] = "1"
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -891,7 +891,9 @@ def test_runtime_toolchain_probe_does_not_install_a_distribution(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_uv_environment(Path(temporary))
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"python": ["rply"]})
             assert last_result_text(client) == "[prepared]"

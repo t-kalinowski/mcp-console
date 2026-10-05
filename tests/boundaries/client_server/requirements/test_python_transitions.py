@@ -121,9 +121,9 @@ def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
         root = Path(directory)
         environment, record = recording_uv_environment(root)
         serve = (
-            execution.serve("--writable-root", str(root))
+            execution.serve("-c", "cache=host", "--writable-root", str(root))
             if execution == SANDBOXED
-            else execution.serve()
+            else execution.serve("-c", "cache=host")
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
@@ -175,7 +175,9 @@ def test_preserves_preparation_restoration_and_live_noops(
             directory, fail_requirement="py-yaml12"
         )
         environment["MCP_CONSOLE_LANGUAGES"] = "r"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             # fmt: r
             r = code(r"""
@@ -424,7 +426,7 @@ def test_idle_activation_failure_retains_worker_until_restart(
         cleanup.callback(resolver_started.close)
         cleanup.callback(resolver_release.close)
         client = cleanup.enter_context(
-            McpClient(binary, execution.serve(), environment, root)
+            McpClient(binary, execution.serve("-c", "cache=host"), environment, root)
         )
         client.initialize_and_list_tools()
         client.send(requirements={"r": ["later"]})
