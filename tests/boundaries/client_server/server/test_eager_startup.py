@@ -553,7 +553,6 @@ def early_requirements_with_pending_poll(
         environment.update(
             {
                 "MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT": "DBI",
-                "MCP_CONSOLE_LANGUAGES": "r",
                 "MCP_CONSOLE_TEST_IR_STARTED": str(prepared.path),
                 "MCP_CONSOLE_TEST_IR_RELEASE": str(proceed.path),
                 LOADER_VARIABLE: str(
@@ -653,7 +652,7 @@ def early_requirements_with_pending_poll(
                 assert not any(
                     "tidyverse" in call["arguments"] for call in ir_run_records(record)
                 )
-                return client.finish()[3:]
+                return client.finish()
             finally:
                 write_release.release()
                 proceed.release()
