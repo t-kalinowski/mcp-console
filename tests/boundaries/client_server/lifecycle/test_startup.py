@@ -170,7 +170,8 @@ def test_preserves_initialize_buffered_during_startup(
         assert fixture.invocations() == invocations, (
             "poll or invalid input duplicated startup"
         )
-        assert not list(fixture.root.glob("sandbox-*"))
+        # Only the gated resolver may own sandbox storage before worker startup.
+        assert len(list(fixture.root.glob("sandbox-*"))) == int(execution is SANDBOXED)
         return client.finish()
 
 
@@ -248,7 +249,7 @@ def test_first_cell_prepares_defaults_after_running_response(
         client.send(r=r, timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
-        assert not list(fixture.root.glob("sandbox-*"))
+        assert len(list(fixture.root.glob("sandbox-*"))) == int(execution is SANDBOXED)
         assert any(
             invocation["program"] == "uv"
             and invocation["arguments"][:2] == ["tool", "run"]
@@ -329,7 +330,7 @@ def test_explicit_preparation_keeps_its_wait_precondition(
         assert "result" not in preparation, (
             "explicit preparation returned before resolution"
         )
-        assert not list(fixture.root.glob("sandbox-*"))
+        assert len(list(fixture.root.glob("sandbox-*"))) == int(execution is SANDBOXED)
         fixture.release.release()
         client.response_timeout = 600
         client.receive(preparation)

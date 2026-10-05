@@ -7,7 +7,7 @@ send:
     startup_calls <- 0L
     callback_calls <- 0L
     Sys.unsetenv("RETICULATE_PYTHON")
-    expected_python <- normalizePath(Sys.which("python3"))
+    expected_python <- normalizePath(if (.Platform$OS.type == "windows") Sys.getenv("MCP_CONSOLE_TEST_PYTHON") else Sys.which("python3"))
     options(reticulate.python.beforeInitialized = function() {
       callback_calls <<- callback_calls + 1L
       initialized <- .C(

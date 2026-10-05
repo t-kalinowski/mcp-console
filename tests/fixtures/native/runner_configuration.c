@@ -14,11 +14,20 @@ __attribute__((constructor)) static void initialize(void) {
 #define execvp next_execvp
 #endif
 
-/* Observe the actual frontend-to-runner payload without replacing the runner,
- * changing its environment, or loading this fixture into the workload. */
+/* Observe worker/command payloads without replacing the runner or loading this
+ * fixture into the workload. The independent resolver launch is not a worker. */
 static int capture_execvp(const char *path, char *const arguments[]) {
     if (arguments[0] != NULL && arguments[1] != NULL &&
         strcmp(arguments[1], "--config-env") == 0) {
+        for (size_t index = 3; arguments[index] != NULL; index++) {
+            if (strcmp(arguments[index], "--") == 0) {
+                if (arguments[index + 1] != NULL && arguments[index + 2] != NULL &&
+                    strcmp(arguments[index + 2], "resolve") == 0) {
+                    return execvp(path, arguments);
+                }
+                break;
+            }
+        }
         const char *destination = getenv("MCP_CONSOLE_TEST_RUNNER_CONFIGURATION");
         const char *configuration = getenv(arguments[2]);
         if (destination == NULL || configuration == NULL) _exit(125);

@@ -31,17 +31,23 @@ def expose_uv(directory: Path) -> Path:
 
 
 def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
-    owners = [
-        child
-        for child in child_process_identities(server)
-        if subprocess.run(
-            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        == f"{binary} resolve"
-    ]
+    # A sandboxed resolver is below its native supervisor; direct execution is
+    # an immediate child. Keep the exact executable/operation identity in both.
+    owners = []
+    pending = [server]
+    while pending:
+        parent = pending.pop()
+        for child in child_process_identities(parent):
+            arguments = subprocess.run(
+                ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            if arguments == f"{binary} resolve":
+                owners.append(child)
+            else:
+                pending.append(child)
     assert len(owners) == 1, owners
     return owners[0]
 
