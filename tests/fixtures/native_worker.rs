@@ -175,14 +175,19 @@ fn spawn_probe_with_configuration(
 
 #[test]
 fn native_python_setup_runs_cells_without_r() {
+    let storage = PythonFixture::new();
     let selected = Command::new("python3")
         .args([PYTHON_PATHS, "executable"])
         .output()
         .expect("find test Python executable");
     assert!(selected.status.success());
     let selected = String::from_utf8(selected.stdout).expect("selected executable");
-    let (mut child, mut reader, _writer) =
-        spawn_probe_with_configuration("python_setup", Some(selected.trim()), None, None);
+    let (mut child, mut reader, _writer) = spawn_probe_with_configuration(
+        "python_setup",
+        Some(selected.trim()),
+        Some(&storage.0),
+        None,
+    );
     assert!(matches!(
         receive_python_probe(&mut reader, &mut child),
         WorkerMessage::Ready
