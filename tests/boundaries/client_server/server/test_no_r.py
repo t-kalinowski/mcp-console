@@ -90,7 +90,11 @@ def test_records_python_without_r_dependencies(
         assert "```{python}" in quarto, quarto
         return TranscriptWithCompanions(
             transcript=transcript,
-            companions={"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")},
+            companions={
+                "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+                    str(workspace), "<workspace>"
+                )
+            },
         )
 
 
