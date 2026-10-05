@@ -90,12 +90,12 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
                 invisible(reticulate::py_config())
                 """)
             client.expect(r=r)
-            host_discovery = temporary / "mcp-console-font-discovery"
-            assert host_discovery.is_file()
+            discoveries = list(temporary.rglob("mcp-console-font-discovery"))
+            assert len(discoveries) == 1, discoveries
             persistent_caches = list(host_matplotlib.glob("fontlist-v*.json"))
             assert len(persistent_caches) == 1, persistent_caches
             persistent_cache_bytes = persistent_caches[0].read_bytes()
-            host_discovery.unlink()
+            discoveries[0].unlink()
 
             client.expect(
                 # fmt: python
@@ -169,7 +169,8 @@ def test_prepares_system_fonts_and_protects_host_cache(binary: Path) -> Transcri
             client.expect(
                 "(True, 7.25, True, True, True, True, False, False)\n", python=python
             )
-            assert not list(temporary.rglob("mcp-console-font-discovery"))
+            discoveries = list(temporary.rglob("mcp-console-font-discovery"))
+            assert not discoveries, discoveries
             transcript = client.finish()
             assert (
                 host_matplotlibrc.read_text(encoding="utf-8")

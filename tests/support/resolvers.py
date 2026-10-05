@@ -206,6 +206,7 @@ def resolver_interrupt_permission_environment(
     assert path is not None, "PATH is required"
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
+    environment["UV_TOOL_DIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
     resolver_watches = temporary_path / "resolver-watches"
     resolver_watches.mkdir()
@@ -217,10 +218,21 @@ def resolver_interrupt_permission_environment(
     environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
     environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
-    # The server passes the interposer to its direct resolver owner. That child
-    # removes the loader variable before launching ir or the worker.
+    # Load the hook in the server and resolver owner, including inside the
+    # native sandbox. The owner removes it before launching ir or the worker.
     environment[LOADER_VARIABLE] = str(
         build_interposer(temporary_path, "killpg_denial_interposer")
+    )
+    config = temporary_path / ".agents/console/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "resolver": {
+                    "environment": {LOADER_VARIABLE: environment[LOADER_VARIABLE]}
+                }
+            }
+        )
     )
     return (
         environment,

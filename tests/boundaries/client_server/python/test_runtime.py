@@ -510,6 +510,8 @@ def inherits_matplotlib_config(
         font_cache = (
             cache_root / "matplotlib" if sys.platform == "linux" else matplotlib
         )
+        if execution is SANDBOXED:
+            font_cache = cache_root / "mcp-console/resolver/payload/matplotlib"
         matplotlib.mkdir(parents=True)
         matplotlibrc = matplotlib / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
