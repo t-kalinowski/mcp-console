@@ -4,6 +4,7 @@ This private interface connects one relay to one worker generation, including cu
 [Architecture](ARCHITECTURE.md) explains ownership; [relay protocol](RELAY_PROTOCOL.md) defines the outer transport.
 The schemas in [`src/worker_protocol.rs`](../src/worker_protocol.rs), incremental framing in [`src/jsonl.rs`](../src/jsonl.rs), native endpoints selected by [`src/sideband.rs`](../src/sideband.rs), and executable boundary tests are authoritative.
 The sideband schema is unversioned; custom workers must implement the current contract.
+The sideband evolves in lockstep with the relay; update both endpoints and fixtures together.
 
 ## Launch and transport
 
@@ -130,7 +131,7 @@ The controller also orders interrupt admission against this receipt and withhold
 This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
 Fatal startup failure follows ordinary generation failure and replacement handling.
 Custom workers retain their existing readiness and evaluation contract and do not send this event.
-Default local and target launchers opt into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
+The default local launcher opts into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
 
 The server admits one evaluation or explicit preparation at a time.
 Each ordinary operation has exactly one matching terminal result:
