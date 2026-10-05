@@ -427,7 +427,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
                 frame(
                     {
                         "Open": {
-                            "version": 6,
+                            "version": 7,
                             "build": version,
                             "workspace": str(remote),
                             "selections": {"r_home": None, "python": None},

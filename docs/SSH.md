@@ -84,9 +84,9 @@ Results can commit only after a compatible response and confirmed resolver clean
 A normal installation failure preserves the accepted environment and current worker.
 A missing or malformed result, transport loss, or uncertain cleanup blocks further preparation and replacement; the operation is not replayed.
 The [target envelope](RELAY_PROTOCOL.md#target-launch-envelope) owns version negotiation and framing.
-Launch protocol version 10 distinguishes interrupted bootstrap from other incomplete setup, carries the controller’s enabled-language selection and requires built-in interpreter-bootstrap completion after transport readiness; older executables are rejected before evaluation even when package versions match.
-Preparation protocol version 6 adds required conversion metadata to inspected Python identities.
-Version 5 peers are rejected during negotiation, even when Console package versions match; update the controller and remote executable together.
+Launch protocol version 11 carries captured managed SQL configuration, alongside the controller’s enabled-language selection and interpreter-bootstrap completion contract.
+Preparation protocol version 7 carries the execution host’s DuckDB extension directory in discovery, alongside required Python conversion metadata.
+Previous launch and preparation versions are rejected during negotiation, even when Console package versions match; update the controller and remote executable together.
 
 SSH preparation runs with the remote account's host permissions, independently of the worker's network policy.
 The [local resolver policy](RESOLVER.md) is not forwarded to SSH hosts; remote resolver sandboxing is deferred.

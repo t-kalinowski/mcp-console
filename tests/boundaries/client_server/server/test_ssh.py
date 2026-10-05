@@ -505,7 +505,7 @@ def _peer(binary: Path, mode: str, callback: str = "resolve_r") -> Transcript:
                 "auth": "unconfirmed",
                 "stdout": "unexpected stdout",
                 "incompatible": "incompatible SSH bootstrap",
-                "prior-bootstrap-protocol": "expected protocol 10",
+                "prior-bootstrap-protocol": "expected protocol 11",
                 "lost": "unconfirmed",
                 "resolver": "dynamic environment resolution is unavailable",
             }[mode]

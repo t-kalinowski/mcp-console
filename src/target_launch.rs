@@ -21,10 +21,10 @@ pub(crate) mod runtime;
 #[cfg(unix)]
 pub(crate) mod transfer;
 
-// v11 requires conversion metadata in prepared Python identities.
-// SSH launch stays at v10; its identities use preparation protocol v6.
-pub(crate) const VERSION: u32 = 11;
-pub(crate) const SSH_VERSION: u32 = 10;
+// v12 (SSH v11) carries captured managed SQL configuration in the bootstrap.
+// SSH identities and extension storage use preparation protocol v7.
+pub(crate) const VERSION: u32 = 12;
+pub(crate) const SSH_VERSION: u32 = 11;
 pub(crate) const MAX_BOOTSTRAP: usize = 1024 * 1024;
 pub(crate) const MAX_FRAME: usize = 64 * 1024;
 pub(crate) const HELLO: u8 = 1;

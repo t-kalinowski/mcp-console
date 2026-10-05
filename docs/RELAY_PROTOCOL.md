@@ -28,7 +28,8 @@ The [worker protocol](WORKER_PROTOCOL.md) owns the inherited fd and worker-messa
 ## Target launch envelope
 
 SSH, Docker, and SBX wrap unchanged relay JSONL using [`src/target_launch.rs`](../src/target_launch.rs).
-The current launch version is **11** for Docker/SBX and **10** for SSH, with matching Console package version required independently.
+The current launch version is **12** for Docker/SBX and **11** for SSH, with matching Console package version required independently.
+Version 12 (SSH version 11) carries captured managed SQL provider, database and engine settings in the bootstrap; previous launch versions are rejected even for default SQL settings.
 Version 11 requires conversion metadata in the Python identity returned by Docker/SBX runtime probes; version 10 peers are rejected before decoding those identities.
 Version 10 distinguishes interrupted interpreter bootstrap from other incomplete setup.
 Version 9 carries enabled languages captured on the controller; execution-host ambient values and workload policy cannot replace that selection.
@@ -42,6 +43,7 @@ Controller input begins with a four-byte unsigned big-endian length and at most 
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `version`, `build`                       | Launch version and Console package version.                                                                      |
 | `languages`                              | Controller-selected `r`, `python`, and `sql` booleans; omitted by private launch-only callers means all enabled. |
+| `sql`                                    | Captured managed provider, database, read-only mode and validated engine startup options.                        |
 | `workspace`                              | Existing absolute execution-host directory.                                                                      |
 | `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection.                                                        |
 | `provider`                               | `native` by default, or `compute` for SBX.                                                                       |

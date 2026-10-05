@@ -39,12 +39,12 @@ def complete(id, value, confirmed=True):
 opened = read()["Open"]
 if mode == "capture-open":
     Path(record).with_suffix(".open").write_text(json.dumps(opened))
-assert opened["version"] == 6
+assert opened["version"] == 7
 assert opened["mode"] == "Auto"
 write(
     {
         "Hello": {
-            "version": 3 if mode == "incompatible" else 6,
+            "version": 6 if mode == "incompatible" else 7,
             "build": opened["build"],
         }
     }

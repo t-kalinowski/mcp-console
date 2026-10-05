@@ -1,0 +1,25 @@
+---
+command: ssh-launch
+error: >-
+  incompatible SSH bootstrap: expected protocol 11, Console 0.0.4;
+  received protocol 10, Console 0.0.4
+---
+command: docker-launch
+error: >-
+  incompatible Docker bootstrap: expected protocol 12, Console 0.0.4;
+  received protocol 11, Console 0.0.4
+---
+command: docker-sandbox-launch
+error: >-
+  incompatible Docker Sandbox bootstrap: expected protocol 12, Console
+  0.0.4; received protocol 11, Console 0.0.4
+---
+command: docker-probe
+error: >-
+  incompatible Docker bootstrap: expected protocol 12, Console 0.0.4;
+  received protocol 11, Console 0.0.4
+---
+command: docker-sandbox-probe
+error: >-
+  incompatible Docker Sandbox bootstrap: expected protocol 12, Console
+  0.0.4; received protocol 11, Console 0.0.4

@@ -66,7 +66,7 @@ esac
             send(
                 {
                     "Open": {
-                        "version": 6,
+                        "version": 7,
                         "build": build,
                         "workspace": "",
                         "selections": {"r_home": None, "python": None},
@@ -76,7 +76,7 @@ esac
             )
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"version": 6, "build": build}}, hello
+            assert hello == {"Hello": {"version": 7, "build": build}}, hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
@@ -183,7 +183,7 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                 json.dumps(
                     {
                         "Open": {
-                            "version": 6,
+                            "version": 7,
                             "build": build,
                             "workspace": "",
                             "selections": {"r_home": None, "python": None},
@@ -198,7 +198,7 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
                 json.loads(line)
                 for line in read_lines(process.stdout, 2, "preparation open")
             ]
-            assert opened[0] == {"Hello": {"version": 6, "build": build}}, opened
+            assert opened[0] == {"Hello": {"version": 7, "build": build}}, opened
             assert opened[1]["Completed"]["confirmed"] is True, opened
             process.stdin.write(
                 json.dumps(

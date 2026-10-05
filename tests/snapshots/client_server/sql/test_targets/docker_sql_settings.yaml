@@ -1,0 +1,6 @@
+---
+prepared_preinstalled_sql_settings: true
+captured_restart_settings: true
+providers:
+  - r
+  - python

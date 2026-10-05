@@ -53,7 +53,7 @@ if "Open" in bootstrap:
         sys.stdout.buffer.write(struct.pack(">I", len(body)) + body)
         sys.stdout.buffer.flush()
 
-    preparation_frame({"Hello": {"version": 6, "build": bootstrap["Open"]["build"]}})
+    preparation_frame({"Hello": {"version": 7, "build": bootstrap["Open"]["build"]}})
     if mode in {"discovery-diagnostics", "discovery-image"}:
         print("preparation detail", file=sys.stderr, flush=True)
         with (log.parent / "discovery-started").open("wb", buffering=0) as signal:

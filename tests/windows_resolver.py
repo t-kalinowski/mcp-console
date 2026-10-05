@@ -43,7 +43,7 @@ class Resolver:
         self.send(
             {
                 "Open": {
-                    "version": 6,
+                    "version": 7,
                     "build": build,
                     "workspace": "",
                     "selections": {},

@@ -549,7 +549,7 @@ def test_rejects_prior_python_identity_protocol_before_runtime_decode(
             assert response["isError"], response
             error = last_result_text(client)
             assert (
-                "incompatible Docker Sandbox bootstrap: expected protocol 11" in error
+                "incompatible Docker Sandbox bootstrap: expected protocol 12" in error
             ), error
             assert "received protocol 10" in error, error
             assert "missing field" not in error, error

@@ -116,7 +116,7 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             while b'"completed"' not in data:
                 tag, body = read_frame(process.stdout)
                 if tag == 1:
-                    assert json.loads(body)["version"] == 10
+                    assert json.loads(body)["version"] == 11
                 else:
                     assert tag == 2, (tag, body)
                     data.extend(body)

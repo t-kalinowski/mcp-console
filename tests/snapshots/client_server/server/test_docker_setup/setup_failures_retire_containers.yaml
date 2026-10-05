@@ -14,9 +14,11 @@ container_absent: true
 startup: |-
   Docker command failed with exit status: 1: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: <controller>/missing-bind
   ; Docker container '<owned container>' (creation ID unavailable) retirement is unconfirmed: container creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
-  Docker command failed with exit status: 1
+  Docker command failed with exit status: 1; Docker command failed with exit status: 1: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: <controller>/missing-bind
+  ; Docker container '<owned container>' (creation ID unavailable) retirement is unconfirmed: container creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
 stderr: |
-  Docker command failed with exit status: 1
+  Docker command failed with exit status: 1; Docker command failed with exit status: 1: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: <controller>/missing-bind
+  ; Docker container '<owned container>' (creation ID unavailable) retirement is unconfirmed: container creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
 ---
 rejected_before_worker_startup: runtime
 container_absent: true
@@ -54,10 +56,10 @@ stderr: |
 rejected_before_worker_startup: compatibility
 container_absent: true
 startup: >-
-  incompatible Docker bootstrap: expected protocol 11, Console 0.0.4;
+  incompatible Docker bootstrap: expected protocol 12, Console 0.0.4;
   received protocol 999, Console incompatible
 stderr: >
-  incompatible Docker bootstrap: expected protocol 11, Console 0.0.4;
+  incompatible Docker bootstrap: expected protocol 12, Console 0.0.4;
   received protocol 999, Console incompatible
 ---
 rejected_before_worker_startup: native_environment

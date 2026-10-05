@@ -65,14 +65,14 @@ def test_local_resolver_policy_preserves_ssh_open_protocol(binary: Path):
                 "selections",
                 "mode",
             }, opened
-            assert opened["version"] == 6
+            assert opened["version"] == 7
             assert opened["selections"] == {
                 "r_home": "/selected/R",
                 "python": "/selected/python",
             }
         return [
             {
-                "version": 6,
+                "version": 7,
                 "runtime_selections_preserved": True,
                 "local_policy_not_forwarded": True,
             }
