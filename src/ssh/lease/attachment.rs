@@ -116,15 +116,14 @@ impl Drop for Link {
 }
 
 pub(super) fn connect(
-    session: &crate::ssh::Session,
+    target: &crate::settings::Target,
     request: &Request,
     secret: &Secret,
     deadline: Instant,
     cancellation: std::io::PipeReader,
 ) -> io::Result<Link> {
-    let mut command = session
-        .ssh_command(&request.hello.operation)
-        .map_err(invalid)?;
+    let mut command =
+        crate::ssh::ssh_command(target, &request.hello.operation).map_err(invalid)?;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

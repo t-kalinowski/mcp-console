@@ -95,7 +95,7 @@ def matching_lines(
         for line_number, line in candidates:
             if forbidden.search(line):
                 matches.append(
-                    f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}"
+                    f"{path.relative_to(ROOT).as_posix()}:{line_number}: {line.strip()}"
                 )
     return list(dict.fromkeys(matches))
 
@@ -105,10 +105,10 @@ class SandboxProcessBoundaryTests(unittest.TestCase):
         host_sources = [
             path
             for path in rust_sources(SOURCE_ROOT)
-            # The remote CLI launch helper also materializes application policy.
+            # The target CLI launch helper also materializes application policy.
             if path.relative_to(SOURCE_ROOT).parts[0]
             not in {"main.rs", "cli.rs", "sandbox.rs", "sandbox"}
-            and path.relative_to(SOURCE_ROOT).as_posix() != "ssh/launch.rs"
+            and path.relative_to(SOURCE_ROOT).as_posix() != "target_launch/launch.rs"
         ]
         self.assertTrue(host_sources, "no Rust source files found")
         violations = matching_lines(
@@ -230,7 +230,7 @@ class ArchitectureCheckTests(unittest.TestCase):
             ),
             ("server.rs", "use crate::{sandbox, server};", "depends on"),
             (
-                "worker_client/unix.rs",
+                "worker_client/process.rs",
                 "use super::{sandbox as private};",
                 "depends on",
             ),

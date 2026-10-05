@@ -19,9 +19,8 @@ send:
     import matplotlib
     import matplotlib.pyplot as plt
 
-    assert (
-        Path(matplotlib.matplotlib_fname()).resolve()
-        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve()
+    assert Path(matplotlib.matplotlib_fname()).samefile(
+        os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]
     )
     assert matplotlib.rcParams["lines.linewidth"] == 7.25
 
@@ -105,7 +104,6 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 467, in _mcp_console_eval_cell
           File "<mcp-console:python:e5>", line 5, in <module>
         ValueError: cell failed
     - type: image
@@ -139,7 +137,6 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 426, in _mcp_console_collect_plots
           File "<mcp-console:python:e7>", line 2, in fail_plot_capture
         RuntimeError: plot render failed
     - type: image

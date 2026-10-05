@@ -2,16 +2,19 @@
 
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, requires
 from support.assertions import last_tool_text
-from support.checkpoints import wait_for_worker_file
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import build_interposer
 from support.normalization import (
     code,
     normalize_duckdb_progress,
@@ -19,9 +22,12 @@ from support.normalization import (
 )
 from support.r import r_test_environment
 from support.records import Transcript
+from support.previews import assert_preview, cell_text, normalize_preview_paths
+from support.resolvers import normalize_duckdb_resolution_error
 from support.suites import run_this_suite
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_uses_default_duckdb_extensions(
     binary: Path, execution: Execution
@@ -37,6 +43,19 @@ def test_uses_default_duckdb_extensions(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
+        inspected = client.send(requirements={"action": "get"})
+        assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+            "icu",
+            "json",
+            "sqlite",
+        ]
+        with sqlite3.connect(workspace / "audit.sqlite") as database:
+            database.execute("CREATE TABLE events (payload TEXT)")
+            database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
+        client.send(sql="SET autoinstall_known_extensions = false")
+        client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
+        client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
+        assert '"42"' in normalize_trailing_spaces(client), last_tool_text(client)
 
         sql = code(r"""
             SELECT
@@ -66,6 +85,7 @@ def test_uses_default_duckdb_extensions(
         return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_restart_adds_r_and_duckdb_requirements(
     binary: Path, execution: Execution
@@ -102,7 +122,9 @@ def test_restart_adds_r_and_duckdb_requirements(
         assert (
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
@@ -142,6 +164,7 @@ def test_restart_adds_r_and_duckdb_requirements(
         return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_and_loads_duckdb_extensions(
     binary: Path, execution: Execution
@@ -191,7 +214,9 @@ def test_prepares_and_loads_duckdb_extensions(
             'Failed to download extension "not_a_real_duckdb_extension"' in failure
         ), failure
         assert "unknown core DuckDB extension" not in failure, failure
-        result["content"][0]["text"] = duckdb_native_failure(failure)
+        result["content"][0]["text"] = normalize_duckdb_resolution_error(
+            failure, "not_a_real_duckdb_extension"
+        )
 
         client.send(
             sql=(
@@ -266,6 +291,7 @@ def test_prepares_and_loads_duckdb_extensions(
         return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sends_sql_cell_with_initial_requirements(
     binary: Path, execution: Execution
@@ -281,17 +307,22 @@ def test_sends_sql_cell_with_initial_requirements(
         FROM duckdb_extensions()
         WHERE extension_name = 'fts' AND loaded
         """)
-    client.send(sql=sql, requirements={"duckdb": ["fts"]})
-    assert last_tool_text(client).splitlines()[-1].split() == ["1", "1"]
+    client.expect(
+        "# A tibble: 1 × 1\n   loaded\n  <int64>\n1       1\n",
+        sql=sql,
+        requirements={"duckdb": ["fts"]},
+    )
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_queries_a_ragnar_store_created_in_r(
     binary: Path, execution: Execution
 ) -> Transcript:
     environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
+    # These R/SQL operations do not use ragnar's Python document converters.
+    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
     client = McpClient(
@@ -316,6 +347,7 @@ def test_queries_a_ragnar_store_created_in_r(
 
     # fmt: r
     r = code(r"""
+        managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
         stopifnot(
           identical(
             DBI::dbGetQuery(
@@ -324,7 +356,7 @@ def test_queries_a_ragnar_store_created_in_r(
             )$value,
             42L
           ),
-          identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+          identical(dirname(find.package("ragnar")), .libPaths()[[managed_index]])
         )
         embed_banana <- function(x) {
           out <- matrix(1, nrow = length(x), ncol = 2L)
@@ -366,6 +398,7 @@ def test_queries_a_ragnar_store_created_in_r(
           )
         ))
         invisible(DBI::dbExecute(connection, "USE knowledge"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
         writeLines("ragnar store ready")
         """)
     client.send(r=r)
@@ -415,13 +448,14 @@ def test_queries_a_ragnar_store_created_in_r(
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
     environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
+    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
     temporary = tempfile.TemporaryDirectory()
     workspace = Path(temporary.name)
     client = McpClient(
@@ -467,6 +501,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
           )
           ragnar::ragnar_store_insert(store, chunks)
         }
+        stopifnot(!reticulate::py_available(initialize = FALSE))
         writeLines("created store under the worker tempdir")
         """)
     client.send(r=r)
@@ -479,6 +514,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     )
     assert last_tool_text(client) == "[prepared]"
 
+    # fmt: r
     r = code(r"""
         stopifnot(
           DBI::dbIsValid(store@con),
@@ -492,6 +528,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "index built after extension preparation\n"
     )
 
+    # fmt: r
     r = code(r"""
         creator_result <- ragnar::ragnar_retrieve(
           store,
@@ -502,13 +539,15 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "beta.md" in preview and "Bananas are yellow fruit" in preview
-    assert "alpha.md" not in preview
+    assert "beta.md" in preview and "Bananas are yellow fruit" in preview, preview
+    assert "alpha.md" not in preview, preview
 
+    # fmt: r
     r = code(r"""
+        # Match the writable instance retained by the creator connection.
         reader <- ragnar::ragnar_store_connect(
           store_path,
-          read_only = TRUE
+          read_only = FALSE
         )
         reader_result <- ragnar::ragnar_retrieve(
           reader,
@@ -519,8 +558,8 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         """)
     client.send(r=r)
     preview = normalize_duckdb_progress(client)
-    assert "alpha.md" in preview and "Apples are red fruit" in preview
-    assert "beta.md" not in preview
+    assert "alpha.md" in preview and "Apples are red fruit" in preview, preview
+    assert "beta.md" not in preview, preview
 
     sql = code(r"""
         SELECT origin FROM chunks ORDER BY origin
@@ -530,6 +569,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     assert "Binder Error:" in output
     assert 'Referenced column "origin" not found' in output
 
+    # fmt: r
     r = code(r"""
         writeLines(paste(
           "R chunks columns:",
@@ -545,6 +585,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     assert "Catalog Error:" in output
     assert "Table with name chunks does not exist" in output
 
+    # fmt: r
     r = code(r"""
         sql_connection(reader@con)
         """)
@@ -553,6 +594,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
         "Error in sql_connection(reader@con) : unused argument (reader@con)\n"
     )
 
+    # fmt: r
     r = code(r"""
         connection <- sql_connection()
         stopifnot(
@@ -623,6 +665,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_evaluates_queries_in_a_persistent_catalog(
     binary: Path, execution: Execution
@@ -665,12 +708,16 @@ def test_evaluates_queries_in_a_persistent_catalog(
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_path = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment["TMPDIR"] = temporary_directory
+        environment["MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"] = str(
+            build_interposer(temporary_path, "sql_interrupt_checkpoint")
+        )
         client = McpClient(
             binary,
             execution.serve(),
@@ -678,20 +725,20 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             current_directory=temporary_path,
         )
         passed = False
+        started = None
         try:
             client.initialize_and_list_tools()
+            # Place the FIFO in the worker's writable temporary directory.
             # fmt: r
             r = code(r"""
-                invisible(DBI::dbExecute(
-                  sql_connection(),
-                  "SET VARIABLE sql_interrupt_marker = ?",
-                  params = list(file.path(tempdir(), "sql-interrupt-started"))
-                ))
+                interrupt_started <- file.path(tempdir(), "sql-interrupt-started")
+                cat(interrupt_started, "\n", sep = "")
                 """)
             client.send(r=r)
-            output = last_tool_text(client)
-            assert output == "[done]", repr(output)
-
+            started = FifoCheckpoint.create(Path(last_tool_text(client).strip()))
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                "<SQL interrupt checkpoint>\n"
+            )
             sql = code(r"""
                 CREATE TABLE interrupt_state AS
                 SELECT CAST(42 AS INTEGER) AS answer
@@ -699,17 +746,34 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             client.send(sql=sql)
             assert last_tool_text(client) == "[done]"
 
+            # fmt: r
+            r = code(r"""
+                dyn.load(Sys.getenv("MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"))
+                invisible(DBI::dbExecute(sql_connection(), "SET threads = 1"))
+                invisible(DBI::dbExecute(sql_connection(), "SET enable_progress_bar = true"))
+                invisible(DBI::dbExecute(sql_connection(), "SET progress_bar_time = 0"))
+                query_started <- FALSE
+                options(duckdb.progress_display = function(percentage) {
+                  if (!query_started && percentage < 100) {
+                    query_started <<- TRUE
+                    invisible(.C(
+                      "wait_for_sql_interrupt",
+                      interrupt_started
+                    ))
+                  }
+                })
+                """)
+            client.send(r=r)
+            assert last_tool_text(client) == "[done]"
+
             sql = code(r"""
-                COPY (SELECT 1) TO (getvariable('sql_interrupt_marker'));
-                SELECT sleep_ms(60000) AS waited
+                SELECT sum(i) AS total FROM range(1000000000000) AS t(i)
                 """)
             client.send(sql=sql, timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "sql-interrupt-started",
-                client,
-            )
+            # A marker in a preceding statement can race DuckDB's reset of its
+            # interrupt flag. Hold this query until its active handler has run.
+            started.wait("DuckDB query reached its progress callback")
             result = client.send(
                 control="interrupt",
                 timeout_ms=30_000,
@@ -728,12 +792,16 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
         finally:
             if not passed:
                 stop_client(client)
+            if started is not None:
+                started.close()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         measurements <- data.frame(
           label = c("a", "b"),
@@ -755,12 +823,14 @@ def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sql_views_follow_rebound_r_data_frames(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         measurements <- data.frame(value = 2L)
         """)
@@ -774,6 +844,7 @@ def test_sql_views_follow_rebound_r_data_frames(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         measurements <- data.frame(value = 7L)
         """)
@@ -789,12 +860,14 @@ def test_sql_views_follow_rebound_r_data_frames(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_prefers_catalog_relations_over_r_data_frames(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         values <- data.frame(origin = "r")
         """)
@@ -812,12 +885,14 @@ def test_prefers_catalog_relations_over_r_data_frames(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_scans_r_bindings_named_like_bridge_state(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         connection <- data.frame(name = "connection")
         source <- data.frame(name = "source")
@@ -838,6 +913,7 @@ def test_scans_r_bindings_named_like_bridge_state(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_exposes_catalog_as_lazy_r_relations(
     binary: Path, execution: Execution
@@ -852,21 +928,25 @@ def test_exposes_catalog_as_lazy_r_relations(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         connection <- sql_connection()
         table_values <- dplyr::tbl(connection, "sql_values")
         lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
           dplyr::mutate(doubled = value * 2L)
         cat(
-          "same connection: ", identical(connection, sql_connection()), "\n",
-          "lazy table: ", inherits(table_values, "tbl_lazy"), "\n",
-          "lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n",
+          c("same connection: ", identical(connection, sql_connection()), "\n"),
+          c("lazy table: ", inherits(table_values, "tbl_lazy"), "\n"),
+          c("lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n"),
           sep = ""
         )
         """)
     client.send(r=r)
     assert last_tool_text(client) == (
-        "same connection: TRUE\nlazy table: TRUE\nlazy view: TRUE\n"
+        """same connection: TRUE
+lazy table: TRUE
+lazy view: TRUE
+"""
     )
 
     sql = code(r"""
@@ -875,6 +955,7 @@ def test_exposes_catalog_as_lazy_r_relations(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         values <- lazy_values |>
           dplyr::arrange(label) |>
@@ -882,10 +963,17 @@ def test_exposes_catalog_as_lazy_r_relations(
         writeLines(paste(values$label, values$value, values$doubled, sep = ":"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "a:2:4\nb:5:10\nc:11:22\n"
+    assert (
+        last_tool_text(client)
+        == """a:2:4
+b:5:10
+c:11:22
+"""
+    )
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_connection_helper_after_clearing_r_workspace(
     binary: Path,
@@ -900,6 +988,7 @@ def test_keeps_connection_helper_after_clearing_r_workspace(
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
+    # fmt: r
     r = code(r"""
         rm(list = ls())
         values <- DBI::dbGetQuery(
@@ -913,6 +1002,7 @@ def test_keeps_connection_helper_after_clearing_r_workspace(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -935,6 +1025,7 @@ def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcr
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_avoids_private_preview_name_collisions(
     binary: Path, execution: Execution
@@ -965,6 +1056,7 @@ def test_avoids_private_preview_name_collisions(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_utf8_preview_in_c_locale(
     binary: Path, execution: Execution
@@ -995,12 +1087,14 @@ def test_preserves_utf8_preview_in_c_locale(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_previews_schema_and_exact_values(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # fmt: r
     r = code(r"""
         invisible(options(
           width = 20L,
@@ -1085,6 +1179,7 @@ def test_previews_schema_and_exact_values(
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -1110,6 +1205,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
@@ -1151,9 +1247,10 @@ def test_bounds_query_previews_without_materializing_results(
         """)
     client.send(sql=sql, timeout_ms=1000)
     large = last_tool_text(client)
+    normalize_preview_paths(client)
     transcript = client.finish()
 
-    assert len(wide.encode("utf-8")) <= 12 * 1024
+    assert len(wide.encode("utf-8")) <= 8 * 1024
     assert "[additional rows omitted]" in wide
     assert "[2 additional columns omitted]" in wide
     assert "[cell values truncated to 160 characters]" in wide
@@ -1161,11 +1258,12 @@ def test_bounds_query_previews_without_materializing_results(
     assert f'"{"z" * 159}…"' in long_cell
     assert "[cell values truncated to 160 characters]" in long_cell
     assert large != "\n[running; poll with an empty send]"
-    assert len(large.encode("utf-8")) <= 12 * 1024
+    assert len(large.encode("utf-8")) <= 8 * 1024
     assert "[additional rows omitted]" in large
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_repeated_previews_deterministic(
     binary: Path, execution: Execution
@@ -1196,17 +1294,20 @@ def test_keeps_repeated_previews_deterministic(
         SELECT * FROM wide_values
         """)
     outputs = []
-    for _ in range(3):
+    retained = []
+    for call_id in range(2, 5):
         client.send(sql=sql)
-        outputs.append(last_tool_text(client))
-    transcript = client.finish()
+        output = last_tool_text(client)
+        raw = cell_text(client, call_id)
+        assert_preview(output, raw)
+        retained.append(raw)
+        outputs.append(output.replace(f"call-{call_id:06}.log", "call-<cell>.log"))
 
+    assert retained[0] == retained[1] == retained[2]
     assert outputs[0] == outputs[1] == outputs[2]
-    assert len(outputs[0].encode("utf-8")) <= 12 * 1024
     assert outputs[0].startswith("# A tibble:")
-    for entry in transcript[-3:]:
-        entry["result"]["content"][0]["text"] = "<same bounded preview>\n"
-    return transcript
+    normalize_preview_paths(client)
+    return client.finish()
 
 
 def normalize_duckdb_extension_error(client: McpClient) -> str:
@@ -1226,15 +1327,6 @@ def normalize_duckdb_extension_error(client: McpClient) -> str:
     assert (download_urls, troubleshooting_urls) == (1, 1), output
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return output
-
-
-def duckdb_native_failure(failure: str) -> str:
-    native_failure = next(
-        line.strip().removeprefix("! ")
-        for line in failure.splitlines()
-        if "Failed to download extension" in line
-    )
-    return native_failure.partition(' at URL "')[0]
 
 
 if __name__ == "__main__":

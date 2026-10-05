@@ -2,27 +2,6 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: |
-    invisible(suppressMessages(base::trace(
-      "py_set_attr",
-      tracer = quote({
-        if (
-          identical(name, "operation") &&
-            identical(value, "configure_import_resolution")
-        ) {
-          invisible(readline("python runtime configuring> "))
-        }
-      }),
-      print = FALSE,
-      where = asNamespace("reticulate")
-    )))
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   python: "42"
 result:
   content:
@@ -38,25 +17,17 @@ send:
 result:
   content:
     - type: text
-      text: ""
-  isError: false
----
-send:
-  r: |
-    invisible(suppressMessages(base::untrace(
-      "py_set_attr",
-      where = asNamespace("reticulate")
-    )))
-    length(getHook("reticulate::matplotlib.pyplot::load"))
-result:
-  content:
-    - type: text
       text: |
-        [1] 1
+        Traceback (most recent call last):
+          File "<string>", line 929, in _mcp_console_configure_module_defaults
+          File "<string>", line 887, in apply
+          File "<runtime setup checkpoint>", line 9, in configuration_checkpoint
+          File "<string>", line 50, in _console_input
+        KeyboardInterrupt
   isError: false
 ---
 send:
-  python: "42"
+  python: assert id(runtime_identity) == runtime_identity_id; 42
 result:
   content:
     - type: text

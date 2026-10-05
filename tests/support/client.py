@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from queue import SimpleQueue
+from threading import Thread
 from typing import Any, Self, TextIO
 
 from support.records import ToolResult, Transcript, TranscriptEntry
@@ -23,12 +25,43 @@ class TextReader:
         self.buffer = bytearray()
         self.eof = False
         self.closed = False
+        self.reader: Thread | None = None
+        if os.name == "nt" and not isinstance(stream, socket.socket):
+            # Winsock cannot select anonymous pipes. Blocking readers announce
+            # complete chunks through sockets so transport deadlines stay event-driven.
+            self.ready, self.wake = socket.socketpair()
+            self.chunks: SimpleQueue[bytes | OSError] = SimpleQueue()
+
+            def read_pipe() -> None:
+                while not self.closed:
+                    try:
+                        chunk = os.read(stream.fileno(), 64 * 1024)
+                    except OSError as error:
+                        chunk = error
+                    self.chunks.put(chunk)
+                    try:
+                        self.wake.sendall(b"1")
+                    except OSError:
+                        return
+                    if not chunk or isinstance(chunk, OSError):
+                        return
+
+            self.reader = Thread(target=read_pipe, daemon=True)
+            self.reader.start()
 
     def fileno(self) -> int:
-        return self.stream.fileno()
+        return (self.ready if self.reader is not None else self.stream).fileno()
 
     def fill(self) -> None:
-        chunk = os.read(self.fileno(), 64 * 1024)
+        if self.reader is not None:
+            self.ready.recv(1)
+            chunk = self.chunks.get()
+            if isinstance(chunk, OSError):
+                raise chunk
+        elif isinstance(self.stream, socket.socket):
+            chunk = self.stream.recv(64 * 1024)
+        else:
+            chunk = os.read(self.fileno(), 64 * 1024)
         self.buffer.extend(chunk)
         self.eof = not chunk
 
@@ -55,9 +88,35 @@ class TextReader:
         return result
 
     def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        if self.reader is not None:
+            self.ready.close()
+            self.wake.close()
+            if self.reader.is_alive():
+                import ctypes
+                from ctypes import wintypes
+
+                kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                kernel.OpenThread.argtypes = [
+                    wintypes.DWORD,
+                    wintypes.BOOL,
+                    wintypes.DWORD,
+                ]
+                kernel.OpenThread.restype = wintypes.HANDLE
+                kernel.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+                kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+                handle = kernel.OpenThread(1, False, self.reader.native_id)
+                if handle:
+                    try:
+                        kernel.CancelSynchronousIo(handle)
+                    finally:
+                        kernel.CloseHandle(handle)
+            self.reader.join(timeout=SERVER_REAP_SECONDS)
+            assert not self.reader.is_alive(), "pipe reader did not retire"
         self.stream.close()
         self.eof = True
-        self.closed = True
 
 
 class McpClient:
@@ -76,15 +135,34 @@ class McpClient:
         pass_fds: tuple[int, ...] = (),
         response_timeout: float = 600,
         shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS,
+        record_in_project: bool = True,
+        use_home_configuration: bool = False,
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
+        if os.name == "nt" and environment is not None and "TMPDIR" in environment:
+            environment = environment | {
+                "TEMP": environment["TMPDIR"],
+                "TMP": environment["TMPDIR"],
+            }
         self.temporary_directory = (
             tempfile.TemporaryDirectory() if current_directory is None else None
         )
         if current_directory is None:
             assert self.temporary_directory is not None
             current_directory = Path(self.temporary_directory.name)
+        self.console_home: tempfile.TemporaryDirectory[str] | None = None
+        if not use_home_configuration:
+            self.console_home = tempfile.TemporaryDirectory()
+            environment = {
+                **(os.environ if environment is None else environment),
+                "MCP_CONSOLE_HOME": self.console_home.name,
+            }
+        if record_in_project:
+            (current_directory / ".agents").mkdir(
+                mode=0o700, parents=True, exist_ok=True
+            )
+            (current_directory / ".agents/console").mkdir(mode=0o700, exist_ok=True)
         process = subprocess.Popen(
             [binary, *arguments],
             env=environment,
@@ -112,6 +190,19 @@ class McpClient:
 
     def send(self, **arguments: Any) -> ToolResult:
         return self._call_tool("send", **arguments)
+
+    def expect(self, expected: str = "[done]", **arguments: Any) -> ToolResult:
+        """Collect exact successful text after one submission."""
+        from support.assertions import wait_for_evaluation_output
+
+        wait_for_evaluation_output(
+            self,
+            expected,
+            "expected send output",
+            completion_timeout_seconds=self.response_timeout,
+            **arguments,
+        )
+        return self.transcript[-1]["result"]
 
     def __enter__(self) -> Self:
         return self
@@ -246,6 +337,14 @@ class McpClient:
         self.notify("notifications/initialized")
         self.request("tools/list")
 
+    def startup_error(self) -> str:
+        """Complete MCP discovery and observe a failed runtime through send."""
+        self.initialize_and_list_tools()
+        result = self.send(requirements={"action": "get"})
+        assert result["isError"], result
+        assert all(part["type"] == "text" for part in result["content"]), result
+        return "".join(part["text"] for part in result["content"])
+
     def _start_tool_call(self, name: str, **arguments: Any) -> TranscriptEntry:
         return self.start_request(
             "tools/call",
@@ -268,13 +367,15 @@ class McpClient:
         assert standard_error == "", standard_error
         return transcript
 
-    def finish_with_standard_error(self) -> tuple[Transcript, str]:
+    def finish_with_standard_error(
+        self, *, expected_exit_status: int = 0
+    ) -> tuple[Transcript, str]:
         deadline = self._cleanup_deadline()
         try:
             self._shutdown(deadline - SERVER_REAP_SECONDS)
             extra_output = self.stdout.read()
             standard_error = self.stderr.read()
-            assert self.process.returncode == 0, standard_error
+            assert self.process.returncode == expected_exit_status, standard_error
             assert extra_output == "", f"unexpected extra output: {extra_output}"
             return self.transcript, standard_error
         finally:
@@ -310,6 +411,8 @@ class McpClient:
             stream.close()
         if self.temporary_directory is not None:
             self.temporary_directory.cleanup()
+        if self.console_home is not None:
+            self.console_home.cleanup()
 
     def close(self) -> None:
         """Close input, allow staged retirement, then kill only the server PID."""

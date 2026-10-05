@@ -1,6 +1,15 @@
 ---
 !same-as MCP initialization for this execution mode
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
 send:
   requirements:
     python:
@@ -23,7 +32,7 @@ send:
     private_probe.write_text("ok", encoding="utf-8")
 
     (
-        config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+        config.samefile(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]),
         matplotlib.rcParams["lines.linewidth"],
         private_probe.read_text(encoding="utf-8") == "ok",
     )

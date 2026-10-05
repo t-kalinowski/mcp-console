@@ -364,6 +364,41 @@ def run_empty_raw_close_between_redraws(relay: ScriptedRelay) -> None:
     )
 
 
+def run_raw_close_between_utf8_fragments(relay: ScriptedRelay) -> None:
+    closed = (
+        "stdout"
+        if os.environ[SCENARIO_ENV] == "stdout_close_between_utf8_fragments"
+        else "stderr"
+    )
+    pending = "stderr" if closed == "stdout" else "stdout"
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send_batch(
+        [
+            {
+                "kind": f"{pending}_bytes",
+                "data": base64.b64encode(b"\xe2").decode("ascii"),
+            },
+            {"kind": f"{closed}_closed"},
+            {
+                "kind": f"{pending}_bytes",
+                "data": base64.b64encode(b"\x82\xac\n").decode("ascii"),
+            },
+        ]
+    )
+    relay.complete()
+    command = relay.receive()
+    assert command.get("kind") == "shutdown", command
+    relay.send_batch(
+        [
+            {"kind": "shutdown_started"},
+            {"kind": f"{pending}_closed"},
+            {"kind": "worker_sideband_closed"},
+            {"kind": "worker_exited", "code": 0},
+        ]
+    )
+
+
 def run_stdin(relay: ScriptedRelay) -> None:
     relay.ready()
     relay.expect({"kind": "stdin", "data": "answer\n"})
@@ -395,11 +430,15 @@ def run_initial_requirements_stdin_idempotent(relay: ScriptedRelay) -> None:
 
 
 def run_live_r_requirements_then_evaluate(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
+    relay.make_checkpoint(RELEASE_NAME)
     relay.ready()
     command = relay.receive()
     assert command.get("kind") == "prepare_r", command
     relay.send({"kind": "r_prepared", "library": command["library"]})
     relay.expect(EVALUATION)
+    relay.notify_checkpoint(IDLE_R_EVALUATION_RECEIVED_NAME)
+    relay.wait_for_checkpoint(RELEASE_NAME)
     relay.complete()
     relay.retire()
 
@@ -1199,10 +1238,105 @@ def run_startup_output(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_preview_raw_prelude(relay: ScriptedRelay) -> None:
+    raw = b"idle head\n" + b"s" * 20000 + b"\xe2"
+    relay.send({"kind": "stdout_bytes", "data": base64.b64encode(raw).decode("ascii")})
+    relay.ready()
+    relay.expect(EVALUATION)
+    relay.send(
+        {
+            "kind": "console_output",
+            "data": "cell head\n" + "x" * 32768 + "\ncell tail\n",
+        }
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_preview_raw(relay: ScriptedRelay) -> None:
+    relay.ready()
+    relay.expect(EVALUATION)
+    for chunk in (
+        b"raw head\n\xe2",
+        b"\x82\xac",
+        b"\xff" * 20000,
+        b"\xe2",
+        b"\x82\xac raw tail\n",
+    ):
+        relay.send(
+            {"kind": "stdout_bytes", "data": base64.b64encode(chunk).decode("ascii")}
+        )
+    relay.complete()
+    relay.retire()
+
+
+def run_preview_direct_allocations(relay: ScriptedRelay) -> None:
+    relay.ready()
+    while True:
+        command = relay.receive()
+        if command["kind"] == "shutdown":
+            relay.retire(command)
+            return
+        assert command["kind"] == "evaluate", command
+        kind = command["source"]
+        assert kind in {"console_output", "stdout"}, command
+        for _ in range(512):
+            relay.send({"kind": kind, "data": "ab" * 8192})
+        relay.send({"kind": kind, "data": "\nfinal diagnostic\n"})
+        relay.complete()
+
+
+def run_partial_utf8_polls(relay: ScriptedRelay) -> None:
+    directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+    release = directory / "partial-release"
+    processed = directory / "partial-processed"
+    relay.ready()
+    relay.expect(EVALUATION)
+    for stream, data in (
+        ("stdout", b"A\xe2"),
+        ("stdout", b"\x82\xacB\xe2"),
+        ("stderr", b"C\xf0\x9f"),
+        ("stdout", b" D\xe2"),
+    ):
+        with release.open("rb", buffering=0) as checkpoint:
+            assert checkpoint.read(1) == b"1"
+        relay.send(
+            {"kind": f"{stream}_bytes", "data": base64.b64encode(data).decode("ascii")}
+        )
+        relay.send(RESOLVE_PYTHON_VERSION)
+        relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
+        with processed.open("wb", buffering=0) as checkpoint:
+            assert checkpoint.write(b"1") == 1
+    with release.open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
+    relay.complete()
+    relay.expect(EVALUATION)
+    relay.send(
+        {"kind": "stdout_bytes", "data": base64.b64encode(b"\x82\xac").decode("ascii")}
+    )
+    relay.complete()
+    relay.retire()
+
+
+def run_partial_utf8_completion(relay: ScriptedRelay) -> None:
+    relay.ready()
+    for kind in ("stdout_bytes", "stderr_bytes"):
+        for chunk in (b"\xe2", b"\x82\xac"):
+            relay.expect(EVALUATION)
+            relay.send({"kind": kind, "data": base64.b64encode(chunk).decode("ascii")})
+            relay.complete()
+    relay.retire()
+
+
 def main() -> None:
     scenarios = {
         "ready": run_ready,
         "startup_output": run_startup_output,
+        "preview_raw": run_preview_raw,
+        "preview_direct_allocations": run_preview_direct_allocations,
+        "partial_utf8_polls": run_partial_utf8_polls,
+        "preview_raw_prelude": run_preview_raw_prelude,
+        "partial_utf8_completion": run_partial_utf8_completion,
         "evaluate": run_evaluate,
         "raw_output": run_raw_output,
         "split_terminal_redraws": run_split_terminal_redraws,
@@ -1210,6 +1344,8 @@ def main() -> None:
         "interleaved_stream_redraws": run_interleaved_stream_redraws,
         "raw_malformed_redraw": run_raw_malformed_redraw,
         "empty_raw_close_between_redraws": run_empty_raw_close_between_redraws,
+        "stdout_close_between_utf8_fragments": run_raw_close_between_utf8_fragments,
+        "stderr_close_between_utf8_fragments": run_raw_close_between_utf8_fragments,
         "stdin": run_stdin,
         "initial_requirements_stdin_idempotent": (
             run_initial_requirements_stdin_idempotent

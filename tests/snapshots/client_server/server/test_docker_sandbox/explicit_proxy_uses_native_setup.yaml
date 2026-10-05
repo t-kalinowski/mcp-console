@@ -1,0 +1,3 @@
+---
+explicit_proxy_uses_native_setup: true
+native_failure_is_not_downgraded: true

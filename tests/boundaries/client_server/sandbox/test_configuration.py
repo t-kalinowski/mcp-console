@@ -25,15 +25,16 @@ def test_serve_selects_its_policy_without_ambient_overrides(binary: Path) -> Tra
     try:
         client.initialize_and_list_tools()
         client.send(
+            # fmt: python
             python=code(r"""
-            import os
-            from pathlib import Path
+                import os
+                from pathlib import Path
 
-            assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
-            temporary = Path(os.environ["TMPDIR"])
-            _ = (temporary / "configured-by-serve").write_text("allowed", encoding="utf-8")
-            print("serve supplied its own policy")
-            """)
+                assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
+                temporary = Path(os.environ["TMPDIR"])
+                _ = (temporary / "configured-by-serve").write_text("allowed", encoding="utf-8")
+                print("serve supplied its own policy")
+                """)
         )
         assert last_tool_text(client) == "serve supplied its own policy\n", (
             last_tool_text(client)

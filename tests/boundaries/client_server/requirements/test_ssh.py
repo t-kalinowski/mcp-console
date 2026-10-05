@@ -7,18 +7,19 @@ import shutil
 import socket
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, last_tool_text
+from support.requirements import SANDBOX, SQL, WORKER, command, requires
+from support.assertions import last_result_text, last_tool_text, wait_for_worker_ready
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import WORKER, SANDBOX, command, requires
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.resolvers import (
     recording_ir_environment,
@@ -30,11 +31,13 @@ from support.resolvers import (
     resolve_public_python_version,
 )
 from support.ssh import SSH, configure, localhost, remote_command, poison_controller
+from support.previews import CONTROL_OMISSION, assert_preview
+from support.evidence import compact_text
 from support.suites import run_this_suite
 
 
 @requires(SSH, WORKER)
-def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcript:
+def test_initializes_during_remote_default_preparation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         local, remote = root / "controller", root / "remote"
@@ -45,7 +48,13 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         marker = remote / "installer-called"
         ir = remote_bin / "ir"
         ir.write_text(
-            "#!/bin/sh\nprintf called >> " + shlex.quote(str(marker)) + "\nexit 93\n"
+            "#!/bin/sh\nprintf called >> "
+            + shlex.quote(str(marker))
+            + "\nprintf 1 > "
+            + shlex.quote(str(remote / "started"))
+            + "\n/bin/dd bs=1 count=1 < "
+            + shlex.quote(str(remote / "release"))
+            + " > /dev/null 2>&1\nexit 93\n"
         )
         ir.chmod(0o755)
         r_environment, _ = r_test_environment()
@@ -63,23 +72,33 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         configure(
             local, remote, prefix, sandbox={"environment": {"PATH": "/workload-only"}}
         )
-        with localhost(root / "sshd") as environment:
+        with (
+            closing(FifoCheckpoint.create(remote / "started")) as started,
+            closing(FifoCheckpoint.create(remote / "release")) as release,
+            localhost(root / "sshd") as environment,
+        ):
             trap = poison_controller(root / "sshd", environment)
             with McpClient(
                 binary, ("serve", "--no-sandbox"), environment, local
             ) as client:
-                client.initialize_and_list_tools()
-                schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
-                assert "requirements" in schema["properties"], schema
-                client.send()
-                assert last_result_text(client) == "\n[idle]"
-                client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
-                assert client.transcript[-1]["result"]["isError"] is True
-                client.finish()
+                try:
+                    started.wait("remote default preparation is blocked")
+                    client.initialize_and_list_tools()
+                    schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
+                    assert "requirements" in schema["properties"], schema
+                    client.request("ping")
+                    client.send(timeout_ms=0)
+                    assert last_result_text(client) == "[worker starting]"
+                    client.send(r="must_not_run <- TRUE", requirements={"r": [""]})
+                    assert client.transcript[-1]["result"]["isError"] is True
+                    assert marker.read_text() == "called", "startup was duplicated"
+                    release.release()
+                    failure = client.send()
+                    assert failure["isError"] and "93" in str(failure), failure
+                    client.finish()
+                finally:
+                    release.release()
             assert not trap.exists(), "controller discovered an execution runtime"
-            assert not marker.exists(), (
-                "discovery, poll, or validation invoked installation"
-            )
             assert not (remote / "ir-cache").exists()
             assert not (remote / "uv-cache").exists()
             assert not (root / "sshd/controller-ir").exists()
@@ -87,7 +106,8 @@ def test_discovers_remote_capability_without_preparing(binary: Path) -> Transcri
         return [
             {
                 "remote_managed_schema": True,
-                "preparation_is_lazy": True,
+                "handshake_while_preparation_blocked": True,
+                "one_background_preparation": True,
                 "controller_runtime_unused": True,
             }
         ]
@@ -186,20 +206,22 @@ def managed_session(
             assert shutil.which("uv", path=environment["PATH"]) == str(
                 remote_bin / "uv"
             )
-        # Distinct host pathnames can share already downloaded artifacts in this
-        # localhost harness. The controller process is forbidden to use either.
+        # Share downloaded artifacts through distinct host pathnames in this
+        # localhost harness. The controller is forbidden to use either cache.
+        # Keep the aliases for worker path assertions, but give ir the stable
+        # root: its shared resolution records must outlive this session's alias.
         for tool, variable in (("ir", "IR_CACHE_DIR"), ("uv", "UV_CACHE_DIR")):
-            cache = (
-                environment.get(variable) or str(remote / "ir-store")
+            cache = Path(
+                (environment.get(variable) or root / "ir-cache")
                 if bootstrap_uv and tool == "ir"
                 else subprocess.check_output([tool, "cache", "dir"], text=True).strip()
             )
             remote_cache = remote / f"{tool}-cache"
-            if cache:
-                cache = Path(cache)
-                cache.mkdir(parents=True, exist_ok=True)
-                remote_cache.symlink_to(cache, target_is_directory=True)
-            environment[variable] = str(remote_cache)
+            cache.mkdir(parents=True, exist_ok=True)
+            remote_cache.symlink_to(cache, target_is_directory=True)
+            environment[variable] = str(
+                remote_cache.resolve() if tool == "ir" else remote_cache
+            )
         if not bootstrap_uv:
             environment["UV_OFFLINE"] = "1"
             environment["UV_NO_CACHE"] = "1"
@@ -229,11 +251,13 @@ def managed_session(
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
             with McpClient(
-                binary, execution.serve(), controller, local, response_timeout=180
+                binary,
+                execution.serve("-c", "cache=host"),
+                controller,
+                local,
+                response_timeout=180,
             ) as client:
                 client.initialize_and_list_tools()
-                assert not ir_run_records(ir_record)
-                assert not uv_tool_run_requirements(uv_record)
                 yield client, remote, ir_record, uv_record
             assert not trap.exists()
             assert not (root / "sshd/controller-ir").exists()
@@ -253,16 +277,28 @@ def test_bootstraps_managed_requirements_through_uv(
     ):
         schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
         assert "requirements" in schema["properties"], schema
-        client.send()
+        # This path bootstraps ir and default R packages into a fresh cache.
+        # Its cold build budget is separate from later SSH/tool exchanges.
+        client.response_timeout = 600
+        try:
+            wait_for_worker_ready(client, "remote uv bootstrap")
+        finally:
+            client.response_timeout = 180
         assert last_result_text(client) == "\n[idle]"
-        assert not uv_record.exists(), "discovery or polling invoked uv"
-        assert not (remote / "uv-tools").exists()
+        assert uv_record.exists(), "background startup did not bootstrap uv"
+        startup_arguments = [
+            json.loads(line) for line in uv_record.read_text().splitlines()
+        ]
+        assert any(args[:2] == ["tool", "run"] for args in startup_arguments)
 
         output = send_and_collect_runtime_python_resolution(
             client,
             requirements={"r": ["praise"], "python": ["humanize"]},
+            # fmt: r
             r=code(r"""
-                r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1L]][[1L]]
+                r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[
+                  1L
+                ]][[1L]]
                 stopifnot(
                   Sys.which("ir") == "",
                   requireNamespace("praise", quietly = TRUE),
@@ -287,10 +323,14 @@ def test_bootstraps_managed_requirements_through_uv(
 
         output = send_and_collect_runtime_python_resolution(
             client,
+            # fmt: python
             python=code("""
                 import humanize, sys
                 from pathlib import Path
-                assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), sys.prefix
+
+                assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), (
+                    sys.prefix
+                )
                 print(humanize.intcomma(12345))
                 print(r.x)
                 """),
@@ -309,6 +349,7 @@ def test_bootstraps_managed_requirements_through_uv(
         )
 
 
+@requires(SQL)
 @requires(SSH, WORKER, command("ir"), command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:
@@ -329,13 +370,20 @@ def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:
         assert len(uv_tool_run_requirements(uv_record)) == baseline_python
         output = send_and_collect_runtime_python_resolution(
             client,
+            # fmt: r
             r=code("""
-            x <- 42L
-            stopifnot(requireNamespace("praise", quietly = TRUE), requireNamespace("tidyverse", quietly = TRUE))
-            Sys.setenv(RETICULATE_UV = "/worker-must-not-select-uv", IR_CACHE_DIR = "/worker-must-not-select-cache")
-            library(zeallot)
-            cat("R ready:", x, "\\n")
-            """),
+                x <- 42L
+                stopifnot(
+                  requireNamespace("praise", quietly = TRUE),
+                  requireNamespace("tidyverse", quietly = TRUE)
+                )
+                Sys.setenv(
+                  RETICULATE_UV = "/worker-must-not-select-uv",
+                  IR_CACHE_DIR = "/worker-must-not-select-cache"
+                )
+                library(zeallot)
+                cat("R ready:", x, "\\n")
+                """),
         )
         assert "R ready: 42" in output, output
         assert any(
@@ -343,11 +391,13 @@ def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:
         )
         output = send_and_collect_runtime_python_resolution(
             client,
+            # fmt: python
             python=code("""
-            import humanize, pyfiglet
-            print(humanize.intcomma(12345))
-            print(r.x)
-            """),
+                import humanize, pyfiglet
+
+                print(humanize.intcomma(12345))
+                print(r.x)
+                """),
         )
         assert "12,345" in output and "42" in output, output
         assert any(
@@ -448,9 +498,12 @@ def test_failed_restart_and_invalid_requirements_preserve_worker(binary, executi
             client.send(r="sentinel <- 0L", requirements=requirements)
             assert client.transcript[-1]["result"]["isError"]
         client.send(
+            # fmt: r
             r=code(r"""
                 options(useFancyQuotes = FALSE)
-                tryCatch(library("../untrusted"), error = function(e) cat(conditionMessage(e), "\n"))
+                tryCatch(library("../untrusted"), error = function(e) {
+                  cat(conditionMessage(e), "\n")
+                })
                 """)
         )
         assert counts == (
@@ -479,7 +532,8 @@ def test_failed_restart_and_invalid_requirements_preserve_worker(binary, executi
 def test_large_remote_install_failure_preserves_diagnostics_and_worker(
     binary, execution
 ):
-    diagnostic = ('compile: α\t"error"\\source ' * 128).rstrip()
+    diagnostic_unit = 'compile: α\t"error"\\source '
+    diagnostic = (diagnostic_unit * 128).rstrip()
     diagnostics = ((diagnostic + "\n") * 352) + "final diagnostic"
     with managed_session(binary, execution, failure_output=diagnostics) as (
         client,
@@ -498,11 +552,18 @@ def test_large_remote_install_failure_preserves_diagnostics_and_worker(
         assert client.transcript[-1]["result"]["isError"]
         output = last_result_text(client)
         expected = f"[R package resolution failed with exit status: 1: {diagnostics}]"
-        assert output == expected, {"length": len(output), "prefix": output[:500]}
+        assert_preview(output, expected, pattern=CONTROL_OMISSION)
+        assert "outputs/call-" not in output, "resolver diagnostics have no cell log"
         client.send(r="stopifnot(Sys.getpid() == worker); sentinel")
         assert last_tool_text(client) == "[1] 42\n"
         client.send(requirements={"r": ["praise"]}, r="sentinel")
         assert last_tool_text(client) == "[1] 42\n"
+        for entry in client.transcript[3:]:
+            for block in entry.get("result", {}).get("content", []):
+                if block["type"] == "text":
+                    block["text"] = compact_text(
+                        block["text"], diagnostic + "\n", diagnostic_unit
+                    )
         return client.finish()[3:]
 
 
@@ -557,6 +618,7 @@ def test_large_successful_resolver_result_preserves_completion(binary):
         fixture = Path(__file__).resolve().parents[3] / "fixtures/ordered_retirement_ir"
         counter = remote / "ir-counter"
         ir.write_text(
+            # fmt: python
             code(f"""
                 #!/usr/bin/env python3
                 import os
@@ -597,23 +659,26 @@ def test_large_successful_resolver_result_preserves_completion(binary):
 @executions(DIRECT, SANDBOXED)
 def test_failed_remote_activation_preserves_worker_until_restart(binary, execution):
     with managed_session(binary, execution) as (client, remote, ir_record, uv_record):
-        send_and_collect_runtime_python_resolution(
+        initial = send_and_collect_runtime_python_resolution(
             client, r="sentinel <- 42L; worker <- Sys.getpid()"
         )
+        assert initial == "[done]", initial
         baseline = len(ir_run_records(ir_record))
         send_and_collect_runtime_python_resolution(
             client,
+            # fmt: r
             r=code(r"""
-            local({
-              invisible(suppressMessages(trace(
-                ".libPaths",
-                tracer = quote(if (!missing(new)) stop("remote activation failed")),
-                print = FALSE, where = baseenv()
-              )))
-              on.exit(invisible(suppressMessages(untrace(".libPaths", where = baseenv()))))
-              do.call(loadNamespace, list(package = "zeallot"))
-            })
-            """),
+                local({
+                  invisible(suppressMessages(trace(
+                    ".libPaths",
+                    tracer = quote(if (!missing(new)) stop("remote activation failed")),
+                    print = FALSE,
+                    where = baseenv()
+                  )))
+                  on.exit(invisible(suppressMessages(untrace(".libPaths", where = baseenv()))))
+                  do.call(loadNamespace, list(package = "zeallot"))
+                })
+                """),
         )
         assert last_tool_text(client) == "Error: remote activation failed\n", (
             last_tool_text(client)
@@ -644,8 +709,10 @@ def test_worker_network_stays_denied_during_remote_preparation(binary):
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         port = listener.getsockname()[1]
+        # fmt: python
         network = code(f"""
             import socket
+
             try:
                 with socket.socket() as connection:
                     assert connection.connect_ex(("127.0.0.1", {port})) != 0

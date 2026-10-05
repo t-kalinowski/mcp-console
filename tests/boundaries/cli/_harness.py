@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
 import select
 import selectors
 import shutil
 import subprocess
 import sys
-import termios
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+if os.name == "posix":
+    import fcntl
+    import pty
+    import termios
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -328,5 +331,8 @@ def _cleanup(lifetime: _SandboxLifetime) -> None:
 def _command_record(lifetime: _SandboxLifetime) -> dict[str, object]:
     return {
         "command": _command(*lifetime.arguments),
-        "stdout": "<sandbox root pid>\n<detached descendant pid>\n<sandbox temp>\n",
+        "stdout": """<sandbox root pid>
+<detached descendant pid>
+<sandbox temp>
+""",
     }

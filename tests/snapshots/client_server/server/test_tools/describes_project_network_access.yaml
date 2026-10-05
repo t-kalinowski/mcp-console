@@ -1,14 +1,14 @@
 ---
 configuration: unrestricted restricted (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -24,20 +24,30 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution, when available, runs outside the sandbox
-  and may execute installation or build code; use only trusted dependencies.
+  the network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: unrestricted restricted (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -51,22 +61,32 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution, when available, runs outside the sandbox
-  and may execute installation or build code; use only trusted dependencies.
+  the network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: unrestricted enabled (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -82,20 +102,30 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution, when available, runs outside the sandbox and
-  may execute installation or build code; use only trusted dependencies.
+  network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: unrestricted enabled (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -109,22 +139,32 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution, when available, runs outside the sandbox and
-  may execute installation or build code; use only trusted dependencies.
+  network. Dependency resolution, when available, uses a separate native
+  resolver sandbox on macOS and Linux with configurable host reads, cache
+  writes, and proxy destinations. Installation or build code may run there; use
+  only trusted dependencies.
 ---
 configuration: restricted restricted (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -140,22 +180,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: restricted restricted (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -171,22 +220,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: restricted enabled (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -202,22 +260,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: restricted enabled (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -231,24 +298,33 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: external-sandbox restricted (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -264,21 +340,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: external-sandbox restricted (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -294,21 +380,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: external-sandbox enabled (string)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -324,21 +420,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: external-sandbox enabled (mapping)
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -352,23 +458,33 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: restricted
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -382,24 +498,33 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code can read host files, cannot directly access the network, and
   can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: enabled
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -415,22 +540,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: proxy
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -446,22 +580,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  resolution, when available, uses a separate native resolver sandbox on macOS
+  and Linux with configurable host reads, cache writes, and proxy destinations.
+  Installation or build code may run there; use only trusted dependencies.
 ---
 configuration: proxy with local binding
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -477,22 +620,31 @@ description: >-
   specify preparation, control, and timeout ordering.
 
 
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
+
+
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  resolution, when available, uses a separate native resolver sandbox on macOS
+  and Linux with configurable host reads, cache writes, and proxy destinations.
+  Installation or build code may run there; use only trusted dependencies.
 ---
 configuration: proxy with network enabled
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -506,24 +658,33 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code can read host files, can access the network subject to the
   launcher's proxy settings, and can write in the worker's private temporary
   directory and to paths explicitly allowed by the launcher. Dependency
-  resolution, when available, runs outside the sandbox and may execute
-  installation or build code; use only trusted dependencies.
+  resolution, when available, uses a separate native resolver sandbox on macOS
+  and Linux with configurable host reads, cache writes, and proxy destinations.
+  Installation or build code may run there; use only trusted dependencies.
 ---
 configuration: native network representation
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -537,24 +698,33 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code can read host files, can directly access the network, and can
   write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution, when available, runs outside
-  the sandbox and may execute installation or build code; use only trusted
-  dependencies.
+  allowed by the launcher. Dependency resolution, when available, uses a
+  separate native resolver sandbox on macOS and Linux with configurable host
+  reads, cache writes, and proxy destinations. Installation or build code may
+  run there; use only trusted dependencies.
 ---
 configuration: external enforcement
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -568,23 +738,33 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution, when available, runs outside the sandbox and may
-  execute installation or build code; use only trusted dependencies.
+  Dependency resolution, when available, uses a separate native resolver sandbox
+  on macOS and Linux with configurable host reads, cache writes, and proxy
+  destinations. Installation or build code may run there; use only trusted
+  dependencies.
 ---
 configuration: no sandbox
 description: >-
-  Persistent R, Python, and SQL workbench for exact computation, file and data
-  inspection, transformation, visualization, statistics, simulation, and
-  modeling. State persists across calls. Choose the language best suited to each
-  cell and reuse live state when switching: Python reads R globals through
-  `r.name`, R reads Python globals through `py$name`, and managed DuckDB SQL can
-  query R data frames by name. R accesses its SQL connection through
-  `sql_connection()`; R or Python can select a user-owned connection with
-  `console_sql_connection(connection)`.
+  Persistent custom-worker workbench. Language fields describe the configured
+  interface; supported languages, evaluation, display, SQL, and cross-language
+  sharing depend on the selected worker. Console does not supply built-in
+  runtime packages, automatic import hooks, or a default SQL connection to
+  custom workers. Managed requirements require execution-host resolver support
+  and compatible worker preparation callbacks; Python requirements are
+  unavailable with a custom worker. Switch languages when useful, using
+  capabilities supplied by the worker.
 
 
   Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
@@ -598,6 +778,14 @@ description: >-
   call `send` again without code or stdin; do not resubmit the cell. Send
   `stdin` alone to answer an active prompt or debugger. Field descriptions
   specify preparation, control, and timeout ordering.
+
+
+  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
+  output keeps its beginning and latest tail. Images have separate limits.
+  Retained raw-log paths are relative to the server's launch directory for
+  project recordings and absolute for home recordings (both on the controller
+  for remote targets). Full retained text requires filesystem access there
+  through existing tools; Console provides no read/search interface.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,

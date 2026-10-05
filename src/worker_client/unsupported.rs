@@ -60,9 +60,10 @@ impl Worker {
         &mut self,
         packages: Vec<String>,
         continue_environment_preparation: bool,
+        native: Option<(crate::resolver::ManagedPython, crate::python::NativePython)>,
         _commit: super::PythonPreparationCommit,
     ) -> Result<super::PreparationOutcome, String> {
-        let _ = (packages, continue_environment_preparation);
+        let _ = (packages, continue_environment_preparation, native);
         unreachable!("unsupported workers cannot start")
     }
 
@@ -112,7 +113,7 @@ impl Worker {
 pub(super) struct WorkerShutdownHandle;
 
 impl WorkerShutdownHandle {
-    pub(super) fn interrupt(&self) -> Result<(), String> {
+    pub(super) fn interrupt(&self, _evaluation: Option<&super::Evaluation>) -> Result<(), String> {
         Err("worker interrupts are supported only on macOS".to_string())
     }
 

@@ -28,7 +28,7 @@ result:
         Backtrace:
         1. global ir_resolve_main()
         2. global ir_resolve_refs(refs_in)
-        3. pak::pkg_deps(refs, dependencies = dependencies, upgrade = TRUE)
+        3. pak::pkg_deps(<ir-version-dependent arguments>)
         4. pak:::remote(function(...) { …
         5. err$throw(res$error)
         ---
@@ -50,6 +50,10 @@ result:
         Execution halted
         ir: dependency resolution failed
   isError: true
+transcript_normalization:
+  target: result.content[0].text
+  replacements:
+    ir_pkg_deps_arguments: <ir-version-dependent arguments>
 ---
 send:
   requirements:
@@ -68,12 +72,13 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       identical(
         dirname(find.package("praise")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
-      normalizePath(.libPaths()[[2L]]) ==
+      normalizePath(.libPaths()[[managed_index + 1L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
     42L
@@ -108,17 +113,18 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       "py-yaml12" %in% reticulate::py_require()$packages,
       identical(
         dirname(find.package("praise")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
       identical(
         dirname(find.package("zeallot")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
-      normalizePath(.libPaths()[[2L]]) ==
+      normalizePath(.libPaths()[[managed_index + 1L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
     42L
@@ -142,17 +148,18 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       "py-yaml12" %in% reticulate::py_require()$packages,
       identical(
         dirname(find.package("praise")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
       identical(
         dirname(find.package("zeallot")),
-        .libPaths()[[1L]]
+        .libPaths()[[managed_index]]
       ),
-      normalizePath(.libPaths()[[2L]]) ==
+      normalizePath(.libPaths()[[managed_index + 1L]]) ==
         normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
     )
     42L

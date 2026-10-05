@@ -1,6 +1,15 @@
 ---
 !same-as MCP initialization for this execution mode
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
 send:
   requirements:
     python:
@@ -19,8 +28,9 @@ send:
     import matplotlib
 
     (
-        Path(matplotlib.matplotlib_fname()).resolve()
-        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+        Path(matplotlib.matplotlib_fname()).samefile(
+            os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]
+        ),
         matplotlib.rcParams["lines.linewidth"],
     )
 result:

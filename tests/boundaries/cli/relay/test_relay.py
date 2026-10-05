@@ -10,6 +10,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    WORKER,
+    requires,
+)
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -21,7 +28,6 @@ from support.processes import (
 from support.native import SHARED_LIBRARY_FLAG
 from support.native import LOADER_VARIABLE
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
 
 
@@ -158,6 +164,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_relay_protocol_is_independent_of_sandbox_launch(
     binary: Path, execution: Execution

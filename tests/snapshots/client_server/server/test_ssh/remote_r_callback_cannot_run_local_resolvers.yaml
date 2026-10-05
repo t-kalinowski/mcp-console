@@ -1,0 +1,12 @@
+---
+send:
+  r: one_cell_only <- TRUE
+result:
+  content:
+    - type: text
+      text: >
+        dynamic environment resolution is unavailable; install `ir` or `uv` and
+        restart MCP Console
+  isError: false
+---
+standard_error: ""

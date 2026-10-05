@@ -2,9 +2,7 @@ use std::process::Stdio;
 
 use serde::Serialize;
 
-use super::process::{
-    ResolverProcess, ResolverStopHandle, read_output, resolver_command, stop_resolver, write_input,
-};
+use super::process::{ResolverProcess, ResolverStopHandle, resolver_command};
 
 const MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE: &str = include_str!("programs/duckdb_extensions.R");
 
@@ -23,37 +21,24 @@ pub(crate) fn resolve_duckdb_extensions(
 
     let rscript = managed_r.rscript();
     let mut command = resolver_command(rscript);
+    command.arg("--vanilla");
+    let _program =
+        super::r_program::RProgram::append(&mut command, MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE)?;
     command
-        .args(["--vanilla", "-e", MANAGED_DUCKDB_EXTENSION_RESOLVER_SOURCE])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     managed_r.configure_worker(&mut command)?;
-    // DuckDB performs its normal extension installation outside the sandbox.
+    // DuckDB installs under the preparation process's cache and network policy.
     // Names are JSON input, never R or SQL source.
-    let mut child = command.spawn().map_err(|error| {
+    let resolver = ResolverProcess::new();
+    let invocation = resolver.spawn(&mut command, Some(input)).map_err(|error| {
         format!(
             "failed to run DuckDB extension resolver with `{}`: {error}",
             rscript.display()
         )
     })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    let stdin = child.stdin.take().expect("resolver stdin is piped");
-    let resolver = ResolverProcess::new();
-    if let Err(error) = on_started(resolver.stop_handle()) {
-        let _ = stop_resolver(&mut child, rscript, "DuckDB extension");
-        return Err(error);
-    }
-    resolver.watch_exit(child.id());
-    let output = resolver.wait(
-        &mut child,
-        write_input(stdin, input),
-        stdout,
-        stderr,
-        rscript,
-        "DuckDB extension",
-    )?;
+    let output = resolver.collect(invocation, rscript, "DuckDB extension", on_started)?;
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);

@@ -9,18 +9,25 @@
 #include <unistd.h>
 
 static atomic_uint fork_count = 0;
+static int sandboxed_owner = 0;
 static int command_selected = 0;
 
-static int is_server(void) {
+static int is_resolver(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
-    return command_selected || (server != NULL && strtol(server, NULL, 10) == getpid());
+    const char *child = getenv("MCP_CONSOLE_TEST_SPAWN_CHILD");
+    return command_selected || sandboxed_owner ||
+        (server != NULL && strtol(server, NULL, 10) ==
+        (child != NULL ? getppid() : getpid()));
 }
 
 __attribute__((constructor)) static void prevent_child_injection(int argc, char **argv) {
     const char *server = getenv("MCP_CONSOLE_TEST_SPAWN_SERVER");
     command_selected = server != NULL && argc > 1 &&
         strcmp(server, "ssh-prepare") == 0 && strcmp(argv[1], server) == 0;
-    if (is_server()) {
+    // Resolver settings identify the owner beyond the native launcher boundary.
+    sandboxed_owner = getenv("MCP_CONSOLE_TEST_SPAWN_OWNER") != NULL;
+    unsetenv("MCP_CONSOLE_TEST_SPAWN_OWNER");
+    if (is_resolver()) {
         unsetenv("DYLD_INSERT_LIBRARIES");
         unsetenv("LD_PRELOAD");
     }
@@ -29,7 +36,7 @@ __attribute__((constructor)) static void prevent_child_injection(int argc, char 
 static pid_t checkpoint_fork(void) {
     const char *armed = getenv("MCP_CONSOLE_TEST_SPAWN_ARMED");
     const char *ordinal = getenv("MCP_CONSOLE_TEST_SPAWN_ORDINAL");
-    if (is_server() && armed != NULL && access(armed, F_OK) == 0 &&
+    if (is_resolver() && armed != NULL && access(armed, F_OK) == 0 &&
         atomic_fetch_add(&fork_count, 1) + 1 == strtoul(ordinal, NULL, 10)) {
         int started = open(getenv("MCP_CONSOLE_TEST_SPAWN_STARTED"), O_WRONLY);
         int release = open(getenv("MCP_CONSOLE_TEST_SPAWN_RELEASE"), O_RDONLY);

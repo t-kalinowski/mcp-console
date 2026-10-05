@@ -19,6 +19,7 @@ from support.checkpoints import FifoCheckpoint
 from support.events import Events
 from support.native import SHARED_LIBRARY_FLAG
 from support.native import LOADER_VARIABLE
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
@@ -283,7 +284,7 @@ def test_finishes_startup_failure_while_relay_stdout_is_backpressured(
 @contextmanager
 def retirement_clock_environment(
     after_frame: dict[str, object],
-) -> Iterator[tuple[Path, dict[str, str]]]:
+) -> Iterator[tuple[Path, dict[str, str], FifoCheckpoint]]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -305,14 +306,17 @@ def retirement_clock_environment(
             capture_output=True,
             text=True,
         )
-        marker = root / "output-complete"
+        completed = FifoCheckpoint.create(root / "output-complete")
         environment = os.environ.copy()
         environment[LOADER_VARIABLE] = str(interposer)
-        environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(marker)
+        environment["MCP_CONSOLE_TEST_OUTPUT_COMPLETE"] = str(completed.path)
         environment["MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME"] = (
             json.dumps(after_frame, separators=(",", ":")) + "\n"
         )
-        yield root, environment
+        try:
+            yield root, environment, completed
+        finally:
+            completed.close()
 
 
 @requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -320,21 +324,38 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
     with retirement_clock_environment({"kind": "worker_exited", "code": 0}) as (
         root,
         environment,
+        completed,
     ):
-        worker = r"""
-import os
-os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
-"""
-        result = subprocess.run(
+        # fmt: python
+        worker = code(r"""
+            import os
+            import sys
+
+            os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
+            with open(os.environ["TEST_WORKER_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            sys.stdin.buffer.read()
+            """)
+        ready = FifoCheckpoint.create(root / "worker-ready")
+        environment["TEST_WORKER_READY"] = str(ready.path)
+        process = subprocess.Popen(
             [binary, "worker-relay", sys.executable, "-c", worker],
-            input="",
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env=environment,
-            timeout=10,
         )
-        assert (root / "output-complete").read_text() == "1"
-        events = [json.loads(line) for line in result.stdout.splitlines()]
+        try:
+            ready.wait("worker initialized before controller EOF")
+            stdout, stderr = process.communicate(timeout=10)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+            ready.close()
+        completed.wait("retirement clock advanced after final output")
+        events = [json.loads(line) for line in stdout.splitlines()]
         assert events == [
             {"kind": "ready"},
             {"kind": "stdout_closed"},
@@ -342,11 +363,9 @@ os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n'
             {"kind": "worker_sideband_closed"},
             {"kind": "worker_exited", "code": 0},
         ], events
-        assert result.returncode == 0, result.stderr
-        assert result.stderr == "", result.stderr
-        return [
-            {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
-        ]
+        assert process.returncode == 0, stderr
+        assert stderr == "", stderr
+        return [{"events": events, "exit_code": process.returncode, "stderr": stderr}]
 
 
 @requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -354,25 +373,41 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
     with retirement_clock_environment({"kind": "stdout_closed"}) as (
         root,
         environment,
+        completed,
     ):
-        worker = r"""
-import os
-os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
-"""
+        # fmt: python
+        worker = code(r"""
+            import os
+            import sys
+
+            os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
+            with open(os.environ["TEST_WORKER_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            sys.stdin.buffer.read()
+            """)
         destination = root / "relay.jsonl"
+        ready = FifoCheckpoint.create(root / "worker-ready")
+        environment["TEST_WORKER_READY"] = str(ready.path)
         with destination.open("w") as output:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [binary, "worker-relay", sys.executable, "-c", worker],
-                input="",
+                stdin=subprocess.PIPE,
                 stdout=output,
                 stderr=subprocess.PIPE,
                 text=True,
                 env=environment,
-                timeout=10,
             )
-        assert (root / "output-complete").read_text() == "1"
-        assert result.returncode == 0, result.stderr
-        assert result.stderr == "", result.stderr
+            try:
+                ready.wait("worker initialized before controller EOF")
+                _, stderr = process.communicate(timeout=10)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=10)
+                ready.close()
+        completed.wait("retirement clock advanced before regular-file output")
+        assert process.returncode == 0, stderr
+        assert stderr == "", stderr
         events = [json.loads(line) for line in destination.read_text().splitlines()]
         assert events == [
             {"kind": "ready"},
@@ -381,9 +416,7 @@ os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n'
             {"kind": "worker_sideband_closed"},
             {"kind": "worker_exited", "code": 0},
         ], events
-        return [
-            {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
-        ]
+        return [{"events": events, "exit_code": process.returncode, "stderr": stderr}]
 
 
 if __name__ == "__main__":

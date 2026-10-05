@@ -5,16 +5,53 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from support.assertions import last_result_text
+from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import Execution
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
+from support.requirements import R
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
+
+# Callers of recording/checkpoint fixtures select cache=host explicitly: their
+# writable state is granted through fixture-owned UV_TOOL_DIR overrides. Real
+# default Console cache coverage lives in requirements/test_cache_locations.py.
+
+
+def expose_uv(directory: Path) -> Path:
+    executable = shutil.which("uv")
+    assert executable is not None, "real uv is required"
+    target = directory / ("uv.exe" if os.name == "nt" else "uv")
+    if os.name == "nt":
+        shutil.copyfile(executable, target)
+    else:
+        target.symlink_to(executable)
+    return target
+
+
+def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
+    # Native sandbox launchers own the resolver beneath the server's children.
+    pending = list(child_process_identities(server))
+    owners = []
+    while pending:
+        child = pending.pop()
+        arguments = subprocess.run(
+            ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if arguments == f"{binary} resolve":
+            owners.append(child)
+        else:
+            pending.extend(child_process_identities(child))
+    assert len(owners) == 1, owners
+    return owners[0]
 
 
 def recording_ir_environment(
@@ -25,6 +62,8 @@ def recording_ir_environment(
 ) -> tuple[dict[str, str], Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
+    # Fixture records and checkpoints live in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     real_ir = shutil.which("ir")
     assert real_ir is not None, "real `ir` is required"
     fake_bin = directory / "bin"
@@ -81,6 +120,8 @@ def checkpoint_uv_environment(
     started = FifoCheckpoint.create(temporary / "uv-started")
     release = FifoCheckpoint.create(temporary / "uv-release")
     environment = os.environ.copy()
+    # Fixture records and checkpoints live in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(temporary)
     environment["RETICULATE_UV"] = str(FIXTURES / "checkpoint_uv")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_CHECKPOINT_ARGUMENT"] = argument
@@ -145,7 +186,7 @@ def record_resolved_r_library(environment: dict[str, str], directory: Path) -> N
 
 def resolver_interrupt_permission_environment(
     temporary_path: Path,
-) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path]:
+) -> tuple[dict[str, str], FifoCheckpoint, FifoCheckpoint, Path, Path, Path]:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
     fake_bin = temporary_path / "bin"
@@ -173,18 +214,33 @@ def resolver_interrupt_permission_environment(
     assert path is not None, "PATH is required"
     environment["PATH"] = os.pathsep.join((str(fake_bin), path))
     environment["TMPDIR"] = str(temporary_path)
+    environment["UV_TOOL_DIR"] = str(temporary_path)
     denied_interrupt = temporary_path / "resolver-sigint-denied"
+    resolver_watches = temporary_path / "resolver-watches"
+    resolver_watches.mkdir()
     resolver_group = temporary_path / "resolver-group"
     resolver_started = FifoCheckpoint.create(temporary_path / "resolver-started")
     resolver_lifetime = FifoCheckpoint.create(temporary_path / "resolver-lifetime")
     environment["MCP_CONSOLE_TEST_DENIED_SIGINT"] = str(denied_interrupt)
+    environment["MCP_CONSOLE_TEST_RESOLVER_WATCHES"] = str(resolver_watches)
     environment["MCP_CONSOLE_TEST_RESOLVER_GROUP"] = str(resolver_group)
     environment["MCP_CONSOLE_TEST_RESOLVER_STARTED"] = str(resolver_started.path)
     environment["MCP_CONSOLE_TEST_RESOLVER_LIFETIME"] = str(resolver_lifetime.path)
-    # The interposer removes its loader variable after reaching the server, so
-    # the resolver and Zod do not inherit it.
+    # Load the hook in the server and resolver owner, including inside the
+    # native sandbox. The owner removes it before launching ir or the worker.
     environment[LOADER_VARIABLE] = str(
         build_interposer(temporary_path, "killpg_denial_interposer")
+    )
+    config = temporary_path / ".agents/console/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "resolver": {
+                    "environment": {LOADER_VARIABLE: environment[LOADER_VARIABLE]}
+                }
+            }
+        )
     )
     return (
         environment,
@@ -192,11 +248,14 @@ def resolver_interrupt_permission_environment(
         resolver_lifetime,
         resolver_group,
         denied_interrupt,
+        resolver_watches,
     )
 
 
 def fake_ir_environment(root: Path, libraries: list[Path]) -> dict[str, str]:
     environment, _ = r_test_environment()
+    # Keep fixture records and checkpoints in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(root)
     fake_bin = root / "bin"
     fake_bin.mkdir()
     fixture = FIXTURES / "ordered_retirement_ir"
@@ -229,6 +288,8 @@ def normalize_duckdb_resolution_error(error: str, extension: str) -> str:
         for line in error.splitlines()
         if f'Failed to download extension "{extension}"' in line
     )
+    # DuckDB releases differ in whether the HTTP error has an Invalid wrapper.
+    detail = detail.removeprefix("Invalid Error: ")
     return detail.partition(' at URL "')[0]
 
 
@@ -250,10 +311,12 @@ def ir_cache_directory(environment: dict[str, str]) -> str:
 
 def matplotlib_test_environment(cache_home: Path) -> dict[str, str]:
     environment = os.environ.copy()
-    cache = ir_cache_directory(environment)
-    environment["IR_CACHE_DIR"] = cache
+    if R.available:
+        cache = ir_cache_directory(environment)
+        environment["IR_CACHE_DIR"] = cache
     environment["XDG_CACHE_HOME"] = str(cache_home)
-    assert ir_cache_directory(environment) == cache
+    if R.available:
+        assert ir_cache_directory(environment) == cache
     return environment
 
 
@@ -264,7 +327,10 @@ def bare_runtime_environment(
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in environment["PATH"].split(os.pathsep)
-        if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
+        if not any(
+            (Path(entry) / (name + (".exe" if os.name == "nt" else ""))).exists()
+            for name in ("ir", "uv", "uvx")
+        )
     )
     environment.pop("RETICULATE_UV", None)
     environment.pop("RETICULATE_PYTHON", None)
@@ -292,6 +358,9 @@ def python_inventory_client(
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")
+    # These cases resolve synthetic Python inventories without embedding their
+    # interpreter selections. R can query version constraints before selection.
+    environment["MCP_CONSOLE_LANGUAGES"] = "r"
     arguments = directory / "uv-arguments.jsonl"
     environment["MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD"] = str(arguments)
     inventories = directory / "uv-python-inventories.json"
@@ -308,13 +377,14 @@ def python_inventory_client(
         environment.update(extra_environment)
     client = McpClient(
         binary,
-        execution.serve(),
+        execution.serve("-c", "cache=host"),
         environment,
         current_directory=directory,
     )
     client.initialize_and_list_tools()
+    client.transcript.clear()
     client.send(requirements={"r": ["DBI"]})
-    assert last_result_text(client) == "[prepared]"
+    assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")
     if resolver_record is not None:
         resolver_record.write_text("", encoding="utf-8")
@@ -420,6 +490,8 @@ def recording_uv_environment(
     real_uv = shutil.which("uv")
     assert real_uv is not None, "real uv is required"
     environment = os.environ.copy()
+    # Fixture records and checkpoints live in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     environment.pop("RETICULATE_PYTHON", None)
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
@@ -464,10 +536,16 @@ def initialize_python_and_record_baseline(client: McpClient, record: Path) -> in
     return len(uv_tool_run_requirements(record))
 
 
-def resolve_managed_python(binary: Path, execution: Execution, directory: Path) -> Path:
+def resolve_managed_python(
+    binary: Path,
+    execution: Execution,
+    directory: Path,
+    *,
+    environment: dict[str, str] | None = None,
+) -> Path:
     workspace = directory / "managed-python"
     workspace.mkdir()
-    environment = os.environ.copy()
+    environment = os.environ.copy() if environment is None else environment.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment.pop("UV_PYTHON", None)
     with McpClient(
@@ -477,14 +555,21 @@ def resolve_managed_python(binary: Path, execution: Execution, directory: Path) 
         current_directory=workspace,
     ) as client:
         client.initialize_and_list_tools()
-        client.send(python='import sys\nprint(f"managed-python={sys.executable}")')
+        client.send(
+            # fmt: python
+            python=code("""
+                import sys
+
+                print(f"managed-python={sys.executable}")
+                """),
+        )
         output = last_result_text(client)
         client.finish()
     executable = Path(
         next(
             line for line in output.splitlines() if line.startswith("managed-python=")
         ).split("=", 1)[1]
-    ).resolve()
+    ).absolute()
     assert executable.is_file(), executable
     return executable
 
@@ -493,32 +578,11 @@ def send_and_collect_runtime_python_resolution(
     client: McpClient,
     **arguments: object,
 ) -> str:
-    call_start = len(client.transcript)
-    client.send(**arguments)
-    chunks = []
-    for attempt in range(8):
-        output = last_result_text(client)
-        if output.endswith("\n[running; poll with an empty send]"):
-            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
-            if attempt == 7:
-                raise AssertionError(
-                    "automatic Python resolution remained running after eight "
-                    f"responses: collected={''.join(chunks)!r}, last={output!r}"
-                )
-            client.send(timeout_ms=30_000)
-            continue
-
-        if output != "[done]" or not chunks:
-            chunks.append(output)
-        collected = "".join(chunks)
-
-        calls = client.transcript[call_start:]
-        submitted = calls[0]
-        final_result = calls[-1]["result"]
-        content = final_result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        content[0]["text"] = collected
-        submitted["result"] = final_result
-        client.transcript[call_start:] = [submitted]
-        return collected
-    raise AssertionError("unreachable")
+    return wait_for_evaluation_output(
+        client,
+        None,
+        "automatic Python resolution",
+        expected_error=None,
+        completion_timeout_seconds=client.response_timeout,
+        **arguments,
+    )

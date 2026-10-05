@@ -7,16 +7,13 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker relay stdout read failed: remote launcher exited with exit
-        status: 1; remote retirement is unconfirmed (SSH exit is not a cleanup
-        barrier); additionally failed to stop the worker: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+      text: |-
+        mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+        remote launcher exited with exit status: 1
+        [worker relay stdout read failed: remote launcher exited with exit status: 1; additionally failed to stop the worker: SSH process exited with exit status: 1; additionally failed to retire worker I/O: remote retirement is unconfirmed (SSH exit is not a cleanup barrier)]
   isError: true
 ---
-standard_error: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
-  remote launcher exited with exit status: 1
+standard_error: ""
 ---
 inherit_environment: true
 environment:
@@ -27,16 +24,13 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker relay stdout read failed: remote launcher exited with exit
-        status: 1; remote retirement is unconfirmed (SSH exit is not a cleanup
-        barrier); additionally failed to stop the worker: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+      text: |-
+        mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+        remote launcher exited with exit status: 1
+        [worker relay stdout read failed: remote launcher exited with exit status: 1; additionally failed to stop the worker: SSH process exited with exit status: 1; additionally failed to retire worker I/O: remote retirement is unconfirmed (SSH exit is not a cleanup barrier)]
   isError: true
 ---
-standard_error: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
-  remote launcher exited with exit status: 1
+standard_error: ""
 ---
 inherit_environment: true
 environment:
@@ -47,16 +41,13 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker relay stdout read failed: remote launcher exited with exit
-        status: 1; remote retirement is unconfirmed (SSH exit is not a cleanup
-        barrier); additionally failed to stop the worker: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+      text: |-
+        mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+        remote launcher exited with exit status: 1
+        [worker relay stdout read failed: remote launcher exited with exit status: 1; additionally failed to stop the worker: SSH process exited with exit status: 1; additionally failed to retire worker I/O: remote retirement is unconfirmed (SSH exit is not a cleanup barrier)]
   isError: true
 ---
-standard_error: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
-  remote launcher exited with exit status: 1
+standard_error: ""
 ---
 inherit_environment: false
 environment: []
@@ -66,16 +57,13 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker relay stdout read failed: remote launcher exited with exit
-        status: 1; remote retirement is unconfirmed (SSH exit is not a cleanup
-        barrier); additionally failed to stop the worker: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+      text: |-
+        mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+        remote launcher exited with exit status: 1
+        [worker relay stdout read failed: remote launcher exited with exit status: 1; additionally failed to stop the worker: SSH process exited with exit status: 1; additionally failed to retire worker I/O: remote retirement is unconfirmed (SSH exit is not a cleanup barrier)]
   isError: true
 ---
-standard_error: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
-  remote launcher exited with exit status: 1
+standard_error: ""
 ---
 inherit_environment: false
 environment:
@@ -86,16 +74,13 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker relay stdout read failed: remote launcher exited with exit
-        status: 1; remote retirement is unconfirmed (SSH exit is not a cleanup
-        barrier); additionally failed to stop the worker: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+      text: |-
+        mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+        remote launcher exited with exit status: 1
+        [worker relay stdout read failed: remote launcher exited with exit status: 1; additionally failed to stop the worker: SSH process exited with exit status: 1; additionally failed to retire worker I/O: remote retirement is unconfirmed (SSH exit is not a cleanup barrier)]
   isError: true
 ---
-standard_error: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
-  remote launcher exited with exit status: 1
+standard_error: ""
 ---
 inherit_environment: false
 environment:
@@ -106,13 +91,10 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker relay stdout read failed: remote launcher exited with exit
-        status: 1; remote retirement is unconfirmed (SSH exit is not a cleanup
-        barrier); additionally failed to stop the worker: remote retirement is
-        unconfirmed (SSH exit is not a cleanup barrier)]
+      text: |-
+        mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
+        remote launcher exited with exit status: 1
+        [worker relay stdout read failed: remote launcher exited with exit status: 1; additionally failed to stop the worker: SSH process exited with exit status: 1; additionally failed to retire worker I/O: remote retirement is unconfirmed (SSH exit is not a cleanup barrier)]
   isError: true
 ---
-standard_error: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column <column>)
-  remote launcher exited with exit status: 1
+standard_error: ""

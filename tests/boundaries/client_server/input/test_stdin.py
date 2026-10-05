@@ -16,10 +16,11 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import stop_process
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_accepts_idle_stdin(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -56,18 +57,31 @@ def test_idle_stdin_startup_blocks_preparation(
         environment["TMPDIR"] = temporary_directory
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
+        environment["ZOD_STARTUP_STARTED"] = str(
+            temporary_path / "initial-waiting-ready"
+        )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                "--worker",
+                str(zod),
+                *(
+                    ("--writable-root", str(temporary_path))
+                    if execution == SANDBOXED
+                    else ()
+                ),
+            ),
             environment,
         )
         passed = False
         try:
             client.initialize_and_list_tools()
+            client.send()
+            assert last_tool_text(client) == "\n[idle]"
             idle_stdin = client.start_send(stdin="queued\n")
             wait_for_marker(
                 temporary_path,
-                "zod-replacement-waiting-ready",
+                "initial-waiting-ready",
                 client,
             )
 
@@ -172,6 +186,7 @@ def test_routes_combined_and_followup_stdin(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_routes_same_call_stdin_to_direct_fd0(
     binary: Path, execution: Execution
@@ -221,7 +236,11 @@ def test_preserves_unexposed_input_output(
 
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == (
-            'before\n[input requested: "late> "]\nduring request\nzod stdin: answer\n'
+            """before
+[input requested: "late> "]
+during request
+zod stdin: answer
+"""
         )
         return client.finish()
 

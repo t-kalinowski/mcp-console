@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R_EVENT_LOOP, requires
 from support.assertions import (
     assert_result_content,
     last_tool_text,
@@ -55,6 +56,7 @@ def test_evaluates_a_complete_cell(binary: Path, execution: Execution) -> Transc
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_services_r_input_handlers_at_cell_boundaries(
     binary: Path, execution: Execution
@@ -107,9 +109,30 @@ def test_services_r_input_handlers_at_cell_boundaries(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_services_later_callbacks_while_idle(
     binary: Path, execution: Execution
+) -> Transcript:
+    return services_later_callbacks_while_idle(binary, execution, "r")
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_services_later_callbacks_without_another_r_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = None
+    for language in ("python", "sql"):
+        current = services_later_callbacks_while_idle(binary, execution, language)
+        if records is None:
+            records = current
+    assert records is not None
+    return records
+
+
+def services_later_callbacks_while_idle(
+    binary: Path, execution: Execution, language: str
 ) -> Transcript:
     relay = Path(__file__).resolve().parents[3] / "fixtures" / "idle_callback_relay"
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -123,7 +146,21 @@ def test_services_later_callbacks_while_idle(
             environment,
         ) as client:
             client.initialize_and_list_tools()
-            client.send(requirements={"r": ["later"]})
+            packages = ["later"]
+            if language == "sql":
+                # A custom worker does not receive the built-in runtime's
+                # infrastructure packages. Declare the SQL adapter's imports.
+                packages += [
+                    "DBI",
+                    "duckdb",
+                    "arrow",
+                    "nanoarrow",
+                    "pillar",
+                    "tibble",
+                    "utf8",
+                ]
+            client.send(requirements={"r": packages})
+            assert last_tool_text(client) == "[prepared]", client.transcript[-1]
 
             # fmt: r
             r = code(r"""
@@ -152,16 +189,30 @@ def test_services_later_callbacks_while_idle(
                 # A worker-local file does not prove the server has received
                 # its output. Wait for the relay's server round trip as well.
                 checkpoint.wait()
-                client.send(r="idle_value")
+                source = {
+                    "r": "idle_value",
+                    "python": "print('python after callback')",
+                    "sql": "SELECT 42 AS answer",
+                }[language]
+                client.send(**{language: source})
                 output = last_tool_text(client)
-                assert output == (
-                    "idle callback\n[output produced while idle]\n[1] 42\n"
-                ), repr(output)
+                prefix = "idle callback\n[output produced while idle]\n"
+                assert output.startswith(prefix), repr(output)
+                result = output.removeprefix(prefix)
+                if language == "r":
+                    assert result == "[1] 42\n", repr(output)
+                elif language == "python":
+                    assert result == "python after callback\n", repr(output)
+                else:
+                    assert (
+                        result == "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n"
+                    ), repr(output)
                 return client.finish()
             finally:
                 checkpoint.close()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_collects_idle_later_callbacks_with_empty_send(
     binary: Path, execution: Execution
@@ -200,6 +251,7 @@ def test_collects_idle_later_callbacks_with_empty_send(
     return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_snapshots_output_while_idle_later_callback_runs(
     binary: Path, execution: Execution
@@ -251,6 +303,7 @@ def test_snapshots_output_while_idle_later_callback_runs(
     return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_restarts_while_idle_callback_runs(
     binary: Path, execution: Execution
@@ -292,6 +345,7 @@ def test_restarts_while_idle_callback_runs(
     return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_returns_plots_from_idle_later_callbacks(
     binary: Path, execution: Execution
@@ -336,6 +390,7 @@ def test_returns_plots_from_idle_later_callbacks(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_stops_cell_after_boundary_callback_failure(
     binary: Path, execution: Execution
@@ -389,6 +444,7 @@ def test_stops_cell_after_boundary_callback_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_skips_final_boundary_callbacks_after_cell_failure(
     binary: Path, execution: Execution
@@ -442,6 +498,7 @@ def test_skips_final_boundary_callbacks_after_cell_failure(
         return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_routes_input_to_idle_later_callbacks_before_a_cell(
     binary: Path, execution: Execution

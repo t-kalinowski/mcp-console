@@ -1,16 +1,27 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
+from support.previews import (
+    compact_previews,
+    assert_preview,
+    cell_text,
+    normalize_preview_paths,
+    session_directory,
+)
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import (
     host_process_id,
     process_exists,
@@ -18,7 +29,7 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
@@ -30,13 +41,23 @@ from boundaries.client_server._harness import (
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory() as temporary_directory,
+        closing(
+            FifoCheckpoint.create(Path(temporary_directory) / "cell-output-closed")
+        ) as output_closed,
+    ):
         temporary_path = Path(temporary_directory)
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(temporary_path, "cell_output_close_interposer")
+        )
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
             execution.serve("--worker", str(zod)),
@@ -53,23 +74,26 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
 
         client.send(control="restart")
         output = last_tool_text(client)
-        prefix = "zod stdin closed\n" + ("x" * LARGE_OUTPUT_SIZE)
+        raw = cell_text(client, 1)
+        assert raw == "", "output after the restart cut does not belong to the cell log"
+        marker = re.search(
+            r"outputs/session.log[^\n]*; (\d+) raw bytes retained", output
+        )
+        assert marker is not None, output
+        prefix = "zod stdin closed\n" + "x" * LARGE_OUTPUT_SIZE
+        observed = int(marker[1])
+        assert observed > len(prefix), observed
+        raw = prefix + "y" * (observed - len(prefix))
+        assert (session_directory(client) / "outputs/session.log").read_text() == raw
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         suffix = "[active evaluation stopped by session restart request]\n" + suffix
-        assert output.startswith(prefix), "worker stdin did not close before restart"
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
-        barrier = output.removeprefix(prefix).removesuffix(suffix)
-        assert barrier and not barrier.strip("y\n"), "unexpected old-worker output"
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "zod stdin closed\n<large output>\n"
-            "[active evaluation stopped by session restart request]\n"
-            "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
-        )
+        assert_preview(output.removesuffix(suffix).removesuffix("\n"), raw)
+        normalize_preview_paths(client)
 
         client.send(r="echo echo")
         assert last_tool_text(client) == "zod: echo\n"
+        compact_previews(client, "x", "y")
         return client.finish()
 
 
@@ -194,6 +218,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_discards_unread_stdin(
     binary: Path, execution: Execution
@@ -204,19 +229,22 @@ def test_restart_discards_unread_stdin(
         execution.serve("--worker", str(zod)),
     )
     client.initialize_and_list_tools()
+    client.send(r="echo echo")
+    assert last_tool_text(client) == "zod: echo\n"
     client.send(stdin="stale\n")
     assert last_tool_text(client) == "\n[idle]"
 
     client.send(control="restart")
     assert last_tool_text(client) == (
         "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-    )
+    ), last_tool_text(client)
 
     client.send(r="input without request", stdin="fresh\n")
     assert last_tool_text(client) == "zod stdin: fresh\n"
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_initial_startup_silently(
     binary: Path, execution: Execution

@@ -34,11 +34,15 @@ struct QuartoWriter {
     r_requirements: Vec<String>,
     python_requirements: Vec<String>,
     dynamic_resolution: bool,
+    r_available: bool,
+    metadata_known: bool,
     sources: Vec<QuartoSource>,
+    environment_boundaries: bool,
     target: Option<Value>,
 }
 
 struct QuartoSource {
+    call_id: Option<u64>,
     language: &'static str,
     contents: String,
 }
@@ -49,11 +53,20 @@ impl Writers {
         quarto: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
         target: Option<&Value>,
     ) -> Self {
         Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
-            quarto: QuartoWriter::new(quarto, working_directory, dynamic_resolution, target),
+            quarto: QuartoWriter::new(
+                quarto,
+                working_directory,
+                dynamic_resolution,
+                python_preparation,
+                r_available,
+                target,
+            ),
         }
     }
 
@@ -63,6 +76,17 @@ impl Writers {
         self.markdown.append(MARKDOWN_HEADER, &fragment)?;
         self.quarto.append(&event.event)
     }
+
+    pub(super) fn configure(
+        &mut self,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+        target: Option<&Value>,
+    ) {
+        self.quarto
+            .configure(dynamic_resolution, python_preparation, r_available, target);
+    }
 }
 
 impl QuartoWriter {
@@ -70,6 +94,8 @@ impl QuartoWriter {
         path: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
         target: Option<&Value>,
     ) -> Self {
         let mut writer = Self {
@@ -78,15 +104,26 @@ impl QuartoWriter {
             r_requirements: Vec::new(),
             python_requirements: Vec::new(),
             dynamic_resolution,
+            r_available,
+            metadata_known: false,
             sources: Vec::new(),
+            environment_boundaries: false,
             target: target.cloned(),
         };
-        if dynamic_resolution {
+        if dynamic_resolution && r_available {
             writer.r_requirements.extend(
                 crate::worker_client::DEFAULT_R_REQUIREMENTS
                     .iter()
                     .map(|requirement| (*requirement).to_string()),
             );
+        }
+        if python_preparation {
+            writer.python_requirements.extend(
+                crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
+                    .iter()
+                    .map(|requirement| (*requirement).to_string()),
+            );
+        } else if dynamic_resolution {
             writer.python_requirements.extend(
                 crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
                     .iter()
@@ -96,10 +133,77 @@ impl QuartoWriter {
         writer
     }
 
+    fn configure(
+        &mut self,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+        target: Option<&Value>,
+    ) {
+        self.dynamic_resolution = dynamic_resolution;
+        self.r_available = r_available;
+        self.metadata_known = true;
+        self.r_requirements = if dynamic_resolution && r_available {
+            crate::worker_client::DEFAULT_R_REQUIREMENTS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.python_requirements = if python_preparation {
+            crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
+        } else if dynamic_resolution {
+            crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
+        } else {
+            &[]
+        }
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        self.target = target.cloned();
+    }
+
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
         let changed = match event {
-            Event::SessionStarted { .. } => true,
-            Event::ToolCall { request, .. } => {
+            Event::SessionStarted {
+                dynamic_resolution, ..
+            } => {
+                self.metadata_known = dynamic_resolution.is_some();
+                true
+            }
+            Event::EnvironmentDiscovered { .. } => true,
+            Event::PythonEnvironmentAccepted { packages } => {
+                self.python_requirements = packages.to_vec();
+                true
+            }
+            Event::RequirementsSelected {
+                call_id,
+                action,
+                snapshot,
+            } => {
+                self.environment_boundaries = true;
+                let position = self
+                    .sources
+                    .iter()
+                    .position(|source| source.call_id == *call_id)
+                    .unwrap_or(self.sources.len());
+                self.sources.insert(
+                    position,
+                    QuartoSource {
+                        call_id: *call_id,
+                        language: "",
+                        contents: format!(
+                            "Requirements selected ({action}):\n\n```json\n{}\n```\n\n",
+                            serde_json::to_string_pretty(snapshot).expect("requirements JSON")
+                        ),
+                    },
+                );
+                true
+            }
+            Event::ToolCall {
+                request, call_id, ..
+            } => {
                 let mut changed = false;
                 if self.dynamic_resolution
                     && let Some(requirements) = declared_requirements(request)
@@ -110,6 +214,7 @@ impl QuartoWriter {
                 }
                 if let Some(source) = submitted_source(request) {
                     self.sources.push(QuartoSource {
+                        call_id: Some(*call_id),
                         language: source.language,
                         contents: source.contents.to_string(),
                     });
@@ -117,9 +222,12 @@ impl QuartoWriter {
                 }
                 changed
             }
-            Event::ArtifactCreated { .. } | Event::CellOutput { .. } | Event::ToolResult { .. } => {
-                false
-            }
+            Event::TargetGeneration { .. }
+            | Event::ArtifactCreated { .. }
+            | Event::CellOutput { .. }
+            | Event::SessionOutput { .. }
+            | Event::StartupFailed { .. }
+            | Event::ToolResult { .. } => false,
         };
         if !changed {
             return Ok(());
@@ -129,36 +237,83 @@ impl QuartoWriter {
     }
 
     fn render(&self) -> String {
-        let mut document = String::from(
-            r#"---
-# Generated by MCP Console. Do not edit.
-title: MCP Console code cells
-knitr:
-  opts_knit:
-    root.dir: "#,
-        );
-        document.push_str(&yaml_string(&self.working_directory));
-        document.push_str(
-            r#"
+        let mut document = String::from("---\n# Generated by MCP Console. Do not edit.\n");
+        document.push_str(if !self.metadata_known {
+            "# Configure the unknown environment before enabling execution.\n"
+        } else if self.environment_boundaries {
+            "# Recreate the environments at the recorded boundaries before enabling execution.\n"
+        } else if self
+            .target
+            .as_ref()
+            .and_then(|target| target.pointer("/runtime/kind"))
+            .and_then(Value::as_str)
+            == Some("python")
+        {
+            "# Execute these cells in the preinstalled target environment recorded below.\n"
+        } else {
+            "# Run `ir render transcript.qmd` in a prepared environment to execute these cells.\n"
+        });
+        if self.metadata_known && !self.r_available && self.target.is_none() {
+            document.push_str(
+                "# IR rendering requires R on the render host, including for Python-only documents.\n",
+            );
+        }
+        document.push_str("title: MCP Console code cells\n");
+        if !self.metadata_known || self.environment_boundaries {
+            document.push_str("execute:\n  eval: false\n");
+        }
+        if !self.metadata_known {
+            document.push_str("mcp-console:\n  environment: unknown\n---\n\n");
+            document.push_str(
+                "Runtime discovery did not complete. The target and preparation capabilities are unknown.\n\n",
+            );
+        } else if let Some(target) = &self.target {
+            document.push_str("---\n\n");
+            write!(
+                document,
+                r#"<!-- Cells ran on {} target {}. Files and environments remain remote. Prepare them before rendering here. -->
+
+"#,
+                match target.pointer("/compute/kind").and_then(Value::as_str) {
+                    Some("docker") => "Docker",
+                    Some("docker_sandbox") => "Docker Sandbox",
+                    _ => "SSH",
+                },
+                target
+            )
+            .expect("writing to a String cannot fail");
+        } else {
+            document.push_str("knitr:\n  opts_knit:\n    root.dir: ");
+            document.push_str(&yaml_string(&self.working_directory));
+            document.push_str(
+                r#"
 ir:
   isolated: true
 "#,
-        );
-        push_yaml_sequence(&mut document, "  packages", &self.r_requirements);
-        push_yaml_sequence(
-            &mut document,
-            "  python-packages",
-            &self.python_requirements,
-        );
-        document.push_str("---\n\n");
-        if let Some(target) = &self.target {
-            document = format!(
-                "---\n# Generated by MCP Console. Do not edit.\ntitle: MCP Console code cells\nexecute:\n  eval: false\n---\n\n<!-- Cells ran on SSH target {}. Files and environments remain remote. Enable execution only in a deliberately prepared environment. -->\n\n",
-                target
             );
+            push_yaml_sequence(&mut document, "  packages", &self.r_requirements);
+            push_yaml_sequence(
+                &mut document,
+                "  python-packages",
+                &self.python_requirements,
+            );
+            document.push_str("---\n\n");
         }
 
+        if self.environment_boundaries {
+            document.push_str(
+                r#"Recreate the environments at the recorded boundaries before enabling execution.
+Cells may require incompatible declarations; the header is not a replay manifest.
+See transcript.md and internal/events.jsonl for requests, committed selections, and failures.
+
+"#,
+            );
+        }
         for source in &self.sources {
+            if source.language.is_empty() {
+                document.push_str(&source.contents);
+                continue;
+            }
             let language = format!("{{{}}}", source.language);
             push_quarto_fence(&mut document, &language, source.language, &source.contents);
         }
@@ -180,6 +335,12 @@ fn declared_requirements(request: &CallToolRequestParams) -> Option<DeclaredRequ
         .as_ref()?
         .get("requirements")?
         .as_object()?;
+    if matches!(
+        requirements.get("action").and_then(Value::as_str),
+        Some("get" | "set" | "reset")
+    ) {
+        return None;
+    }
     let r = requirement_strings(requirements, "r")?;
     let python = requirement_strings(requirements, "python")?;
     if r.is_empty() && python.is_empty() {
@@ -301,6 +462,22 @@ impl ProjectionWriter {
 
 fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), String> {
     match &envelope.event {
+        Event::EnvironmentDiscovered {
+            dynamic_resolution,
+            python_preparation,
+            r_available,
+            target,
+        } => {
+            document.push_str("## Runtime discovery\n\n");
+            push_json(
+                document,
+                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available, "target": target }),
+            )
+        }
+        Event::PythonEnvironmentAccepted { packages } => {
+            document.push_str("## Accepted Python environment\n\n");
+            push_json(document, &json!({ "packages": packages }))
+        }
         Event::SessionStarted {
             session,
             working_directory,
@@ -319,6 +496,29 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             document.push_str("## Session\n\n");
             push_json(document, &metadata)
         }
+        Event::TargetGeneration {
+            container_id,
+            sandbox,
+        } => {
+            if let Some(sandbox) = sandbox {
+                document.push_str("## MicroVM generation\n\n");
+                push_json(document, &json!({ "sandbox": sandbox }))
+            } else {
+                document.push_str("## Container generation\n\n");
+                push_json(document, &json!({ "container_id": container_id }))
+            }
+        }
+        Event::RequirementsSelected {
+            call_id,
+            action,
+            snapshot,
+        } => {
+            document.push_str("## Requirements selected\n\n");
+            push_json(
+                document,
+                &json!({"call_id": call_id, "action": action, "snapshot": snapshot}),
+            )
+        }
         Event::ToolCall {
             call_id, request, ..
         } => render_tool_call(document, *call_id, request),
@@ -328,11 +528,32 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             path,
             ..
         } => {
+            let owner = call_id.map_or_else(|| "session".into(), |id| format!("call {id}"));
             writeln!(
                 document,
-                "## Artifact {artifact_id} for call {call_id}\n\n[Artifact {artifact_id} from call {call_id}](<{path}>)\n"
+                "## Artifact {artifact_id} for {owner}
+
+[Artifact {artifact_id} from {owner}](<{path}>)
+"
             )
             .expect("writing to a String cannot fail");
+            Ok(())
+        }
+        Event::SessionOutput {
+            path,
+            retained_bytes,
+            discarded_bytes,
+            ..
+        } => {
+            if *retained_bytes != 0 || *discarded_bytes != 0 {
+                writeln!(document, "## Session output\n\n[Startup and idle output](<{path}>)\n\n{retained_bytes} raw bytes retained; {discarded_bytes} raw bytes not retained in this file.\n")
+                    .expect("writing to a String cannot fail");
+            }
+            Ok(())
+        }
+        Event::StartupFailed { message } => {
+            document.push_str("## Startup failed\n\n");
+            push_fence(document, "text", message);
             Ok(())
         }
         Event::CellOutput {
@@ -346,7 +567,12 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             if *inline_omitted_bytes != 0 || *discarded_bytes != 0 {
                 writeln!(
                     document,
-                    "## Retained output for call {call_id}\n\n[Retained text output for call {call_id}](<{path}>)\n\n{retained_bytes} bytes retained; {inline_omitted_bytes} bytes omitted from inline responses; {discarded_bytes} bytes not retained in this file.\n"
+                    "## Retained output for call {call_id}
+
+[Retained text output for call {call_id}](<{path}>)
+
+{retained_bytes} raw bytes retained; {inline_omitted_bytes} rendered UTF-8 bytes omitted from inline responses; {discarded_bytes} raw bytes not retained in this file.
+"
                 )
                 .expect("writing to a String cannot fail");
             }

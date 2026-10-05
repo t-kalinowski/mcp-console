@@ -4,21 +4,32 @@ use std::process::{Command, ExitCode, Stdio};
 
 use serde_json::{Value, json};
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 mod installation;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 mod runner;
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 mod unsupported;
 
 const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
-pub fn capture_settings(roots: Vec<PathBuf>) -> Result<crate::settings::SandboxSettings, String> {
-    let (source, settings, _) = crate::settings::discover()?;
-    capture_policy(source, settings, roots)
+pub fn capture_settings(
+    roots: Vec<PathBuf>,
+    overrides: &[String],
+) -> Result<crate::settings::SandboxSettings, String> {
+    let crate::settings::Captured {
+        source,
+        policy: settings,
+        provider,
+        ..
+    } = crate::settings::discover(overrides)?;
+    if provider == crate::settings::Provider::Compute {
+        return Err("standalone sandbox is local and cannot use the resolved compute provider; use mcp-console serve for Docker Sandbox execution".into());
+    }
+    capture_policy(source.as_deref(), settings, roots)
 }
 
-pub fn capture_policy(
+fn capture_policy(
     source: Option<&str>,
     settings: crate::settings::SandboxSettings,
     roots: Vec<PathBuf>,
@@ -127,24 +138,33 @@ pub fn materialize_settings(
     Ok(settings)
 }
 
-/// Validate native policy and setup before workload startup or server readiness.
+/// Validate native policy and setup for the standalone sandbox command.
 /// The child explicitly consumes the snapshot, so it cannot rediscover settings.
 fn preflight(settings: &crate::settings::SandboxSettings) -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot locate sandbox launcher: {error}"))?;
     let payload = serde_json::to_string(settings)
         .map_err(|error| format!("cannot encode sandbox settings: {error}"))?;
-    let output = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(["sandbox", "--exit-with-parent"])
         .arg(std::process::id().to_string())
-        .args([
-            "--settings-env",
-            crate::settings::ENVIRONMENT,
-            "--",
-            "/usr/bin/true",
-        ])
+        .args(["--settings-env", crate::settings::ENVIRONMENT, "--"])
         .env(crate::settings::ENVIRONMENT, payload)
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    #[cfg(unix)]
+    command.arg("/usr/bin/true");
+    #[cfg(windows)]
+    command
+        .arg(
+            std::path::PathBuf::from(
+                std::env::var_os("SystemRoot").ok_or("SystemRoot is unavailable")?,
+            )
+            .join("System32")
+            .join("cmd.exe"),
+        )
+        .args(["/d", "/c", "exit", "0"]);
+    let output = command
         .output()
         .map_err(|error| format!("cannot start sandbox preflight: {error}"))?;
     if !output.status.success() {
@@ -173,15 +193,21 @@ pub fn run(
     config_env: Option<&str>,
     settings_env: Option<&str>,
     writable_roots: Vec<PathBuf>,
+    overrides: &[String],
 ) -> Result<ExitCode, String> {
+    if !overrides.is_empty() && (config_env.is_some() || settings_env.is_some()) {
+        return Err(
+            "configuration overrides cannot be combined with --config-env or --settings-env".into(),
+        );
+    }
     let settings = if config_env.is_some() {
         crate::settings::SandboxSettings::default()
     } else if let Some(name) = settings_env {
         crate::settings::from_environment(name)?
     } else {
-        capture_settings(writable_roots)?
+        capture_settings(writable_roots, overrides)?
     };
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     {
         runner::run(
             command,
@@ -191,9 +217,22 @@ pub fn run(
             settings,
         )
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = (exit_with_parent, config_env, settings_env, settings);
         unsupported::run(command)
     }
+}
+
+#[cfg(windows)]
+pub fn windows_setup(status: bool, state_dir: Option<PathBuf>) -> Result<ExitCode, String> {
+    let mut runner = Command::new(installation::private_runner()?);
+    runner.arg(if status { "status" } else { "setup" });
+    if let Some(state_dir) = state_dir {
+        runner.arg("--state-dir").arg(state_dir);
+    }
+    let status = runner
+        .status()
+        .map_err(|error| format!("failed to launch Windows sandbox setup: {error}"))?;
+    Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
 }

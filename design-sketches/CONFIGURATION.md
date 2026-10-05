@@ -69,7 +69,7 @@ The most consequential choices are:
 The implemented project-editing configuration is one line:
 
 ```yaml
-extends: ":workspace"
+extends: :workspace
 ```
 
 This grants writes beneath the fixed launch workspace, with `.git`, `.agents`, `.codex`, and `.claude` readable and protected from writes by default.
@@ -131,8 +131,9 @@ Its `allowWrite`, `denyWrite`, `denyRead`, domain rules, local binding, and Unix
 MCP Console uses snake_case equivalents and makes listener publishing a separate concern.
 SRT also distinguishes filesystem and proxy-mediated network enforcement.[2]
 
-The native runner is the implementation boundary for the proposed configuration.
-An alternative provider remains exploratory and must own its policy interpretation and enforcement.
+The native runner owns native policy interpretation and enforcement.
+The implemented [Docker Sandbox compute provider](../docs/DOCKER_SANDBOX.md) uses Docker's existing policy and rejects unsupported native restrictions.
+The broader provider selection below remains exploratory; each provider must own its policy interpretation and enforcement.
 Adapters may map configuration fields to a provider's API, but Console does not supply a shared security validator or evaluator for them.
 
 ### Current MCP Console
@@ -201,7 +202,7 @@ Do not add a config-path or storage-root override that scatters Console-managed 
 
 ```yaml
 version: 1
-extends: ":read-only"
+extends: :read-only
 permissions:
   filesystem:
     allow_write: [.]
@@ -209,7 +210,7 @@ permissions:
 
 profiles:
   review:
-    extends: ":read-only"
+    extends: :read-only
 
   api_work:
     extends: default
@@ -246,7 +247,7 @@ To remove sandboxing while retaining an already selected remote target, use the 
 
 ```yaml
 version: 1
-extends: ":read-only"
+extends: :read-only
 
 definitions:
   targets:
@@ -353,10 +354,12 @@ Repeating its native metadata defaults is unnecessary.
 
 ### Proposed custom-profile composition and sandbox policy
 
-For the proposed general configuration layering, omitted values would inherit, scalar values replace, mappings merge by key, and sequences replace.
-This is not the implemented built-in adapter: current restricted filesystem entries augment the native baseline, network values replace its network setting, and unrestricted/external filesystem kinds replace its filesystem.
-Changing a tagged object's `kind` replaces that whole object rather than retaining incompatible fields from its old kind.
-For example, changing a Python environment from `managed` to `existing` does not retain the managed requirements list.
+The implemented [project-file and CLI layering](../docs/CONFIGURATION.md) preserves omitted keys, merges mappings recursively, and replaces scalar values and sequences.
+Explicit null remains a value.
+These generic rules run before the built-in adapter: current restricted filesystem entries augment the native baseline, network values replace its network setting, and unrestricted/external filesystem kinds replace its filesystem.
+For future custom-profile composition, changing a tagged object's `kind` could replace that whole object rather than retaining incompatible fields from its old kind.
+That field-specific behavior is not part of the implemented generic layering module.
+Under that proposal, changing a Python environment from `managed` to `existing` would not retain the managed requirements list.
 
 Permission blocks describe the policy requested from the sandbox.
 Console does not evaluate access rules, compare permissions, or add a separate set-delta language.
@@ -365,7 +368,7 @@ Use a profile with the desired baseline and supply its requested rules:
 ```yaml
 profiles:
   write_results_only:
-    extends: ":read-only"
+    extends: :read-only
     permissions:
       filesystem:
         allow_write: [results]
@@ -382,7 +385,7 @@ This built-in selector is a proposal:
 
 ```yaml
 version: 1
-extends: ":danger-full-access"
+extends: :danger-full-access
 ```
 
 It may add a target, environments, and resources; document-wide storage settings still apply.
@@ -555,7 +558,7 @@ None should imply the others.
 
 ```yaml
 version: 1
-extends: ":workspace"
+extends: :workspace
 permissions:
   network:
     mode: none
@@ -762,6 +765,9 @@ Filesystem permissions refer to `/workspace` inside the container.
 Cache backing and service forwarding are likewise resolved across both boundaries.
 
 ### Docker Sandbox
+
+The [implemented first slice](../docs/DOCKER_SANDBOX.md) requires a prepared digest-qualified template, explicit same-path shares, and one owned VM per worker generation.
+The session lifetime and policy translation described below remain proposals.
 
 ```yaml
 target:

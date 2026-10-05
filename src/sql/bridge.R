@@ -28,22 +28,64 @@ base::local(
         return(invisible(managed_connection))
       }
 
-      storage <- file.path(tempdir(), "mcp-console-duckdb")
-      managed_connection <<- DBI::dbConnect(
+      storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
+      connection <- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",
           config = list(
-            # Suppress DuckDB-R's temporary fallback while leaving DuckDB core
-            # to resolve its native default extension directory.
-            extension_directory = "",
+            # Share the captured cache with preparation, or leave this empty
+            # for DuckDB core's native default when no cache was supplied.
+            extension_directory = Sys.getenv(
+              "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
+            ),
             secret_directory = file.path(storage, "stored-secrets"),
             temp_directory = file.path(storage, "spill")
           ),
           environment_scan = TRUE
         )
       )
-      DBI::dbExecute(managed_connection, "SET enable_progress_bar = false")
+      on.exit({
+        if (is.null(managed_connection)) {
+          tryCatch(
+            DBI::dbDisconnect(connection),
+            error = function(condition) {
+              cat(
+                "Error closing SQL connection: ",
+                conditionMessage(condition),
+                "\n",
+                sep = ""
+              )
+            }
+          )
+        }
+      })
+      DBI::dbExecute(connection, "SET enable_progress_bar = false")
+      managed_connection <<- connection
       invisible(managed_connection)
+    }
+
+    initialize_managed_connection <- function() {
+      tryCatch(
+        {
+          # Bare and prepared environments may omit the optional managed provider.
+          if (
+            !nzchar(system.file(package = "DBI")) ||
+              !nzchar(system.file(package = "duckdb"))
+          ) {
+            return(0L)
+          }
+          ensure_managed_connection()
+          1L
+        },
+        interrupt = function(condition) {
+          cat("\n")
+          -1L
+        },
+        error = function(condition) {
+          cat("Error: ", conditionMessage(condition), "\n", sep = "")
+          0L
+        }
+      )
     }
 
     ensure_connection <- function() {
@@ -54,6 +96,9 @@ base::local(
     }
 
     sql_connection <- function() {
+      if (.Call("mcp_console_sql_take_restore_request")) {
+        selected_connection <<- NULL
+      }
       ensure_connection()
     }
 

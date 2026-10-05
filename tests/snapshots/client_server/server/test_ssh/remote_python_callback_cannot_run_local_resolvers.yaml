@@ -1,0 +1,11 @@
+---
+send:
+  r: one_cell_only <- TRUE
+result:
+  content:
+    - type: text
+      text: |
+        dynamic environment resolution is unavailable
+  isError: false
+---
+standard_error: ""

@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import select
 import shutil
@@ -13,17 +14,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text, wait_for_evaluation_output
-from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.native import SHARED_LIBRARY_FLAG
+from support.python import runtime_source_line
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_python_preparation_while_evaluation_is_running(
     binary: Path,
@@ -43,6 +46,7 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(binary, execution.serve(), environment)
         client.initialize_and_list_tools()
+        # fmt: python
         python = code("""
             runtime_generation_marker = "original runtime retained"
             preparation_gate = input("preparation gate> ")
@@ -144,26 +148,8 @@ def test_interrupts_running_python_evaluation(
             r = code(r"""
                 python_interrupt_started <- tempfile("python-interrupt-started-")
                 python_interrupt_release <- tempfile("python-interrupt-release-")
-                Sys.setenv(
-                  MCP_CONSOLE_PYTHON_INTERRUPT_STARTED = python_interrupt_started,
-                  MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE = python_interrupt_release
-                )
-                # Complete Python initialization before arming the dispatch checkpoint.
+                # Initialize from R before the Python evaluation checkpoint.
                 invisible(reticulate::py_config())
-                invisible(suppressMessages(base::trace(
-                  "py_eval",
-                  tracer = quote({
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "python-r-interrupt-started"
-                    )))
-                    repeat {
-                      Sys.sleep(60)
-                    }
-                  }),
-                  print = FALSE,
-                  where = asNamespace("reticulate")
-                )))
                 cat(python_interrupt_started, python_interrupt_release, sep = "\n")
                 """)
             client.send(r=r)
@@ -174,52 +160,8 @@ def test_interrupts_running_python_evaluation(
             started, release = [FifoCheckpoint.create(Path(path)) for path in paths]
             checkpoints.extend((started, release))
 
-            client.send(python="42", timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "python-r-interrupt-started",
-                client,
-            )
-
-            client.send(control="interrupt", timeout_ms=0)
-            result = client.transcript[-1]["result"]
-            assert result["isError"] is False, result
-            output = last_result_text(client)
-            assert output == "\n", repr(output)
-
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::untrace(
-                  "py_eval",
-                  where = asNamespace("reticulate")
-                )))
-                # Poison reticulate's cached result wrapper after MCP Console
-                # initializes its private Python evaluator. Cell results must
-                # still return through direct conversion instead of that wrapper.
-                invisible(reticulate::py_eval(
-                  r"---(
-                exec(
-                    "import inspect\n"
-                    "inspect._mcp_original_getmro_code = inspect.getmro.__code__\n"
-                    "def _mcp_interrupting_getmro(cls):\n"
-                    "    getmro.__code__ = _mcp_original_getmro_code\n"
-                    "    raise KeyboardInterrupt\n"
-                    "inspect.getmro.__code__ = _mcp_interrupting_getmro.__code__\n"
-                )
-                )---",
-                  convert = TRUE
-                ))
-                """)
-            client.send(r=r)
-            assert last_result_text(client) == "[done]"
-
             # fmt: python
             python = code("""
-                import inspect
-
-                inspect.getmro.__code__ = inspect._mcp_original_getmro_code
-
                 import ctypes
                 import os
                 import signal
@@ -240,12 +182,12 @@ def test_interrupts_running_python_evaluation(
                 try:
                     with (
                         open(
-                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_STARTED"],
+                            r.python_interrupt_started,
                             "wb",
                             buffering=0,
                         ) as started,
                         open(
-                            os.environ["MCP_CONSOLE_PYTHON_INTERRUPT_RELEASE"],
+                            r.python_interrupt_release,
                             "rb",
                             buffering=0,
                         ) as release,
@@ -275,7 +217,12 @@ def test_interrupts_running_python_evaluation(
             client.send()
             assert "KeyboardInterrupt" in last_result_text(client)
 
-            client.send(python="python_interrupt_state + 1")
+            client.send(
+                # fmt: python
+                python=code("""
+                    python_interrupt_state + 1
+                    """)
+            )
             assert last_result_text(client) == "42\n"
             transcript = client.finish()
             passed = True
@@ -290,25 +237,269 @@ def test_interrupts_running_python_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(POSIX)
+def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # Complete startup before observing the blocking syscall.
+        # fmt: r
+        r = code("""
+            raw_event_wait <- function() Sys.sleep(0.001)
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        # fmt: python
+        python = code("""
+            raw_state = object()
+            original_raw_state = raw_state
+            # Complete bridge attachment before the blocking-read checkpoint.
+            r.raw_event_wait()
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == "[done]"
+        # fmt: python
+        python = code("""
+            import os
+
+            # Exercise R's temporary SIGINT handler inside the same Python cell.
+            r.raw_event_wait()
+            print("reading raw stdin", flush=True)
+            try:
+                os.read(0, 1)
+            except KeyboardInterrupt:
+                print("raw read interrupted")
+            else:
+                raise AssertionError("raw read completed without an interrupt")
+            """)
+        wait_for_evaluation_output(
+            client,
+            "reading raw stdin\n\n[running; poll with an empty send]",
+            "Python raw stdin read",
+            python=python,
+            timeout_ms=0,
+        )
+        wait_for_evaluation_output(
+            client,
+            "raw read interrupted\n",
+            "Python raw stdin interrupt",
+            control="interrupt",
+            timeout_ms=0,
+        )
+        client.send(python="raw_state is original_raw_state")
+        assert last_result_text(client) == "True\n"
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_nested_language_calls_once(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # Initialize Python from R and keep objects in both runtimes throughout.
+        # fmt: r
+        r = code(r"""
+            nested_r_state <- new.env()
+            nested_r_original <- nested_r_state
+            nested_input <- function() readline("nested R> ")
+            invisible(reticulate::py_config())
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        # fmt: python
+        python = code(r"""
+            import os
+            import signal
+
+            nested_state = object()
+            nested_original = nested_state
+
+
+            def signal_while_suspended():
+                os.kill(os.getpid(), signal.SIGINT)
+                print("Python completed while suspended")
+
+
+            def read_while_suspended():
+                global suspended_line
+                suspended_line = input("suspended Python> ")
+                print(suspended_line)
+
+
+            try:
+                r.nested_input()
+            except KeyboardInterrupt:
+                print("Python caught R interrupt")
+            print("Python continued")
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == (
+            '[input requested: "nested R> "]\n[waiting for stdin]'
+        )
+        wait_for_evaluation_output(
+            client,
+            "Python caught R interrupt\nPython continued\n",
+            "Python-to-R interrupt acknowledged once",
+            control="interrupt",
+        )
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              reticulate::py_run_string("input('nested Python> ')"),
+              interrupt = function(condition) cat("R caught Python interrupt\n")
+            )
+            cat("R continued\n")
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == (
+            '[input requested: "nested Python> "]\n[waiting for stdin]'
+        )
+        wait_for_evaluation_output(
+            client,
+            "R caught Python interrupt\nR continued\n",
+            "R-to-Python interrupt acknowledged once",
+            control="interrupt",
+        )
+        # A signal raised while R suspends interrupts must let Python finish
+        # its bytecode. Re-arming in the Python handler would spin here.
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              {
+                suspendInterrupts(reticulate::py_run_string(
+                  "signal_while_suspended()"
+                ))
+                Sys.sleep(0) # Explicitly check R interrupts inside the handler.
+              },
+              interrupt = function(condition) cat("R accepted deferred interrupt\n")
+            )
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == (
+            "Python completed while suspended\nR accepted deferred interrupt\n"
+        ), repr(last_result_text(client))
+        # Managed input also remains usable inside that suspended state.
+        # fmt: r
+        r = code(r"""
+            tryCatch(
+              {
+                suspendInterrupts(reticulate::py_run_string(
+                  "read_while_suspended()"
+                ))
+                Sys.sleep(0)
+              },
+              interrupt = function(condition) cat("R accepted input interrupt\n")
+            )
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == (
+            '[input requested: "suspended Python> "]\n[waiting for stdin]'
+        )
+        client.send(control="interrupt", timeout_ms=0)
+        assert last_result_text(client) == "\n[waiting for stdin]"
+        wait_for_evaluation_output(
+            client,
+            "accepted\nR accepted input interrupt\n",
+            "suspended Python input",
+            stdin="accepted\n",
+        )
+        client.send(python="nested_state is nested_original")
+        assert last_result_text(client) == "True\n"
+        client.send(r="identical(nested_r_state, nested_r_original)")
+        assert last_result_text(client) == "[1] TRUE\n"
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_releases_python_threads_during_managed_input(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            input_release <- tempfile("input-thread-release-")
+            input_completed <- tempfile("input-thread-completed-")
+            cat(input_release, input_completed, sep = "\n")
+            """)
+        client.send(r=r)
+        paths = last_result_text(client).splitlines()
+        assert len(paths) == 2, paths
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "<thread release>\n<thread completed>"
+        )
+        release, completed = [FifoCheckpoint.create(Path(path)) for path in paths]
+        try:
+            # fmt: python
+            python = code(r"""
+                import threading
+
+                release_path = r.input_release
+                completed_path = r.input_completed
+
+
+                def input_thread():
+                    with open(release_path, "rb", buffering=0) as gate:
+                        assert gate.read(1) == b"1"
+                    with open(completed_path, "wb", buffering=0) as receipt:
+                        receipt.write(b"1")
+
+
+                background = threading.Thread(target=input_thread, daemon=True)
+                background.start()
+                line = input("thread progress> ")
+                background.join()
+                print(line)
+                """)
+            client.send(python=python)
+            assert last_result_text(client) == (
+                '[input requested: "thread progress> "]\n[waiting for stdin]'
+            )
+            release.release()
+            completed.wait("background Python progressed during managed input")
+            wait_for_evaluation_output(
+                client, "finished\n", "managed input completion", stdin="finished\n"
+            )
+            return client.finish()
+        finally:
+            release.close()
+            completed.close()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_initializes_private_runtime_once_on_first_python_cell(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # The shared runtime owns module setup. Observe the public initialization
+    # hook instead of counting the removed R-side Matplotlib callback.
     # fmt: r
     r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load"))
+        stopifnot(!reticulate::py_available(initialize = FALSE))
+        initialization_count <- 0L
+        setHook("reticulate.onPyInit", function() {
+          initialization_count <<- initialization_count + 1L
+        }, action = "append")
         """)
     client.send(r=r)
-    assert last_result_text(client) == "[1] 1\n"
-    client.send(python="42")
+    assert last_result_text(client) == "[done]"
+    client.send(
+        python="runtime_identity = object(); runtime_identity_id = id(runtime_identity); 42"
+    )
     assert last_result_text(client) == "42\n"
-    # fmt: r
-    r = code(r"""
-        length(getHook("reticulate::matplotlib.pyplot::load"))
-        """)
-    client.send(r=r)
+    client.send(python="assert id(runtime_identity) == runtime_identity_id; 43")
+    assert last_result_text(client) == "43\n"
+    client.send(r="initialization_count")
+    assert last_result_text(client) == "[1] 0\n"
+    client.send(r="invisible(reticulate::py_config()); initialization_count")
+    assert last_result_text(client) == "[1] 1\n"
+    client.send(python="assert id(runtime_identity) == runtime_identity_id; 44")
+    assert last_result_text(client) == "44\n"
+    client.send(r="invisible(reticulate::py_config()); initialization_count")
     assert last_result_text(client) == "[1] 1\n"
     return client.finish()
 
@@ -318,59 +509,55 @@ def test_retries_python_runtime_initialization_after_interrupt(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
+    configuration_line = runtime_source_line("_defaults.apply(name)")
+    numpy_line = runtime_source_line('if module.get_printoptions()["linewidth"] == 75:')
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        modules = Path(temporary_directory) / "modules"
+        modules.mkdir()
+        # Interrupt the shared setup boundary, independently of bridge hooks.
+        # Restore the function before blocking so retry has no second gate.
+        checkpoint = code("""
+            import __main__
+            import numpy as np
+
+            __main__.runtime_identity = object()
+            __main__.runtime_identity_id = id(__main__.runtime_identity)
+            original_get_printoptions = np.get_printoptions
+            def configuration_checkpoint():
+                np.get_printoptions = original_get_printoptions
+                input('python runtime configuring> ')
+                return original_get_printoptions()
+            np.get_printoptions = configuration_checkpoint
+            """)
+        (modules / "sitecustomize.py").write_text(
+            f"exec(compile({json.dumps(checkpoint)}, '<runtime setup checkpoint>', 'exec'))"
+        )
+        environment["RETICULATE_PYTHONPATH"] = str(modules)
         client = McpClient(binary, execution.serve(), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::trace(
-                  "py_set_attr",
-                  tracer = quote({
-                    if (
-                      identical(name, "operation") &&
-                        identical(value, "configure_import_resolution")
-                    ) {
-                      invisible(readline("python runtime configuring> "))
-                    }
-                  }),
-                  print = FALSE,
-                  where = asNamespace("reticulate")
-                )))
-                """)
-            wait_for_evaluation_output(
-                client, "[done]", "Python configuration checkpoint", r=r
-            )
-
-            # The input request proves runtime configuration has started before
-            # interrupting it, after any first-use Python preparation completes.
             client.send(python="42")
             assert last_result_text(client) == (
                 '[input requested: "python runtime configuring> "]\n[waiting for stdin]'
-            )
+            ), last_result_text(client)
 
             client.send(control="interrupt", timeout_ms=0)
             result = client.transcript[-1]["result"]
             assert result["isError"] is False, result
             output = last_result_text(client)
-            assert output in {"", "\n"}, repr(output)
-            result["content"][0]["text"] = output.rstrip("\n")
+            assert output == (
+                "Traceback (most recent call last):\n"
+                f'  File "<string>", line {configuration_line}, in _mcp_console_configure_module_defaults\n'
+                f'  File "<string>", line {numpy_line}, in apply\n'
+                '  File "<runtime setup checkpoint>", line 9, in configuration_checkpoint\n'
+                '  File "<string>", line 50, in _console_input\n'
+                "KeyboardInterrupt\n"
+            ), repr(output)
 
-            # fmt: r
-            r = code(r"""
-                invisible(suppressMessages(base::untrace(
-                  "py_set_attr",
-                  where = asNamespace("reticulate")
-                )))
-                length(getHook("reticulate::matplotlib.pyplot::load"))
-                """)
-            client.send(r=r)
-            assert last_result_text(client) == "[1] 1\n"
-
-            client.send(python="42")
+            client.send(python="assert id(runtime_identity) == runtime_identity_id; 42")
             output = last_result_text(client)
             assert output == "42\n", repr(output)
             client.send(python="import yaml12; yaml12.__name__")
@@ -397,6 +584,48 @@ def test_retries_python_runtime_initialization_after_interrupt(
         finally:
             if not passed:
                 stop_client(client)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_dispatches_cells_without_reticulate_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        client.send(python="direct_state = [41]")
+        assert last_result_text(client) == "[done]"
+        # Ordinary Python setup and evaluation do not call reticulate's
+        # R evaluation entry points. This instrumentation is confined to R.
+        # fmt: r
+        r = code(r"""
+            for (name in c("py_eval", "py_run_string")) {
+              invisible(suppressMessages(base::trace(
+                name,
+                tracer = quote(stop("R-mediated Python cell dispatch")),
+                print = FALSE,
+                where = asNamespace("reticulate")
+              )))
+            }
+            invisible(suppressMessages(base::trace(
+              "readline",
+              tracer = quote(stop("R-mediated Python input")),
+              print = FALSE,
+              where = baseenv()
+            )))
+            """)
+        client.send(r=r)
+        assert last_result_text(client) == "[done]"
+        client.send(python="direct_state.append(42); direct_state")
+        assert last_result_text(client) == "[41, 42]\n"
+        client.send(python='input("direct> ")', stdin="still live\n")
+        assert last_result_text(client) == (
+            "[input requested: \"direct> \"]\n'still live'\n"
+        )
+        client.send(python='raise ValueError("direct exception")')
+        assert last_result_text(client).endswith("ValueError: direct exception\n")
+        client.send(python="direct_state")
+        assert last_result_text(client) == "[41, 42]\n"
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -444,6 +673,7 @@ def test_dispatch_does_not_mutate_python_globals(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_live_python_resolver(
     binary: Path, execution: Execution
@@ -463,7 +693,7 @@ def test_interrupts_live_python_resolver(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -532,6 +762,7 @@ def test_interrupts_live_python_resolver(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_cancels_live_python_preparation(
     binary: Path, execution: Execution
@@ -541,7 +772,7 @@ def test_restart_cancels_live_python_preparation(
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()

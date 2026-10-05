@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
 from support.execution import SANDBOXED
+from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import SANDBOX, command, requires
@@ -35,27 +36,33 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         ir_cache = ir_cache_directory(environment)
         client = McpClient(
             binary,
-            SANDBOXED.serve(),
+            SANDBOXED.serve("-c", "cache=host"),
             environment,
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
         (workspace / "render-value.txt").write_text("40\n", encoding="utf-8")
-        r_source = (
-            "  #| eval: false\n"
-            'echo <- 0L\nrender_value <- as.integer(readLines("render-value.txt"))\n'
-            'cat("executed-r=40\\n")'
-        )
+        # fmt: r
+        r_source = code(r"""
+              #| eval: false
+            echo <- 0L
+            render_value <- as.integer(readLines("render-value.txt"))
+            cat("executed-r=40\n")
+            """).removesuffix("\n")
         client.send(r=r_source)
         assert client.transcript[-1]["result"]["content"] == [
             {"type": "text", "text": "executed-r=40\n"}
         ]
-        source = (
-            "  #| eval: false\n"
-            'echo = """before\n````\n<div>not markdown</div>\nafter"""\n'
-            'print(f"executed-python={int(r.render_value) + 2}")\n'
-            "print(echo)"
-        )
+        # fmt: python
+        source = code(r'''
+              #| eval: false
+            echo = """before
+            ````
+            <div>not markdown</div>
+            after"""
+            print(f"executed-python={int(r.render_value) + 2}")
+            print(echo)
+            ''').removesuffix("\n")
         client.send(python=source)
         python_result = client.transcript[-1]["result"]["content"][0]["text"]
         assert "executed-python=42" in python_result, python_result
@@ -106,13 +113,13 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             "document": document.read_text(encoding="utf-8"),
         }
 
-        render_script = r"""
-set -eu
-cp "$1" "$TMPDIR/transcript.qmd"
-cd "$TMPDIR"
-export HOME="$TMPDIR"
-exec ir render transcript.qmd --to html --output - --quiet
-""".lstrip()
+        render_script = code(r"""
+            set -eu
+            cp "$1" "$TMPDIR/transcript.qmd"
+            cd "$TMPDIR"
+            export HOME="$TMPDIR"
+            exec ir render transcript.qmd --to html --output - --quiet
+            """)
         rendering = subprocess.run(
             [
                 binary,

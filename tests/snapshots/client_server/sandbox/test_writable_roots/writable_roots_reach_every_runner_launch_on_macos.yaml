@@ -21,8 +21,11 @@ send:
         _ = (root / "persistent").write_text("user data")
         subprocess.run(["touch", str(root / "child")], check=True)
     _ = (host / "cache" / "temporary-path").write_text(str(temporary))
-    for denied in (host / "parent-write", host / "neighbor" / "created",
-                   host / "output café 雪" / "escape" / "created"):
+    for denied in (
+        host / "parent-write",
+        host / "neighbor" / "created",
+        host / "output café 雪" / "escape" / "created",
+    ):
         try:
             _ = denied.write_text("must not be written")
         except OSError as error:
@@ -30,7 +33,9 @@ send:
         else:
             raise AssertionError(f"unexpected write: {denied}")
     os.chdir(host / "output café 雪")
-    print("both grants and subprocess writes verified; neighboring and symlink writes denied")
+    print(
+        "both grants and subprocess writes verified; neighboring and symlink writes denied"
+    )
 result:
   content:
     - type: text
@@ -86,8 +91,11 @@ send:
         _ = (root / "persistent").write_text("user data")
         subprocess.run(["touch", str(root / "child")], check=True)
     _ = (host / "cache" / "temporary-path").write_text(str(temporary))
-    for denied in (host / "parent-write", host / "neighbor" / "created",
-                   host / "output café 雪" / "escape" / "created"):
+    for denied in (
+        host / "parent-write",
+        host / "neighbor" / "created",
+        host / "output café 雪" / "escape" / "created",
+    ):
         try:
             _ = denied.write_text("must not be written")
         except OSError as error:
@@ -95,7 +103,9 @@ send:
         else:
             raise AssertionError(f"unexpected write: {denied}")
     os.chdir(host / "output café 雪")
-    print("both grants and subprocess writes verified; neighboring and symlink writes denied")
+    print(
+        "both grants and subprocess writes verified; neighboring and symlink writes denied"
+    )
 result:
   content:
     - type: text
@@ -148,8 +158,11 @@ send:
         _ = (root / "persistent").write_text("user data")
         subprocess.run(["touch", str(root / "child")], check=True)
     _ = (host / "cache" / "temporary-path").write_text(str(temporary))
-    for denied in (host / "parent-write", host / "neighbor" / "created",
-                   host / "output café 雪" / "escape" / "created"):
+    for denied in (
+        host / "parent-write",
+        host / "neighbor" / "created",
+        host / "output café 雪" / "escape" / "created",
+    ):
         try:
             _ = denied.write_text("must not be written")
         except OSError as error:
@@ -157,7 +170,9 @@ send:
         else:
             raise AssertionError(f"unexpected write: {denied}")
     os.chdir(host / "output café 雪")
-    print("both grants and subprocess writes verified; neighboring and symlink writes denied")
+    print(
+        "both grants and subprocess writes verified; neighboring and symlink writes denied"
+    )
 result:
   content:
     - type: text

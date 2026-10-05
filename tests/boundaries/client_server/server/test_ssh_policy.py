@@ -1,9 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
-import os
 import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -21,18 +19,26 @@ from support.resolvers import send_and_collect_runtime_python_resolution
 from support.ssh import (
     CONFIG,
     SSH,
-    EXTERNAL_SSH,
     configure,
+    client_environment,
     localhost,
     poison_controller,
     remote_command,
 )
+from support.ssh_external import EXTERNAL_SSH, external_target
 from support.suites import run_this_suite
 
 
+# fmt: r
 EXERCISE = code(r"""
     writable <- function(path) {
-      tryCatch({writeLines("remote value", path); TRUE}, error = function(error) FALSE)
+      tryCatch(
+        {
+          writeLines("remote value", path)
+          TRUE
+        },
+        error = function(error) FALSE
+      )
     }
     suppressWarnings(stopifnot(
       writable("results/value"),
@@ -104,11 +110,13 @@ def test_policy_uses_remote_paths_and_native_validation(binary: Path) -> Transcr
                 client.stdout.read(timeout=12)
                 stderr = client.stderr.read(timeout=12)
                 client.process.wait(timeout=12)
-                assert "mcp-console-sandbox: invalid configuration JSON" in stderr, (
-                    stderr
-                )
-                stderr = re.sub(
-                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", stderr
+                assert (
+                    "mcp-console-sandbox: invalid configuration JSON"
+                    in last_result_text(client)
+                ), stderr
+                content = client.transcript[-1]["result"]["content"][0]
+                content["text"] = re.sub(
+                    r"(at line [0-9]+, column )[0-9]+", r"\1<column>", content["text"]
                 )
                 transcript.extend(client.transcript[3:])
                 transcript.append({"standard_error": stderr})
@@ -170,10 +178,14 @@ def test_invalid_environment_reaches_remote_native_validation(
                         stderr = client.stderr.read(timeout=12)
                         client.process.wait(timeout=12)
                         assert (
-                            "mcp-console-sandbox: invalid configuration JSON" in stderr
+                            "mcp-console-sandbox: invalid configuration JSON"
+                            in last_result_text(client)
                         ), stderr
-                        stderr = re.sub(
-                            r"(at line [0-9]+, column )[0-9]+", r"\1<column>", stderr
+                        content = client.transcript[-1]["result"]["content"][0]
+                        content["text"] = re.sub(
+                            r"(at line [0-9]+, column )[0-9]+",
+                            r"\1<column>",
+                            content["text"],
                         )
                         transcript.append(
                             {"inherit_environment": inherit, "environment": invalid}
@@ -201,13 +213,16 @@ def test_nul_runtime_selectors_fail_on_remote_host_without_panicking(
                     sandbox={"environment": {name: "invalid\0selection"}},
                 )
                 with McpClient(binary, ("serve",), environment, root) as client:
+                    startup = client.startup_error()
+                    client.stdin.close()
                     assert client.process.wait(timeout=12) != 0
                     assert not client.stdout.read()
                     errors = client.stderr.read()
-                    assert f"remote {name} selection must not contain NUL" in errors, (
+                    assert f"remote {name} selection must not contain NUL" in startup, (
                         errors
                     )
                     assert "panicked" not in errors, errors
+                    transcript.extend(client.transcript[3:])
                     transcript.append({"selection": name, "standard_error": errors})
             assert not trap.exists(), "controller discovered an execution runtime"
     return transcript
@@ -215,10 +230,7 @@ def test_nul_runtime_selectors_fail_on_remote_host_without_panicking(
 
 @requires(EXTERNAL_SSH)
 def test_external_execution_host_policy(binary: Path) -> Transcript:
-    # Test infrastructure provisions the host and existing workspace. No uploads,
-    # installation, directory creation, or synchronization happen in the server.
-    external = json.loads(os.environ["MCP_CONSOLE_TEST_SSH_EXTERNAL"])
-    with TemporaryDirectory() as temporary:
+    with external_target() as external, TemporaryDirectory() as temporary:
         local = Path(temporary)
         config = local / CONFIG
         config.parent.mkdir(parents=True)
@@ -226,38 +238,39 @@ def test_external_execution_host_policy(binary: Path) -> Transcript:
             json.dumps(
                 {
                     "target": external["target"],
-                    "sandbox": policy(external["environment"]),
+                    "sandbox": policy(
+                        {
+                            **external["environment"],
+                            "MCP_CONSOLE_TEST_SSH_PLATFORM": external["platform"],
+                        }
+                    ),
                 }
             )
         )
-        ssh = local / "ssh"
-        ssh.write_text(
-            code(r"""
-                #!/bin/sh
-                exec /usr/bin/ssh -F CONFIG "$@"
-                """).replace("CONFIG", shlex.quote(external["ssh_config"]))
+        environment = client_environment(
+            local, config=external.get("ssh_config"), remote_path=external.get("path")
         )
-        ssh.chmod(0o755)
-        environment = {
-            **os.environ,
-            "PATH": str(local),
-            "R_HOME": "/unavailable-controller-R",
-        }
+        trap = poison_controller(local, environment)
         with McpClient(
             binary, ("serve", "--writable-root", "cli"), environment, local
         ) as client:
             client.initialize_and_list_tools()
             send_and_collect_runtime_python_resolution(
                 client,
-                r="stopifnot(Sys.info()[['sysname']] == "
-                + json.dumps(external["platform"])
-                + "); "
+                # fmt: r
+                r=code("""
+                    stopifnot(
+                      Sys.info()[["sysname"]] == Sys.getenv("MCP_CONSOLE_TEST_SSH_PLATFORM")
+                    )
+                    """)
                 + EXERCISE,
             )
             assert (
                 last_result_text(client) == "remote relative and CLI grants verified\n"
             ), last_result_text(client)
-            return client.finish()[3:]
+            transcript = client.finish()[3:]
+        assert not trap.exists(), "controller discovered an execution runtime"
+        return transcript
 
 
 if __name__ == "__main__":

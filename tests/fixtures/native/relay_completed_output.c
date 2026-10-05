@@ -39,7 +39,7 @@ __attribute__((constructor)) static void initialize_clock(void) {
     const char *seconds = getenv("MCP_CONSOLE_TEST_CLOCK_SECONDS");
     if (seconds != NULL) advance_seconds = atoi(seconds);
     completion_record = open(getenv("MCP_CONSOLE_TEST_OUTPUT_COMPLETE"),
-                             O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+                             O_WRONLY | O_CLOEXEC);
     if (completed_frame == NULL || *completed_frame == '\0' ||
         completion_record < 0 || fstat(STDOUT_FILENO, &output_identity) < 0) {
         _exit(91);
@@ -62,10 +62,12 @@ static ssize_t observe_completed_write(int descriptor, const void *buffer, size_
                       ? matched + 1
                       : (bytes[index] == completed_frame[0] ? 1 : 0);
         if (matched == frame_length) {
+            // Receiving stdout does not prove this interposer has resumed.
+            // Publish the new clock before waking the checkpoint reader.
+            atomic_store(&completed, true);
             if (write(completion_record, "1", 1) != 1) {
                 _exit(92);
             }
-            atomic_store(&completed, true);
             matched = 0;
         }
     }

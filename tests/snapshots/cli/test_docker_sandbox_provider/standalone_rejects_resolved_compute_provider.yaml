@@ -1,0 +1,11 @@
+---
+sandbox: {}
+error: >
+  standalone sandbox is local and cannot use the resolved compute
+  provider; use mcp-console serve for Docker Sandbox execution
+---
+sandbox:
+  provider: compute
+error: >
+  standalone sandbox is local and cannot use the resolved compute
+  provider; use mcp-console serve for Docker Sandbox execution

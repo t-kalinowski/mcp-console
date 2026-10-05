@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.native import LOADER_VARIABLE, build_interposer
+from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
@@ -95,6 +96,7 @@ def test_augments_both_restricted_representations(binary: Path) -> Transcript:
                         "--",
                         sys.executable,
                         "-c",
+                        # fmt: python
                         code("""
                             from pathlib import Path
                             import sys
@@ -215,16 +217,21 @@ def test_preserves_native_validation_errors(binary: Path) -> Transcript:
                 ("serve",),
                 ("sandbox", "--", "/bin/echo", "workload started"),
             ):
-                result = subprocess.run(
-                    [binary, *arguments],
-                    cwd=host,
-                    env=environment,
-                    input="",
-                    capture_output=True,
-                    text=True,
-                )
-                assert result.returncode == 1 and result.stdout == "", result
-                assert capture.exists(), result.stderr
+                if arguments[0] == "serve":
+                    with McpClient(binary, arguments, environment, host) as client:
+                        reported = client.startup_error()
+                        client.finish()
+                else:
+                    result = subprocess.run(
+                        [binary, *arguments],
+                        cwd=host,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                    )
+                    assert result.returncode == 1 and result.stdout == "", result
+                    reported = result.stderr
+                assert capture.exists(), reported
                 payloads = [
                     json.loads(line) for line in capture.read_text().splitlines()
                 ]
@@ -265,13 +272,19 @@ def test_preserves_native_validation_errors(binary: Path) -> Transcript:
                 )
                 diagnostic = normalize(native.stderr)
                 assert diagnostic.startswith("mcp-console-sandbox: "), native
-                assert normalize(result.stderr).endswith(diagnostic), result
-                assert f"{CONFIG}: sandbox preflight failed" in result.stderr, result
+                if arguments[0] == "serve":
+                    assert (
+                        normalize(reported)
+                        == diagnostic + "[worker relay exited before readiness]"
+                    ), reported
+                else:
+                    assert normalize(reported).endswith(diagnostic), reported
+                    assert f"{CONFIG}: sandbox preflight failed" in reported, reported
                 transcript.append(
                     {
                         "settings": settings,
                         "command": arguments[0],
-                        "stderr": normalize(result.stderr),
+                        "diagnostic": normalize(reported),
                     }
                 )
                 capture.unlink()
@@ -369,6 +382,7 @@ def test_forwards_native_fields_without_proxy_expansion(binary: Path) -> Transcr
                 "--",
                 sys.executable,
                 "-c",
+                # fmt: python
                 code("""
                     import os
 

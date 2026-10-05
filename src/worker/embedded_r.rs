@@ -1,38 +1,44 @@
-use std::collections::VecDeque;
 use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_int, c_uchar, c_void};
 use std::io;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 
 use super::core::{
     self, emit_output, observe_stdin_shutdown, record_worker_failure, send_input_cancelled,
-    send_input_received, send_input_requested, take_pending_server_message, take_worker_failure,
+    send_input_received, send_input_requested,
 };
-use crate::cell::{Cell, Language};
-use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
+use super::input::{finish_console_stdin_operation, read_console_stdin};
+use crate::cell::Language;
+use crate::worker_protocol::ConsoleChannel;
+
+mod parse;
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(unix)]
+use unix as native;
+#[cfg(unix)]
+pub(super) use unix::wait_for_activity;
+#[cfg(windows)]
+use windows as native;
 
 static R_MAIN_ARGS: OnceLock<Vec<CString>> = OnceLock::new();
-static R_REPL_INIT: OnceLock<ReplInit> = OnceLock::new();
-static R_REPL_DO_ONE: OnceLock<ReplDoOne> = OnceLock::new();
-static R_EVENTS: OnceLock<REvents> = OnceLock::new();
 static R_CHECK_USER_INTERRUPT: OnceLock<CheckUserInterrupt> = OnceLock::new();
 static CELL_SOURCE: Mutex<Option<CellSource>> = Mutex::new(None);
-static CONSOLE_STDIN: Mutex<ConsoleStdin> = Mutex::new(ConsoleStdin {
-    pushback: VecDeque::new(),
-    line_prefix: Vec::new(),
-});
-static EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
-static SQL_EVALUATION_STARTED: AtomicBool = AtomicBool::new(false);
+// R's DLL REPL reads submitted source before Busy(1), then interactive input.
+static REPL_EVALUATING: AtomicBool = AtomicBool::new(false);
 type ReplInit = unsafe extern "C-unwind" fn();
 type ReplDoOne = unsafe extern "C-unwind" fn() -> c_int;
 type TopLevelExec = unsafe extern "C-unwind" fn(
     Option<unsafe extern "C-unwind" fn(*mut c_void)>,
     *mut c_void,
 ) -> c_int;
-type CheckActivity = unsafe extern "C-unwind" fn(c_int, c_int) -> *mut c_void;
-type RunHandlers = unsafe extern "C-unwind" fn(*mut c_void, *mut c_void);
 type ReadConsole = unsafe extern "C-unwind" fn(
     prompt: *const c_char,
     buffer: *mut c_uchar,
@@ -40,133 +46,90 @@ type ReadConsole = unsafe extern "C-unwind" fn(
     add_history: c_int,
 ) -> c_int;
 type CheckUserInterrupt = unsafe extern "C-unwind" fn();
-type AddInputHandler = unsafe extern "C-unwind" fn(
+type ExecWithCleanup = unsafe extern "C-unwind" fn(
+    unsafe extern "C-unwind" fn(*mut c_void) -> *mut c_void,
     *mut c_void,
-    c_int,
-    Option<unsafe extern "C-unwind" fn(*mut c_void)>,
-    c_int,
+    unsafe extern "C-unwind" fn(*mut c_void),
+    *mut c_void,
 ) -> *mut c_void;
-type RemoveInputHandler = unsafe extern "C-unwind" fn(*mut *mut c_void, *mut c_void) -> c_int;
+type ObjectFn = unsafe extern "C-unwind" fn(*mut c_void);
+
+#[repr(C)]
+struct ReplApi {
+    init: ReplInit,
+    do_one: ReplDoOne,
+    top_level_exec: TopLevelExec,
+    exec_with_cleanup: ExecWithCleanup,
+    preserve: ObjectFn,
+    release: ObjectFn,
+    stack_top: *mut c_int,
+    stack: *mut *mut *mut c_void,
+    nil: libr::SEXP,
+}
 
 struct CellSource {
     text: String,
     offset: usize,
 }
 
-struct ConsoleStdin {
-    pushback: VecDeque<ConsoleStdinChunk>,
-    line_prefix: Vec<u8>,
-}
-
-struct ConsoleStdinChunk {
-    bytes: Vec<u8>,
-    offset: usize,
-}
-
-impl ConsoleStdin {
-    unsafe fn copy_pushback(&mut self, destination: *mut u8, capacity: usize) -> usize {
-        let mut copied = 0;
-        while copied < capacity {
-            let Some(chunk) = self.pushback.front_mut() else {
-                break;
-            };
-            debug_assert!(chunk.offset <= chunk.bytes.len());
-            let remaining = &chunk.bytes[chunk.offset..];
-            let length = remaining.len().min(capacity - copied);
-            unsafe {
-                std::ptr::copy_nonoverlapping(remaining.as_ptr(), destination.add(copied), length);
-            }
-            copied += length;
-            chunk.offset += length;
-            if chunk.offset == chunk.bytes.len() {
-                self.pushback.pop_front();
-            }
-        }
-        if self.pushback.is_empty() {
-            self.pushback = VecDeque::new();
-        }
-        copied
-    }
-
-    fn record_chunk(&mut self, chunk: &[u8]) {
-        if chunk.last() == Some(&b'\n') {
-            self.line_prefix = Vec::new();
-        } else {
-            self.line_prefix.extend_from_slice(chunk);
-        }
-    }
-
-    fn preserve_line(&mut self, chunk: &[u8]) {
-        if self.line_prefix.is_empty() && chunk.is_empty() {
-            return;
-        }
-        if !chunk.is_empty() {
-            self.pushback.push_front(ConsoleStdinChunk {
-                bytes: chunk.to_vec(),
-                offset: 0,
-            });
-        }
-        if !self.line_prefix.is_empty() {
-            self.pushback.push_front(ConsoleStdinChunk {
-                bytes: std::mem::take(&mut self.line_prefix),
-                offset: 0,
-            });
-        }
-    }
-
-    fn finish_operation(&mut self) {
-        // A later callback cannot be assumed to continue this operation.
-        self.preserve_line(&[]);
-    }
-}
-
-struct REvents {
-    top_level_exec: TopLevelExec,
-    check_activity: CheckActivity,
-    run_handlers: RunHandlers,
-    add_input_handler: AddInputHandler,
-    remove_input_handler: RemoveInputHandler,
-    rg_wait_usec: usize,
-}
-
-struct Runtime {
-    writer: crate::sideband::Writer,
+pub(super) struct Runtime {
+    parser: parse::Parser,
     graphics: crate::r_graphics::Bridge,
-    r_environment: crate::r_environment::Bridge,
-    python: crate::python::Runtime,
-    sql: crate::sql::Bridge,
+    environment: crate::r_environment::Bridge,
+}
+
+impl Runtime {
+    pub(super) fn initialize() -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            parser: parse::Parser::initialize()?,
+            graphics: crate::r_graphics::Bridge::initialize()?,
+            environment: crate::r_environment::Bridge::initialize()?,
+        })
+    }
+
+    pub(super) fn idle(&self) -> Result<(), String> {
+        run_ready_handlers(&self.graphics)
+    }
+
+    pub(super) fn prepare(
+        &self,
+        library: &str,
+    ) -> Result<crate::r_environment::PreparationOutcome, String> {
+        defer_interrupts(
+            || self.environment.prepare(std::path::Path::new(library)),
+            discard_interrupts,
+        )
+    }
+
+    pub(super) fn begin_graphics(&self) -> Result<(), String> {
+        defer_interrupts(|| self.graphics.begin(), check_interrupts)
+    }
+
+    pub(super) fn finish_graphics(&self) -> Result<(), String> {
+        defer_interrupts(|| self.graphics.finish(), check_interrupts)
+    }
+
+    pub(super) fn evaluate(&self, source: String) -> Result<(), String> {
+        // Console reads during preflight are interactive input, never cell source.
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
+        if !self.parser.complete(&source)? {
+            return Ok(());
+        }
+        evaluate_r_cell(source)
+    }
 }
 
 unsafe extern "C" {
-    fn mcp_r_run_ready_handlers(
-        top_level_exec: TopLevelExec,
-        check_activity: CheckActivity,
-        run_handlers: RunHandlers,
-        input_handlers: *mut c_void,
-    );
-    fn mcp_r_wait_for_activity(
-        top_level_exec: TopLevelExec,
-        add_input_handler: AddInputHandler,
-        remove_input_handler: RemoveInputHandler,
-        check_activity: CheckActivity,
-        input_handlers: *mut *mut c_void,
-        sideband_fd: c_int,
-        wait_usec: c_int,
-    ) -> c_int;
-    fn mcp_r_repl_run_cell(
-        init: ReplInit,
-        do_one: ReplDoOne,
-        before_do_one: extern "C" fn(),
-        check_interrupt: CheckUserInterrupt,
-        interrupts_pending: *const c_int,
-    ) -> c_int;
+    fn mcp_r_repl_configure(api: *const ReplApi);
+    fn mcp_r_repl_run_cell(before_do_one: extern "C" fn()) -> c_int;
+    fn mcp_r_record_interrupt();
 }
 
 unsafe extern "C-unwind" {
     fn mcp_r_console_configure(
         read_console: ReadConsole,
         check_interrupt: CheckUserInterrupt,
-        interrupts_pending: *const c_int,
+        interrupts_pending: *mut c_int,
     );
     fn mcp_r_read_console(
         prompt: *const c_char,
@@ -176,201 +139,7 @@ unsafe extern "C-unwind" {
     ) -> c_int;
 }
 
-pub(crate) fn run() -> Result<(), Box<dyn Error>> {
-    let (reader, writer) = crate::sideband::connect_from_env()?;
-    let r_home = harp::command::r_home_setup()?;
-    #[cfg(target_os = "linux")]
-    reexec_with_r_library_path(&r_home, &reader, &writer)?;
-    normalize_interrupt_signal()?;
-    initialize_r(&r_home)?;
-    let temporary_directory =
-        std::path::PathBuf::from(String::try_from(harp::parse_eval_base("base::tempdir()")?)?);
-    crate::python::configure_worker_environment(&temporary_directory)?;
-    core::initialize(reader, writer.clone())?;
-    let graphics = crate::r_graphics::Bridge::initialize()?;
-    let r_environment = crate::r_environment::Bridge::initialize()?;
-    let python = crate::python::Runtime::initialize()?;
-    let sql = crate::sql::Bridge::initialize()?;
-    writer.send(&WorkerMessage::Ready)?;
-
-    Runtime {
-        writer,
-        graphics,
-        r_environment,
-        python,
-        sql,
-    }
-    .run()
-}
-
-#[cfg(target_os = "linux")]
-fn reexec_with_r_library_path(
-    r_home: &std::path::Path,
-    reader: &crate::sideband::Reader,
-    writer: &crate::sideband::Writer,
-) -> Result<(), Box<dyn Error>> {
-    use std::os::unix::process::CommandExt;
-
-    let library = r_home.join("lib");
-    let mut paths: Vec<_> = std::env::var_os("LD_LIBRARY_PATH")
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default();
-    if paths.first() == Some(&library) {
-        return Ok(());
-    }
-    paths.insert(0, library);
-    // The ELF loader reads LD_LIBRARY_PATH at exec, before native R packages
-    // need to resolve libR.so and its companion libraries.
-    let mut command = std::process::Command::new(std::env::current_exe()?);
-    command
-        .args(std::env::args_os().skip(1))
-        .env("LD_LIBRARY_PATH", std::env::join_paths(paths)?);
-    crate::sideband::configure_exec(reader, writer, &mut command)?;
-    Err(command.exec().into())
-}
-
-impl Runtime {
-    fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        loop {
-            if !self.handle(self.wait_for_message()?)? {
-                return Ok(());
-            }
-        }
-    }
-
-    fn wait_for_message(&self) -> Result<ServerMessage, String> {
-        loop {
-            if core::is_shutting_down() {
-                return Ok(ServerMessage::Shutdown);
-            }
-            if let Some(message) = take_pending_server_message()? {
-                return Ok(message);
-            }
-
-            let (buffered, sideband_fd) = core::sideband_activity()?;
-            if buffered {
-                return core::receive_server_message();
-            }
-            if wait_for_activity(sideband_fd)? {
-                return core::receive_server_message();
-            }
-
-            run_ready_handlers(&self.graphics)?;
-            if let Some(message) = take_worker_failure() {
-                return Err(message);
-            }
-        }
-    }
-
-    fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {
-        if matches!(
-            &message,
-            ServerMessage::PreparePython { .. } | ServerMessage::PrepareR { .. }
-        ) {
-            run_ready_handlers(&self.graphics).map_err(io::Error::other)?;
-            if core::is_shutting_down() {
-                return Ok(false);
-            }
-            if let Some(message) = take_worker_failure() {
-                return Err(io::Error::other(message).into());
-            }
-        }
-
-        match message {
-            ServerMessage::Evaluate { language, source } => {
-                check_interrupts();
-                let result = evaluate_cell(
-                    Cell { language, source },
-                    &self.graphics,
-                    &mut self.python,
-                    &mut self.sql,
-                );
-                check_interrupts();
-
-                if core::is_shutting_down() {
-                    return Ok(false);
-                }
-                if let Some(message) = take_worker_failure().or_else(|| result.err()) {
-                    return Err(io::Error::other(message).into());
-                }
-                self.writer.send(&WorkerMessage::Completed)?;
-            }
-            // Keep worker-owned preparation state transitions atomic. Any
-            // nested host resolver registers its own interrupt target.
-            ServerMessage::PreparePython { packages } => {
-                let result = defer_interrupts(|| self.python.prepare(packages), discard_interrupts);
-                if core::is_shutting_down() {
-                    return Ok(false);
-                }
-                if let Some(message) = take_worker_failure() {
-                    return Err(io::Error::other(message).into());
-                }
-                match result {
-                    Ok(crate::python::PreparationOutcome::Prepared) => {
-                        self.writer.send(&WorkerMessage::PythonPrepared)?;
-                    }
-                    Ok(crate::python::PreparationOutcome::Failed { message }) => {
-                        self.writer
-                            .send(&WorkerMessage::PythonPreparationFailed { message })?;
-                    }
-                    Err(message) => return Err(io::Error::other(message).into()),
-                }
-            }
-            ServerMessage::PrepareR { library } => {
-                let result = defer_interrupts(
-                    || self.r_environment.prepare(std::path::Path::new(&library)),
-                    discard_interrupts,
-                );
-                if core::is_shutting_down() {
-                    return Ok(false);
-                }
-                if let Some(message) = take_worker_failure() {
-                    return Err(io::Error::other(message).into());
-                }
-                match result.map_err(io::Error::other)? {
-                    crate::r_environment::PreparationOutcome::Prepared { library } => {
-                        self.writer.send(&WorkerMessage::RPrepared { library })?;
-                    }
-                    crate::r_environment::PreparationOutcome::Failed { message } => {
-                        self.writer
-                            .send(&WorkerMessage::RPreparationFailed { message })?;
-                    }
-                }
-            }
-            ServerMessage::Shutdown => return Ok(false),
-            ServerMessage::RResolved { .. }
-            | ServerMessage::RResolutionFailed { .. }
-            | ServerMessage::PythonResolved { .. }
-            | ServerMessage::PythonResolutionFailed { .. }
-            | ServerMessage::PythonVersionResolved { .. }
-            | ServerMessage::PythonVersionResolutionFailed { .. } => {
-                return Err(
-                    io::Error::other("worker received an unexpected resolver response").into(),
-                );
-            }
-        }
-        Ok(true)
-    }
-}
-
-fn normalize_interrupt_signal() -> io::Result<()> {
-    if unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) } == libc::SIG_ERR {
-        return Err(io::Error::last_os_error());
-    }
-    let mut signals = unsafe { std::mem::zeroed() };
-    if unsafe { libc::sigemptyset(&mut signals) } != 0
-        || unsafe { libc::sigaddset(&mut signals, libc::SIGINT) } != 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-    let result =
-        unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) };
-    (result == 0)
-        .then_some(())
-        .ok_or_else(|| io::Error::from_raw_os_error(result))
-}
-
-fn check_interrupts() {
+pub(super) fn check_interrupts() {
     if !interrupt_pending() {
         return;
     }
@@ -380,7 +149,7 @@ fn check_interrupts() {
     let _ = harp::top_level_exec(|| unsafe { check() });
 }
 
-fn defer_interrupts<T>(
+pub(super) fn defer_interrupts<T>(
     operation: impl FnOnce() -> Result<T, String>,
     after: impl FnOnce(),
 ) -> Result<T, String> {
@@ -392,12 +161,26 @@ fn defer_interrupts<T>(
     result
 }
 
-fn discard_interrupts() {
+pub(super) fn discard_interrupts() {
     unsafe { libr::set(libr::R_interrupts_pending, 0) };
+    #[cfg(windows)]
+    unsafe {
+        libr::set(libr::UserBreak, libr::Rboolean_FALSE)
+    };
 }
 
 fn interrupt_pending() -> bool {
-    unsafe { libr::get(libr::R_interrupts_pending) != 0 }
+    #[cfg(windows)]
+    native::process_events();
+    #[cfg(unix)]
+    unsafe {
+        libr::get(libr::R_interrupts_pending) != 0
+    }
+    #[cfg(windows)]
+    unsafe {
+        libr::get(libr::UserBreak) != libr::Rboolean_FALSE
+            || libr::get(libr::R_interrupts_pending) != 0
+    }
 }
 
 fn console_interrupt_pending() -> bool {
@@ -405,58 +188,19 @@ fn console_interrupt_pending() -> bool {
         && unsafe { libr::get(libr::R_interrupts_suspended) == libr::Rboolean_FALSE }
 }
 
-pub(crate) fn resolve_r(
-    packages: Vec<String>,
-) -> Result<crate::r_environment::ResolutionOutcome, String> {
-    // SQL callbacks can reenter R, but SQL evaluation does not resolve packages.
-    if SQL_EVALUATION_STARTED.load(Ordering::SeqCst) {
-        return Ok(crate::r_environment::ResolutionOutcome::Unavailable);
+fn acknowledge_console_interrupt() -> bool {
+    if !console_interrupt_pending() {
+        return false;
     }
-    core::resolve_r(packages)
+    discard_interrupts();
+    true
 }
 
-fn evaluate_cell(
-    cell: Cell,
-    graphics: &crate::r_graphics::Bridge,
-    python: &mut crate::python::Runtime,
-    sql: &mut crate::sql::Bridge,
-) -> Result<(), String> {
-    run_ready_handlers(graphics)?;
-    if core::is_shutting_down() {
-        return Ok(());
-    }
-    if let Some(message) = take_worker_failure() {
-        return Err(message);
-    }
-    let result = match cell.language {
-        Language::R => evaluate_r_cell(cell.source, graphics),
-        Language::Python => evaluate_python_cell(cell.source, graphics, python),
-        Language::Sql => evaluate_sql_cell(cell.source, sql),
-    };
-    finish_console_stdin_operation()?;
-    if result.is_ok() && !core::is_shutting_down() {
-        if let Some(message) = take_worker_failure() {
-            return Err(message);
-        }
-        run_ready_handlers(graphics)?;
-    }
-    result
-}
-
-fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
-    if r.contains('\0') {
-        emit_output(
-            ConsoleChannel::Diagnostic,
-            b"Error: R source cannot contain NUL\n",
-        );
-        return Ok(());
-    }
-
-    defer_interrupts(|| graphics.begin(), check_interrupts)?;
+fn evaluate_r_cell(r: String) -> Result<(), String> {
     set_cell_source(r);
     let status = run_repl_cell();
     clear_cell_source();
-    let result = match status {
+    match status {
         0 | 1 => Ok(()),
         2 => {
             emit_output(ConsoleChannel::Diagnostic, b"Error: Incomplete code\n");
@@ -465,55 +209,31 @@ fn evaluate_r_cell(r: String, graphics: &crate::r_graphics::Bridge) -> Result<()
         status => Err(format!(
             "R worker received unexpected DLL REPL status {status}"
         )),
-    };
-    defer_interrupts(|| graphics.finish(), check_interrupts)?;
-    result
-}
-
-fn evaluate_python_cell(
-    source: String,
-    graphics: &crate::r_graphics::Bridge,
-    python: &mut crate::python::Runtime,
-) -> Result<(), String> {
-    if source.contains('\0') {
-        emit_output(
-            ConsoleChannel::Diagnostic,
-            b"SyntaxError: source code string cannot contain null bytes\n",
-        );
-        return Ok(());
     }
-    defer_interrupts(|| graphics.begin(), check_interrupts)?;
-    EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    let result = python.evaluate(&source);
-    EVALUATION_STARTED.store(false, Ordering::SeqCst);
-    defer_interrupts(|| graphics.finish(), check_interrupts)?;
-    result
 }
 
-fn evaluate_sql_cell(source: String, sql: &mut crate::sql::Bridge) -> Result<(), String> {
-    if source.contains('\0') {
-        emit_output(
-            ConsoleChannel::Diagnostic,
-            b"Error: SQL source cannot contain NUL\n",
-        );
-        return Ok(());
-    }
-    EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    SQL_EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    let result = sql.evaluate(&source);
-    SQL_EVALUATION_STARTED.store(false, Ordering::SeqCst);
-    EVALUATION_STARTED.store(false, Ordering::SeqCst);
-    result
-}
-
-fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
+pub(super) fn initialize_r(
+    installation: &crate::local_runtime::RInstallation,
+) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+    let r_home = &installation.home;
+    // Let the selected R launcher choose its configured default architecture
+    // when users start subprocesses through commandArgs()[1].
+    #[cfg(unix)]
+    let executable = r_home.join("bin/R");
+    #[cfg(windows)]
+    let executable = r_home.join("bin/R.exe");
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
-    let arguments = ["mcp-console", "--quiet", "--interactive", "--vanilla"]
-        .into_iter()
-        .map(CString::new)
-        .collect::<Result<Vec<_>, _>>()?;
+    let arguments = vec![
+        #[cfg(unix)]
+        CString::new(executable.as_os_str().as_bytes())?,
+        #[cfg(windows)]
+        CString::new(executable.to_string_lossy().as_bytes())?,
+        CString::new("--quiet")?,
+        CString::new("--interactive")?,
+        CString::new("--vanilla")?,
+    ];
     R_MAIN_ARGS
         .set(arguments)
         .map_err(|_| io::Error::other("R arguments were already initialized"))?;
@@ -524,21 +244,10 @@ fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
         .map(|argument| argument.as_ptr() as *mut c_char)
         .collect::<Vec<_>>();
 
-    unsafe {
-        libr::Rf_initialize_R(
-            argument_pointers.len() as c_int,
-            argument_pointers.as_mut_ptr(),
-        );
-        libr::set(libr::R_Interactive, libr::Rboolean_TRUE);
-        libr::set(libr::R_Consolefile, std::ptr::null_mut());
-        libr::set(libr::R_Outputfile, std::ptr::null_mut());
-        libr::set(libr::ptr_R_WriteConsole, None);
-        libr::set(libr::ptr_R_WriteConsoleEx, Some(r_write_console));
-        libr::set(libr::ptr_R_ReadConsole, Some(mcp_r_read_console));
-        libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
-        libr::set(libr::ptr_R_Busy, Some(r_busy));
-        libr::setup_Rmainloop();
-    }
+    // Python cells and startup hooks can mutate these paths before late R
+    // initialization. Restore the captured installation immediately before R starts.
+    installation.configure_environment();
+    let deferred = native::initialize_r(r_home, &mut argument_pointers)?;
 
     libraries.initialize_post_setup_r();
     unsafe {
@@ -547,124 +256,74 @@ fn initialize_r(r_home: &std::path::Path) -> Result<(), Box<dyn Error>> {
     harp::routines::r_register_routines();
     harp::initialize();
     harp::parse_eval_base("base::options(width = 200L)")?;
+    // Preserve R's fatal-signal diagnostics. Its bootstrap SIGINT handler only
+    // records R's pending flag; attachment below retains that flag, transfers
+    // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
-    Ok(())
+    Ok(deferred)
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
+    #[cfg(unix)]
     let library = libloading::os::unix::Library::this();
+    #[cfg(windows)]
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")?;
     let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
     let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
     let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
-    let check_activity = unsafe { *library.get::<CheckActivity>(b"R_checkActivity\0")? };
-    let run_handlers = unsafe { *library.get::<RunHandlers>(b"R_runHandlers\0")? };
+    #[cfg(unix)]
+    let events = native::Events::load(&library, top_level_exec)?;
     let check_interrupt = unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
-    let add_input_handler = unsafe { *library.get::<AddInputHandler>(b"addInputHandler\0")? };
-    let remove_input_handler =
-        unsafe { *library.get::<RemoveInputHandler>(b"removeInputHandler\0")? };
-    let rg_wait_usec = unsafe { *library.get::<*mut c_int>(b"Rg_wait_usec\0")? as usize };
-    R_REPL_INIT
-        .set(init)
-        .map_err(|_| io::Error::other("R REPL was already initialized"))?;
-    R_REPL_DO_ONE
-        .set(do_one)
-        .map_err(|_| io::Error::other("R REPL was already initialized"))?;
-    R_EVENTS
-        .set(REvents {
+    unsafe {
+        mcp_r_repl_configure(&ReplApi {
+            init,
+            do_one,
             top_level_exec,
-            check_activity,
-            run_handlers,
-            add_input_handler,
-            remove_input_handler,
-            rg_wait_usec,
-        })
-        .map_err(|_| io::Error::other("R event handlers were already initialized"))?;
+            exec_with_cleanup: *library.get::<ExecWithCleanup>(b"R_ExecWithCleanup\0")?,
+            preserve: *library.get::<ObjectFn>(b"R_PreserveObject\0")?,
+            release: *library.get::<ObjectFn>(b"R_ReleaseObject\0")?,
+            stack_top: *library.get::<*mut c_int>(b"R_PPStackTop\0")?,
+            stack: *library.get::<*mut *mut *mut c_void>(b"R_PPStack\0")?,
+            nil: libr::R_NilValue,
+        });
+    }
+    #[cfg(unix)]
+    events.install()?;
     R_CHECK_USER_INTERRUPT
         .set(check_interrupt)
         .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
-    unsafe { mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending) };
+    unsafe {
+        mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
+    }
+    super::interrupt::attach_r(super::interrupt::State {
+        signal: mcp_r_record_interrupt,
+        requested: interrupt_pending,
+        pending: console_interrupt_pending,
+        acknowledge: acknowledge_console_interrupt,
+    })?;
     Ok(())
 }
 
 fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
     defer_interrupts(|| graphics.begin(), check_interrupts)?;
-    EVALUATION_STARTED.store(true, Ordering::SeqCst);
-    let events = R_EVENTS
-        .get()
-        .expect("R event handlers should be initialized");
-    unsafe {
-        mcp_r_run_ready_handlers(
-            events.top_level_exec,
-            events.check_activity,
-            events.run_handlers,
-            r_input_handlers(),
-        );
-    }
-    EVALUATION_STARTED.store(false, Ordering::SeqCst);
+    #[cfg(unix)]
+    native::run_ready_handlers();
     finish_console_stdin_operation()?;
     defer_interrupts(|| graphics.finish(), check_interrupts)?;
     observe_stdin_shutdown()
 }
 
-fn wait_for_activity(sideband_fd: c_int) -> Result<bool, String> {
-    let events = R_EVENTS
-        .get()
-        .expect("R event handlers should be initialized");
-    let mut wait_usec = unsafe { libr::get(libr::R_wait_usec) };
-    let graphical_wait_usec = unsafe { *(events.rg_wait_usec as *const c_int) };
-    if graphical_wait_usec > 0 && (wait_usec <= 0 || graphical_wait_usec < wait_usec) {
-        wait_usec = graphical_wait_usec;
-    }
-    let status = unsafe {
-        mcp_r_wait_for_activity(
-            events.top_level_exec,
-            events.add_input_handler,
-            events.remove_input_handler,
-            events.check_activity,
-            libr::R_InputHandlers.cast(),
-            sideband_fd,
-            wait_usec,
-        )
-    };
-    match status {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err("R event wait failed".to_string()),
-    }
-}
-
-fn r_input_handlers() -> *mut c_void {
-    unsafe { libr::get(libr::R_InputHandlers).cast_mut() }
-}
-
 fn run_repl_cell() -> c_int {
-    let init = *R_REPL_INIT
-        .get()
-        .expect("R REPL should be initialized before evaluation");
-    let do_one = *R_REPL_DO_ONE
-        .get()
-        .expect("R REPL should be initialized before evaluation");
-    let check_interrupt = *R_CHECK_USER_INTERRUPT
-        .get()
-        .expect("R interrupt checker should be initialized before evaluation");
-    // SAFETY: Both function pointers are process-lifetime libR symbols with
-    // the declared ABI. This main thread owns R, and the C shim contains R's
-    // top-level jump so it cannot bypass a live Rust frame.
-    unsafe {
-        mcp_r_repl_run_cell(
-            init,
-            do_one,
-            before_repl_iteration,
-            check_interrupt,
-            libr::R_interrupts_pending,
-        )
-    }
+    // SAFETY: The configured API consists of process-lifetime libR symbols.
+    // This main thread owns R; the C shim keeps a live top-level context so
+    // errors and interrupts cannot bypass a Rust frame.
+    unsafe { mcp_r_repl_run_cell(before_repl_iteration) }
 }
 
 extern "C" fn before_repl_iteration() {
     // R may reuse buffered source without calling Busy(0), so reset before
     // every outer DLL step. Busy(1) latches evaluation in r_busy().
-    EVALUATION_STARTED.store(false, Ordering::SeqCst);
+    REPL_EVALUATING.store(false, Ordering::SeqCst);
 }
 
 extern "C-unwind" fn r_busy(which: c_int) {
@@ -672,7 +331,7 @@ extern "C-unwind" fn r_busy(which: c_int) {
     // afterwards. Ignore Busy(0): a nested R REPL can issue it before a
     // ReadConsole request that still belongs to the evaluation.
     if which != 0 {
-        EVALUATION_STARTED.store(true, Ordering::SeqCst);
+        REPL_EVALUATING.store(true, Ordering::SeqCst);
     }
 }
 
@@ -772,7 +431,8 @@ extern "C-unwind" fn r_read_console(
     if !crate::sideband::available_in_process() {
         return console_eof(buf);
     }
-    if !EVALUATION_STARTED.load(Ordering::SeqCst) {
+    if matches!(core::cell_language(), Some(Language::R)) && !REPL_EVALUATING.load(Ordering::SeqCst)
+    {
         return match take_cell_source((buflen as usize) - 1) {
             Some(source) => write_console_input(buf, buflen, &source),
             None => console_eof(buf),
@@ -791,7 +451,7 @@ extern "C-unwind" fn r_read_console(
         return console_eof(buf);
     }
 
-    match read_console_stdin(buf, buflen) {
+    match read_console_stdin(buf, buflen, console_interrupt_pending) {
         Ok(read) => {
             let receipt = if read < 0 {
                 send_input_cancelled()
@@ -804,108 +464,11 @@ extern "C-unwind" fn r_read_console(
                 record_worker_failure(error);
                 return console_eof(buf);
             }
-            read
+            if read < 0 { -1 } else { c_int::from(read > 0) }
         }
         Err(error) => {
             record_worker_failure(error);
             console_eof(buf)
         }
     }
-}
-
-fn read_console_stdin(buf: *mut c_uchar, buflen: c_int) -> Result<c_int, String> {
-    let capacity = (buflen as usize) - 1;
-    if console_interrupt_pending() {
-        return cancel_console_stdin_read(buf, 0);
-    }
-    let mut stdin = CONSOLE_STDIN
-        .lock()
-        .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-    // SAFETY: r_read_console validated buf and reserved one byte for NUL.
-    let mut length = unsafe { stdin.copy_pushback(buf, capacity) };
-    drop(stdin);
-
-    while length < capacity {
-        if console_interrupt_pending() {
-            return cancel_console_stdin_read(buf, length);
-        }
-        let mut descriptor = libc::pollfd {
-            fd: libc::STDIN_FILENO,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ready = unsafe { libc::poll(&mut descriptor, 1, 10) };
-        if ready == 0 {
-            continue;
-        }
-        if ready < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(format!("R worker stdin poll failed: {error}"));
-        }
-        if descriptor.revents & libc::POLLNVAL != 0 {
-            return Err("R worker stdin descriptor is invalid".to_string());
-        }
-        if descriptor.revents & (libc::POLLIN | libc::POLLHUP) == 0 {
-            return Err(format!(
-                "R worker stdin poll returned unexpected events {}",
-                descriptor.revents
-            ));
-        }
-        if console_interrupt_pending() {
-            return cancel_console_stdin_read(buf, length);
-        }
-        let byte = unsafe { buf.add(length) };
-        let count = unsafe { libc::read(libc::STDIN_FILENO, byte.cast(), 1) };
-        if count == 1 {
-            length += 1;
-            if unsafe { *byte } == b'\n' {
-                break;
-            }
-            continue;
-        }
-        if count == 0 {
-            core::mark_shutting_down();
-            return Ok(console_eof(buf));
-        }
-
-        let error = io::Error::last_os_error();
-        if error.kind() == io::ErrorKind::Interrupted {
-            continue;
-        }
-        return Err(format!("R worker stdin read failed: {error}"));
-    }
-    unsafe {
-        *buf.add(length) = 0;
-    }
-    record_console_stdin_chunk(buf, length)?;
-    Ok(i32::from(length > 0))
-}
-
-fn record_console_stdin_chunk(buf: *const c_uchar, length: usize) -> Result<(), String> {
-    let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
-    let mut stdin = CONSOLE_STDIN
-        .lock()
-        .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-    stdin.record_chunk(chunk);
-    Ok(())
-}
-
-fn cancel_console_stdin_read(buf: *const c_uchar, length: usize) -> Result<c_int, String> {
-    let chunk = unsafe { std::slice::from_raw_parts(buf, length) };
-    let mut stdin = CONSOLE_STDIN
-        .lock()
-        .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-    stdin.preserve_line(chunk);
-    Ok(-1)
-}
-
-fn finish_console_stdin_operation() -> Result<(), String> {
-    let mut stdin = CONSOLE_STDIN
-        .lock()
-        .map_err(|_| "R worker console stdin lock poisoned".to_string())?;
-    stdin.finish_operation();
-    Ok(())
 }

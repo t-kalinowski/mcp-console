@@ -59,7 +59,8 @@ impl<R: Read> Read for Output<R> {
                 self.session.status.set(self.preparation, false);
                 return Ok(0);
             }
-            let bytes = crate::ssh::read_payload(&mut self.reader, BLOCK)?;
+            let bytes =
+                crate::target_launch::read_payload(&mut self.reader, BLOCK, crate::ssh::PROTOCOL)?;
             match (tag[0], bytes.as_slice()) {
                 (1, _) if !bytes.is_empty() => self.pending = io::Cursor::new(bytes),
                 (2, b"connected") => self.session.status.set(self.preparation, false),

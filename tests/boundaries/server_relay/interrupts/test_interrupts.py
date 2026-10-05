@@ -24,15 +24,17 @@ from boundaries.server_relay._harness import (
     _wait_for_recorded_tool_result,
 )
 from support.assertions import tool_text as _tool_text
+from support.assertions import wait_for_worker_ready
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import POSIX, PROCESS_EVENTS, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_and_reports_result(
     binary: Path, execution: Execution
@@ -47,6 +49,7 @@ def test_interrupts_and_reports_result(
     return client.finish_active()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     binary: Path,
@@ -77,6 +80,7 @@ def test_interrupt_requirements_without_cell_is_rejected_before_signal(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
@@ -178,6 +182,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_preserves_controlled_completion_marker(
     binary: Path,
@@ -186,6 +191,9 @@ def test_control_only_interrupt_preserves_controlled_completion_marker(
     client = ServerRelayClient(
         binary, "controlled_completion_then_interrupt", execution=execution
     )
+    # MCP initialization does not await configuration. A zero-timeout control
+    # requires it, and this scenario tests completion after that startup phase.
+    wait_for_worker_ready(client.client, "configuration before controlled restart")
     result = client.send(
         control="restart",
         r="controlled cell completed before later interrupt",
@@ -233,6 +241,7 @@ def test_control_only_interrupt_preserves_controlled_completion_marker(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_orders_stdin_before_new_evaluation(
     binary: Path,
@@ -254,6 +263,8 @@ def test_controlled_interrupt_orders_stdin_before_new_evaluation(
         timeout_ms=50,
     )
     output = _tool_text(result)
+    if output.endswith("[running; poll with an empty send]"):
+        output += _tool_text(client.send())
     old = output.index("old evaluation finished from stdin\n")
     new = output.index("new evaluation ran\n")
     assert old < new, output
@@ -280,6 +291,7 @@ def test_controlled_interrupt_orders_stdin_before_new_evaluation(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
     binary: Path,
@@ -346,6 +358,7 @@ def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_cell(
     binary: Path,
@@ -408,6 +421,7 @@ def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_ce
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_cell(
     binary: Path,
@@ -456,6 +470,7 @@ def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_ce
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
     binary: Path,
@@ -515,6 +530,7 @@ def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_collects(
     binary: Path,
@@ -564,6 +580,7 @@ def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_colle
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_honors_timeout_after_attachment(
     binary: Path,
@@ -618,6 +635,7 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     binary: Path,
@@ -715,6 +733,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(

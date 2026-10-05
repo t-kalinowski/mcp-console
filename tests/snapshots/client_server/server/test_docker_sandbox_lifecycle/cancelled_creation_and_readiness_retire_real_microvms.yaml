@@ -1,0 +1,12 @@
+---
+cancelled: create-gate
+owned_microvms_absent: true
+missing_create_acknowledgement_remains_unconfirmed: true
+---
+cancelled: probe-gate
+owned_microvms_absent: true
+missing_create_acknowledgement_remains_unconfirmed: false
+---
+cancelled: launch-gate
+owned_microvms_absent: true
+missing_create_acknowledgement_remains_unconfirmed: false

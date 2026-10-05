@@ -1,526 +1,280 @@
 # Built-in runtime
 
-**Status:** Implemented current behavior
-
-This document describes the console behavior visible to users of the built-in worker.
-It covers R, Python, SQL, input, output, plots, and interoperability.
-The [worker protocol](WORKER_PROTOCOL.md) defines the lower-level contract for built-in and custom workers, while [requirements and environments](REQUIREMENTS.md) owns dependency preparation.
-The [`send` operation-order reference](SEND_OPERATIONS.md) owns validation, control, preparation, stdin ordering, and wait-timeout semantics.
-The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records the agent-facing MCP text; [tool description guidance](TOOL_DESCRIPTIONS.md) covers editorial rules.
+The built-in worker keeps R, Python, and SQL state in one process.
+This guide covers behavior visible through `send`; [operation order](SEND_OPERATIONS.md) owns admission and control, [requirements](REQUIREMENTS.md) owns dependency preparation, and [architecture](ARCHITECTURE.md) explains implementation boundaries.
 
 ## Session model
 
-MCP Console provides one implicit session.
-That session can use a configured [SSH target](SSH.md) with an existing R installation and a resolver bootstrap such as `uv`.
-Console prepares managed R, Python, and DuckDB dependencies on that host as needed.
-Without a resolver bootstrap, the remote session uses available preinstalled packages and adapters with managed preparation disabled.
-Runtime state and arbitrary files then live remotely; the MCP server, output spools, journals, transcripts, and returned image artifacts stay local.
-The tool context and session metadata identify the target and initial remote directory separately from the recording workspace.
-Remote source-only Quarto projections default to evaluation disabled and omit the controller execution root.
-They do not reproduce the remote filesystem when rendered locally.
-Each worker generation contains:
+There is one implicit session and one active cell at a time.
+Globals, imports, options, database state, debugger state, and unread input survive between cells.
+Cells are not transactions: an error can leave earlier effects in place.
+Restart or worker loss discards all live state; accepted requirements remain in the server for replacement workers.
 
-- one persistent R global environment;
-- one persistent Python `__main__` namespace embedded through reticulate; and
-- one persistent in-memory DuckDB connection and catalog, used as the default SQL backend.
+The default worker starts in the background while MCP discovery remains usable.
+Worker transport readiness precedes background initialization of enabled R and Python on the serialized interpreter thread.
+Startup hooks run even without submitted code; their output, plots, and input prompts remain available through `send`.
+When SQL is enabled and its optional provider is installed, bootstrap opens the managed DuckDB connection; first-query work remains lazy.
+Python-owned SQL warms only an installed DuckDB package matching the active import candidate; workspace modules/packages shadowing it are treated as absent during bootstrap.
+An absent provider can be prepared on later SQL demand.
+Warmup does not prepare missing packages.
+Provider errors remain visible through `send` and leave unrelated cells usable; later SQL demand retries connection creation.
+Interrupting warmup withholds an early waiting cell and retains the worker.
+Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
+Custom workers retain lazy launch.
 
-SQL cells can be redirected to a user-owned DBI connection retained in R or a DB-API connection retained in Python without moving connection objects between runtimes.
+[SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md) execute on their selected target while the controller owns recordings and responses.
+Provider filesystems, preparation, and cleanup differ; they are not interchangeable sandbox modes.
 
-Objects, imports, options, attached packages, database objects, and unread standard input remain available across cells in the same worker generation.
-Language errors do not reset the worker, and changes made before an error remain applied.
-Restart, worker replacement, or server exit discards all in-memory state.
-Prepared requirements are server-owned and survive restart as described in [Requirements and environments](REQUIREMENTS.md).
+## Python sessions without R
 
-Only one cell can run at a time.
-Submit code-bearing `send` calls sequentially and collect a running cell before submitting another.
-A control-only interrupt may overlap a pending `send` while that call resolves or prepares requirements, including for restart.
-The same call may first interrupt or restart the session through its optional `control` field.
-Code-free `send` calls poll, supply stdin, prepare requirements, interrupt, or restart the same implicit session.
+R discovery uses `R_HOME` or `R` on the execution host's PATH.
+Genuine absence allows Python/SQL; a broken selected R installation is an error, not fallback.
+Local and SSH sessions without an explicit Python selection require uv on that host.
+There is no automatic PATH-Python fallback.
+Managed defaults are NumPy, pandas, DuckDB, and the SQLite extension; Matplotlib is not a default dependency.
+
+Set `python: .venv/bin/python` to use an existing environment without uv or managed Python preparation.
+Paths and legacy selection precedence are described in [configuration](CONFIGURATION.md#python-environment-selection).
+CPython 3.10+ with a usable shared embedding library is required.
+Selected virtualenv paths and prefixes are preserved for imports, subprocesses, and multiprocessing.
+
+Prepared Docker/SBX targets use preinstalled interpreters and packages.
+They can run ordinary Python without NumPy, pandas, or DuckDB; missing DuckDB disables managed SQL, not Python or a user-selected DB-API connection.
+Managed local Python uses the captured [resolver extension cache](RESOLVER.md); SSH Python needs an absolute startup `HOME` for its shared extension cache.
+Worker spill, secrets, and caches use private lifetime storage, not ownership by R's session tempdir.
 
 ## Cells and polling
 
-A code-bearing `send` call accepts exactly one complete `r`, `python`, or `sql` cell.
-It may instead contain only control or stdin, or contain none of those fields as an ordinary poll.
-The source is not an interactive fragment assembled across calls.
-R uses its native top-level evaluation behavior; Python parses the entire submitted source before executing it; SQL passes the complete string to the active SQL backend.
+Submit exactly one complete `r`, `python`, or `sql` source string.
+R and Python parse the entire cell before evaluating it; SQL passes the complete string to the selected driver.
+Sources are not fragments accumulated across calls.
 
-Use a REPL-style workflow: submit one coherent cell, inspect its result, then submit the next cell based on what the result showed.
-One assistant turn can make several sequential calls.
-Leave the primary result last so the runtime displays it normally; use explicit printing only for additional intermediate output.
-R also autoprints earlier visible top-level expressions.
-
-For example, an analysis can progress through these calls:
-
-```r
-jobs <- read.csv("hpc_jobs.csv")
-str(jobs)
-```
-
-```r
-jobs$queued <- jobs$pending_job_count > 0
-aggregate(queued ~ protocol_id, jobs, mean)
-```
-
-```python
-jobs = r.jobs
-jobs.shape
-```
-
-Each call reuses state created by earlier calls, and its output informs the next cell.
-
-A code-bearing call can declare additive R packages, Python packages, or DuckDB extensions in `requirements`, regardless of the cell language.
-See [Requirements for a cell](REQUIREMENTS.md#requirements-for-a-cell) for the declaration syntax and [`send` operation order](SEND_OPERATIONS.md#operations) for preparation and failure behavior.
-R resolves missing plain package names when execution reaches a supported package-loading operation.
-The built-in managed Python environment likewise resolves a missing import when Python's ordinary import finders cannot satisfy it.
-Neither language's source is scanned in advance, and MCP Console does not replay a cell after a package-load or import failure.
-
-When the call's evaluation wait expires, its response contains output available so far and a state notice such as `[running; poll with an empty send]` or `[worker starting]`.
-
-Call `send` again without code or standard input to poll.
-Polling collects newly available output; an idle response contains pending output and `[idle]`.
-
-Evaluation completion returns collected text and images, or `[done]` if the completed region has no other content.
-New code is not admitted while an evaluation or its uncollected result is active.
+Submit a coherent cell, inspect its result, then submit the next.
+Leave the main result last for ordinary display.
+A timeout does not cancel execution: after `[running; poll with an empty send]`, poll with no code or stdin rather than resubmitting.
+New code is rejected while a cell or its uncollected result is active.
+Completion returns text/images, or `[done]` when there is no content; an idle poll returns pending output and `[idle]`.
 
 ## Standard input and managed reads
 
-The `stdin` field contributes the UTF-8 bytes of its string to one generation-long standard-input stream.
-MCP Console:
+`stdin` queues exact UTF-8 bytes, adds no newline, echoes nothing, and does not close the stream or acknowledge consumption.
+Empty text queues nothing.
+Line-oriented input normally needs a trailing `\n`.
+Unread bytes may satisfy a later read or cell and are discarded on restart.
 
-- does not append a newline;
-- does not echo the bytes;
-- treats an empty string as no input;
-- does not close the stream at the end of a payload; and
-- does not acknowledge that a runtime consumed the bytes.
+R `readline()` / `browser()` and main-thread Python `input()` / `pdb` report managed input requests.
+An outstanding request can end a response with `[waiting for stdin]`.
+Answer with `stdin` alone, not another cell.
+For example, at R's `Browse[1]>`, send `ls.str()\n` to inspect, `c\n` to continue, or `Q\n` to quit.
+The evaluation remains active while the debugger waits.
 
-Line-oriented reads normally need an explicit `\n`.
-Bytes that no reader has consumed remain queued on fd 0 for later reads or later cells.
-When a managed read has already consumed part of a line, the built-in worker preserves that prefix as managed-console pushback if the read is interrupted or the operation ends between console callbacks.
-Only a later managed console callback can replay the preserved prefix.
-To complete that line, the next reader must therefore be managed; Python `sys.stdin`, direct fd-0 reads, and descendants cannot consume the prefix.
-All unread input and managed-console pushback are discarded when the worker generation ends.
-
-The [`send` operation table](SEND_OPERATIONS.md#operations) specifies when input is queued and which generation receives it for each call shape.
-Enqueue order does not guarantee consumption by a particular runtime read.
-
-The built-in worker reports managed reads from:
-
-- R `readline()` and `browser()`; and
-- Python `input()`, `breakpoint()`, and `pdb` when they use reticulate's R console bridge.
-
-A reported read adds a record such as `[input requested: "name> "]`.
-If the request is still outstanding when either its 10-millisecond exposure grace ends or the call reaches its deadline, the response ends in `[waiting for stdin]`.
-Input that was already queued can satisfy the read before that marker is returned.
-The grace controls only when the request becomes visible; it is not a read timeout.
-
-Interactive debugger state also persists between calls.
-For example, this R cell enters `browser()`:
-
-```r
-inspect_mean <- function(x) {
-  browser()
-  mean(x)
-}
-
-inspect_mean(c(1, 2, 3))
-```
-
-After the response shows `Browse[1]>`, send `sys.calls()\n`, `ls.str()\n`, or `x\n` through `stdin` without a code field.
-Send `c\n` to continue or `Q\n` to quit the debugger.
-Do not submit another code cell until the active evaluation finishes.
-
-Direct reads from Python `sys.stdin`, fd 0, or a descendant bypass managed input reporting.
-They can consume bytes still queued on fd 0 but produce no request or receipt record.
-They cannot consume a partial line that the built-in worker has preserved for the next managed console callback.
+Direct `sys.stdin`, fd-0, and descendant reads bypass input notifications.
+They can consume queued bytes but cannot recover a partial line already buffered by a managed console read.
+Interrupted managed reads preserve that prefix only for a later managed read.
+Input ordering guarantees enqueue order, not which reader consumes it; see [operations](SEND_OPERATIONS.md#operations).
 
 ## Interruption
 
-`send(control = "interrupt")` requests cooperative interruption according to the [`send` operation table](SEND_OPERATIONS.md#operations).
-If neither a resolver nor a worker is running, the call does not start a worker and returns the tool error `[worker is not running]`.
-A resolver signal error is returned by both the interrupt and resolution calls, and the server stops that resolver during cleanup.
-An interrupted automatic R or Python resolver reports an interrupted outcome to the running cell.
+`control: "interrupt"` signals the active resolver first, otherwise the worker.
+It does not retarget a replacement.
+If neither is running, it reports a tool error without starting a worker.
+Interrupts are cooperative: code may catch, delay, replace, or block them.
+Use restart when a fresh worker is required.
 
-The response contains available output and current state through the normal `send` conventions, commonly ending in `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, or the completed evaluation result.
-
-R, Python, and DuckDB observe interruption through their normal console/runtime mechanisms.
-Managed console reads are cancelled when the active runtime accepts the interrupt.
-User code can catch, delay, replace, or block `SIGINT`, so interruption is cooperative rather than a termination guarantee.
-Use `control = "restart"` when the worker must be replaced.
+The normal output/state response still applies.
+Input and a following cell may accompany control, but the exact grace, admission, and partial effects belong to [send ordering](SEND_OPERATIONS.md), not language behavior.
 
 ## Explicit restart
 
-`send(control = "restart")` retires the current worker, discards its in-memory state, and starts a replacement from the retained environment.
-The operation waits for retirement and replacement startup.
-On success after a worker was ready, restart output begins with `[worker stopped: in-memory state lost]`, `[starting new worker]`, and any replacement-startup output.
-A restart without a cell ends with `[idle]`; a following cell instead contributes its output and ends a successful combined response with `[done]`.
-Restarting a session that has not established a worker omits the worker-stopped notice.
-Restart can include requirements, stdin, and a cell; their order and failure effects are specified in [`send` operation order](SEND_OPERATIONS.md#operations).
-The replacement has fresh R globals, Python state, DuckDB catalog, and debugger state while retaining the successfully prepared server-owned environment.
+`control: "restart"` waits for retirement and replacement startup.
+Requirements are prepared before retirement; same-call input and code go only to the ready replacement.
+Failed preparation preserves the old worker; failure after retirement cannot restore it.
 
-One controlled-send response preserves old-generation output, restart lifecycle notices, new-cell output when present, and the terminal state marker in that order; a successfully completed controlled cell ends with `[done]`.
-The server keeps that complete response under one delivery owner so cancellation or write failure can return it for delivery exactly once.
-
-Without a waiting `send`, restart owns pending output from the old worker.
-If it stops an unfinished evaluation, that output is followed by `[active evaluation stopped by session restart request]` before the worker and replacement notices.
-
-When restart interrupts a `send` that is still waiting on an unfinished evaluation, the two calls keep separate response ownership.
-The waiting `send` receives its retained text and images, followed by `[stopped by session restart request before evaluation finished]` and, when a ready worker was retired, `[worker stopped: in-memory state lost]`; that `send` is a tool error.
-The restart call waits for the waiting response to be written, then returns its own active-evaluation, worker-loss, and replacement notices without repeating the worker output.
-If the waiting response cannot be delivered, restart reclaims its output so it is returned exactly once.
-A waiting `send` whose evaluation finishes before restart interrupts it receives its normal completed response.
+After an established worker, notices identify state loss and new-worker startup.
+A restart without code ends in `[idle]`; a completed combined control-and-cell response ends in `[done]`.
+Old output precedes lifecycle notices and new output.
+A separately waiting evaluation keeps its own response ownership until delivery or recovery settles.
+See [output ownership](ARCHITECTURE.md#output-and-delivery) for cancellation races; local recovery is not exactly-once client observation.
 
 ## R
 
-R cells run in persistent global state through R's native console loop.
-Global bindings and `.Last.value` remain available to later calls.
-R parse, evaluation, and print errors are console output followed by normal completion; the worker stays reusable.
-Because R consumes top-level expressions as a console does, earlier complete expressions may take effect before a later expression in the same cell fails or remains incomplete.
+Accepted cells run in persistent global state through R's native console semantics.
+Every visible top-level expression may autoprint.
+Parse errors reject the whole cell without running earlier expressions or changing `.Last.value`, `.Traceback`, history, task callbacks, or `options(error)`.
+Evaluation and print errors are console outcomes; they preserve earlier effects and leave the worker usable.
 
-Between cells, the worker continues servicing R event handlers such as `later` callbacks, which can mutate persistent R state and produce output.
-Output produced while idle remains pending until a later response drains it; when that response belongs to a new cell and both regions contain output, `[output produced while idle]` separates them.
+R's native bootstrap and event APIs are component-local to Unix and Windows.
+Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
+Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
+Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
+Windows installs an interrupt-delivery callback; its idle command wait does not service R event handlers.
 
-Ordinary R console output and diagnostics remain distinct worker channels but both appear as MCP text.
-The built-in startup width is 200 columns; evaluated code may change its options.
-Packages prepared for the session are available but are not attached automatically.
+On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
+They may change state and produce output returned by a later poll, Python cell, or SQL cell.
+When needed, `[output produced while idle]` separates that region from new-cell output.
+The initial display width is 200 columns and remains user-configurable.
 
-### On-demand R packages
-
-When dynamic environment resolution is available, the built-in worker can prepare a missing plain R package name while the current cell is running.
-This covers direct `library()`, `require()`, `requireNamespace()`, and `loadNamespace()` calls and package use through `::` and `:::`.
-Use these operations normally; there is no need to probe package availability or call `install.packages()` first.
-
-The worker wraps `base::library` because `library()` checks `find.package()` before namespace loading.
-For `base::loadNamespace`, it runs R's original formals and body in a private lexical environment that intercepts the existing `retry_loadNamespace` restart after a retryable missing-package error.
-The handler makes the package available and lets R's implementation continue, while preserving the original body for packages that inspect it.
-These adapters preserve ordinary R behavior: `library()` and `require()` attach only when the original call does, while `::`, `:::`, `requireNamespace()`, and `loadNamespace()` load a namespace without attaching the package.
-They bypass automatic resolution for already available packages, `library()` help and listing calls, an explicit non-NULL `lib.loc`, and partial namespace loads.
-
-Runtime discovery accepts plain package names only.
-Use `requirements.r` to stage a package before evaluation or to supply an explicit `ir` reference such as a remote source.
-The worker does not inspect R source before evaluation.
-Each missing package is resolved only when execution reaches a covered operation, so unreachable or quoted code does not invoke `ir` and several new packages in one cell can cause several incremental `ir` calls in execution order.
-
-In a bare runtime, the worker does not replace `base::library` or `base::loadNamespace`.
-Installed packages work normally, missing packages retain their ordinary R behavior, and `requirements.r` is not available.
-
-When the server returns a candidate library, the worker prepends it through the managed `.libPaths()` bridge and reports activation before resuming the original base call.
-The server retains the library only after that report.
-The worker is not replaced, so its PID, R globals, loaded namespaces, Python objects, DuckDB catalog, and unread input remain available.
-Once activation succeeds, the retained environment survives later namespace or cell errors and is reused by later cells and restart.
-
-An ordinary resolution failure follows the original base operation: `library()` and namespace loads report R errors, while `require()` may return `FALSE`; the worker remains reusable.
-An activation failure also leaves the worker available for state recovery, but further requirement changes need restart because the live and retained library state may differ.
-An unchanged restart or shutdown cancels an active resolver and discards candidates owned by the old worker generation.
-A restart that adds requirements waits for active environment resolution before preparing its additions and replacing the worker; generation checks still prevent an unactivated old candidate from committing.
-Transport, protocol, and bridge-infrastructure failures retain the normal worker-failure behavior.
-
-The worker installs `py`, `sql_connection()`, and `console_sql_connection()` in `tools:mcp-console` at search position 2, and installs `console_sql_connection()` in Python builtins when CPython initializes.
-R can read Python globals through `py$name` and use the R-owned SQL connection through DBI or dplyr.
-`sql_connection()` returns that R-owned connection; it does not proxy a Python connection into R.
-In R, `console_sql_connection(connection)` selects any valid user-owned `DBIConnection`, and `console_sql_connection(NULL)` restores the managed DuckDB connection and its catalog.
-In Python, `console_sql_connection(connection)` selects an object with a DB-API `cursor()` method, and `console_sql_connection(None)` requests restoration of managed DuckDB for the next SQL cell.
-The latest selection controls later SQL cells: selecting from R clears the Python provider, while selecting from Python leaves the R-owned connection available through `sql_connection()` without routing SQL cells to it.
-Do not disconnect the managed DuckDB connection.
-Restore it before disconnecting a custom connection that is still selected.
+Use package-loading operations normally.
+Managed sessions resolve reached missing plain packages without scanning or replaying the source.
+Bare sessions retain ordinary R behavior.
+See [automatic R resolution](REQUIREMENTS.md#automatic-r-package-resolution).
+In a sandboxed R worker, a writable temporary library precedes managed libraries; manual installations there last only for that generation and remain subject to network policy and build prerequisites.
 
 ## Python
 
-Python cells execute in one persistent `__main__.__dict__`.
-Imports, assignments, functions, and objects remain available across cells and through R's `py$name` bridge.
-The final expression of a cell is displayed through Python's normal display hook; source is not echoed.
+Cells execute in persistent `__main__.__dict__`; the final expression uses the normal display hook.
+Ordinary exceptions print their tracebacks and leave the worker usable.
+Private Console frames are omitted, but user, standard-library, and third-party frames remain.
+An uncaught `SystemExit` terminates the worker; catching it is normal control flow, and an exit in a background thread ends only that thread.
 
-An uncaught exception prints its traceback and completes as a language outcome.
-The Python session remains usable, including state established before the exception.
-Python 3.10 or later is required.
-The built-in startup display width for NumPy and pandas is 200 columns, and evaluated code may change it.
+Console owns CPython initialization with or without R.
+An explicit or host-resolved Python selection initializes before optional R setup; unresolved R-side selection uses the compatibility adapter.
+Bare R remains usable when that adapter is unavailable.
+When unresolved discovery finds no Python interpreter, background initialization finishes with R alone; an actual Python request still reports the selection error.
+Explicit selection errors and incompatible interpreters retain their ordinary failure behavior.
+Startup services are connected before executable `.pth` files and `sitecustomize` run.
+Completed site processing is not repeated on later setup or bridge attachment.
+`RETICULATE_PYTHONPATH`, when set, overrides `PYTHONPATH` for Python and its children.
+The working-directory import entry follows `os.chdir()`.
 
-Reticulate maps ordinary Python standard output and diagnostics into the R console channels.
-Writes to binary stream buffers, native fd 1 or 2, and descendant process streams use the captured standard streams instead.
-There is no guaranteed chronology between independent sideband, stdout, and stderr sources, although each source's order is preserved.
+NumPy/pandas display defaults use width 200 without overwriting nondefault startup settings or later user changes.
+Bridge attachment preserves the running interpreter, objects, selected connection, and user stream redirections.
+Interrupted setup can retry completed-safe steps; incompatible identity or unsafe partial initialization requires replacement.
+See [current limitations](#current-limitations).
 
-After Python's `os.fork()`, cached console stream objects and logging handlers write to the child's standard streams without calling R or using the worker sideband.
-Explicit stdout and stderr redirection remains effective, and the parent's streams and logging retain their behavior.
-This output support does not make arbitrary R execution or native-extension code safe in a fork child.
+Main-thread text uses Console channels.
+Binary buffers, native descriptors, background threads, and fork children use raw streams.
+Cached Console streams fall back to child streams after `fork`; that does not make R or arbitrary native extensions safe in a fork child.
+Console adds no notebook event loop: asynchronous work must be started and managed explicitly.
 
-Asynchronous Python work runs only when user code starts and manages it explicitly.
-MCP Console does not add notebook event-loop behavior.
-
-### On-demand Python packages
-
-When dynamic environment resolution is available, the built-in server-managed Python environment resolves missing imports while the current cell runs.
-Import the packages appropriate for the task directly; do not probe for their installation or run pip in the worker.
-Availability queries such as `importlib.util.find_spec()` inspect the current environment without triggering resolution.
-Successful resolution emits no `[prepared]` marker.
-When the import and inferred distribution have different names, the server reports the committed mapping, for example `[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']`.
-Same-name resolution emits no notice.
-
-The private runtime appends a finder to `sys.meta_path` after Python's existing finders.
-Built-in, frozen, standard-library, local, already-installed, and already-loaded modules therefore resolve normally before MCP Console sees an import.
-Ordinary `import` statements, `from ... import ...`, and `importlib.import_module()` all use this machinery.
-Missing optional imports reached while the default NumPy or pandas package is initializing stay on Python's ordinary path, so importing either available default does not start host resolution.
-Import an optional dependency directly after initialization, or declare it through `requirements.python`, when it is needed.
-When every earlier finder misses, MCP Console takes the top-level name from the requested import.
-A curated table maps established differences such as `yaml` to `pyyaml`, `PIL` to `pillow`, and `sklearn` to `scikit-learn`.
-For other conservative ASCII identifiers, it assumes that the PyPI distribution has the same name as the top-level module.
-Automatic inference produces one bare distribution name; it does not infer versions, extras, markers, URLs, paths, or other requirement syntax.
-
-MCP Console declines the fallback when it cannot safely identify one distribution.
-This includes broad shared namespaces such as `google`, `azure`, `zope`, `opentelemetry`, and `backports`, a missing submodule whose top-level package is already present, and a standard-library module absent from the selected Python build.
-The resulting import error asks for the correct distribution through `requirements.python` when explicit preparation can help.
-A direct missing-submodule import retains its ordinary `ModuleNotFoundError`; for the exact submodule lookup performed by `from package import missing`, MCP Console uses `ImportError` so CPython does not suppress the guidance.
-Both forms report the full missing-submodule name.
-
-Resolution starts only when execution reaches the missing import.
-Python source is not scanned, so imports in unreachable branches or uncalled functions do not invoke the resolver.
-Each reached missing import resolves in execution order, and the cell is never replayed.
-
-The finder calls the private R bridge, which adds the inferred distribution to reticulate's managed manifest and asks the existing host `uv` resolver for a compatible environment.
-After reticulate activates that environment, the worker reports the complete manifest to the server.
-Only then does the original import resume against invalidated import caches.
-Preparation makes the distribution available; the original import still performs the import normally.
-The automatic resolver request carries a differently named import and distribution together, and the server adds the bounded notice when it commits the matching activation.
-
-This transition does not restart the worker or Python interpreter.
-Python and R globals, Python objects, the DuckDB catalog, worker PID, and stdin state remain available.
-New subprocesses use the activated environment and can import its retained packages.
-In a sandboxed macOS worker, the built-in Python runtime makes psutil enumerate the dedicated process group instead of requesting the host-wide process table.
-On Linux, the PID namespace limits native process enumeration to the sandbox.
-With `serve --no-sandbox`, psutil retains its native host process enumeration.
-The server retains a successfully activated environment for later cells and restart, even if the inferred distribution does not provide the requested module or later code in the cell fails.
-An ordinary resolution failure before activation restores the earlier reticulate manifest and leaves the worker usable.
-Errors include the inferred distribution, the host resolver diagnostic when available, and an explicit `requirements.python` recovery example.
-
-Use `requirements.python` when the correct distribution differs from the inferred name, a version, extra, or environment marker is needed, a namespace is ambiguous, or the package should be prepared before the cell starts.
-Explicit preparation accepts supported named PEP 508 registry requirements and does not import the package.
-
-Automatic resolution can call R and reticulate only from the main worker process and the Python thread that configured the runtime.
-A missing import reached from a fork child or another Python thread reports that the distribution must be prepared before that child or thread starts; it does not invoke the host resolver.
-Imports already handled by ordinary Python finders remain available in those contexts.
-
-A nonempty user-selected `RETICULATE_PYTHON` disables both automatic managed resolution and `requirements.python`.
-Its missing-import error directs the user to install the distribution into that environment or restart MCP Console with managed Python enabled.
-
-A bare runtime also disables the import resolver and `requirements.python`.
-If ambient reticulate and Python are usable, installed distributions import normally and a missing import directs the user to install `ir` or `uv` before restarting.
-If reticulate is not installed, Python cells report that ambient adapter error directly.
-
-Automatic import resolution counts toward the active evaluation's `timeout_ms` wait.
-A short wait can therefore return `[running; poll with an empty send]`; poll with an empty `send`, interrupt the active resolver with `control = "interrupt"`, or restart according to the normal generation lifecycle.
+Use imports directly in managed sessions.
+[Automatic Python resolution](REQUIREMENTS.md#automatic-python-import-resolution) explains inference, optional dependencies, and thread restrictions.
+Explicit Python environments and bare/prepared targets require installed packages.
 
 ## R and Python interoperability
 
-The two languages share reticulate's live bridge:
+Reticulate supplies the on-demand bridge: Python uses `r.name` for R globals and functions; R uses `py$name` for Python globals.
+An actual `r` access can initialize R when shared bootstrap has not completed it.
+Conversion follows reticulate's rules; objects/proxies do not survive worker replacement.
 
-- Python reads R globals and calls R functions through `r.name`;
-- R reads and writes Python globals through `py$name`; and
-- objects converted or proxied by reticulate remain subject to reticulate's conversion rules.
-
-With the managed DuckDB backend, an R data frame can be queried by name from SQL.
-A Python data frame is not automatically visible to managed DuckDB SQL; bind or convert it to an R global first before querying it there.
-Objects and proxies tied to a worker generation become invalid when that generation ends.
+An R-only configuration need not start Python.
+Ordinary Python need not attach reticulate.
+Both interpreters and reentrant bridge calls share the worker's owning thread.
 
 ## SQL and DuckDB
 
-The managed in-memory DuckDB connection is the default SQL backend and is created lazily.
-Later managed SQL cells, DBI calls, and dplyr relations reuse its catalog.
+Managed SQL uses one in-memory DuckDB connection and persistent catalog.
+With R available it belongs to R/DBI; without R it belongs to Python/DB-API.
+SQL-only use still needs one of those adapters.
 DuckDB CLI dot commands are not supported.
+Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening databases outside sandbox-writable paths.
 
-R can redirect later SQL cells to another DBI backend:
+With R-owned DuckDB, unqualified relation names can refer to R global data frames; a table/view with that name takes precedence.
+A view sees later rebinding of the R name.
+Python frames must be assigned to an R global first.
+Without R, register frames explicitly with `sql_connection().register("name", frame)`; Python globals are not scanned.
+
+Select another backend without moving its connection between languages:
 
 ```r
 connection <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
 console_sql_connection(connection)
+# Restore managed DuckDB before disconnecting connection:
+console_sql_connection(NULL)
 ```
-
-The selected connection remains owned by user code.
-`sql_connection()` returns it, while `console_sql_connection(NULL)` restores the managed DuckDB connection without discarding its catalog.
-Restore the managed connection before disconnecting a selected connection.
-
-Python can instead select a DB-API connection:
 
 ```python
 import sqlite3
 
 connection = sqlite3.connect(":memory:")
 console_sql_connection(connection)
+console_sql_connection(None)  # Restore the existing managed catalog.
 ```
 
-The Python runtime retains the exact connection object.
-If it implements `execute()`, SQL cells execute directly on it so connection-local state is preserved; otherwise the adapter executes through `connection.cursor()`.
-The adapter reads result metadata and bounded rows through the returned cursor protocol, without converting the connection or its result rows through reticulate.
-`console_sql_connection(None)` restores managed DuckDB when the next SQL cell is dispatched.
+The latest selection controls SQL cells.
+User connections remain user-owned; restoring managed DuckDB does not close them.
+Never disconnect Console's managed connection.
+R `sql_connection()` returns its R-owned connection even while SQL cells use a Python selection; without R, Python `sql_connection()` returns the active Python connection.
 
-The R provider submits SQL cells on a selected connection through `DBI::dbSendQuery()`.
-Results that report columns use the bounded preview path below, while results without columns return `[done]` when they produce no console output.
-Each selected driver supplies the SQL dialect, transaction state, and type mappings, and determines whether its query interface accepts statements or multiple commands.
-Use `DBI::dbExecute()` or `DBI::dbSendStatement()` from an R cell for commands that require the DBI statement interface.
-The adapters do not retry a failed cell through another execution method because the first attempt may already have changed database state.
-DuckDB extension requirements and the managed conveniences below apply only to the managed R-backed DuckDB provider; prepare Python drivers and their dependencies through `requirements.python`.
+R submits cells through `DBI::dbSendQuery()`.
+Python uses the connection's `execute()` when available, otherwise its cursor protocol.
+The driver owns SQL dialect, transactions, and type mappings.
+Use DBI's statement interface from R when needed.
+Adapters do not retry through another method: the first attempt may already have changed state.
+Errors leave the selected connection available.
 
-Environment scanning lets an unqualified relation name refer to an R data frame in global state.
-A DuckDB table or view with the same name takes precedence.
-A view over an R data-frame name observes a later rebinding when queried.
-Managed DuckDB does not expose Python objects as relations and adds no separate registration API.
-A selected Python driver can use only the relations and driver-specific registrations available on that connection.
+### Result previews
 
-Query results are previews, not complete result materializations for display.
-The preview:
-
-- fetches at most 21 rows, using the twenty-first only to detect additional rows;
-- displays at most 20 rows and 12 columns;
-- truncates displayed cell values to 160 characters;
-- formats at a width of 200 columns; and
-- fits the complete preview, including omission markers, within 12 KiB by removing rows and then columns if necessary.
-
-The renderer reports omitted rows, columns, and truncated cells.
-It does not count the complete query result.
-Preview text is emitted as UTF-8, including when the R process uses the C locale.
-Queries with result columns but zero rows still return column names and `[0 rows]`; the R provider also reports Arrow types.
-Results with no columns return no preview and do not report affected-row counts.
-
-SQL backend, DBI, and DB-API errors are printed as ordinary console errors and leave the selected connection available for later cells.
-Extension preparation and sandbox constraints are documented in [Requirements and environments](REQUIREMENTS.md).
+A preview fetches at most 21 rows to display at most 20 rows and 12 columns.
+Values are capped at 160 characters and formatted at width 200.
+The table's 12 KiB ceiling removes rows, then columns; the stricter whole-response 8 KiB budget still applies afterward.
+Omissions are reported without counting the full result.
+Empty results with columns retain headers; no-column results have no preview or affected-row count.
 
 ## Plots and images
 
-### R graphics
-
-R's managed default graphics device opens lazily during a cell and returns PNG pages as MCP image blocks.
-Any managed pages still open at cell end are finalized, including after an ordinary R language error.
-Text can appear before an image whose page is still open.
-
-Managed default devices are cell scoped.
-Later cells cannot add layers to an earlier managed plot, so all operations for one plot must be in the same cell.
-The default is 800 by 600 pixels at 96 DPI.
-Persistent options select positive finite dimensions and resolution:
+R's managed default device returns PNG pages and finalizes open pages at cell end, including after language errors.
+A later cell cannot add layers to an already finalized plot.
+Defaults are 800 by 600 pixels at 96 DPI.
+Set positive, finite persistent `console.plot.width_in`, `console.plot.height_in` (**inches**), and `console.plot.dpi` options to change them.
+For example, a 1600 by 1050 pixel image at 100 DPI uses:
 
 ```r
 options(
-  console.plot.width = 8,
-  console.plot.height = 6,
-  console.plot.dpi = 144
+  console.plot.width_in = 16,
+  console.plot.height_in = 10.5,
+  console.plot.dpi = 100
 )
 ```
 
-Width and height are in inches.
-Devices opened explicitly by user code are user-owned: MCP Console does not close them, read their files, or return their images.
+Explicit user devices are not closed or captured by Console.
+R plots invoked through Python follow these same rules.
 
-### Matplotlib
-
-At the end of every Python cell, including after an exception, the worker renders each open `matplotlib.pyplot` figure in figure-number order, returns it as PNG, and closes all pyplot-managed figures.
-`show()` is optional and is replaced with a no-op by the runtime.
-When `MPLBACKEND` is absent, the worker sets it to Matplotlib's noninteractive `Agg` backend.
-A nonempty inherited `MPLBACKEND` takes precedence and may select an interactive backend that fails inside the sandbox.
-Calling `savefig()` does not suppress return of an open figure; calling `close()` before cell end does.
-Figures not registered with pyplot are not captured.
-
-The built-in worker preserves an existing host `matplotlibrc` selected through inherited `MATPLOTLIBRC` or `MPLCONFIGDIR` (falling back to `$HOME/.matplotlib` on macOS and `$XDG_CONFIG_HOME/matplotlib` or `$HOME/.config/matplotlib` on Linux) while redirecting Matplotlib configuration and cache writes to worker-private storage.
-On Linux, the inherited font cache is `$MPLCONFIGDIR`, `$XDG_CACHE_HOME/matplotlib`, or `$HOME/.cache/matplotlib`, in that order.
-It can reuse matching host font indexes read-only; sandboxed worker code does not modify the host configuration or cache.
-
-R plots created through Python's `r` bridge follow the R graphics rules.
+At Python cell end, including after an exception, all open pyplot figures are returned in figure-number order and closed.
+`show()` is optional; `savefig()` does not suppress capture, but closing a figure does.
+Figures outside pyplot are not captured.
+An inherited `MPLBACKEND` is respected; otherwise Console uses `Agg`.
+Host configuration/font caches may be read while new cache writes are redirected to private worker storage.
 
 ## Output and notices
 
-Console output, diagnostics, captured stdout and stderr, input-request records, images, and server lifecycle notices are assembled in one server-owned output stream for delivery.
-The server preserves each producer's order but cannot reconstruct chronology across independent transports.
-Outside the progress-frame compaction described below, it does not normalize ordinary whitespace or reinterpret output based on its source.
-Invalid UTF-8 from raw standard streams is replaced when projected to MCP text; the private relay transport still preserves the bytes.
+Language errors and warnings are ordinary console text.
+Explicit preparation, transport, worker, and protocol failures are tool errors.
+Bracketed input and lifecycle notices are server state, not runtime output.
+Each producer's order is preserved; independent sideband/stdout/stderr streams have no global chronology.
 
-When one controlled `send` stops or completes an earlier operation and then runs a new cell, the response keeps the prior output before lifecycle notices and new-cell output, followed by the final combined state marker.
-The server transfers ownership between those logical regions instead of delivering the earlier response separately.
+An established worker failure ends the cell without replay and makes one replacement attempt.
+The failing call remains a tool error even if the new worker becomes `[idle]`.
+If it returns `[worker starting]`, poll until startup settles.
+Discovery failures require a new server; other startup retries follow [server readiness](SEND_OPERATIONS.md#server-readiness).
 
-Bracketed records such as `[running; poll with an empty send]`, `[waiting for stdin]`, `[idle]`, mapped Python import resolutions, and worker-replacement notices are server state, not language output.
-R errors, Python exceptions, and SQL backend errors are ordinary console text and normally leave the worker reusable.
-Warnings are ordinary runtime output too.
-Host dependency-resolver failures during explicit preparation are MCP tool errors, but preserve any current worker and its in-memory state.
-An ordinary automatic R resolver failure is instead reported inside the running R evaluation.
-An ordinary automatic Python failure becomes an actionable `ModuleNotFoundError` in the running Python evaluation.
-[Requirements and environments](REQUIREMENTS.md) describes the request-specific effects.
-Worker, relay, and protocol failures are MCP tool errors and may stop and replace the worker.
+Each complete response, including generated notices, has at most **8 KiB UTF-8 text**.
+Large output retains its beginning and latest tail.
+Consecutive progress redraws from one producer are compacted within a response interval: carriage return replaces the frame, backspace removes a Unicode scalar, and CRLF remains a newline.
+Other controls stay literal.
+Raw streams use incremental decoding; invalid UTF-8 is replaced for display, not in retained raw logs.
 
-If initial lazy startup for a code-bearing `send` fails before the worker reaches `ready`, the call reports startup failure details without worker-loss or replacement notices, and its cell is not replayed.
-A later code-bearing `send` makes a fresh startup attempt for only its new cell; the server does not add replacement notices.
+Images have independent limits: 8 MiB encoded data, 64 KiB MIME metadata, and 4,096 images per undrained interval and complete result.
+Whole images are admitted; text limits do not consume their allowance.
+Omitted text/images are reported.
 
-When an established worker fails during a cell, the server does not run that cell again.
-The failing `send` retains available output and failure details, adds `[worker stopped: in-memory state lost]`, and starts one automatic replacement attempt.
-It waits for that attempt only for the call's remaining wait time.
-`[starting new worker]` marks the start of that attempt.
-The response then:
-
-- ends in `[idle]` if the replacement becomes ready;
-- ends in `[worker starting]` if the call's wait time expires first; or
-- includes replacement-startup failure details if the attempt fails.
-
-The original `send` remains an MCP tool error even when it ends in `[idle]`; that notice means only that later cells can run in a fresh worker.
-After `[worker starting]`, poll with `send` without code or stdin until the replacement reaches `[idle]` or reports startup failure.
-Do not submit another cell while replacement startup is still active.
-The failing call does not repeat a failed startup attempt; after that failure is collected, a later code-bearing `send` makes a fresh startup attempt and, if it succeeds, runs only the new cell.
-
-Ordinary newline-terminated output is preserved exactly.
-Within each delivered output segment, the server compacts single-line progress redraws in consecutive text from the same worker output stream.
-A bare carriage return makes following text replace the whole frame, and backspace removes one Unicode scalar.
-CRLF remains an ordinary newline.
-Other controls and escape sequences are preserved literally.
-Compaction does not cross response boundaries, so a long-running cell may return one current progress frame in each poll.
-Pending-output limits are applied before compaction; if a segment is truncated, its final redraw may not have been retained.
-
-Each undrained output segment is limited to:
-
-- 8 MiB of console text and raw standard-stream bytes;
-- 8 MiB of encoded image data;
-- 64 KiB of image MIME-type data; and
-- 4,096 ordinary output events.
-
-The first event that exceeds a limit adds a typed `[output truncated: ...]` notice.
-A fitting text prefix is retained, while an image that does not fit is omitted as a whole.
-After that first overflow, all later console text, raw standard-stream output, and images in the same undrained segment are discarded, even if another budget still has room.
-Lifecycle and control events remain available.
-The separate 12 KiB SQL-preview limit is applied before SQL text enters these budgets.
-
-For each recorded evaluation, the server also creates `outputs/call-NNNNNN.log` in the private session directory when the worker operation is admitted.
-It appends console text and direct stdout and stderr bytes in server observation order before applying the pending-output limits, and flushes the file before each response cut and at evaluation completion.
-Direct standard-stream bytes are preserved as written, so a worker that writes invalid UTF-8 can produce a log that is not UTF-8 text.
-Images and server-owned notices are not written to this file.
-
-Each cell output file retains at most 1 GiB.
-The server continues draining worker output after the file limit or a write failure and reports that later text is not retained in the file.
-Such text can still be delivered inline when the pending-output budget permits it.
-When pending text is omitted but remains in the file, the truncation notice includes its workspace-relative path as `retained text` and the number of omitted bytes actually retained there.
-Startup and cell omissions are reported separately; a cell log does not capture preceding startup or idle output.
-Later polls still return only newly observed output; reading or searching the file does not change polling state.
-
-These files retain emitted cell text, including text omitted from tool responses.
-They do not recover values that a language printer or SQL preview omitted before producing output, preserve stream labels, or provide a lossless record beyond the file limit.
-
-When session recording is active, an evaluation image that passes the pending-output limits is persisted immediately and remains associated with the `send` call that started the evaluation.
-It can therefore appear in the recording before a later poll returns it.
-By contrast, an image produced while the worker is idle or during dependency preparation is persisted only when a later tool response returns it, and is associated with that responding call.
-An image omitted by the pending-output limits is not recorded.
-The [implemented architecture](ARCHITECTURE.md) describes the session record and artifact files.
+Polling consumes an observed interval, including its omitted middle.
+Reading a raw file does not change that cursor.
+Raw per-cell files retain up to 1 GiB and can be read during evaluation; startup/idle output without a cell log cannot borrow another cell's path.
+Full retrieval requires filesystem access to the controller's recording directory.
+See [recording](RECORDING.md) for loss counts, artifacts, privacy, and report generation.
 
 ## Current limitations
 
-- There is one implicit session and no named-session interface.
-- Cells run sequentially; lifecycle control may overlap the operation it interrupts or replaces.
-- Restart and failure replacement discard every in-memory language, database, debugger, graphics, and unread-input state.
-- No general worker-frame or stdin-queue size limit is defined.
-- Cell output has a per-evaluation limit but no aggregate session quota or automatic retention cleanup yet.
-- The pending-text budget remains 8 MiB; a smaller rendered-response limit with a head-and-tail preview is not implemented yet.
-- Direct fd-0 readers do not participate in managed input notifications.
-- Managed DuckDB cannot query Python objects until they are bound as R data; a selected Python driver sees only objects registered on its own connection.
-- SQL previews do not include affected-row counts or total result counts.
-- Only default-device R graphics and open pyplot figures are captured automatically.
-  Managed graphics and Python caches use each worker's R session temporary directory, including with `--no-sandbox`.
-- In the default sandboxed mode, normal restart, automatic failure replacement, orderly server shutdown, and unexpected server or relay failure retire descendants across process-group and session changes.
-  On Linux, the native namespace monitor waits for kernel retirement of the namespace before acknowledging cleanup.
-  On macOS, the guarantee covers the owned process group and detached descendants observed by the runner; a later descendant that becomes orphaned before its fork event is resolved remains outside this guarantee.
-  The configured relay starts only after the runner establishes native enforcement and cleanup ownership.
-  Caller death triggers cleanup while the runner lives; runner death has no independent recovery guarantee.
-- With `serve --no-sandbox`, the worker runs with host permissions and no runner tracks or retires its descendants; normal relay shutdown still reaps the direct worker.
-- Linux sandboxing requires procfs, permitted namespace setup, and the requested policy capabilities; see [tested Linux host compatibility](LINUX_COMPATIBILITY.md).
-- Windows is not supported.
+There are no named sessions, parallel cells, aggregate recording quota, automatic retention cleanup, or Console file-read/search interface.
+No general worker-frame or stdin-queue limit is defined.
+Recordings are not checkpoints and cannot recover data a language printer never emitted.
 
-The [architecture](ARCHITECTURE.md) explains lifecycle and process ownership.
-The [worker protocol](WORKER_PROTOCOL.md) defines exact message and closure rules.
-Source and public transcript tests are authoritative if this document and implementation disagree.
+**Initialize R before starting background threads that may access the native process environment.** R bootstrap reads and mutates environment variables; Console's interpreter thread and the GIL cannot serialize arbitrary native threads.
+Partial R initialization or unsafe bridge/startup failure can require restart even when ordinary Python remains usable.
+
+macOS and Linux are supported.
+Windows x64 supports experimental [local R and Python](WINDOWS.md), including managed dependency resolution; SQL is deferred.
+Native enforcement and descendant retirement have explicit [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
+`--no-sandbox` removes native enforcement/descendant cleanup but not an outer Docker/SBX resource.
+Preparation remains a separate [trusted host operation](REQUIREMENTS.md#host-resolution-and-trust).

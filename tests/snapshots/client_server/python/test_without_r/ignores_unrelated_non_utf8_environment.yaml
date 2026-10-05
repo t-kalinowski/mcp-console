@@ -1,0 +1,54 @@
+---
+send:
+  requirements:
+    action: get
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "duckdb"
+            ],
+            "duckdb": [
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": true,
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - duckdb
+      duckdb:
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    prepared: true
+    runtime_requirements:
+      r: []
+      python: []
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - py-yaml12
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false

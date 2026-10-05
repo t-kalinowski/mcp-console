@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -16,9 +17,16 @@ import mcp_console
 from mcp_console import AsyncMCPConsole, MCPConsole
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
+from support.normalization import code
 from support.records import Transcript
-from support.requirements import WORKER, requires
-from support.resolvers import bare_runtime_environment
+from support.previews import assert_preview
+from support.evidence import compact_text
+from support.requirements import POSIX, SQL, WORKER, command, requires
+from support.resolvers import (
+    bare_runtime_environment,
+    fake_ir_environment,
+    recording_uv_environment,
+)
 from support.suites import run_this_suite
 
 
@@ -32,6 +40,170 @@ def options(binary: Path, execution: Execution) -> dict:
     }
 
 
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
+def test_clients_inspect_and_replace_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
+    results = []
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = recording_uv_environment(root)
+        # No cell is evaluated, but eager startup still prepares DuckDB extensions.
+        # Supply those real packages alongside deterministic resolver results.
+        library = Path(
+            subprocess.run(
+                [
+                    "ir",
+                    "run",
+                    "--with",
+                    "DBI",
+                    "--with",
+                    "duckdb",
+                    "--with",
+                    "jsonlite",
+                    "--isolated",
+                    "--vanilla",
+                    "-e",
+                    "cat(.libPaths()[[1L]])",
+                ],
+                cwd=directory,
+                env=r_test_environment()[0],
+                check=True,
+                stdout=subprocess.PIPE,
+                text=True,
+            ).stdout
+        )
+        assert library.is_absolute() and library.is_dir(), library
+        environment.update(fake_ir_environment(root, [library] * 4))
+        # Preparation must not borrow packages from the caller's R libraries.
+        empty_library = root / "empty-r-library"
+        empty_library.mkdir()
+        environment.update(
+            {
+                name: str(empty_library)
+                for name in ("R_LIBS", "R_LIBS_USER", "R_LIBS_SITE")
+            }
+        )
+        environment.pop("RETICULATE_PYTHON", None)
+        environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
+        settings = {
+            "command": binary,
+            "args": execution.serve("-c", "cache=host"),
+            "server_parameters": {"cwd": directory, "env": environment},
+        }
+        with MCPConsole(**settings) as console:
+            startup = json.loads(console.send(requirements={"action": "get"}))
+            assert startup["prepared"] is True, startup
+            console.send(
+                requirements={
+                    "action": "set",
+                    "python": [],
+                    "python_version": [">=3.11"],
+                    "exclude_newer": "2026-01-01",
+                }
+            )
+            selected = json.loads(console.send(requirements={"action": "get"}))
+            console.send(requirements=dict(selected["requirements"], action="set"))
+            assert selected["prepared"] is True, selected
+            assert selected["requirements"]["python"] == []
+            results.append({"sync": selected})
+
+        async def asynchronous() -> None:
+            async with AsyncMCPConsole(**settings) as console:
+                startup = json.loads(await console.send(requirements={"action": "get"}))
+                assert startup["prepared"] is True, startup
+                await console.send(requirements={"action": "set"})
+                selected = json.loads(
+                    await console.send(requirements={"action": "get"})
+                )
+                assert selected["requirements"]["python"] == []
+                results.append({"async": selected})
+
+        asyncio.run(asynchronous())
+        assert (root / "ir-counter").read_text() == "4"
+    return results
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_sync_and_async_clients_receive_bounded_previews(
+    binary: Path, execution: Execution
+) -> Transcript:
+    results = []
+    with tempfile.TemporaryDirectory() as temporary:
+        (Path(temporary) / ".agents/console").mkdir(parents=True)
+        settings = options(binary, execution)
+        settings["server_parameters"]["cwd"] = temporary
+        emitted = "x" * (8 * 1024 * 1024 + 7)
+
+        def check(text: str) -> None:
+            assert_preview(text, emitted)
+            session = max(
+                (Path(temporary) / ".agents/console/sessions").iterdir(),
+                key=lambda path: path.name,
+            )
+            assert (session / "outputs/call-000001.log").read_text() == emitted
+            results.append(
+                {"preview": compact_text(text.replace(session.name, "<run ID>"), "x")}
+            )
+
+        with MCPConsole(**settings) as console:
+            check(console.send(r="overflow console output"))
+            assert console.send() == "\n[idle]"
+
+        async def asynchronous() -> None:
+            async with AsyncMCPConsole(**settings) as console:
+                check(await console.send(r="overflow console output"))
+                assert await console.send() == "\n[idle]"
+
+        asyncio.run(asynchronous())
+    return results
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_initialization_keeps_one_lifecycle_while_startup_is_pending(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        gate = Path(directory) / "startup.py"
+        gate.write_text(
+            # fmt: python
+            code("""
+                import json
+                import subprocess
+                import sys
+
+                pending = [sys.stdin.buffer.readline()]
+                if json.loads(pending[0])["method"] == "server/discover":
+                    # Release on the SDK's initialize fallback, without a timing sleep.
+                    # The real server sees every request, including the pending discovery.
+                    pending.append(sys.stdin.buffer.readline())
+                child = subprocess.Popen(sys.argv[1:], stdin=subprocess.PIPE)
+                try:
+                    for message in pending:
+                        child.stdin.write(message)
+                    child.stdin.flush()
+                    for message in sys.stdin.buffer:
+                        child.stdin.write(message)
+                        child.stdin.flush()
+                finally:
+                    child.stdin.close()
+                    child.wait(timeout=10)
+                """)
+        )
+        settings = options(binary, execution)
+        settings["command"] = sys.executable
+        settings["args"] = ["-u", str(gate), str(binary), *settings["args"]]
+        with MCPConsole(**settings) as console:
+            result = console.send(r="echo initialized")
+            assert result == "zod: initialized\n", result
+        return [{"startup_kept_one_lifecycle": True, "output": result}]
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_callable_tools_follow_connected_server_fields(
     binary: Path, execution: Execution
@@ -133,7 +305,15 @@ def test_callable_tools_follow_connected_server_fields(
                     "bare",
                     bare,
                     "1 + 1",
-                    {"r", "python", "sql", "control", "stdin", "timeout_ms"},
+                    {
+                        "r",
+                        "python",
+                        "sql",
+                        "control",
+                        "requirements",
+                        "stdin",
+                        "timeout_ms",
+                    },
                 ),
                 (
                     "custom",
@@ -143,6 +323,15 @@ def test_callable_tools_follow_connected_server_fields(
                 ),
             ):
                 async with AsyncMCPConsole(**settings) as console:
+                    if label == "bare":
+                        assert console.send_tool.input_schema["properties"][
+                            "requirements"
+                        ]["properties"]["action"]["enum"] == [
+                            "get",
+                            "add",
+                            "set",
+                            "reset",
+                        ]
                     output = await exercise_tools(console, source, expected_fields)
                 with MCPConsole(**settings) as console:
                     assert (
@@ -154,6 +343,7 @@ def test_callable_tools_follow_connected_server_fields(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_callable_preserves_line_breaks_around_images(
     binary: Path, execution: Execution
@@ -166,13 +356,19 @@ def test_callable_preserves_line_breaks_around_images(
     with MCPConsole(**options(binary, execution)) as console:
         synchronous = console.send(r="emit image")
     assert (
-        synchronous == asynchronous == "before image\n[image/png output]\nafter image\n"
+        synchronous
+        == asynchronous
+        == """before image
+[image/png output]
+after image
+"""
     )
     return [{"output": synchronous}]
 
 
 @requires(WORKER)
 @executions(DIRECT, SANDBOXED)
+@requires(SQL)
 def test_callable_preserves_mixed_language_state(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -222,6 +418,7 @@ def test_callable_preserves_mixed_language_state(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_errors_close_and_reconnect(binary: Path, execution: Execution) -> Transcript:
     async def exercise():
@@ -249,6 +446,7 @@ def test_errors_close_and_reconnect(binary: Path, execution: Execution) -> Trans
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_responses_preserves_schema_text_and_images(
     binary: Path, execution: Execution
@@ -289,6 +487,7 @@ def test_responses_preserves_schema_text_and_images(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_openai_agents_callable_preserves_optional_arguments(
     binary: Path, execution: Execution
@@ -317,6 +516,7 @@ def test_openai_agents_callable_preserves_optional_arguments(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_native_openai_agents_server(binary: Path, execution: Execution) -> Transcript:
     from agents import Agent
@@ -339,6 +539,7 @@ def test_native_openai_agents_server(binary: Path, execution: Execution) -> Tran
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_anthropic_callable_and_native_tools(
     binary: Path, execution: Execution
@@ -361,6 +562,7 @@ def test_anthropic_callable_and_native_tools(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_native_openai_agents_waits_for_console_output(
     binary: Path, execution: Execution
@@ -378,6 +580,7 @@ def test_native_openai_agents_waits_for_console_output(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_chatlas_registers_on_existing_chat(
     binary: Path, execution: Execution
@@ -402,6 +605,7 @@ def test_chatlas_registers_on_existing_chat(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_chatlas_callable_registers_concrete_schema(
     binary: Path, execution: Execution
@@ -419,6 +623,7 @@ def test_chatlas_callable_registers_concrete_schema(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_sync_callable_and_framework_tools(
     binary: Path, execution: Execution
@@ -475,6 +680,7 @@ def test_sync_callable_and_framework_tools(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_sync_responses_preserves_text_and_images(
     binary: Path, execution: Execution

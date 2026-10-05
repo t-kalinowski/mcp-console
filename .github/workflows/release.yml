@@ -90,7 +90,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: 0.12.4
+          version: latest
           cache-local-path: ${{ runner.temp }}/mcp-console-cache
           cache-suffix: release-v1-${{ steps.cache-epoch.outputs.value }}
 
@@ -110,10 +110,10 @@ jobs:
       - name: Build wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
-          maturin-version: v1.15.0
           rust-toolchain: stable
           target: ${{ matrix.target }}
-          manylinux: off
+          # Use native runners while retaining PyPI-compatible Linux wheel tags.
+          container: off
           args: --release --locked --compatibility pypi --out dist
 
       - name: Smoke-test wheel
@@ -130,6 +130,12 @@ jobs:
             dist/*.whl \
             target/${{ matrix.target }}/release/mcp-console \
             --target "${{ matrix.target }}"
+          python3 scripts/release.py \
+            smoke-wheel \
+            dist/*.whl \
+            target/${{ matrix.target }}/release/mcp-console \
+            --target "${{ matrix.target }}" \
+            --without-r
           python3 tests/sandbox_installation.py "$UV_TOOL_BIN_DIR/mcp-console"
 
       - name: Upload wheel
@@ -183,7 +189,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: 0.12.4
+          version: latest
 
       - name: Publish wheels to PyPI
         run: |

@@ -26,15 +26,14 @@ result:
 ---
 send:
   r: cat("direct stdin cell ran\n")
-  timeout_ms: 30000
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: |-
-        direct callback released
-        [stopped by session restart request before evaluation finished]
-        [worker stopped: in-memory state lost]
-  isError: true
+
+        [running; poll with an empty send]
+  isError: false
 ---
 send:
   control: restart
@@ -42,6 +41,7 @@ result:
   content:
     - type: text
       text: |-
+        direct callback released
         [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]
         [starting new worker]

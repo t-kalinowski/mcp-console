@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 const ROOT_EXAMPLES: &str = "\
 Examples:
@@ -21,15 +21,38 @@ Examples:
     after_help = ROOT_EXAMPLES
 )]
 pub struct Cli {
+    #[command(flatten)]
+    pub overrides: ConfigOverrides,
+
     #[command(subcommand)]
     pub command: Command,
 }
 
+#[derive(Debug, Args)]
+pub struct ConfigOverrides {
+    /// Override project configuration; repeat for multiple dotted KEY=VALUE assignments
+    #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
+    pub values: Vec<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Provision the native Windows sandbox accounts and network rules
+    #[cfg(windows)]
+    SandboxSetup {
+        /// Persistent Windows sandbox state directory
+        #[arg(long, value_name = "PATH")]
+        state_dir: Option<PathBuf>,
+        /// Report setup readiness without provisioning
+        #[arg(long)]
+        status: bool,
+    },
     /// Run the MCP server over standard input and output
     Serve {
-        /// Run evaluated code with server permissions, without sandbox isolation or descendant cleanup
+        #[command(flatten)]
+        overrides: ConfigOverrides,
+
+        /// Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
         #[arg(long)]
         no_sandbox: bool,
 
@@ -48,17 +71,44 @@ pub enum Command {
 
     /// Run the internal R worker
     #[command(hide = true)]
-    Worker,
+    Worker {
+        /// Initialize enabled runtimes after transport readiness
+        #[arg(long, hide = true)]
+        bootstrap_runtimes: bool,
+    },
+
+    /// Run the internal host resolver
+    #[command(hide = true)]
+    Resolve,
+
+    #[command(hide = true)]
+    DockerOwner,
+    #[command(hide = true)]
+    DockerLaunch,
+    #[command(hide = true)]
+    DockerProbe,
+    #[command(hide = true)]
+    ImageRuntimeProbe {
+        #[arg(long)]
+        python: Option<PathBuf>,
+    },
+    #[command(hide = true)]
+    DockerSandboxOwner,
+    #[command(hide = true)]
+    DockerSandboxLaunch,
+    #[command(hide = true)]
+    DockerSandboxProbe,
 
     /// Launch the built-in runtime for an authenticated SSH controller
     #[command(hide = true)]
     SshLaunch,
-    #[command(hide = true)]
-    SshOwner,
 
     /// Prepare dependencies for an authenticated SSH controller
     #[command(hide = true)]
     SshPrepare,
+
+    #[command(hide = true)]
+    SshOwner,
 
     /// Own the controller end of the private SSH stream
     #[command(hide = true)]
@@ -85,6 +135,9 @@ pub enum Command {
     /// Run a command with the default or an explicit sandbox policy
     #[command(after_help = SANDBOX_EXAMPLES)]
     Sandbox {
+        #[command(flatten)]
+        overrides: ConfigOverrides,
+
         /// Read the runner configuration as JSON from this launch environment variable
         #[arg(long, value_name = "NAME", conflicts_with = "exit_with_parent")]
         config_env: Option<String>,

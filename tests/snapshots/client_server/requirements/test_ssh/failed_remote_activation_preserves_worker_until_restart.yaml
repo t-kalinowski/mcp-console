@@ -13,7 +13,8 @@ send:
       invisible(suppressMessages(trace(
         ".libPaths",
         tracer = quote(if (!missing(new)) stop("remote activation failed")),
-        print = FALSE, where = baseenv()
+        print = FALSE,
+        where = baseenv()
       )))
       on.exit(invisible(suppressMessages(untrace(".libPaths", where = baseenv()))))
       do.call(loadNamespace, list(package = "zeallot"))

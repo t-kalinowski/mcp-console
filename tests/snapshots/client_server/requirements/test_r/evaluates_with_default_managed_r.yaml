@@ -3,15 +3,31 @@
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+    managed_packages <- c(
+      "tidyverse",
+      "reticulate",
+      "DBI",
+      "duckdb",
+      "arrow",
+      "nanoarrow",
+      "yyjsonr"
+    )
+    # Loaded namespaces report canonical cache paths; ir libraries can
+    # contain symlinks to those same package directories.
     stopifnot(
-      identical(dirname(find.package("tidyverse")), .libPaths()[[1L]]),
-      identical(dirname(find.package("reticulate")), .libPaths()[[1L]]),
-      identical(dirname(find.package("DBI")), .libPaths()[[1L]]),
-      identical(dirname(find.package("duckdb")), .libPaths()[[1L]]),
-      identical(dirname(find.package("arrow")), .libPaths()[[1L]]),
-      identical(dirname(find.package("nanoarrow")), .libPaths()[[1L]]),
       vapply(
-        c("ggplot2", "dplyr", "readr", "jsonlite"),
+        managed_packages,
+        function(package) {
+          identical(
+            normalizePath(find.package(package)),
+            normalizePath(file.path(.libPaths()[[managed_index]], package))
+          )
+        },
+        logical(1L)
+      ),
+      vapply(
+        c("ggplot2", "dplyr", "readr", "jsonlite", "yyjsonr"),
         requireNamespace,
         logical(1L),
         quietly = TRUE

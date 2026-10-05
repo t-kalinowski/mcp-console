@@ -15,6 +15,7 @@ send:
   r: |
     stopifnot(is.function(fortunes::fortune))
     stop("after activation")
+  timeout_ms: 0
 result:
   content:
     - type: text

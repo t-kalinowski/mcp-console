@@ -44,7 +44,10 @@ def test_demarcates_idle_prelude_across_cell_outcomes(
             expose_idle_sideband_output(client, temporary_path, "success")
             client.send(r="echo echo")
             assert last_tool_text(client) == (
-                "zod background sideband\n[output produced while idle]\nzod: echo\n"
+                """zod background sideband
+[output produced while idle]
+zod: echo
+"""
             )
 
             expose_idle_sideband_output(client, temporary_path, "timeout")
@@ -71,7 +74,9 @@ def test_demarcates_idle_prelude_across_cell_outcomes(
                 "isError": False,
             }, timed_out
 
-            release_fixture_checkpoint(pending.parent / "zod-release-cell-output")
+            release_fixture_checkpoint(
+                pending.parent / "zod-release-cell-output", client=client
+            )
             processed = wait_for_marker(
                 temporary_path,
                 "zod-cell-output-processed",

@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.records import Transcript
 from support.r import r_test_environment
-from support.requirements import SANDBOX, WORKER, requires
+from support.requirements import REMOTE_CONTROLLERS, SANDBOX, WORKER, requires
 from support.ssh import CONFIG, bootstrap, read_frame
 from support.suites import run_this_suite
 
@@ -36,7 +36,7 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
                 json.dumps(
                     {
                         "target": {
-                            "transport": {"kind": "ssh", "host": "mule"},
+                            "transport": {"kind": "ssh", "host": "console-test"},
                             **values,
                         }
                     }
@@ -57,6 +57,7 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
     return records
 
 
+@requires(REMOTE_CONTROLLERS)
 def test_bootstrap_framing_errors(binary: Path) -> Transcript:
     cases = (
         (b"\x00\x10\x00\x01", "exceeds"),
@@ -118,7 +119,7 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             while b'"completed"' not in data:
                 tag, body = read_frame(process.stdout)
                 if tag == 1:
-                    assert json.loads(body)["version"] == 2
+                    assert json.loads(body)["version"] == 10
                 else:
                     assert tag == 2, (tag, body)
                     data.extend(body)
@@ -143,6 +144,7 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             process.wait(timeout=10)
 
 
+@requires(REMOTE_CONTROLLERS)
 def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:
@@ -153,8 +155,24 @@ def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
             (root / "missing", {}, "cannot access remote target.workspace"),
             (file, {}, "is not a directory"),
             (Path("relative"), {}, "absolute"),
+            (root, {"version": 3}, "incompatible SSH bootstrap"),
             (root, {"version": 999}, "incompatible SSH bootstrap"),
             (root, {"build": "incompatible-build"}, "incompatible SSH bootstrap"),
+            (
+                root,
+                {
+                    "environment": {
+                        "discovery": {
+                            "managed": False,
+                            "selections": {"r_home": None, "python": None},
+                        },
+                        "r": None,
+                        "python": None,
+                        "native": {"r_home": None, "python": None},
+                    }
+                },
+                "SSH worker bootstrap has no selected runtime",
+            ),
         )
         for workspace, values, expected in cases:
             result = subprocess.run(

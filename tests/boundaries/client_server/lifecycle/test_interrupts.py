@@ -15,7 +15,7 @@ from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import stop_process, stop_process_group
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
@@ -32,6 +32,7 @@ from boundaries.client_server._harness import (
 )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_worker_with_sigint(
     binary: Path, execution: Execution
@@ -137,10 +138,10 @@ def test_supervises_stopped_and_continued_workers(
                 "content": [
                     {
                         "type": "text",
-                        "text": "worker evaluation is already being polled",
+                        "text": "\n[running; poll with an empty send]",
                     }
                 ],
-                "isError": True,
+                "isError": False,
             }, interrupt
 
             continue_stopped_worker(worker_pid, worker_group)
@@ -221,12 +222,14 @@ def test_reports_resolver_interrupt_permission_error(
             resolver_lifetime,
             resolver_group_record,
             denied_interrupt,
+            resolver_watches,
         ) = resolver_interrupt_permission_environment(temporary_path)
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
+            temporary_path,
         )
         resolver_group = None
         passed = False
@@ -239,6 +242,11 @@ def test_reports_resolver_interrupt_permission_error(
             resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
+            )
+            wait_for_path(
+                resolver_watches / str(resolver_group),
+                "active resolver supervision",
+                client,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)
@@ -319,16 +327,20 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             resolver_lifetime,
             resolver_group_record,
             denied_interrupt,
+            resolver_watches,
         ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
+            temporary_path,
         )
         resolver_group = None
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Complete lazy custom-worker startup before timing resolver arrival.
+            client.expect("zod: ready\n", r="echo ready")
             evaluation = client.start_send(
                 r="report runtime R resolution failure",
             )
@@ -336,6 +348,11 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
+            )
+            wait_for_path(
+                resolver_watches / str(resolver_group),
+                "active resolver supervision",
+                client,
             )
 
             interrupt = client.start_send(control="interrupt", timeout_ms=0)

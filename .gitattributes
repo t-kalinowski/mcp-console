@@ -1,2 +1,5 @@
 tests/snapshots/**/*.md whitespace=-blank-at-eof
 tests/snapshots/**/*.qmd whitespace=-blank-at-eof
+*.R text eol=lf
+*.py text eol=lf
+scripts/* text eol=lf

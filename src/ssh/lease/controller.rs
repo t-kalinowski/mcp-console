@@ -21,7 +21,7 @@ pub(super) fn run(operation: &str) -> io::Result<()> {
         std::env::remove_var("MCP_CONSOLE_SSH_TARGET");
         std::env::remove_var("MCP_CONSOLE_SSH_GENERATION");
     }
-    let target: crate::settings::SshTarget =
+    let target: crate::settings::Target =
         serde_json::from_str(&target).map_err(|e| invalid(e.to_string()))?;
     let secret = challenge()?;
     let owner = challenge()?[..16]
@@ -48,7 +48,6 @@ pub(super) fn run(operation: &str) -> io::Result<()> {
     for fd in [0, 1, 2] {
         nonblocking(fd)?;
     }
-    let session = crate::ssh::Session::new(target, Vec::new());
     let (received, notification) = io::pipe()?;
     nonblocking(received.as_raw_fd())?;
     let mut received = File::from(std::os::fd::OwnedFd::from(received));
@@ -83,13 +82,13 @@ pub(super) fn run(operation: &str) -> io::Result<()> {
                     .deadline
                     .min(Instant::now() + crate::ssh::SETUP_TIMEOUT);
                 let (cancelled, cancel) = io::pipe()?;
-                let session = session.clone();
+                let target = target.clone();
                 let results = results.clone();
                 let mut notification = notification.try_clone()?;
                 let task = thread::spawn(move || {
                     let result = (|| {
                         let mut link = attachment::connect(
-                            &session,
+                            &target,
                             &request,
                             &secret,
                             deadline,

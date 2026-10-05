@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sysconfig
@@ -47,4 +48,9 @@ def result_text(result: CallToolResult) -> str:
         text += part
     if result.is_error:
         raise RuntimeError(text or "MCP Console returned an error")
+    if (
+        isinstance(result.structured_content, dict)
+        and "requirements" in result.structured_content
+    ):
+        return json.dumps(result.structured_content, indent=2)
     return text

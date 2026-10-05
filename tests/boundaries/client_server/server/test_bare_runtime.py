@@ -13,10 +13,13 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
+from support.requirements import SQL
 from support.resolvers import bare_runtime_environment
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_runs_without_a_resolver_bootstrap(
     binary: Path, execution: Execution
@@ -38,8 +41,16 @@ def test_runs_without_a_resolver_bootstrap(
         client.initialize_and_list_tools()
         send = client.transcript[-1]["result"]["tools"][0]
         properties = send["inputSchema"]["properties"]
-        assert {"r", "python", "sql"} <= properties.keys(), properties
-        assert "requirements" not in properties, properties
+        expected_languages = {"r", "python"}
+        if SQL.available:
+            expected_languages.add("sql")
+        assert expected_languages <= properties.keys(), properties
+        assert properties["requirements"]["properties"]["action"]["enum"] == [
+            "get",
+            "add",
+            "set",
+            "reset",
+        ], properties
 
         client.send(r="1 + 1")
         assert last_result_text(client) == "[1] 2\n"
@@ -83,7 +94,9 @@ def test_runs_without_a_resolver_bootstrap(
         assert "tidyverse" not in quarto, quarto
         assert "numpy" not in quarto, quarto
         assert "praise" not in quarto, quarto
-        quarto = quarto.replace(str(workspace.resolve()), "<workspace>")
+        quarto = quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+            str(workspace), "<workspace>"
+        )
         return TranscriptWithCompanions(
             transcript=transcript,
             companions={

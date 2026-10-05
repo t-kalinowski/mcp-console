@@ -1,16 +1,42 @@
 //! Trusted application settings, captured before starting a session or workload.
 
 use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-mod yaml;
+mod target;
+#[cfg(unix)]
+pub(crate) use target::Access;
+pub(crate) use target::{Compute, DockerSandbox, Pull, Target, validate_ssh_lease};
+
+/// Selected enforcement, independently of direct versus inner-runner launch.
+#[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Provider {
+    #[default]
+    Native,
+    Compute,
+}
+
+impl Provider {
+    pub fn needs_native_runner(self, no_sandbox: bool) -> bool {
+        self == Self::Native && !no_sandbox
+    }
+}
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
 /// Native policy values; application additions materialize on the execution host.
 pub type SandboxSettings = Map<String, Value>;
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Cache {
+    Console,
+    Host,
+}
 
 /// Preserve Console's assignments and removals after project environment controls.
 pub fn preserve_environment<'a>(
@@ -65,107 +91,135 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    cache: Option<Cache>,
+    python: Option<std::path::PathBuf>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
-    target: Option<SshTarget>,
+    resolver: Map<String, Value>,
+    target: Option<Target>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SshTarget {
-    pub transport: Transport,
-    #[serde(default)]
-    pub workspace: String,
-    #[serde(default = "remote_command")]
-    pub command: Vec<String>,
-    #[serde(default = "ssh_lease_ms")]
-    pub lease_ms: u64,
+#[derive(Default)]
+pub(crate) struct Captured {
+    pub cache: Option<Cache>,
+    pub python: Option<std::path::PathBuf>,
+    pub source: Option<String>,
+    pub policy: SandboxSettings,
+    pub resolver: SandboxSettings,
+    pub target: Option<Target>,
+    pub provider: Provider,
 }
 
-fn ssh_lease_ms() -> u64 {
-    30_000
-}
-
-pub(crate) fn validate_ssh_lease(lease_ms: u64) -> Result<(), String> {
-    if !(1_000..=300_000).contains(&lease_ms) {
-        return Err(
-            "target.lease_ms must be an integer from 1000 through 300000 milliseconds".into(),
-        );
-    }
-    Ok(())
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum Transport {
-    Ssh { host: String },
-}
-
-fn remote_command() -> Vec<String> {
-    vec!["uvx".into(), "mcp-console".into()]
-}
-
-impl SshTarget {
-    pub fn host(&self) -> &str {
-        let Transport::Ssh { host } = &self.transport;
-        host
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        validate_ssh_lease(self.lease_ms)?;
-        if !self.workspace.starts_with('/') || self.workspace.contains('\0') {
-            return Err("target.workspace must be an absolute remote directory path".into());
-        }
-        if self.host().is_empty() || self.host().contains('\0') {
-            return Err("target.transport.host must be a nonempty SSH destination".into());
-        }
-        if self.command.is_empty()
-            || self.command[0].is_empty()
-            || self.command.iter().any(|argument| argument.contains('\0'))
-        {
-            return Err("target.command must be a nonempty argv with a nonempty executable and no NUL bytes".into());
-        }
-        Ok(())
-    }
-}
-
-pub fn discover() -> Result<(Option<&'static str>, SandboxSettings, Option<SshTarget>), String> {
-    let name = ".agents/console/config.yaml";
-    // A dangling symlink or an unreadable existing file must reach read_to_string.
-    match std::fs::symlink_metadata(name) {
-        // No configuration file can exist below a non-directory component.
+pub fn discover(overrides: &[String]) -> Result<Captured, String> {
+    let project = Path::new(".agents/console/config.yaml");
+    let path = match std::fs::symlink_metadata(project) {
+        Ok(_) => Some(PathBuf::from(project)),
         Err(error)
             if matches!(
                 error.kind(),
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            return Ok((None, SandboxSettings::default(), None));
+            crate::console_paths::home_console_directory()?
+                .map(|directory| directory.join("config.yaml"))
         }
-        Err(error) => return Err(format!("cannot inspect '{name}': {error}")),
-        Ok(_) => {}
-    }
-    let source =
-        std::fs::read_to_string(name).map_err(|error| format!("cannot read '{name}': {error}"))?;
-    let value = yaml::load(&source).map_err(|error| format!("{name}: {error}"))?;
+        Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
+    };
+    let Some(value) = crate::config::load(path.as_deref(), overrides)? else {
+        return Ok(Captured::default());
+    };
+    let name = if overrides.is_empty() {
+        path.expect("configuration came from a file")
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        "configuration with CLI overrides".into()
+    };
+    let has_extends = value.get("extends").is_some();
     let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
+    let compute = project
+        .target
+        .as_ref()
+        .is_some_and(|target| matches!(target.compute, Compute::DockerSandbox(_)));
+    let provider = match project.sandbox.remove("provider") {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|error| format!("{name}: sandbox.provider: {error}"))?,
+        None if compute => Provider::Compute,
+        None => Provider::Native,
+    };
+    if provider == Provider::Compute {
+        if !compute {
+            return Err(format!(
+                "{name}: sandbox.provider: compute requires target.compute.kind: docker_sandbox"
+            ));
+        }
+        crate::docker_sandbox::validate_policy(&project.sandbox, has_extends, &[])
+            .map_err(|error| format!("{name}: {error}"))?;
+    } else if compute {
+        return Err(format!(
+            "{name}: docker_sandbox only supports sandbox.provider: compute; inner native enforcement is not supported"
+        ));
+    }
     // These fields belong to Console's launch protocol and worker lifetime.
     // All other sandbox fields and values are interpreted by the native runner.
     for field in ["version", "lifecycle", "extends", "workspace"] {
         if project.sandbox.contains_key(field) {
             return Err(format!("{name}: sandbox.{field} is managed by Console"));
         }
+        if project.resolver.contains_key(field) {
+            return Err(format!("{name}: resolver.{field} is managed by Console"));
+        }
     }
     if let Some(profile) = project.extends {
         project.sandbox.insert("extends".into(), profile.into());
     }
-    if let Some(target) = &project.target {
+    if let Some(target) = &mut project.target {
         target
-            .validate()
+            .capture()
             .map_err(|error| format!("{name}: {error}"))?;
     }
-    Ok((Some(name), project.sandbox, project.target))
+    let target = project.target.filter(|target| !target.is_local_host());
+    let remote_python = target.is_some();
+    Ok(Captured {
+        cache: project.cache,
+        python: project
+            .python
+            .map(|path| {
+                if path.as_os_str().is_empty() {
+                    let default = match target.as_ref().map(|target| &target.compute) {
+                        Some(Compute::Docker(_) | Compute::DockerSandbox(_)) => {
+                            "select preinstalled target Python"
+                        }
+                        _ => "use uv",
+                    };
+                    return Err(format!(
+                        "python must name an executable; omit it to {default}"
+                    ));
+                }
+                if remote_python {
+                    Ok(path)
+                } else {
+                    let path = if let Ok(relative) = path.strip_prefix("~") {
+                        let home = std::env::var_os("HOME")
+                            .map(PathBuf::from)
+                            .filter(|home| home.is_absolute())
+                            .ok_or("configured Python home expansion requires an absolute HOME")?;
+                        home.join(relative)
+                    } else {
+                        path
+                    };
+                    std::path::absolute(path)
+                        .map_err(|error| format!("cannot locate configured Python: {error}"))
+                }
+            })
+            .transpose()?,
+        source: Some(name),
+        policy: project.sandbox,
+        resolver: project.resolver,
+        target,
+        provider,
+    })
 }
 
 pub fn from_environment(name: &str) -> Result<SandboxSettings, String> {

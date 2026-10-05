@@ -15,7 +15,9 @@ send:
     python:
       - humanize
   r: |
-    r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[1L]][[1L]]
+    r_library <- strsplit(Sys.getenv("R_LIBS"), .Platform$path.sep, fixed = TRUE)[[
+      1L
+    ]][[1L]]
     stopifnot(
       Sys.which("ir") == "",
       requireNamespace("praise", quietly = TRUE),
@@ -37,7 +39,10 @@ send:
   python: |
     import humanize, sys
     from pathlib import Path
-    assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), sys.prefix
+
+    assert Path(sys.prefix).resolve().is_relative_to((Path.cwd() / "uv-cache").resolve()), (
+        sys.prefix
+    )
     print(humanize.intcomma(12345))
     print(r.x)
 result:

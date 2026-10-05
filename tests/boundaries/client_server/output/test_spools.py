@@ -15,15 +15,24 @@ from support.checkpoints import (
     release_fixture_checkpoint,
     wait_for_worker_file,
 )
+from support.previews import (
+    OMISSION,
+    TEXT_BUDGET,
+    assert_preview,
+    compact_previews,
+    normalize_preview_paths,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
+from support.requirements import POSIX, requires
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_separates_startup_omissions_from_retained_cell_text(
     binary: Path, execution: Execution
@@ -54,20 +63,24 @@ def test_separates_startup_omissions_from_retained_cell_text(
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
         assert (workspace / path).read_bytes() == b"cell output\n"
-        notices = (
-            "\n[output truncated: omitted 7 text bytes and 0 encoded image bytes across 1 event]"
-            "\n[output truncated: omitted 12 text bytes and 0 encoded image bytes across 1 event; "
-            f"retained text: {path} (12 of 12 omitted text bytes)]"
+        assert len(output.encode()) <= TEXT_BUDGET
+        assert output.endswith("cell output\n"), output[-1000:]
+        marker = OMISSION.search(output)
+        assert marker is not None
+        assert "outputs/session.log" in marker[0]
+        assert (session / "outputs/session.log").read_text() == "s" * (
+            PENDING_TEXT_BUDGET + 7
         )
-        prefix = "s" * PENDING_TEXT_BUDGET
-        assert output == prefix + notices, output[-1000:]
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            f"<retained {PENDING_TEXT_BUDGET} startup text bytes>"
-            + notices.replace(session.name, "<run ID>")
-        )
+        assert path not in marker[0]
+        startup_preview = output.removesuffix("cell output\n")
+        assert_preview(startup_preview, "s" * (PENDING_TEXT_BUDGET + 7))
+        client.transcript[-1]["result"]["content"][0]["text"] = output
+        normalize_preview_paths(client)
+        compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_partial_retention_and_later_unretained_output(
     binary: Path, execution: Execution
@@ -79,19 +92,19 @@ def test_reports_partial_retention_and_later_unretained_output(
         launcher = workspace / "limited-server"
         # Limit regular-file writes using the OS, while leaving enough room for
         # the journal and both projections of the two bounded tool responses.
-        # fmt: python
         launcher.write_text(
             f"#!{sys.executable}\n"
+            # fmt: python
             + code(f"""
-            import os
-            import resource
-            import signal
-            import sys
+                import os
+                import resource
+                import signal
+                import sys
 
-            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
-            resource.setrlimit(resource.RLIMIT_FSIZE, ({file_limit}, {file_limit}))
-            os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])
-            """),
+                signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+                resource.setrlimit(resource.RLIMIT_FSIZE, ({file_limit}, {file_limit}))
+                os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])
+                """),
             encoding="utf-8",
         )
         launcher.chmod(0o755)
@@ -112,43 +125,51 @@ def test_reports_partial_retention_and_later_unretained_output(
             ) as processed:
                 # Keep each batch pending until the server has processed it.
                 # Intermediate polls would reset the inline budget and split counts.
-                release_fixture_checkpoint(release)
+                release_fixture_checkpoint(release, client=client)
                 processed.wait(timeout=client.response_timeout)
                 client.send(timeout_ms=0)
                 first = client.transcript[-1]
                 first_text = last_tool_text(client)
-                release_fixture_checkpoint(release)
+                release_fixture_checkpoint(release, client=client)
                 processed.wait(timeout=client.response_timeout)
                 client.send(timeout_ms=0)
                 second = client.transcript[-1]
                 second_text = last_tool_text(client)
-            assert "retained text:" not in second_text, second_text[-1000:]
 
             session = next((workspace / ".agents/console" / "sessions").iterdir())
             path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
             assert (workspace / path).read_bytes() == b"x" * file_limit
-            omitted = 2 * PENDING_TEXT_BUDGET + 7
-            persisted = file_limit - PENDING_TEXT_BUDGET
+            assert f"stopped after {file_limit} retained bytes" in first_text
+            assert "later text is not retained in this file" in first_text
             assert (
-                f"retained text: {path} ({persisted} of {omitted} omitted text bytes)"
+                f"{file_limit} raw bytes retained, 4 raw bytes not retained"
                 in first_text
-            ), first_text[-1000:]
-            assert f"stopped after {file_limit} retained bytes" in first_text, (
-                first_text[-1000:]
             )
-            assert "later text is not retained in this file" in first_text, first_text[
-                -1000:
-            ]
-
-            for entry, text, character in (
-                (first, first_text, "x"),
-                (second, second_text, "y"),
-            ):
-                prefix = character * PENDING_TEXT_BUDGET
-                assert text.startswith(prefix), text[-1000:]
-                entry["result"]["content"][0]["text"] = (
-                    f"<retained {PENDING_TEXT_BUDGET} text bytes>"
-                    + text.removeprefix(prefix).replace(session.name, "<run ID>")
+            assert (
+                f"{file_limit} raw bytes retained, {PENDING_TEXT_BUDGET + 11} raw bytes not retained"
+                in second_text
+            )
+            assert "file contains only a prefix" in first_text
+            assert "omitted text beyond it is unavailable" in second_text
+            assert first_text.endswith("\n[running; poll with an empty send]")
+            # File-failure notices are separate from the emitted byte stream.
+            failure_start = first_text.index("[cell output file ")
+            failure_end = first_text.index("]\n", failure_start) + 2
+            first_payload = (
+                first_text[:failure_start].removesuffix("\n") + first_text[failure_end:]
+            )
+            first_payload = first_payload.removesuffix(
+                "\n[running; poll with an empty send]"
+            )
+            first_omitted = assert_preview(
+                first_payload, "x" * (3 * PENDING_TEXT_BUDGET + 7)
+            )
+            second_omitted = assert_preview(
+                second_text, "y" * (PENDING_TEXT_BUDGET + 7)
+            )
+            for entry, text in ((first, first_text), (second, second_text)):
+                entry["result"]["content"][0]["text"] = text.replace(
+                    session.name, "<run ID>"
                 )
 
             client.send(r="echo after failure")
@@ -167,18 +188,22 @@ def test_reports_partial_retention_and_later_unretained_output(
             assert output_event["discarded_bytes"] == PENDING_TEXT_BUDGET + 11, (
                 output_event
             )
-            assert output_event["inline_omitted_bytes"] == omitted + 7, output_event
+            assert (
+                output_event["inline_omitted_bytes"] == first_omitted + second_omitted
+            ), output_event
             markdown = (session / "transcript.md").read_text()
             assert (
-                f"{PENDING_TEXT_BUDGET + 11} bytes not retained in this file"
+                f"{PENDING_TEXT_BUDGET + 11} raw bytes not retained in this file"
                 in markdown
             )
             assert "permanently discarded" not in markdown
+            compact_previews(client, "x", "y", "z", "s", "p", "ab")
             transcript, stderr = client.finish_with_standard_error()
             assert stderr == "", stderr
             return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_omitted_bytes_retained_at_the_file_limit(
     binary: Path, execution: Execution
@@ -203,7 +228,7 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
         with closing(
             FifoCheckpoint.attach(release.with_name("zod-retention-completed"))
         ) as completed:
-            release_fixture_checkpoint(release)
+            release_fixture_checkpoint(release, client=client)
             # Keep all output pending until the server acknowledges completion;
             # intermediate polls would reset the inline budget and split counts.
             completed.wait(timeout=client.response_timeout)
@@ -223,16 +248,12 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
             for _ in range(1024):
                 assert retained.read(len(block)) == block
             assert retained.read(1) == b""
-        omitted_retained = limit - PENDING_TEXT_BUDGET
-        notices = (
-            f"\n[output truncated: omitted {omitted_retained + 5} text bytes and "
-            "0 encoded image bytes across 128 events; "
-            f"retained text: {path} ({omitted_retained} of {omitted_retained + 5} omitted text bytes)]"
-            f"\n[cell output retention limit reached at {limit} bytes for {path}; "
-            "later text is not retained in this file]\n"
-        )
-        prefix = "x" * PENDING_TEXT_BUDGET
-        assert output == prefix + notices, output[-1500:]
+        assert len(output.encode()) <= TEXT_BUDGET
+        assert "tail\n" in output, output[-1500:]
+        assert f"{limit} raw bytes retained, 5 raw bytes not retained" in output
+        assert "file contains only a prefix" in output
+        assert f"cell output retention limit reached at {limit} bytes" in output
+        omitted = sum(int(match[1]) for match in OMISSION.finditer(output))
         events = [
             json.loads(line)
             for line in (session / "internal/events.jsonl").read_text().splitlines()
@@ -244,11 +265,11 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
         )
         assert summary["retained_bytes"] == limit, summary
         assert summary["discarded_bytes"] == 5, summary
-        assert summary["inline_omitted_bytes"] == omitted_retained + 5, summary
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            f"<retained {PENDING_TEXT_BUDGET} text bytes>"
-            + notices.replace(session.name, "<run ID>")
+        assert summary["inline_omitted_bytes"] == omitted, summary
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            session.name, "<run ID>"
         )
+        compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 
 

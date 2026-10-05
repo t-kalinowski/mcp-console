@@ -7,7 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, requires
 from support.assertions import last_result_text
+from support.previews import (
+    assert_preview,
+    compact_previews,
+)
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import (
@@ -16,6 +21,7 @@ from support.normalization import (
     normalize_python_traceback_paths,
 )
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     initialize_python_and_record_baseline,
     recording_uv_environment,
@@ -28,6 +34,7 @@ from support.suites import run_this_suite
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_resolves_missing_python_import_without_replaying_cell(
     binary: Path,
@@ -38,8 +45,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
-    client.send(r="automatic_python_r_state <- 42L")
-    assert last_result_text(client) == "[done]"
+    client.expect(r="automatic_python_r_state <- 42L")
     client.send(sql="CREATE TABLE automatic_python_state AS SELECT 42 AS answer")
 
     # fmt: python
@@ -49,8 +55,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
         automatic_python_object = {"answer": 42}
         automatic_python_pid = os.getpid()
         """)
-    client.send(python=setup)
-    assert last_result_text(client) == "[done]", repr(last_result_text(client))
+    client.expect(python=setup)
 
     # fmt: python
     python = code("""
@@ -84,6 +89,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     binary: Path,
@@ -105,30 +111,68 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     client.send(python=python, timeout_ms=120_000)
     output = last_result_text(client)
     prefix = "x" * retained
-    assert output.startswith(prefix), len(output)
-    remainder = output.removeprefix(prefix)
-    assert remainder.startswith("\n[output truncated: omitted "), repr(remainder[:200])
-    assert "resolved PyPI distribution" not in remainder, repr(remainder[:200])
+    notice = "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+    assert notice in output
+    assert_preview(output, prefix + notice + "'yaml12'\n")
     assert client.temporary_directory is not None
     workspace = Path(client.temporary_directory.name)
     session = next((workspace / ".agents/console" / "sessions").iterdir())
     relative_output = Path("outputs/call-000001.log")
     public_output = (
-        f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
+        f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
     )
-    assert (
-        f"; retained text: {public_output} (9 of 78 omitted text bytes)]" in remainder
-    ), remainder[-300:]
+    assert f"raw cell log: {public_output}" in output, output[len(prefix) :]
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )
-    remainder = remainder.replace(session.name, "<run ID>")
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        f"<retained {retained} text bytes>{remainder}"
+    client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+        session.name, "<run ID>"
     )
+    compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
     return client.finish()
 
 
+@platform_snapshots("win32")
+@executions(DIRECT, SANDBOXED)
+def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment = os.environ.copy()
+    environment.pop("RETICULATE_PYTHON", None)
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        # fmt: python
+        python = code("""
+            print("notice head\\n" + "x" * 10000, end="")
+            import yaml12
+
+            print("y" * 10000 + "\\nnotice tail")
+            """)
+        client.send(python=python, timeout_ms=120_000)
+        output = last_result_text(client)
+        head = "notice head\n" + "x" * 10000
+        tail = "y" * 10000 + "\nnotice tail\n"
+        notice = (
+            "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+        )
+        assert_preview(output, head + notice + tail)
+        assert "generated notice bytes not retained" in output
+        assert "resolved PyPI distribution" not in output
+        assert client.temporary_directory is not None
+        session = next(
+            (
+                Path(client.temporary_directory.name) / ".agents/console/sessions"
+            ).iterdir()
+        )
+        assert (session / "outputs/call-000001.log").read_text() == head + tail
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            session.name, "<run ID>"
+        )
+        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
+        return client.finish()
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_new_meta_path_finders_after_automatic_resolution(
     binary: Path,
@@ -141,7 +185,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
             directory,
             substitute_requirement=(module, "pydash"),
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -170,39 +214,26 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
 
             automatic_meta_finder = AutomaticMetaFinder()
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
-        # Register the finder only after reticulate activates the inferred
-        # environment, while the original import is waiting in this runtime.
-        # fmt: r
-        r = code(r"""
-            reticulate_namespace <- asNamespace("reticulate")
-            original_py_require <- get("py_require", envir = reticulate_namespace)
-            automatic_meta_finder_registered <- FALSE
-            unlockBinding("py_require", reticulate_namespace)
-            assign(
-              "py_require",
-              function(...) {
-                result <- original_py_require(...)
-                if (!automatic_meta_finder_registered) {
-                  reticulate::py_run_string(
-                    paste0(
-                      "import sys, __main__; ",
-                      "sys.meta_path.insert(0, __main__.automatic_meta_finder)"
-                    ),
-                    local = TRUE
-                  )
-                  automatic_meta_finder_registered <<- TRUE
-                }
-                result
-              },
-              envir = reticulate_namespace
-            )
-            lockBinding("py_require", reticulate_namespace)
+        # Activation runs ordinary Python code. Install a finder while the
+        # original import is waiting, after the new environment is active.
+        # fmt: python
+        python = code(r"""
+            import runpy
+            import sys
+
+            original_run_path = runpy.run_path
+
+            def activate_with_finder(*args, **kwargs):
+                result = original_run_path(*args, **kwargs)
+                sys.meta_path.insert(0, automatic_meta_finder)
+                runpy.run_path = original_run_path
+                return result
+
+            runpy.run_path = activate_with_finder
             """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -214,6 +245,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_infers_python_distributions_for_normal_import_forms(
     binary: Path,
@@ -222,7 +254,7 @@ def test_infers_python_distributions_for_normal_import_forms(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -262,6 +294,7 @@ def test_infers_python_distributions_for_normal_import_forms(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_resolve_unreached_or_available_python_imports(
     binary: Path,
@@ -280,7 +313,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=directory,
         )
@@ -344,6 +377,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_resolve_missing_python_imports_from_sql(
     binary: Path,
@@ -356,11 +390,10 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             directory,
             fail_requirement=prefix,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
-        client.send(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
-        assert last_result_text(client) == "[done]"
+        client.expect(sql="CREATE TABLE managed_restore_value AS SELECT 42 AS answer")
 
         # Exercise every driver-controlled call made by the DB-API adapter.
         # fmt: python
@@ -416,8 +449,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
 
             console_sql_connection(Connection())
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         client.send(sql="ANSWER")
         preview = last_result_text(client)
@@ -450,8 +482,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
             console_sql_connection(None)
             sys.settrace(restore_hook)
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -483,6 +514,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_reenter_automatic_python_resolution(
     binary: Path, execution: Execution
@@ -491,46 +523,31 @@ def test_does_not_reenter_automatic_python_resolution(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        # Wrap the public reticulate requirement transition reached by the
-        # private callback. Its nested Python miss must not start another host
-        # resolver while the outer import owns resolution.
-        # fmt: r
-        r = code(rf"""
-            reticulate_namespace <- asNamespace("reticulate")
-            original_py_require <- get("py_require", envir = reticulate_namespace)
-            automatic_nested_calls <- 0L
-            automatic_nested_error <- NULL
-            automatic_nested_triggered <- FALSE
-            unlockBinding("py_require", reticulate_namespace)
-            assign(
-              "py_require",
-              function(...) {{
-                if (!automatic_nested_triggered) {{
-                  automatic_nested_triggered <<- TRUE
-                  automatic_nested_calls <<- automatic_nested_calls + 1L
-                  automatic_nested_error <<- tryCatch(
-                    {{
-                      reticulate::py_run_string(
-                        "import {nested}",
-                        local = TRUE
-                      )
-                      NA_character_
-                    }},
-                    error = conditionMessage
-                  )
-                }}
-                original_py_require(...)
-              }},
-              envir = reticulate_namespace
-            )
-            lockBinding("py_require", reticulate_namespace)
+        # A missing import inside the activation script must not reenter
+        # resolution. Use ordinary Python's script hook in every composition.
+        # fmt: python
+        python = code(rf"""
+            import runpy
+            original_run_path = runpy.run_path
+            automatic_nested_calls = 0
+            automatic_nested_error = None
+
+            def activate_with_nested_import(*args, **kwargs):
+                global automatic_nested_calls, automatic_nested_error
+                automatic_nested_calls += 1
+                try:
+                    import {nested}
+                except ModuleNotFoundError as error:
+                    automatic_nested_error = str(error)
+                return original_run_path(*args, **kwargs)
+
+            runpy.run_path = activate_with_nested_import
             """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -543,21 +560,16 @@ def test_does_not_reenter_automatic_python_resolution(
         runs = uv_tool_run_requirements(record)[baseline:]
         assert len(runs) == 1 and "py-yaml12" in runs[0], runs
 
-        # fmt: r
-        r = code(rf"""
-            cat(
-              automatic_nested_calls,
-              grepl("{nested}", automatic_nested_error, fixed = TRUE),
-              sep = "\n"
-            )
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "1\nTRUE\n", repr(last_result_text(client))
+        client.send(
+            python=f"assert automatic_nested_calls == 1; assert '{nested}' in automatic_nested_error; print('nested resolution suppressed')"
+        )
+        assert last_result_text(client) == "nested resolution suppressed\n"
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_automatic_python_requirement_after_error_and_restart(
     binary: Path,
@@ -566,7 +578,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -595,6 +607,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_automatic_python_resolution_failure(
     binary: Path, execution: Execution
@@ -606,9 +619,13 @@ def test_reports_automatic_python_resolution_failure(
             directory,
             fail_requirement=requirement,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
+
+        client.send(python="import sys; print(sys.executable)")
+        executable = last_result_text(client).strip()
+        client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
 
         output = send_and_collect_runtime_python_resolution(
             client,
@@ -628,7 +645,7 @@ def test_reports_automatic_python_resolution_failure(
         assert len(runs) == 1, runs
         assert requirement in runs[0] and "sklearn" not in runs[0], runs
 
-        normalized = normalize_python_resolution_error(output)
+        normalized = normalize_python_resolution_error(output, executable=executable)
         client.transcript[-1]["result"]["content"][0]["text"] = normalized
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')
@@ -638,6 +655,7 @@ def test_reports_automatic_python_resolution_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_inferred_distribution_that_does_not_provide_import(
     binary: Path,
@@ -650,7 +668,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
             directory,
             substitute_requirement=(inferred, "py-yaml12"),
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -688,6 +706,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_explicit_python_requirements_preempt_automatic_resolution(
     binary: Path,
@@ -696,7 +715,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -711,6 +730,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
     binary: Path,
@@ -725,18 +745,20 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
         fromlist_parent.mkdir()
         (fromlist_parent / "__init__.py").write_text("", encoding="utf-8")
         (fromlist_parent / "missing.py").write_text(
-            """try:
-    import mcp_console_available_root.nested_missing
-except ModuleNotFoundError as error:
-    missing_name = error.name
-    answer = 42
-""",
+            # fmt: python
+            code("""
+                try:
+                    import mcp_console_available_root.nested_missing
+                except ModuleNotFoundError as error:
+                    missing_name = error.name
+                    answer = 42
+                """),
             encoding="utf-8",
         )
         environment, record = recording_uv_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=directory,
         )
@@ -787,6 +809,7 @@ except ModuleNotFoundError as error:
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unavailable_standard_library_module_without_resolution(
     binary: Path,
@@ -795,7 +818,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -821,6 +844,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_disables_automatic_resolution_for_user_selected_python(
     binary: Path,
@@ -833,7 +857,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         environment, record = recording_uv_environment(directory)
         environment["RETICULATE_PYTHON"] = str(managed_python)
         environment["PYTHONNODEBUGRANGES"] = "1"
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -858,6 +882,34 @@ def test_disables_automatic_resolution_for_user_selected_python(
         client.send(python="6 * 7")
         assert last_result_text(client) == "42\n"
         return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_runtime_toolchain_probe_does_not_install_a_distribution(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_uv_environment(Path(temporary))
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(requirements={"python": ["rply"]})
+            assert last_result_text(client) == "[prepared]"
+            baseline = len(uv_tool_run_requirements(record))
+            client.send(
+                python="import rply; rply.LexerGenerator().build(); print('CPython lexer ready')"
+            )
+            assert last_result_text(client) == "CPython lexer ready\n", (
+                client.transcript[-1]
+            )
+            assert len(uv_tool_run_requirements(record)) == baseline
+            declaration = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]
+            assert "rpython" not in declaration["requirements"]["python"], declaration
+            return client.finish()
 
 
 if __name__ == "__main__":

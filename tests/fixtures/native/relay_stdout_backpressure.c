@@ -21,18 +21,23 @@ static ssize_t (*native_writev)(int descriptor, const struct iovec *buffers, int
 #endif
 
 static int blocked;
+static bool monitored;
 static atomic_bool observed = false;
 static struct stat output_identity;
 
 __attribute__((constructor)) static void initialize_checkpoint(void) {
-    unsetenv("DYLD_INSERT_LIBRARIES");
 #ifdef __linux__
-    unsetenv("LD_PRELOAD");
     native_write = dlsym(RTLD_NEXT, "write");
     if (native_write == NULL) _exit(90);
     native_writev = dlsym(RTLD_NEXT, "writev");
     if (native_writev == NULL) _exit(90);
 #endif
+#ifdef MCP_CONSOLE_BACKPRESSURE_SELECT
+    if (!MCP_CONSOLE_BACKPRESSURE_SELECT()) return;
+#endif
+    monitored = true;
+    unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
     const char *path = getenv("MCP_CONSOLE_TEST_STDOUT_BLOCKED");
     blocked = path == NULL ? -1 : open(path, O_WRONLY | O_CLOEXEC);
     if (blocked < 0 || fstat(STDOUT_FILENO, &output_identity) < 0) {
@@ -42,7 +47,7 @@ __attribute__((constructor)) static void initialize_checkpoint(void) {
 
 static bool is_stdout(int descriptor) {
     struct stat identity;
-    return fstat(descriptor, &identity) == 0 &&
+    return monitored && fstat(descriptor, &identity) == 0 &&
            identity.st_dev == output_identity.st_dev &&
            identity.st_ino == output_identity.st_ino;
 }

@@ -1,0 +1,50 @@
+---
+command: serve
+overrides:
+  - -c
+  - sandbox.environment.BEFORE=first
+  - -c
+  - sandbox.environment.CHANGE=first
+  - -c
+  - >-
+    sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: {entries:
+    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth:
+    3}}
+  - -c
+  - extends=null
+  - -c
+  - sandbox.workspace_options=null
+environment:
+  KEEP: project
+  CHANGE: last
+  BEFORE: first
+  ADD: cli
+workspace_options: ~
+glob_scan_max_depth: 3
+paths:
+  - cli
+---
+command: sandbox
+overrides:
+  - -c
+  - sandbox.environment.BEFORE=first
+  - -c
+  - sandbox.environment.CHANGE=first
+  - -c
+  - >-
+    sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: {entries:
+    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth:
+    3}}
+  - -c
+  - extends=null
+  - -c
+  - sandbox.workspace_options=null
+environment:
+  KEEP: project
+  CHANGE: last
+  BEFORE: first
+  ADD: cli
+workspace_options: ~
+glob_scan_max_depth: 3
+paths:
+  - cli

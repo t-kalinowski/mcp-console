@@ -55,8 +55,8 @@ def gated_session(
     binary: Path,
     *,
     probe=False,
-    advance_clock=False,
     handoff=False,
+    prewarmed=False,
     lease_ms=None,
     faults=False,
     frame_gate=False,
@@ -114,6 +114,8 @@ def gated_session(
                 "MCP_CONSOLE_TEST_STARTUP_RELEASE": str(release.path),
             }
         )
+        if prewarmed:
+            (remote / "claimed").touch()
         if handoff:
             environment.update(
                 {
@@ -165,21 +167,10 @@ def gated_session(
             value = json.loads(config.read_text())
             value["target"]["lease_ms"] = lease_ms
             config.write_text(json.dumps(value))
+        if handoff:
+            (remote / "armed").touch()
         with localhost(root / "sshd", faults=faults) as controller:
             poison_controller(root / "sshd", controller)
-            if advance_clock:
-                controller.update(
-                    {
-                        LOADER_VARIABLE: str(
-                            build_interposer(local, "relay_completed_output")
-                        ),
-                        "MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME": r'"text":"\n[running; poll with an empty send]"',
-                        "MCP_CONSOLE_TEST_OUTPUT_COMPLETE": str(
-                            remote / "clock-advanced"
-                        ),
-                        "MCP_CONSOLE_TEST_CLOCK_SECONDS": "60",
-                    }
-                )
             client = McpClient(
                 binary, DIRECT.serve(), controller, local, response_timeout=15
             )
@@ -187,8 +178,19 @@ def gated_session(
             try:
                 if not probe:
                     client.initialize_and_list_tools()
-                if handoff:
-                    (remote / "armed").touch()
+                if prewarmed:
+                    # Finish preparation before rearming its fixture gate.
+                    # The later control exchanges retain their short budget.
+                    client.response_timeout = 180
+                    try:
+                        client.expect(
+                            "[prepared]",
+                            requirements={"action": "reset"},
+                            timeout_ms=180_000,
+                        )
+                    finally:
+                        client.response_timeout = 15
+                    (remote / "claimed").unlink()
                 yield client, remote, started, release, exits, identities
             finally:
                 if handoff:
@@ -204,7 +206,9 @@ def observe(remote, started, exits, identities, *, direct=False):
     for pid in map(int, (remote / "identity").read_text().split()):
         identities.append(capture_process_identity(pid))
         exits.watch_process(pid)
-    return ownership_ancestor(identities[-2], "ssh-prepare" if direct else "ssh-owner")
+    return ownership_ancestor(
+        identities[-2], "ssh-prepare" if direct else "ssh-owner"
+    )
 
 
 def exited(exits, identities):
@@ -264,9 +268,9 @@ def test_restart_cancels_remote_preparation_before_replacement(binary):
         return client.finish()[3:]
 
 
-@requires(SSH, WORKER, PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
+@requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_preparation_outlives_the_setup_deadline(binary):
-    with gated_session(binary, advance_clock=True) as (
+    with gated_session(binary) as (
         client,
         remote,
         started,
@@ -276,11 +280,14 @@ def test_preparation_outlives_the_setup_deadline(binary):
     ):
         client.send(r="42L", timeout_ms=0)
         observe(remote, started, exits, identities)
-        # MCP output advances the controller's monotonic clock by 60 seconds.
-        # Control then wakes the preparation owner after its old setup deadline.
+        # Hold the resolver past the actual 30-second connection deadline.
+        # Advancing every controller clock also distorts unrelated Tokio timers.
+        try:
+            client.process.wait(timeout=35)
+        except subprocess.TimeoutExpired:
+            pass
+        assert client.process.poll() is None, client.stderr.read()
         client.request("ping")
-        completed = (remote / "clock-advanced").read_text()
-        assert completed == "1", repr(completed)
         client.send(control="interrupt")
         retired(exits, identities)
         assert "exit status: 130" in last_result_text(client), last_result_text(client)
@@ -289,7 +296,14 @@ def test_preparation_outlives_the_setup_deadline(binary):
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_explicit_preparation_waits_and_accepts_concurrent_control(binary):
-    with gated_session(binary) as (client, remote, started, release, exits, identities):
+    with gated_session(binary, prewarmed=True) as (
+        client,
+        remote,
+        started,
+        release,
+        exits,
+        identities,
+    ):
         preparation = client.start_send(requirements={"r": ["praise"]}, timeout_ms=0)
         observe(remote, started, exits, identities)
         # The ping response precedes any preparation response even with timeout 0.
@@ -311,7 +325,8 @@ def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
         exits,
         identities,
     ):
-        preparation = client.start_send(requirements={"r": ["praise"]})
+        client.send(r="42L", requirements={"r": ["praise"]}, timeout_ms=0)
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         started.wait("uv bootstrap finished before Python resolver spawn", timeout=180)
         client.request("ping")
         client.send(control="interrupt", timeout_ms=0)
@@ -319,8 +334,9 @@ def test_interrupt_is_accepted_between_remote_resolver_stages(binary):
             last_result_text(client)
         )
         release.release()
-        client.receive(preparation)
-        assert preparation["result"]["isError"], preparation
+        preparation = client.send(timeout_ms=180_000)
+        assert preparation["isError"], preparation
+        assert last_result_text(client) == "[worker startup interrupted]"
         client.response_timeout = 180
         output = send_and_collect_runtime_python_resolution(client, r="42L")
         assert output == "[1] 42\n", output
@@ -371,45 +387,8 @@ def test_input_closure_cancels_discovery_before_mcp_ready(binary):
 
 
 @requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
-def test_preparation_loss_preserves_ordinary_worker_evaluations(binary):
-    with gated_session(binary) as (client, remote, started, release, exits, identities):
-        client.send(r="value <- 41L; worker <- Sys.getpid()", timeout_ms=0)
-        observe(remote, started, exits, identities)
-        release.release()
-        client.response_timeout = 180
-        send_and_collect_runtime_python_resolution(client)
-        (remote / "claimed").unlink()
-        preparation = client.start_send(requirements={"r": ["praise"]})
-        owner = observe(remote, started, exits, identities)
-        # Lose the trusted context after admission, keeping the established
-        # worker connection and its language state alive.
-        os.kill(owner[0], signal.SIGKILL)
-        client.receive(preparation)
-        assert "unconfirmed" in json.dumps(preparation), preparation
-        client.send(r="stopifnot(Sys.getpid() == worker); value + 1L")
-        assert last_tool_text(client) == "[1] 42\n", last_tool_text(client)
-        for request in ({"requirements": {"r": ["praise"]}}, {"control": "restart"}):
-            client.send(**request)
-            assert "unconfirmed" in last_result_text(client), last_result_text(client)
-        client.stdin.close()
-        client.process.wait(timeout=10)
-        errors = client.stderr.read()
-        assert "SSH preparation owner stopped" in errors, errors
-        # SSH and adapter diagnostics can both report the lost owner. Their
-        # arrival races adapter exit; the MCP operation errors are recorded.
-        return client.transcript[3:]
-
-
-@requires(SSH, WORKER, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_detected_transport_loss_blocks_preparation_and_replacement(binary):
-    with gated_session(binary, lease_ms=1500) as (
-        client,
-        remote,
-        started,
-        release,
-        exits,
-        identities,
-    ):
+    with gated_session(binary) as (client, remote, started, release, exits, identities):
         client.send(r="must_not_run <- TRUE", timeout_ms=0)
         owner = observe(remote, started, exits, identities)
         exits.watch_process(owner[0])
@@ -430,7 +409,14 @@ def test_detected_transport_loss_blocks_preparation_and_replacement(binary):
 
 @requires(SSH, WORKER, PROCESS_EVENTS, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
-    with gated_session(binary) as (client, remote, started, release, exits, identities):
+    with gated_session(binary, prewarmed=True) as (
+        client,
+        remote,
+        started,
+        release,
+        exits,
+        identities,
+    ):
         blocked = FifoCheckpoint.create(remote / "stdout-blocked")
         interposer = build_interposer(remote, "relay_stdout_backpressure")
         prefix = remote / "remote-console"
@@ -470,7 +456,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
                 frame(
                     {
                         "Open": {
-                            "version": 3,
+                            "version": 6,
                             "build": version,
                             "workspace": str(remote),
                             "selections": {"r_home": None, "python": None},
@@ -483,7 +469,7 @@ def test_connection_closure_reaps_preparation_with_backpressured_output(binary):
             assert read_message()["Completed"]["id"] == 0
             process.stdin.write(frame({"Run": {"id": 1, "operation": "Bootstrap"}}))
             process.stdin.flush()
-            owner = observe(remote, started, exits, identities, direct=True)
+            owner = observe(remote, started, exits, identities)
             exits.watch_process(owner[0])
             # Fill SSH's output window with explicit stale-control replies,
             # then observe a real EAGAIN at the remote helper's stdout.

@@ -10,14 +10,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.requirements import POSIX, PROCESS_EVENTS, requires
+from support.assertions import last_result_text, last_tool_text
+from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
+from support.normalization import code
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.r import r_test_environment
+from support.r import r_test_environment, startup_r_package
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
+from support.ssh import configure, peer_environment
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
@@ -29,6 +32,7 @@ PNG_1X1 = (
 from boundaries.client_server._harness import wait_for_marker
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_materializes_records_only_for_console_use(
     binary: Path, execution: Execution
@@ -43,6 +47,7 @@ def test_materializes_records_only_for_console_use(
             execution.serve("--worker", str(zod)),
             {**os.environ, "TMPDIR": str(unused_workspace)},
             current_directory=unused_workspace,
+            record_in_project=False,
         )
         client.initialize_and_list_tools()
         assert not (unused_workspace / ".agents").exists(), unused_workspace
@@ -68,7 +73,7 @@ def test_materializes_records_only_for_console_use(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
-        assert not (workspace / ".agents").exists(), workspace
+        assert not (workspace / ".agents/console/sessions").exists(), workspace
         client.send(r="echo echo")
 
         sessions = list((workspace / ".agents/console/sessions").iterdir())
@@ -104,6 +109,124 @@ def test_materializes_records_only_for_console_use(
         return transcript
 
 
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_selects_existing_project_or_home_recording_directory(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    records = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        for case in (
+            "home",
+            "project",
+            "project path is a file",
+            "console home",
+            "project with console home",
+        ):
+            base = root / case
+            home = base / "home"
+            workspace = base / "workspace"
+            home.mkdir(parents=True)
+            workspace.mkdir()
+            project_console = workspace / ".agents/console"
+            in_project = case in ("project", "project with console home")
+            if in_project:
+                project_console.mkdir(parents=True)
+            elif case == "project path is a file":
+                project_console.parent.mkdir()
+                project_console.write_text("occupied", encoding="utf-8")
+            environment = os.environ | {"HOME": str(home)}
+            environment.pop("MCP_CONSOLE_HOME", None)
+            console_home = home / ".agents/console"
+            if "console home" in case:
+                console_home = base / "console"
+                environment["MCP_CONSOLE_HOME"] = str(console_home)
+            with McpClient(
+                binary,
+                execution.serve("--worker", str(zod)),
+                environment=environment,
+                current_directory=workspace,
+                record_in_project=False,
+                use_home_configuration=True,
+            ) as client:
+                client.initialize_and_list_tools()
+                assert not (home / ".agents").exists()
+                client.send(r="preview huge line")
+                recording_root = project_console if in_project else console_home
+                (session,) = (recording_root / "sessions").iterdir()
+                log = session / "outputs/call-000001.log"
+                assert log.is_file(), log
+                public_path = (
+                    Path(
+                        f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+                    )
+                    if in_project
+                    else log
+                )
+                text = "".join(
+                    block["text"]
+                    for block in client.transcript[-1]["result"]["content"]
+                    if block["type"] == "text"
+                )
+                assert str(public_path) in text
+                if case == "home":
+                    assert not (workspace / ".agents").exists()
+                if in_project or "console home" in case:
+                    assert not (home / ".agents").exists()
+                client.finish()
+            records.append(
+                {
+                    "case": case,
+                    "recording_root": "project"
+                    if in_project
+                    else ("console home" if "console home" in case else "home"),
+                }
+            )
+    return records
+
+
+@requires(POSIX)
+def test_rejects_non_utf8_home_recording_path(binary: Path) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        home = Path(os.fsdecode(os.fsencode(temporary) + b"/home-\xff"))
+        workspace = root / "workspace"
+        workspace.mkdir()
+        project_console = workspace / ".agents/console"
+        project_console.mkdir(parents=True)
+        (project_console / "config.yaml").write_text("{}\n", encoding="utf-8")
+        environment = os.environ | {"HOME": str(home)}
+        environment.pop("MCP_CONSOLE_HOME", None)
+        with McpClient(
+            binary,
+            ("serve", "--no-sandbox", "--worker", str(zod)),
+            environment=environment,
+            current_directory=workspace,
+            record_in_project=False,
+            use_home_configuration=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            # Configuration was captured at launch; recording is selected on send.
+            (project_console / "config.yaml").unlink()
+            project_console.rmdir()
+            client.send(r="echo echo")
+            assert client.transcript[-1]["result"] == {
+                "content": [{"type": "text", "text": "zod: echo\n"}],
+                "isError": False,
+            }, client.transcript[-1]
+            transcript, stderr = client.finish_with_standard_error()
+        assert stderr == (
+            "mcp-console: transcript recording disabled: recording path must be UTF-8\n"
+        ), stderr
+        assert not (workspace / ".agents/console/sessions").exists()
+        transcript.append({"server stderr": stderr.strip()})
+        return transcript
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_continues_without_record_when_record_cannot_be_created(
     binary: Path,
@@ -113,7 +236,10 @@ def test_continues_without_record_when_record_cannot_be_created(
     with tempfile.TemporaryDirectory() as temporary_directory:
         workspace = Path(temporary_directory)
         (workspace / ".agents").mkdir()
-        (workspace / ".agents/console").write_text("occupied", encoding="utf-8")
+        (workspace / ".agents/console").mkdir()
+        (workspace / ".agents/console/sessions").write_text(
+            "occupied", encoding="utf-8"
+        )
         client = McpClient(
             binary,
             execution.serve("--worker", str(zod)),
@@ -129,7 +255,9 @@ def test_continues_without_record_when_record_cannot_be_created(
             "code": -32602,
             "message": "tool not found",
         }, client.transcript[-1]
-        assert (workspace / ".agents/console").read_text(encoding="utf-8") == "occupied"
+        assert (workspace / ".agents/console/sessions").read_text(
+            encoding="utf-8"
+        ) == "occupied"
         transcript, standard_error = client.finish_with_standard_error()
         assert standard_error.count("\n") == 1, standard_error
         assert standard_error.startswith(
@@ -147,6 +275,7 @@ def test_continues_without_record_when_record_cannot_be_created(
         return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_updates_quarto_without_rereading_journal(
     binary: Path, execution: Execution
@@ -196,6 +325,7 @@ def test_updates_quarto_without_rereading_journal(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_records_tool_calls_and_images(
     binary: Path, execution: Execution
@@ -262,12 +392,12 @@ def test_records_tool_calls_and_images(
             "tool_result",
         ], events
         run_id = events[0]["run_id"]
-        assert run_id
+        assert run_id.endswith(f"-{client.process.pid:010d}"), run_id
         assert session.name == run_id, (session, run_id)
         assert events[0]["session"] == "default", events[0]
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
         assert all(event["run_id"] == run_id for event in events), events
-        assert all(event["schema_version"] == 1 for event in events), events
+        assert all(event["schema_version"] == 2 for event in events), events
         assert [event["sequence"] for event in events] == list(range(1, 10)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
         assert events[3]["call_id"] == events[2]["call_id"], events
@@ -432,6 +562,7 @@ def test_records_tool_calls_and_images(
         )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_disables_recording_after_transcript_failure(
     binary: Path, execution: Execution
@@ -497,6 +628,7 @@ def test_disables_recording_after_transcript_failure(
         return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_recording_after_cell_output_failure(
     binary: Path, execution: Execution
@@ -698,6 +830,33 @@ def test_flushes_calls_and_keeps_unpolled_images(
         unpolled_quarto_inode = quarto.stat().st_ino
 
         (image_started.parent / "zod-release-image-completion").touch()
+
+        def completed_image_output() -> Path | None:
+            # Completion belongs to call 2 even when it precedes the next poll.
+            # Ignore an incomplete append until its terminating newline arrives.
+            lines = journal.read_text(encoding="utf-8").rsplit("\n", 1)[0].splitlines()
+            if any(
+                event.get("event") == "cell_output" and event.get("call_id") == 2
+                for event in map(json.loads, lines)
+            ):
+                return journal
+            return None
+
+        wait_for_checkpoint(
+            completed_image_output,
+            "unpolled cell completion recorded",
+            root=journal.parent,
+            client=client,
+        )
+        completed_events = [
+            json.loads(line)
+            for line in journal.read_text(encoding="utf-8").splitlines()
+        ]
+        assert [event["event"] for event in completed_events] == [
+            *[event["event"] for event in final_events],
+            "cell_output",
+        ], completed_events
+        assert completed_events[-1]["call_id"] == 2, completed_events[-1]
         client.send(timeout_ms=3_000)
         poll_result = client.transcript[-1]["result"]
         assert poll_result == {
@@ -708,9 +867,9 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [event["event"] for event in polled_events[-3:]] == [
+        assert [event["event"] for event in polled_events] == [
+            *[event["event"] for event in completed_events],
             "tool_call",
-            "cell_output",
             "tool_result",
         ], polled_events
         assert polled_events[-1]["call_id"] == 3, polled_events[-1]
@@ -760,6 +919,317 @@ def test_flushes_calls_and_keeps_unpolled_images(
             }
         )
         return transcript
+
+
+@requires(PROCESS_EVENTS)
+def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        configure(root, root, [str(binary)])
+        reached = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            with McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "discovery-diagnostics"),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery diagnostic emitted")
+                sessions = root / ".agents/console/sessions"
+                wait_for_checkpoint(
+                    lambda: next(sessions.glob("*/outputs/session.log"), None),
+                    "startup recording materialized",
+                    root=sessions,
+                    recursive=True,
+                    client=client,
+                )
+                (quarto_path,) = sessions.glob("*/transcript.qmd")
+                pending_quarto = quarto_path.read_text()
+                assert "execute:\n  eval: false\n" in pending_quarto, pending_quarto
+                assert "environment: unknown" in pending_quarto, pending_quarto
+                client.expect(
+                    "[worker starting]", requirements={"action": "get"}, timeout_ms=0
+                )
+                release.release()
+                client.send(requirements={"action": "get"})
+                client.finish()
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            early = [event for event in events if event.get("call_id") == 1]
+            (discovered,) = [
+                event for event in events if event["event"] == "environment_discovered"
+            ]
+            assert [event["event"] for event in early] == [
+                "tool_call",
+                "tool_result",
+            ], early
+            assert all(event["sequence"] < discovered["sequence"] for event in early), (
+                events
+            )
+            assert all(event["at"] < discovered["at"] for event in early), events
+            markdown = (session / "transcript.md").read_text()
+            assert markdown.index("## Call 1:") < markdown.index(
+                "## Runtime discovery"
+            ), markdown
+            quarto = (session / "transcript.qmd").read_text()
+            assert "environment: unknown" not in quarto, quarto
+            assert "eval: false" not in quarto, quarto
+            return [{"early_call_and_result_precede_discovery": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
+@requires(PROCESS_EVENTS)
+def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        configure(root, root, [str(binary)])
+        reached = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            with McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "discovery-image"),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery awaiting release")
+                client.expect(
+                    "[worker starting]", requirements={"action": "get"}, timeout_ms=0
+                )
+                sessions = root / ".agents/console/sessions"
+                assert not list(sessions.glob("*/artifacts/*"))
+                release.release()
+                image = wait_for_checkpoint(
+                    lambda: next(sessions.glob("*/artifacts/*.png"), None),
+                    "startup image retained after discovery",
+                    root=sessions,
+                    recursive=True,
+                    client=client,
+                )
+                client.finish()
+            session = image.parent.parent
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            (artifact,) = [
+                event for event in events if event["event"] == "artifact_created"
+            ]
+            early = [event for event in events if event.get("call_id") == 1]
+            assert [event["event"] for event in early] == [
+                "tool_call",
+                "tool_result",
+            ], events
+            assert all(event["sequence"] < artifact["sequence"] for event in early), (
+                events
+            )
+            assert all(event["at"] < artifact["at"] for event in early), events
+            assert events[0]["event"] == "session_started", events
+            assert all(events[0]["at"] <= event["at"] for event in events), events
+            assert artifact["call_id"] is None, artifact
+            assert image.read_bytes() == base64.b64decode(PNG_1X1)
+            markdown = (session / "transcript.md").read_text()
+            assert markdown.index("## Call 1:") < markdown.index(
+                "## Artifact 1 for session"
+            ), markdown
+            return [{"early_call_and_result_precede_startup_artifact": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
+@requires(POSIX)
+def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        configure(root, root, [str(binary)])
+        reached = FifoCheckpoint.create(root / "discovery-started")
+        release = FifoCheckpoint.create(root / "discovery-release")
+        try:
+            with McpClient(
+                binary,
+                DIRECT.serve(),
+                peer_environment(root, "discovery-failure"),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery awaiting failure release")
+                client.expect(
+                    "[worker starting]",
+                    requirements={"action": "get"},
+                    timeout_ms=0,
+                )
+                client.send(r="stop('failed discovery ran the cell')", timeout_ms=0)
+                release.release()
+                response = client.send()
+                assert response["isError"], response
+                assert "synthetic discovery failure" in last_result_text(client)
+                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+                assert stderr == "synthetic discovery failure\n", stderr
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            calls = [event for event in events if event["event"] == "tool_call"]
+            results = [event for event in events if event["event"] == "tool_result"]
+            assert events[0]["event"] == "session_started", events
+            assert all(events[0]["at"] <= event["at"] for event in events), events
+            assert len(calls) == len(results) == 3, events
+            assert [event["call_id"] for event in calls] == [1, 2, 3], calls
+            assert [event["call_id"] for event in results] == [1, 2, 3], results
+            assert results[-1]["result"]["isError"], results[-1]
+            assert "synthetic discovery failure" in str(results[-1]), results[-1]
+            assert sum(event["event"] == "startup_failed" for event in events) == 1
+            assert events[0]["dynamic_resolution"] is None, events[0]
+            assert events[0]["python_preparation"] is None, events[0]
+            quarto = (session / "transcript.qmd").read_text()
+            header = quarto.split("---\n", 2)[1]
+            assert "execute:\n  eval: false\n" in header, quarto
+            assert "mcp-console:\n  environment: unknown\n" in header, quarto
+            assert "ir:" not in header and "knitr:" not in header, quarto
+            assert "stop('failed discovery ran the cell')" in quarto, quarto
+            return [{"early_calls_recorded": 3, "startup_failure_recorded": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_reports_startup_recording_failure_without_a_tool_call(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        reached = FifoCheckpoint.create(root / "startup-output")
+        release = FifoCheckpoint.create(root / "startup-release")
+        source = code(f"""
+            cat("unrecorded startup text\\n")
+            ready <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+            writeBin(charToRaw("1"), ready)
+            close(ready)
+            gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+            readBin(gate, "raw", 1L)
+            """)
+        try:
+            (root / ".agents/console").mkdir(parents=True)
+            (root / ".agents/console/sessions").write_text("occupied")
+            with startup_r_package(root, source) as env:
+                env["RETICULATE_PYTHON"] = sys.executable
+                args = (
+                    execution.serve("--writable-root", str(root))
+                    if execution == SANDBOXED
+                    else execution.serve()
+                )
+                with McpClient(binary, args, env, root) as client:
+                    client.initialize_and_list_tools()
+                    reached.wait("startup text emitted", timeout=60)
+                    client.request("ping")
+                    _, stderr = client.finish_with_standard_error()
+                    assert stderr.startswith(
+                        "mcp-console: transcript recording disabled: failed to create "
+                    ), stderr
+                    assert stderr.count("\n") == 1, stderr
+                    assert not any(
+                        entry.get("method") == "tools/call"
+                        for entry in client.transcript
+                    ), client.transcript
+                assert (root / ".agents/console/sessions").read_text() == "occupied"
+            return [{"startup_recording_failure_reported_without_send": True}]
+        finally:
+            reached.close()
+            release.close()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_records_startup_without_a_tool_call(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        reached = FifoCheckpoint.create(root / "startup-output")
+        release = FifoCheckpoint.create(root / "startup-release")
+        source = code(f"""
+            cat(paste0(rep("startup text\\n", 20000L), collapse = ""))
+            graphics::plot(1:3)
+            graphics::plot(3:1)
+            grDevices::dev.off()
+            ready <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+            writeBin(charToRaw("1"), ready)
+            close(ready)
+            gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+            readBin(gate, "raw", 1L)
+            """)
+        try:
+            with startup_r_package(root, source) as env:
+                env["RETICULATE_PYTHON"] = sys.executable
+                args = (
+                    execution.serve("--writable-root", str(root))
+                    if execution == SANDBOXED
+                    else execution.serve()
+                )
+                with McpClient(binary, args, env, root) as client:
+                    client.initialize_and_list_tools()
+                    reached.wait(
+                        "startup output drained without a tool call", timeout=60
+                    )
+                    client.request("ping")
+                    client.stdin.close()
+                    assert client.process.wait(timeout=12) == 0
+                    assert client.stdout.read() == ""
+                    assert client.stderr.read() == ""
+                (session,) = (root / ".agents/console/sessions").iterdir()
+                assert (
+                    session / "outputs/session.log"
+                ).read_text() == "startup text\n" * 20000
+                events = [
+                    json.loads(line)
+                    for line in (session / "internal/events.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+                assert not any(
+                    event["event"] in ("tool_call", "tool_result", "cell_output")
+                    for event in events
+                ), events
+                artifacts = [
+                    event for event in events if event["event"] == "artifact_created"
+                ]
+                assert len(artifacts) == 2, artifacts
+                assert all(event["call_id"] is None for event in artifacts)
+                assert all(event["schema_version"] == 2 for event in events), events
+                assert all(
+                    (session / event["path"])
+                    .read_bytes()
+                    .startswith(b"\x89PNG\r\n\x1a\n")
+                    for event in artifacts
+                )
+                assert any(
+                    event["event"] == "session_output"
+                    and event["retained_bytes"] == 260000
+                    for event in events
+                )
+                return [
+                    {
+                        "startup_text_retained_bytes": 260000,
+                        "startup_images": 2,
+                        "tool_calls": 0,
+                        "eof_retired_startup": True,
+                    }
+                ]
+        finally:
+            reached.close()
+            release.close()
 
 
 if __name__ == "__main__":

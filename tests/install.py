@@ -9,13 +9,16 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import textwrap
 import unittest
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
 
+from support.normalization import code
+
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+from checkout_workflow import checkout_owner
 
 
 @unittest.skipUnless(sys.platform in ("darwin", "linux"), "requires macOS or Linux")
@@ -28,10 +31,17 @@ class InstallationTests(unittest.TestCase):
             source = directory / "source"
             (source / "scripts").mkdir(parents=True)
             (source / "src").mkdir()
-            for name in ("pyproject.toml", "README.md", "LICENSE", "build.rs"):
+            for name in (
+                "pyproject.toml",
+                "README.md",
+                "LICENSE",
+                "build.rs",
+                "scripts/checkout_workflow.py",
+                "scripts/checkout_windows.py",
+                "scripts/build_backend.py",
+            ):
                 shutil.copyfile(ROOT / name, source / name)
             shutil.copytree(ROOT / "python", source / "python")
-            shutil.copyfile(ROOT / "build_backend.py", source / "build_backend.py")
             shutil.copyfile(
                 ROOT / "scripts/stage-sandbox-runner",
                 source / "scripts/stage-sandbox-runner",
@@ -40,32 +50,36 @@ class InstallationTests(unittest.TestCase):
             data.mkdir(parents=True)
             (data / ".gitignore").write_text("/*\n!/.gitignore\n")
             (source / "Cargo.toml").write_text(
-                textwrap.dedent("""
-                [package]
-                name = "mcp-console"
-                version = "0.0.3"
-                edition = "2024"
-                [build-dependencies]
-                cc = "1"
-                serde_json = "1"
-                sha2 = "0.11"
-            """)
+                code("""
+                    [package]
+                    name = "mcp-console"
+                    version = "0.0.3"
+                    edition = "2024"
+                    [build-dependencies]
+                    cc = "1"
+                    embed-resource = "3"
+                    serde_json = "1"
+                    sha2 = "0.11"
+                    """)
             )
             shutil.copyfile(ROOT / "Cargo.lock", source / "Cargo.lock")
             (source / "src/main.rs").write_text(
-                textwrap.dedent("""
-                fn main() {
-                    println!("console {}", env!("RUSTUP_TOOLCHAIN"));
-                    let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
-                    let runner = executable.parent().unwrap().parent().unwrap()
-                        .join("libexec/mcp-console-sandbox");
-                    let status = std::process::Command::new(runner).status().unwrap();
-                    assert!(status.success());
-                }
-            """)
+                code("""
+                    fn main() {
+                        println!("console {}", env!("RUSTUP_TOOLCHAIN"));
+                        let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
+                        let runner = executable.parent().unwrap().parent().unwrap()
+                            .join("libexec/mcp-console-sandbox");
+                        let status = std::process::Command::new(runner).status().unwrap();
+                        assert!(status.success());
+                    }
+                    """)
             )
-            for name in ("r_graphics.c", "r_repl.c"):
-                (source / "src" / name).touch()
+            # Exercise the build script with empty native sources at their real paths.
+            for native_source in (ROOT / "src").rglob("*.c"):
+                destination = source / native_source.relative_to(ROOT)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.touch()
             runner_source = directory / "runner"
             workspace = runner_source / "codex-rs"
             workspace.mkdir(parents=True)
@@ -83,11 +97,11 @@ class InstallationTests(unittest.TestCase):
             )
             (runner_source / ".gitignore").write_text("/codex-rs/target\n")
             (workspace / "Cargo.toml").write_text(
-                textwrap.dedent("""
-                [workspace]
-                members = ["mcp-console-sandbox", "bwrap"]
-                resolver = "2"
-            """)
+                code("""
+                    [workspace]
+                    members = ["mcp-console-sandbox", "bwrap"]
+                    resolver = "2"
+                    """)
             )
             (workspace / ".cargo").mkdir()
             (workspace / ".cargo/config.toml").touch()
@@ -98,54 +112,56 @@ class InstallationTests(unittest.TestCase):
                 crate = workspace / package
                 (crate / "src").mkdir(parents=True)
                 (crate / "Cargo.toml").write_text(
-                    textwrap.dedent(f"""
-                    [package]
-                    name = "codex-{package}"
-                    version = "0.1.0"
-                    edition = "2024"
-                    [[bin]]
-                    name = "{binary}"
-                    path = "src/main.rs"
-                    [build-dependencies]
-                    cc = "1"
-                """)
+                    code(f"""
+                        [package]
+                        name = "codex-{package}"
+                        version = "0.1.0"
+                        edition = "2024"
+                        [[bin]]
+                        name = "{binary}"
+                        path = "src/main.rs"
+                        [build-dependencies]
+                        cc = "1"
+                        """)
                 )
                 (crate / "build.rs").write_text(
-                    textwrap.dedent("""
-                    fn main() {
-                        let mut build = cc::Build::new();
-                        build.file("value.c");
-                        if std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
-                            && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap"
-                        {
-                            build.define("LINK_LIBCAP", None);
-                            println!("cargo:rustc-link-lib=cap");
+                    code("""
+                        fn main() {
+                            let mut build = cc::Build::new();
+                            build.file("value.c");
+                            let libcap = std::env::var("CARGO_CFG_TARGET_OS").unwrap() == "linux"
+                                && std::env::var("CARGO_PKG_NAME").unwrap() == "codex-bwrap";
+                            if libcap {
+                                build.define("LINK_LIBCAP", None);
+                            }
+                            build.compile("value");
+                            if libcap {
+                                println!("cargo:rustc-link-lib=cap");
+                            }
                         }
-                        build.compile("value");
-                    }
-                """)
+                        """)
                 )
                 (crate / "value.c").write_text(
-                    textwrap.dedent("""
-                    #ifdef LINK_LIBCAP
-                    extern void *cap_get_proc(void);
-                    extern int cap_free(void *);
-                    #endif
-                    int value(void) {
-                    #ifdef LINK_LIBCAP
-                        cap_free(cap_get_proc());
-                    #endif
-                        return FIXTURE_VALUE;
-                    }
-                """)
+                    code("""
+                        #ifdef LINK_LIBCAP
+                        extern void *cap_get_proc(void);
+                        extern int cap_free(void *);
+                        #endif
+                        int value(void) {
+                        #ifdef LINK_LIBCAP
+                            cap_free(cap_get_proc());
+                        #endif
+                            return FIXTURE_VALUE;
+                        }
+                        """)
                 )
                 (crate / "src/main.rs").write_text(
-                    textwrap.dedent("""
-                    unsafe extern "C" { fn value() -> i32; }
-                    fn main() {
-                        println!("{} {}", unsafe { value() }, env!("RUSTUP_TOOLCHAIN"));
-                    }
-                """)
+                    code("""
+                        unsafe extern "C" { fn value() -> i32; }
+                        fn main() {
+                            println!("{} {}", unsafe { value() }, env!("RUSTUP_TOOLCHAIN"));
+                        }
+                        """)
                 )
             for name in ("LICENSE", "NOTICE"):
                 (runner_source / name).write_text(name)
@@ -199,6 +215,7 @@ class InstallationTests(unittest.TestCase):
                     "UV_TOOL_DIR": str(directory / "tools"),
                     "UV_TOOL_BIN_DIR": str(directory / "bin"),
                     "CARGO_TARGET_DIR": str(source / "target"),
+                    "XDG_CACHE_HOME": str(directory / "cache"),
                     "RUSTUP_TOOLCHAIN": console_toolchain,
                     "GIT_CONFIG_COUNT": "1",
                     "GIT_CONFIG_KEY_0": f"url.{runner_source.as_uri()}.insteadOf",
@@ -267,18 +284,16 @@ class InstallationTests(unittest.TestCase):
             )
 
     def test_uv_installs_a_relocatable_bundle_from_unstaged_sources(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="mcp-console-install-") as temporary:
+        # Hiding the build artifacts below uses a rename on this filesystem.
+        with tempfile.TemporaryDirectory(
+            prefix="mcp-console-install-", dir=ROOT.parent
+        ) as temporary:
             directory = Path(temporary)
             source = directory / "source"
             target = ROOT / "target"
             environment = os.environ.copy()
-            # Reuse the checkout already prepared by the caller's build. The
-            # native-flags regression separately exercises automatic fetching.
-            pin = json.loads((ROOT / "sandbox-runner.json").read_text())
-            environment.setdefault(
-                "MCP_CONSOLE_SANDBOX_SOURCE",
-                str(ROOT / "target/sandbox-runner-cache" / pin["commit"]),
-            )
+            # Automatic staging shares the caller's pinned source/build cache.
+            # An explicit source override is retained for CI and release builds.
             environment |= {
                 "CARGO_TARGET_DIR": str(target),
                 "UV_TOOL_DIR": str(directory / "uv-tools"),
@@ -533,4 +548,5 @@ class InstallationTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    with checkout_owner(ROOT):
+        unittest.main()

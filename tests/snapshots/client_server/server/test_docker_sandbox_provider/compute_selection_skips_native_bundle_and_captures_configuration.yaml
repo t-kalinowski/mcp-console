@@ -1,0 +1,5 @@
+---
+fake_provider: true
+native_and_resolver_sentinels_invoked: false
+captured_template_reused: true
+no_sandbox_retains_compute_enforcement: true

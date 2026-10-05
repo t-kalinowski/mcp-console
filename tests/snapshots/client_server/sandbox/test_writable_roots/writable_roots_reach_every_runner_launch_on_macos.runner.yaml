@@ -10,11 +10,6 @@ runner_configuration:
             kind: root
         access: read
   network: restricted
-  version: 2
-  lifecycle:
-    private_tmp:
-      environment:
-        - TMPDIR
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -83,6 +78,11 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
+  version: 2
+  lifecycle:
+    private_tmp:
+      environment:
+        - TMPDIR
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -110,11 +110,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
-  lifecycle:
-    private_tmp:
-      environment:
-        - TMPDIR
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -183,6 +178,11 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
+  version: 2
+  lifecycle:
+    private_tmp:
+      environment:
+        - TMPDIR
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -210,13 +210,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
-  lifecycle:
-    private_tmp:
-      environment:
-        - TMPDIR
-    parent_pid: <server pid>
-    sigterm: retire
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -285,6 +278,13 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
+  version: 2
+  lifecycle:
+    private_tmp:
+      environment:
+        - TMPDIR
+    parent_pid: <server pid>
+    sigterm: retire
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -312,13 +312,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
-  lifecycle:
-    private_tmp:
-      environment:
-        - TMPDIR
-    parent_pid: <server pid>
-    sigterm: retire
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -387,6 +380,13 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
+  version: 2
+  lifecycle:
+    private_tmp:
+      environment:
+        - TMPDIR
+    parent_pid: <server pid>
+    sigterm: retire
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted
@@ -414,13 +414,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
-  lifecycle:
-    private_tmp:
-      environment:
-        - TMPDIR
-    parent_pid: <server pid>
-    sigterm: retire
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -489,6 +482,13 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
+  version: 2
+  lifecycle:
+    private_tmp:
+      environment:
+        - TMPDIR
+    parent_pid: <server pid>
+    sigterm: retire
 transcript_normalization:
   host_directory: omitted
   server_pid: omitted

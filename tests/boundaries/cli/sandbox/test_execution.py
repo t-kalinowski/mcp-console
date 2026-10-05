@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import pty
 import select
 import selectors
 import shutil
@@ -11,6 +10,10 @@ import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+if os.name == "posix":
+    import pty
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -295,7 +298,10 @@ def test_enforces_host_read_only_and_temporary_writes(binary: Path) -> Transcrip
         assert host_file.read_text(encoding="utf-8") == "host data"
         assert not Path(temporary_directory).exists()
 
-    entry["stdout"] = "host data\nsandbox temp\n<sandbox temp>\n"
+    entry["stdout"] = """host data
+sandbox temp
+<sandbox temp>
+"""
     entry["transcript_normalization"] = {
         "target": "stdout line 3",
         "sandbox_temporary_directory": "omitted",

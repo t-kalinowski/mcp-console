@@ -5,9 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::cell::Language;
 use crate::worker_protocol::{
-    PythonRequirementManifest, PythonResolveRequest, PythonVersionResolveRequest,
-    RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
+    NativePythonActivation, PythonRequirementManifest, PythonResolveRequest,
+    PythonVersionResolveRequest, RResolutionFailureKind, WorkerMessage, deserialize_payload_free,
 };
+
+pub(crate) const PARTIAL_COMMAND_EOF: &str = "relay stdin closed midway through a frame";
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(transparent)]
@@ -35,6 +37,8 @@ pub(crate) enum RelayCommand {
     },
     PythonResolved {
         python: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native: Option<Box<NativePythonActivation>>,
     },
     PythonResolutionFailed {
         message: String,
@@ -61,6 +65,9 @@ pub(crate) enum RelayCommand {
 pub(crate) enum RelayEvent {
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
+    RuntimeInitialized {
+        interrupted: bool,
+    },
     ConsoleOutput {
         data: String,
     },
@@ -103,9 +110,15 @@ pub(crate) enum RelayEvent {
     PythonActivated {
         requirements: PythonRequirementManifest,
     },
+    PythonActivationFailed {
+        requirements: PythonRequirementManifest,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     PythonPrepared,
     PythonPreparationFailed {
+        message: String,
+    },
+    PythonPreparationRejected {
         message: String,
     },
     #[serde(deserialize_with = "deserialize_payload_free")]
@@ -150,6 +163,9 @@ impl From<WorkerMessage> for RelayEvent {
     fn from(message: WorkerMessage) -> Self {
         match message {
             WorkerMessage::Ready => Self::Ready,
+            WorkerMessage::RuntimeInitialized { interrupted } => {
+                Self::RuntimeInitialized { interrupted }
+            }
             WorkerMessage::ConsoleOutput { data } => Self::ConsoleOutput { data },
             WorkerMessage::ConsoleDiagnostic { data } => Self::ConsoleDiagnostic { data },
             WorkerMessage::Image { data, mime_type } => Self::Image { data, mime_type },
@@ -170,9 +186,15 @@ impl From<WorkerMessage> for RelayEvent {
             WorkerMessage::PythonActivated { requirements } => {
                 Self::PythonActivated { requirements }
             }
+            WorkerMessage::PythonActivationFailed { requirements } => {
+                Self::PythonActivationFailed { requirements }
+            }
             WorkerMessage::PythonPrepared => Self::PythonPrepared,
             WorkerMessage::PythonPreparationFailed { message } => {
                 Self::PythonPreparationFailed { message }
+            }
+            WorkerMessage::PythonPreparationRejected { message } => {
+                Self::PythonPreparationRejected { message }
             }
             WorkerMessage::Completed => Self::Completed,
         }

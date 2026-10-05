@@ -16,9 +16,11 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_input_handler_client
 from support.records import Transcript
+from support.requirements import POSIX, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_routes_idle_and_timed_out_stdin(
     binary: Path, execution: Execution
@@ -75,6 +77,7 @@ def test_routes_idle_and_timed_out_stdin(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_routes_combined_and_followup_stdin(
     binary: Path, execution: Execution
@@ -94,8 +97,14 @@ def test_routes_combined_and_followup_stdin(
     # input-exposure response. Accumulate exact public output cuts in order.
     wait_for_evaluation_output(
         client,
-        '[input requested: "first> "]\n[input requested: "second> "]\nAda|Lovelace\n',
+        """[input requested: "first> "]
+[input requested: "second> "]
+Ada|Lovelace
+""",
         "combined same-call stdin",
+        # The first R cell includes cold interpreter startup; subsequent input
+        # observations use the ordinary arrival budget after this completes.
+        completion_timeout_seconds=client.response_timeout,
         r=r,
         stdin="Ada\nLovelace\n",
     )
@@ -155,6 +164,7 @@ def test_routes_combined_and_followup_stdin(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_fd0_order_between_readers(
     binary: Path, execution: Execution
@@ -240,6 +250,7 @@ def test_preserves_fd0_order_between_readers(
             stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_utf8_across_console_reads(
     binary: Path, execution: Execution

@@ -6,11 +6,17 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import cache
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import entry_result_text, last_result_text
+from support.requirements import POSIX, PROCESS_EVENTS, SQL, command, requires
+from support.assertions import (
+    entry_result_text,
+    last_result_text,
+    wait_for_evaluation_output,
+)
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -21,10 +27,11 @@ from support.processes import (
     live_processes,
 )
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, command, requires
+from support.r import r_test_environment, reference_r_error
 from support.resolvers import (
     ir_requirements,
     ir_run_records,
+    local_resolver_owner,
     recording_ir_environment,
 )
 from support.suites import run_this_suite
@@ -89,6 +96,18 @@ Encoding: UTF-8
     return libraries
 
 
+@cache
+def installed_fixture_r_libraries(
+    packages: tuple[str, ...],
+) -> tuple[tempfile.TemporaryDirectory, tuple[Path, Path]]:
+    # Each case runs its execution modes sequentially in one process. Retain
+    # only immutable installed packages until that process exits; library
+    # views, resolver records, and worker state remain execution-local.
+    temporary = tempfile.TemporaryDirectory(prefix="mcp-console-r-packages-")
+    environment, _ = r_test_environment()
+    return temporary, fixture_r_libraries(environment, Path(temporary.name), packages)
+
+
 def recording_fixture_r_environment(
     directory: Path,
     packages: tuple[str, ...],
@@ -97,7 +116,7 @@ def recording_fixture_r_environment(
     isolated_library = directory / "r-library"
     environment["R_LIBS_SITE"] = str(isolated_library)
     environment["R_LIBS_USER"] = str(isolated_library)
-    source_libraries = fixture_r_libraries(environment, directory, packages)
+    _, source_libraries = installed_fixture_r_libraries(packages)
     environment["MCP_CONSOLE_TEST_IR_SOURCE_LIBRARIES"] = os.pathsep.join(
         map(str, source_libraries)
     )
@@ -114,40 +133,32 @@ def send_and_collect_runtime_r_resolution(
     expected: str,
     **arguments: object,
 ) -> None:
-    call_start = len(client.transcript)
-    client.send(**arguments)
-    chunks = []
-    for attempt in range(5):
-        output = last_result_text(client)
-        # A timeout can drain final R output before the completion event,
-        # so retain every output delta instead of only the last poll.
-        if output.endswith("\n[running; poll with an empty send]"):
-            chunks.append(output.removesuffix("\n[running; poll with an empty send]"))
-            if attempt == 4:
-                raise AssertionError(
-                    "automatic R resolution remained running after five responses: "
-                    f"collected={''.join(chunks)!r}, last={output!r}"
-                )
-            client.send()
-            continue
-
-        if output != "[done]" or not chunks:
-            chunks.append(output)
-        collected = "".join(chunks)
-        assert collected == expected, repr(collected)
-
-        calls = client.transcript[call_start:]
-        submitted = calls[0]
-        final_result = calls[-1]["result"]
-        assert isinstance(final_result, dict), final_result
-        content = final_result["content"]
-        assert len(content) == 1 and content[0]["type"] == "text", content
-        content[0]["text"] = collected
-        submitted["result"] = final_result
-        client.transcript[call_start:] = [submitted]
-        return
+    wait_for_evaluation_output(
+        client,
+        expected,
+        "automatic R resolution",
+        completion_timeout_seconds=client.response_timeout,
+        **arguments,
+    )
 
 
+def send_and_compare_r_error(
+    client: McpClient, environment: dict[str, str], source: str
+) -> None:
+    expected = reference_r_error(environment, source)
+    send_and_collect_runtime_r_resolution(client, expected, r=source)
+    # Like plot references, record the live comparison after exact equality.
+    client.transcript[-1]["result"]["content"][0]["text"] = (
+        "<error output identical to live Rscript>"
+    )
+    client.transcript[-1]["transcript_normalization"] = {
+        "target": "result.content[0].text",
+        "reference": "same source in live Rscript --vanilla",
+        "comparison": "exact equality, including Calls; excluding Execution halted",
+    }
+
+
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_missing_r_packages_during_evaluation(
@@ -157,7 +168,7 @@ def test_resolves_missing_r_packages_during_evaluation(
         directory = Path(temporary)
         packages = ("mcpfirst", "mcpsecond")
         environment, _ = recording_fixture_r_environment(directory, packages)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
 
         client.send(python="python_sentinel = 40")
@@ -170,8 +181,7 @@ def test_resolves_missing_r_packages_during_evaluation(
             sentinel <- 42L
             worker_pid <- Sys.getpid()
             """)
-        client.send(r=setup)
-        assert last_result_text(client) == "[done]"
+        client.expect(r=setup)
 
         # fmt: r
         r = code(r"""
@@ -192,13 +202,13 @@ def test_resolves_missing_r_packages_during_evaluation(
         output = last_result_text(client)
         assert output == "answer: 42\n", repr(output)
 
-        client.send(python="python_sentinel + 2")
-        assert last_result_text(client) == "42\n"
+        client.expect("42\n", python="python_sentinel + 2")
         client.send(sql="SELECT answer FROM automatic_r_state")
         assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
@@ -209,7 +219,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
         directory = Path(temporary)
         package = "mcpsqlcallback"
         environment, record = recording_fixture_r_environment(directory, (package,))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
 
         # fmt: r
@@ -222,8 +232,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
             }
             invisible()
             """)
-        client.send(r=r)
-        assert last_result_text(client) == "[done]"
+        client.expect(r=r)
 
         # fmt: python
         python = code("""
@@ -233,8 +242,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
             connection.create_function("sql_requires_package", 0, r.sql_requires_package)
             console_sql_connection(connection)
             """)
-        client.send(python=python)
-        assert last_result_text(client) == "[done]"
+        client.expect(python=python)
         baseline = len(ir_run_records(record))
 
         client.send(sql="SELECT sql_requires_package() AS resolved")
@@ -258,6 +266,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_reached_r_packages_at_runtime(
@@ -277,10 +286,9 @@ def test_resolves_reached_r_packages_at_runtime(
         )
         environment, record = recording_fixture_r_environment(directory, packages)
         environment["PKG_SUBPROCESS_TIMEOUT"] = "0"
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -353,6 +361,7 @@ def test_resolves_reached_r_packages_at_runtime(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_retains_automatic_r_package_after_error_and_restart(
@@ -361,10 +370,9 @@ def test_retains_automatic_r_package_after_error_and_restart(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -372,24 +380,164 @@ def test_retains_automatic_r_package_after_error_and_restart(
             stopifnot(is.function(fortunes::fortune))
             stop("after activation")
             """)
-        client.send(r=r)
-        assert "Error: after activation" in last_result_text(client)
-        assert len(ir_run_records(record)) == baseline + 1
-
-        client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
-        assert last_result_text(client) == "[1] 42\n"
-        assert len(ir_run_records(record)) == baseline + 1
-
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        wait_for_evaluation_output(
+            client,
+            "Error: after activation\n",
+            "automatic R package error",
+            completion_timeout_seconds=client.response_timeout,
+            r=r,
+            timeout_ms=0,
         )
-        client.send(r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L')
-        assert last_result_text(client) == "[1] 42\n"
+        assert len(ir_run_records(record)) == baseline + 1
+
+        client.expect(
+            "[1] 42\n",
+            r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L',
+        )
+        assert len(ir_run_records(record)) == baseline + 1
+
+        client.expect(
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
+            control="restart",
+        )
+        client.expect(
+            "[1] 42\n",
+            r='stopifnot(requireNamespace("fortunes", quietly = TRUE)); 42L',
+        )
         assert len(ir_run_records(record)) == baseline + 1
         return client.finish()
 
 
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
+def test_preserves_missing_package_conditions_after_resolution_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, record = recording_ir_environment(
+            Path(temporary), fail_requirement="notloaded.pkg"
+        )
+        # fmt: r
+        caught = code(r"""
+            tryCatch(
+              loadNamespace("notloaded.pkg"),
+              packageNotFoundError = function(e) "expected missing-package error"
+            )
+            """)
+        # Compare the original condition, including its call and package fields,
+        # with this host's R rather than recreating R's condition in the test.
+        # fmt: r
+        details = code(r"""
+            describe_missing <- function(expr) {
+              tryCatch(
+                withCallingHandlers(
+                  expr,
+                  packageNotFoundError = function(e) {
+                    cat("calling handler: ")
+                    print(class(e))
+                  }
+                ),
+                packageNotFoundError = function(e) {
+                  print(e)
+                  print(list(
+                    message = conditionMessage(e),
+                    call = deparse(conditionCall(e)),
+                    package = e$package,
+                    lib.loc = if (is.null(e$lib.loc)) {
+                      NULL
+                    } else {
+                      identical(e$lib.loc, .libPaths())
+                    }
+                  ))
+                  invisible(NULL)
+                }
+              )
+            }
+            describe_missing(loadNamespace("notloaded.pkg"))
+            describe_missing(notloaded.pkg::missing)
+            describe_missing(notloaded.pkg:::missing)
+            describe_missing(library(notloaded.pkg))
+            print(requireNamespace("notloaded.pkg"))
+            print(requireNamespace("notloaded.pkg", quietly = TRUE))
+            suppressWarnings(require(notloaded.pkg, quietly = TRUE))
+            suppressWarnings(library(notloaded.pkg, logical.return = TRUE))
+            """)
+        reference = subprocess.run(
+            [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],
+            input=details,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                send_and_collect_runtime_r_resolution(
+                    client, '[1] "expected missing-package error"\n', r=caught
+                )
+                baseline = len(ir_run_records(record))
+                send_and_collect_runtime_r_resolution(
+                    client, reference.stdout, r=details
+                )
+                client.transcript[-1]["result"]["content"][0]["text"] = (
+                    "<condition classes, messages, calls, and fields identical to live Rscript>"
+                )
+                client.transcript[-1]["transcript_normalization"] = {
+                    "target": "result.content[0].text",
+                    "reference": "same source in live Rscript --vanilla",
+                    "comparison": "exact equality of printed condition details",
+                }
+                runs = ir_run_records(record)[baseline:]
+                assert len(runs) == 8, runs
+                assert all("notloaded.pkg" in ir_requirements(run) for run in runs)
+
+            # Explicit preparation still reports the resolver's failure.
+            client.send(requirements={"r": ["notloaded.pkg"]})
+            assert "synthetic `ir` failure for notloaded.pkg" in last_result_text(
+                client
+            )
+            return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+@requires(command("ir"))
+def test_matches_base_r_missing_package_error_display(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        environment, _ = recording_ir_environment(
+            Path(temporary), fail_requirement="notloaded.pkg"
+        )
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(r="options(showErrorCalls = TRUE)")
+            for source in (
+                "library(notloaded.pkg)",
+                "base::library(notloaded.pkg)",
+                'loadNamespace("notloaded.pkg")',
+                'base::loadNamespace("notloaded.pkg")',
+                "notloaded.pkg::missing",
+                "notloaded.pkg:::missing",
+                'package <- "notloaded.pkg"; library(package, character.only = TRUE)',
+                "loader <- library; loader(notloaded.pkg)",
+                "lookup <- function() library(notloaded.pkg); lookup()",
+                'lookup <- function() loadNamespace("notloaded.pkg"); lookup()',
+            ):
+                send_and_compare_r_error(client, environment, source)
+            return client.finish()
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_does_not_resolve_unreached_package_loads(
@@ -401,29 +549,27 @@ def test_does_not_resolve_unreached_package_loads(
             Path(temporary),
             fail_requirement=missing,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
-        client.send(r=f"if (FALSE) library({missing}); 42L")
-        assert last_result_text(client) == "[1] 42\n"
+        client.send(r="options(showErrorCalls = TRUE)")
+        client.expect("[1] 42\n", r=f"if (FALSE) library({missing}); 42L")
         assert len(ir_run_records(record)) == baseline
 
-        client.send(r=f"library({missing})")
-        assert f"synthetic `ir` failure for {missing}" in last_result_text(client)
+        source = f"library({missing})"
+        send_and_compare_r_error(client, environment, source)
         failed = len(ir_run_records(record))
         assert failed == baseline + 1
 
-        client.send(r="42L")
-        assert last_result_text(client) == "[1] 42\n"
-        client.send(r=f"library({missing})")
-        assert f"synthetic `ir` failure for {missing}" in last_result_text(client)
+        client.expect("[1] 42\n", r="42L")
+        send_and_compare_r_error(client, environment, source)
         assert len(ir_run_records(record)) == failed + 1
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_rejects_non_package_runtime_names_before_ir(
@@ -431,10 +577,9 @@ def test_rejects_non_package_runtime_names_before_ir(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -468,6 +613,7 @@ def test_rejects_non_package_runtime_names_before_ir(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_preserves_base_r_loading_semantics_without_resolution(
@@ -476,10 +622,9 @@ def test_preserves_base_r_loading_semantics_without_resolution(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -505,7 +650,26 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             }
             unloadNamespace("codetools")
 
-            listing <- library()
+            listing_warnings <- character()
+            listing <- withCallingHandlers(
+              library(),
+              warning = function(w) {
+                listing_warnings <<- c(listing_warnings, conditionMessage(w))
+                invokeRestart("muffleWarning")
+              }
+            )
+            expected_warnings <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") {
+              sprintf(
+                ngettext(
+                  1L,
+                  "library %s contains no packages",
+                  "libraries %s contain no packages"
+                ),
+                sQuote(.libPaths()[[1L]])
+              )
+            } else {
+              character()
+            }
             help_info <- library(help = base)
             restricted <- suppressWarnings(library(
               "fortunes",
@@ -530,6 +694,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
             )
             stopifnot(
               inherits(listing, "libraryIQR"),
+              identical(listing_warnings, expected_warnings),
               inherits(help_info, "packageInfo"),
               identical(restricted, FALSE),
               partial_failed,
@@ -593,6 +758,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Transcript:
@@ -604,13 +770,12 @@ def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Tran
         environment, record = recording_ir_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=package,
         )
         client.initialize_and_list_tools()
-        client.send(requirements={"r": ["DBI"]})
-        assert last_result_text(client) == "[prepared]"
+        client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
 
         # fmt: r
@@ -638,11 +803,21 @@ def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Tran
             """)
         client.send(r=r)
         output = last_result_text(client)
-        assert output == "$exported\n[1] 42\n\n$internal\n[1] 41\n\n", repr(output)
+        assert (
+            output
+            == """$exported
+[1] 42
+
+$internal
+[1] 41
+
+"""
+        ), repr(output)
         assert len(ir_run_records(record)) == baseline
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_r_activation_failure_requires_restart_without_stopping_worker(
@@ -651,10 +826,9 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
-        client.send(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
-        assert last_result_text(client) == "[done]"
+        client.expect(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
         baseline = len(ir_run_records(record))
 
         # The private bridge deliberately uses the live base::.libPaths binding
@@ -685,29 +859,31 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
         assert "synthetic managed R activation failure" in last_result_text(client)
         assert len(ir_run_records(record)) == baseline + 1
 
-        client.send(
-            r=("activation_state + as.integer(identical(Sys.getpid(), activation_pid))")
+        client.expect(
+            "[1] 42\n",
+            r=(
+                "activation_state + as.integer(identical(Sys.getpid(), activation_pid))"
+            ),
         )
-        assert last_result_text(client) == "[1] 42\n"
-        client.send(requirements={"r": ["english"]})
-        assert last_result_text(client) == "[restart required]"
+        client.expect("[restart required]", requirements={"r": ["english"]})
 
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+        client.expect(
+            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
+            control="restart",
         )
-        client.send(
+        client.expect(
+            "[1] 42\n",
             r=(
                 "package <- 'fortunes'; "
                 "stopifnot(do.call(base::requireNamespace, "
                 "list(package = package, quietly = TRUE))); 42L"
-            )
+            ),
         )
-        assert last_result_text(client) == "[1] 42\n"
         assert len(ir_run_records(record)) == baseline + 2
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_restart_discards_unactivated_r_candidate(
@@ -719,12 +895,11 @@ def test_restart_discards_unactivated_r_candidate(
         package = "mcprestart"
         environment, record = recording_fixture_r_environment(directory, (package,))
         environment["TMPDIR"] = temporary
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(r="invisible(NULL)")
-            assert last_result_text(client) == "[done]"
+            client.expect(r="invisible(NULL)")
             baseline = len(ir_run_records(record))
 
             # The live .libPaths() binding is reached after RResolved and
@@ -804,6 +979,7 @@ def test_restart_discards_unactivated_r_candidate(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_rejects_preparation_while_automatic_r_resolver_is_running(
@@ -819,13 +995,12 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
         try:
             client.initialize_and_list_tools()
-            client.send(requirements={"r": ["DBI"]})
-            assert last_result_text(client) == "[prepared]"
+            client.expect("[prepared]", requirements={"r": ["DBI"]})
             baseline = len(ir_run_records(record))
 
             evaluation = client.start_send(
@@ -891,17 +1066,17 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(
-                r="resolver_interrupt_state <- 41L; resolver_pid <- Sys.getpid()"
+            client.expect(
+                r="resolver_interrupt_state <- 41L; resolver_pid <- Sys.getpid()",
             )
-            assert last_result_text(client) == "[done]"
             baseline = len(ir_run_records(record))
             server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
+            owner = local_resolver_owner(server, binary)
+            existing_children = child_process_identities(owner)
 
             # fmt: r
             r = code(r"""
@@ -909,33 +1084,37 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                 do.call(base::loadNamespace, list(package = package))
                 resolver_interrupt_cell_ran <- TRUE
                 """)
-            evaluation = client.start_send(r=r)
+            # Release the cell's response claim before the interrupt becomes
+            # the sole reader of the resolver error and evaluation completion.
+            client.expect("\n[running; poll with an empty send]", r=r, timeout_ms=0)
             started.wait("automatic R resolver")
             resolver = [
                 child
-                for child in child_process_identities(server)
+                for child in child_process_identities(owner)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver
-            interrupt = client.start_send(control="interrupt")
-            client.receive_many([evaluation, interrupt])
+            wait_for_evaluation_output(
+                client,
+                "Error: R package resolution interrupted\n",
+                "automatic R resolver interruption",
+                completion_timeout_seconds=client.response_timeout,
+                control="interrupt",
+            )
             # Keep the FIFO blocked until interruption has reaped this resolver.
             assert live_processes(resolver) == [], (
                 "interrupt did not reap the R resolver"
             )
-            assert entry_result_text(interrupt) == "\n[idle]"
-            error = entry_result_text(evaluation)
-            assert error == "Error: R package resolution interrupted\n", repr(error)
             assert len(ir_run_records(record)) == baseline + 1
 
-            client.send(
+            client.expect(
+                "[1] 42\n",
                 r=(
                     "resolver_interrupt_state + "
                     "as.integer(!exists('resolver_interrupt_cell_ran')) + "
                     "as.integer(identical(Sys.getpid(), resolver_pid)) - 1L"
-                )
+                ),
             )
-            assert last_result_text(client) == "[1] 42\n"
             transcript = client.finish()
             passed = True
             return transcript

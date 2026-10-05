@@ -1,0 +1,53 @@
+---
+send:
+  r: "42"
+result:
+  content:
+    - type: text
+      text: |
+        [1] 42
+  isError: false
+---
+send:
+  python: >-
+    from pathlib import Path; pid =
+    Path("/tmp/independent-process").read_text(); print(Path("/proc",
+    pid).exists())
+result:
+  content:
+    - type: text
+      text: |
+        True
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: >-
+    from pathlib import Path;
+    print(Path("/tmp/independent-process").exists())
+result:
+  content:
+    - type: text
+      text: |
+        False
+  isError: false
+---
+standard_error: |
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+  Deleting sandbox <owned-microvm>...
+  Sandbox '<owned-microvm>' removed
+---
+independent_vm_process_and_container_retired: true

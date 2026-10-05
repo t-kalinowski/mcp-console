@@ -2,9 +2,9 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::ManagedR;
 use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command, stop_resolver,
+    ResolverInvocation, ResolverOutput, ResolverProcess, ResolverStopHandle, resolver_command,
 };
 
 const MANAGED_R_LIBRARY_RESOLVER_SOURCE: &str = include_str!("programs/r_library.R");
@@ -112,17 +112,6 @@ pub(crate) struct ManagedRResolverConfiguration {
     rscript: PathBuf,
 }
 
-#[derive(Clone, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ManagedR {
-    library: PathBuf,
-    r_libs: OsString,
-    // Executable selection never travels in a preparation request.
-    #[serde(skip)]
-    rscript: PathBuf,
-    requirements: Vec<String>,
-}
-
 impl ManagedRResolverConfiguration {
     pub(crate) fn resolve_uv(
         &self,
@@ -133,14 +122,15 @@ impl ManagedRResolverConfiguration {
         let resolver = ResolverProcess::new();
         let mut on_started = Some(on_started);
         let mut command = resolver_command(&self.rscript);
+        command.arg("--vanilla");
+        let _program = super::r_program::RProgram::append(&mut command, UV_BINARY_RESOLVER_SOURCE)?;
         command
-            .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         managed_r.configure_worker(&mut command)?;
         configuration.configure_uv_bootstrap(&mut command);
-        let mut child = command.spawn().map_err(|error| {
+        let invocation = resolver.spawn(&mut command, None).map_err(|error| {
             format!(
                 "failed to resolve `uv` with `{}`: {error}",
                 self.rscript.display()
@@ -148,7 +138,7 @@ impl ManagedRResolverConfiguration {
         })?;
         let output = collect_resolver_output(
             &resolver,
-            &mut child,
+            invocation,
             &mut on_started,
             &self.rscript,
             "`uv`",
@@ -159,44 +149,8 @@ impl ManagedRResolverConfiguration {
     }
 }
 
-impl ManagedR {
-    pub(crate) fn on_host(mut self, rscript: &Path) -> Self {
-        self.rscript = rscript.to_path_buf();
-        self
-    }
-    pub(crate) fn configure_worker(&self, command: &mut Command) -> Result<(), String> {
-        if !self.library.is_dir() {
-            return Err(format!(
-                "resolved R library `{}` no longer exists",
-                self.library.display()
-            ));
-        }
-        command.env("R_LIBS", &self.r_libs);
-        Ok(())
-    }
-
-    pub(crate) fn requirements(&self) -> &[String] {
-        &self.requirements
-    }
-
-    pub(crate) fn library(&self) -> &Path {
-        &self.library
-    }
-
-    pub(crate) fn rscript(&self) -> &Path {
-        &self.rscript
-    }
-}
-
-pub(crate) fn detect_r_bootstrap(
-    python: &mut super::ManagedPythonResolverConfiguration,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<Option<ManagedRBootstrap>, String> {
-    discover(python, on_started).map(|(bootstrap, _)| bootstrap)
-}
-
 pub(crate) fn discover(
-    python: &mut super::ManagedPythonResolverConfiguration,
+    python: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<(Option<ManagedRBootstrap>, PathBuf), String> {
     let resolver = ResolverProcess::new();
@@ -218,12 +172,15 @@ pub(crate) fn discover(
 pub(crate) fn resolve_r(
     requirements: Vec<String>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+    on_configured: impl FnOnce(ManagedRResolverConfiguration),
 ) -> Result<ManagedR, String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
     let mut python = super::ManagedPythonResolverConfiguration::capture();
     let configuration = discover_r_resolver_with(&resolver, &mut on_started, &mut python)?
         .ok_or_else(|| "dynamic environment resolution requires `ir` or `uv`".to_string())?;
+    // Retain the selected executables even when this first manifest fails.
+    on_configured(configuration.clone());
     resolve_r_with_process(&configuration, requirements, &resolver, &mut on_started)
 }
 
@@ -258,16 +215,12 @@ fn discover_r_resolver_with(
     Ok(Some(ManagedRResolverConfiguration { ir, rscript }))
 }
 
-fn select_ir_command(python: &mut super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
-    let path_ir = find_path_entry("ir");
-    let path_uv = find_path_entry("uv");
+fn select_ir_command(python: &super::ManagedPythonResolverConfiguration) -> Option<IrCommand> {
+    let path_ir = super::find_path_entry("ir");
+    let path_uv = super::find_path_entry("uv");
     if let Some(ir) = path_ir {
-        if let Some(uv) = path_uv.as_ref() {
-            python.set_default_uv(uv.as_os_str().to_os_string());
-        }
         Some(IrCommand::direct(ir))
     } else if let Some(uv) = path_uv {
-        python.set_default_uv(uv.as_os_str().to_os_string());
         Some(IrCommand::through_path_uv(uv))
     } else {
         python
@@ -282,7 +235,14 @@ fn discover_rscript(
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<PathBuf, String> {
     if let Some(r_home) = std::env::var_os("R_HOME") {
-        return Ok(PathBuf::from(r_home).join("bin/Rscript"));
+        let rscript = rscript_in(Path::new(&r_home));
+        if !rscript.is_file() {
+            return Err(format!(
+                "R_HOME must select an existing R installation: {} is missing",
+                rscript.display()
+            ));
+        }
+        return Ok(rscript);
     }
     let program = Path::new("R");
     let mut command = resolver_command(program);
@@ -291,14 +251,14 @@ fn discover_rscript(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to discover the worker R home with `{}`: {error}",
             program.display()
         )
     })?;
     let output =
-        collect_resolver_output(resolver, &mut child, on_started, program, "worker R home")?;
+        collect_resolver_output(resolver, invocation, on_started, program, "worker R home")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -313,7 +273,21 @@ fn discover_rscript(
     if r_home.is_empty() {
         return Err("worker R returned an empty home path".to_string());
     }
-    Ok(PathBuf::from(r_home).join("bin/Rscript"))
+    Ok(rscript_in(Path::new(r_home)))
+}
+
+fn rscript_in(home: &Path) -> PathBuf {
+    #[cfg(unix)]
+    return home.join("bin/Rscript");
+    #[cfg(windows)]
+    {
+        let executable = home.join("bin/Rscript.exe");
+        if executable.is_file() {
+            executable
+        } else {
+            home.join("bin/x64/Rscript.exe")
+        }
+    }
 }
 
 fn resolve_uv_with_rscript(
@@ -351,8 +325,9 @@ fn run_uv_program(
     probe_only: bool,
 ) -> Result<ResolverOutput, String> {
     let mut command = resolver_command(rscript);
+    command.arg("--vanilla");
+    let _program = super::r_program::RProgram::append(&mut command, UV_BINARY_RESOLVER_SOURCE)?;
     command
-        .args(["--vanilla", "-e", UV_BINARY_RESOLVER_SOURCE])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -360,7 +335,7 @@ fn run_uv_program(
         command.arg("--probe");
     }
     configuration.configure_uv_bootstrap(&mut command);
-    let mut child = command.spawn().map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to inspect ambient reticulate with `{}`: {error}",
             rscript.display()
@@ -368,7 +343,7 @@ fn run_uv_program(
     })?;
     collect_resolver_output(
         resolver,
-        &mut child,
+        invocation,
         on_started,
         rscript,
         "ambient reticulate `uv`",
@@ -406,6 +381,8 @@ fn finish_uv_resolution(
     }
     let output = String::from_utf8(output.stdout)
         .map_err(|_| "reticulate `uv` resolver returned a non-UTF-8 path".to_string())?;
+    #[cfg(windows)]
+    let output = output.replace("\r\n", "\n");
     let path = output
         .strip_suffix('\n')
         .filter(|path| !path.is_empty() && !path.contains(['\n', '\r']))
@@ -426,8 +403,8 @@ fn resolve_r_with_process(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
 ) -> Result<ManagedR, String> {
-    // `ir` resolves and installs remote packages with normal host cache and
-    // network access. Requirement strings are process arguments, never R source.
+    // `ir` uses the preparation process's cache and network permissions.
+    // Requirement strings are process arguments, never R source.
     let mut command = configuration.ir.command();
     command
         .arg("run")
@@ -445,16 +422,14 @@ fn resolve_r_with_process(
             "PKG_SUBPROCESS_TIMEOUT",
             PAK_SUBPROCESS_STARTUP_TIMEOUT_MILLISECONDS,
         )
-        .args([
-            "--isolated",
-            "--vanilla",
-            "-e",
-            MANAGED_R_LIBRARY_RESOLVER_SOURCE,
-        ])
+        .args(["--isolated", "--vanilla"]);
+    let _program =
+        super::r_program::RProgram::append(&mut command, MANAGED_R_LIBRARY_RESOLVER_SOURCE)?;
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to run R package resolver with `{}`: {error}",
             configuration.ir.label()
@@ -462,7 +437,7 @@ fn resolve_r_with_process(
     })?;
     let output = collect_resolver_output(
         resolver,
-        &mut child,
+        invocation,
         on_started,
         configuration.ir.display_program(),
         "R package",
@@ -505,21 +480,6 @@ fn resolve_r_with_process(
     })
 }
 
-fn find_path_entry(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    // A broken symlink or non-executable entry is a broken installation, not
-    // permission to select a different resolver.
-    std::env::split_paths(&path)
-        .map(|directory| {
-            if directory.as_os_str().is_empty() {
-                PathBuf::from(".").join(program)
-            } else {
-                directory.join(program)
-            }
-        })
-        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
-}
-
 fn validate_ir_version(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
@@ -531,7 +491,7 @@ fn validate_ir_version(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to check R package resolver version with `{}`: {error}",
             ir.label()
@@ -539,7 +499,7 @@ fn validate_ir_version(
     })?;
     let output = collect_resolver_output(
         resolver,
-        &mut child,
+        invocation,
         on_started,
         ir.display_program(),
         "R package",
@@ -579,19 +539,15 @@ fn validate_ir_version(
 
 fn collect_resolver_output(
     resolver: &ResolverProcess,
-    child: &mut std::process::Child,
+    invocation: ResolverInvocation,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
     program: &Path,
     kind: &str,
 ) -> Result<ResolverOutput, String> {
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    if let Some(on_started) = on_started.take()
-        && let Err(error) = on_started(resolver.stop_handle())
-    {
-        let _ = stop_resolver(child, program, kind);
-        return Err(error);
-    }
-    resolver.watch_exit(child.id());
-    resolver.wait(child, completed_write(), stdout, stderr, program, kind)
+    resolver.collect(invocation, program, kind, |handle| {
+        match on_started.take() {
+            Some(started) => started(handle),
+            None => Ok(()),
+        }
+    })
 }

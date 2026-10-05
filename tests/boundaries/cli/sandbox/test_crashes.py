@@ -626,7 +626,10 @@ def test_owner_loss_retires_the_sandbox_lifetime(binary: Path) -> Transcript:
                     target_script,
                 ],
                 "stdout": (
-                    "<sandbox root pid>\n<detached descendant pid>\n<sandbox temp>\n"
+                    """<sandbox root pid>
+<detached descendant pid>
+<sandbox temp>
+"""
                 ),
             },
             {

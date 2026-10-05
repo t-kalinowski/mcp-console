@@ -1,16 +1,55 @@
 use std::collections::VecDeque;
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
+use crate::cell::Language;
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
+
+pub(crate) use super::activity::observe_stdin_shutdown;
+// Preserve the existing native probe entry point without exposing readiness
+// variants to the production coordinator.
+#[cfg(all(test, unix))]
+pub(super) use super::activity::next_command;
 
 static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
 static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
 static PENDING_SERVER_MESSAGES: Mutex<VecDeque<ServerMessage>> = Mutex::new(VecDeque::new());
 static WORKER_FAILURE: Mutex<Option<String>> = Mutex::new(None);
 static WORKER_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+static CELL_LANGUAGE: Mutex<Option<Language>> = Mutex::new(None);
+static BOOTSTRAPPING: AtomicBool = AtomicBool::new(false);
+static BOOTSTRAP_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn bootstrapping() -> bool {
+    BOOTSTRAPPING.load(Ordering::Relaxed)
+}
+
+pub(super) fn set_bootstrapping(active: bool) {
+    BOOTSTRAPPING.store(active, Ordering::Relaxed);
+}
+
+pub(crate) fn record_bootstrap_interrupt() {
+    if bootstrapping() {
+        BOOTSTRAP_INTERRUPTED.store(true, Ordering::Relaxed);
+    }
+}
+
+pub(super) fn bootstrap_interrupted() -> bool {
+    BOOTSTRAP_INTERRUPTED.load(Ordering::Relaxed)
+}
+
+pub(super) fn begin_cell(language: Language) {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = Some(language);
+}
+
+pub(super) fn finish_cell() {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned") = None;
+}
+
+pub(super) fn cell_language() -> Option<Language> {
+    *CELL_LANGUAGE.lock().expect("cell language lock poisoned")
+}
 
 pub(crate) fn initialize(
     reader: crate::sideband::Reader,
@@ -24,9 +63,12 @@ pub(crate) fn initialize(
         .map_err(|_| io::Error::other("R worker sideband was already initialized"))
 }
 
-pub(crate) fn sideband_activity() -> Result<(bool, RawFd), String> {
-    let reader = worker_reader()?;
-    Ok((reader.has_buffered_data(), reader.as_raw_fd()))
+// Commands deferred during resolution retain their order across native waits.
+pub(super) fn queued_command() -> Result<Option<ServerMessage>, String> {
+    if is_shutting_down() {
+        return Ok(Some(ServerMessage::Shutdown));
+    }
+    take_pending_server_message()
 }
 
 pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
@@ -35,7 +77,7 @@ pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
-pub(crate) fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
+fn take_pending_server_message() -> Result<Option<ServerMessage>, String> {
     PENDING_SERVER_MESSAGES
         .lock()
         .map_err(|_| "pending server message lock poisoned".to_string())
@@ -48,27 +90,6 @@ pub(crate) fn is_shutting_down() -> bool {
 
 pub(crate) fn mark_shutting_down() {
     WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-}
-
-pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
-    let mut event = libc::pollfd {
-        fd: libc::STDIN_FILENO,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    loop {
-        let result = unsafe { libc::poll(&mut event, 1, 0) };
-        if result >= 0 {
-            if event.revents & libc::POLLHUP != 0 {
-                mark_shutting_down();
-            }
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(format!("worker stdin readiness check failed: {error}"));
-        }
-    }
 }
 
 pub(crate) fn record_worker_failure(message: String) {
@@ -127,12 +148,33 @@ pub(crate) fn publish_plot(image: Result<String, String>) {
 
 pub(crate) fn resolve_python(
     request: crate::worker_protocol::PythonResolveRequest,
-) -> Result<String, String> {
+) -> Result<crate::worker_protocol::NativePythonActivation, String> {
+    let (python, native) = resolve_python_candidate(request)?;
+    let native = native.ok_or_else(|| {
+        infrastructure_failure("native Python resolver omitted the candidate configuration".into())
+    })?;
+    if native.selected.embedding.python != python {
+        return Err(infrastructure_failure(
+            "native Python resolver returned mismatched executables".into(),
+        ));
+    }
+    Ok(*native)
+}
+
+fn resolve_python_candidate(
+    request: crate::worker_protocol::PythonResolveRequest,
+) -> Result<
+    (
+        String,
+        Option<Box<crate::worker_protocol::NativePythonActivation>>,
+    ),
+    String,
+> {
     send_worker_message(&WorkerMessage::ResolvePython { request })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
-        ServerMessage::PythonResolved { python } => {
+        ServerMessage::PythonResolved { python, native } => {
             crate::python::link_matplotlib_caches();
-            Ok(python)
+            Ok((python, native))
         }
         ServerMessage::PythonResolutionFailed { message } => Err(message),
         ServerMessage::RResolved { .. } | ServerMessage::RResolutionFailed { .. } => {
@@ -166,12 +208,22 @@ pub(crate) fn publish_python_activation(
     send_worker_message(&WorkerMessage::PythonActivated { requirements })
 }
 
+pub(crate) fn publish_python_activation_failure(
+    requirements: crate::worker_protocol::PythonRequirementManifest,
+) -> Result<(), String> {
+    send_worker_message(&WorkerMessage::PythonActivationFailed { requirements })
+}
+
 pub(crate) fn resolve_r(
     packages: Vec<String>,
 ) -> Result<crate::r_environment::ResolutionOutcome, String> {
     use crate::r_environment::{ResolutionFailureKind, ResolutionOutcome};
     use crate::worker_protocol::RResolutionFailureKind;
 
+    // SQL callbacks can reenter R, but SQL evaluation does not resolve packages.
+    if matches!(cell_language(), Some(Language::Sql)) {
+        return Ok(ResolutionOutcome::Unavailable);
+    }
     send_worker_message(&WorkerMessage::ResolveR { packages })?;
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::RResolved { library } => Ok(ResolutionOutcome::Resolved { library }),
@@ -266,7 +318,7 @@ fn queue_server_message(message: ServerMessage) -> Result<(), String> {
     Ok(())
 }
 
-fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Reader>, String> {
+pub(super) fn worker_reader() -> Result<MutexGuard<'static, crate::sideband::Reader>, String> {
     WORKER_READER
         .get()
         .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?

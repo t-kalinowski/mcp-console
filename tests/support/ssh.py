@@ -8,11 +8,11 @@ import shutil
 import socket
 import subprocess
 import struct
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 import select
 import time
-import sys
 
 from support.client import TextReader
 from support.normalization import code
@@ -24,15 +24,10 @@ SSHD = shutil.which("sshd") or (
 )
 SSH = Requirement(
     "localhost OpenSSH",
-    SSHD is not None and shutil.which("ssh-keygen") is not None,
+    os.name == "posix" and SSHD is not None and shutil.which("ssh-keygen") is not None,
     "requires sshd and ssh-keygen with permission to run a localhost SSH server",
 )
 CONFIG = ".agents/console/config.yaml"
-EXTERNAL_SSH = Requirement(
-    "configured external SSH target",
-    bool(os.environ.get("MCP_CONSOLE_TEST_SSH_EXTERNAL")),
-    "set MCP_CONSOLE_TEST_SSH_EXTERNAL to a provisioned test target JSON object",
-)
 
 
 def bootstrap(
@@ -41,7 +36,8 @@ def bootstrap(
     version = subprocess.check_output([binary, "--version"], text=True).split()[1]
     body = json.dumps(
         {
-            "version": 2,
+            "version": 10,
+            "provider": "native",
             "build": version,
             "workspace": str(workspace),
             "policy": policy or {},
@@ -74,7 +70,7 @@ def read_frame(stream, timeout: float = 15) -> tuple[int, bytes]:
 
 
 def configure(
-    workspace: Path, remote: Path, prefix: list[str], **policy: object
+    workspace: Path, remote: Path, prefix: list[str] | None, **policy: object
 ) -> Path:
     config = workspace / CONFIG
     config.parent.mkdir(parents=True, exist_ok=True)
@@ -93,8 +89,26 @@ def configure(
     return config
 
 
+def peer_environment(root: Path, mode: str) -> dict[str, str]:
+    peer = Path(__file__).resolve().parents[1] / "fixtures/ssh_peer.py"
+    ssh = root / "ssh"
+    ssh.write_text(
+        code(r"""
+            #!/bin/sh
+            exec COMMAND "$@"
+            """).replace("COMMAND", shlex.join([sys.executable, str(peer)]))
+    )
+    ssh.chmod(0o755)
+    return {
+        **os.environ,
+        "PATH": str(root) + os.pathsep + os.environ["PATH"],
+        "CONSOLE_SSH_PEER": mode,
+        "CONSOLE_SSH_PEER_LOG": str(root / "calls"),
+    }
+
+
 @contextmanager
-def localhost(root: Path, *, faults: bool = False):
+def localhost(root: Path, *, remote_path: Path | None = None, faults: bool = False):
     assert SSHD is not None
     root.mkdir()
     for name in ("host", "client"):
@@ -137,32 +151,9 @@ LogLevel VERBOSE
   ControlPath {root}/control
 """
     )
-    # Only supply a test configuration file. All transport and quoting are real
-    # OpenSSH, including the production-selected options and destination alias.
-    executable = shutil.which("ssh")
-    assert executable is not None
-    launcher = root / "ssh"
-    launcher.write_text(
-        code(r"""
-            #!/bin/sh
-            exec COMMAND "$@"
-            """).replace("COMMAND", shlex.join([executable, "-F", str(client_config)]))
+    environment = client_environment(
+        root, config=str(client_config), remote_path=remote_path, faults=faults
     )
-    launcher.chmod(0o755)
-    if faults:
-        proxy = Path(__file__).resolve().parents[1] / "fixtures/ssh_tcp_proxy.py"
-        wrapper = root / "ssh-wrapper.py"
-        wrapper.write_text(
-            "import os, shlex, sys\n"
-            + f"base = {str(executable)!r}\nconfig = {str(client_config)!r}\n"
-            + f"proxy = {str(proxy)!r}\nroot = {str(root)!r}\n"
-            + "role = shlex.split(sys.argv[-1])[-1]\n"
-            + "command = shlex.join([sys.executable, proxy, root, role]) + ' %h %p'\n"
-            + "os.execv(base, [base, '-F', config, '-o', 'ProxyCommand=' + command, *sys.argv[1:]])\n"
-        )
-        launcher.write_text(
-            "#!/bin/sh\nexec " + shlex.join([sys.executable, str(wrapper)]) + ' "$@"\n'
-        )
     process = subprocess.Popen(
         [SSHD, "-D", "-e", "-f", str(server_config)],
         stderr=subprocess.PIPE,
@@ -173,11 +164,72 @@ LogLevel VERBOSE
     try:
         line = reader.readline(timeout=10)
         assert "Server listening on" in line, line
-        yield {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
+        yield environment
     finally:
         process.terminate()
         process.wait(timeout=10)
         reader.close()
+
+
+def client_environment(
+    root: Path,
+    *,
+    config: str | None = None,
+    remote_path: str | Path | None = None,
+    faults: bool = False,
+) -> dict[str, str]:
+    # Preserve real OpenSSH transport, options, and remote-shell quoting.
+    executable = shutil.which("ssh")
+    assert executable is not None
+    command = [executable, *(["-F", config] if config else [])]
+    launcher = root / "ssh"
+    launcher.write_text(
+        code(r"""
+            #!/bin/sh
+            exec COMMAND "$@"
+            """).replace("COMMAND", shlex.join(command))
+    )
+    launcher.chmod(0o755)
+    if remote_path is not None:
+        # Keep the real SSH connection and remote shell, but give command
+        # discovery a controlled PATH independent of account startup files.
+        launcher.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import shlex
+                import sys
+
+                command, remote_path = CONFIGURATION
+                arguments = sys.argv[1:]
+                arguments[-1] = shlex.join(
+                    [
+                        "/usr/bin/env",
+                        "PATH=" + remote_path,
+                        "/bin/sh",
+                        "-c",
+                        arguments[-1],
+                    ]
+                )
+                os.execv(command[0], [*command, *arguments])
+                """).replace("CONFIGURATION", repr((command, str(remote_path))))
+        )
+    if faults:
+        proxy = Path(__file__).resolve().parents[1] / "fixtures/ssh_tcp_proxy.py"
+        wrapper = root / "ssh-wrapper.py"
+        wrapper.write_text(
+            "import os, shlex, sys\n"
+            + f"command = {command!r}\n"
+            + f"proxy = {str(proxy)!r}\nroot = {str(root)!r}\n"
+            + "role = shlex.split(sys.argv[-1])[-1]\n"
+            + "proxy_command = shlex.join([sys.executable, proxy, root, role]) + ' %h %p'\n"
+            + "os.execv(command[0], [*command, '-o', 'ProxyCommand=' + proxy_command, *sys.argv[1:]])\n"
+        )
+        launcher.write_text(
+            "#!/bin/sh\nexec " + shlex.join([sys.executable, str(wrapper)]) + ' "$@"\n'
+        )
+    return {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"]}
 
 
 def remote_command(root: Path, binary: Path, environment: dict[str, str]) -> list[str]:

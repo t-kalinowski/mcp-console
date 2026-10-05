@@ -1,5 +1,5 @@
 ---
-!same-as MCP initialization for this execution mode
+!same-as r-sql MCP initialization for this execution mode
 ---
 send:
   sql: |
@@ -26,6 +26,7 @@ result:
 ---
 send:
   r: |
+    managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
     stopifnot(
       identical(
         DBI::dbGetQuery(
@@ -34,7 +35,7 @@ send:
         )$value,
         42L
       ),
-      identical(dirname(find.package("ragnar")), .libPaths()[[1L]])
+      identical(dirname(find.package("ragnar")), .libPaths()[[managed_index]])
     )
     embed_banana <- function(x) {
       out <- matrix(1, nrow = length(x), ncol = 2L)
@@ -76,6 +77,7 @@ send:
       )
     ))
     invisible(DBI::dbExecute(connection, "USE knowledge"))
+    stopifnot(!reticulate::py_available(initialize = FALSE))
     writeLines("ragnar store ready")
 result:
   content:

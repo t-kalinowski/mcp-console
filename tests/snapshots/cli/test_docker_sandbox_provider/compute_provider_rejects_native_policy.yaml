@@ -1,0 +1,168 @@
+---
+field: filesystem
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.filesystem; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: filesystem
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.filesystem; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: network
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.network; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: network
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.network; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: proxy
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.proxy; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: proxy
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.proxy; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: linux_backend
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.linux_backend; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: linux_backend
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.linux_backend; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: workspace_options
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.workspace_options; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: workspace_options
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.workspace_options; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: macos_seatbelt_profile_extension
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.macos_seatbelt_profile_extension; use Docker Sandbox
+  policy and target.compute.mounts shared-path configuration
+---
+field: macos_seatbelt_profile_extension
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.macos_seatbelt_profile_extension; use Docker Sandbox
+  policy and target.compute.mounts shared-path configuration
+---
+field: lifecycle
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.lifecycle; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: lifecycle
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.lifecycle; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: version
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.version; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: version
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.version; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: workspace
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.workspace; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: workspace
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.workspace; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: extends
+flags: []
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.extends; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: extends
+flags:
+  - --no-sandbox
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support sandbox.extends; use Docker Sandbox policy and
+  target.compute.mounts shared-path configuration
+---
+field: extends
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support extends; use Docker Sandbox policy and target.compute.mounts
+  shared-path configuration
+---
+field: extends
+error: >
+  .agents/console/config.yaml: Docker Sandbox compute provider does not
+  support extends; use Docker Sandbox policy and target.compute.mounts
+  shared-path configuration
+---
+field: --writable-root
+error: >
+  Docker Sandbox compute provider does not support --writable-root; use
+  Docker Sandbox policy and target.compute.mounts shared-path
+  configuration

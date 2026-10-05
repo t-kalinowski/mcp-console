@@ -20,14 +20,111 @@ env:
   # Manual version used by GitHub Actions cache keys and restore prefixes.
   # Bump for build inputs outside the hashed files, such as workflow build
   # flags or native dependency setup. Cargo and Maturin do not read this value.
-  CI_BUILD_CACHE_VERSION: "2"
+  CI_BUILD_CACHE_VERSION: "3"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
-  UV_VERSION: 0.12.4
 
 jobs:
+  windows:
+    name: Windows local execution
+    runs-on: windows-latest
+    env:
+      LC_ALL: C
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set Windows dependency directories
+        shell: pwsh
+        run: |
+          "UV_CACHE_DIR=$env:RUNNER_TEMP/console-windows-cache/uv" >> $env:GITHUB_ENV
+          "R_LIBS_USER=$env:RUNNER_TEMP/console-windows-r" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: r-lib/actions/setup-r@v2
+        id: r
+        with:
+          use-public-rspm: always
+      - uses: dtolnay/rust-toolchain@stable
+        id: rust
+        with:
+          components: clippy, rustfmt
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: latest
+          enable-cache: false
+      - name: Select weekly cache identity
+        id: epoch
+        shell: pwsh
+        run: |
+          $now = [DateTime]::UtcNow
+          $year = [Globalization.ISOWeek]::GetYear($now)
+          $week = [Globalization.ISOWeek]::GetWeekOfYear($now)
+          "week=$year-$week" >> $env:GITHUB_OUTPUT
+          "image=$env:ImageOS" >> $env:GITHUB_OUTPUT
+          Write-Output "Runner image: $env:ImageOS-$env:ImageVersion"
+      - name: Restore Windows build and dependency caches
+        uses: actions/cache/restore@v6
+        id: cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            ${{ runner.temp }}/console-windows-cache
+          key: windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
+          restore-keys: |
+            windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
+      - name: Install Windows runtime packages
+        run: |
+          $ciPython = (Get-Command python).Source
+          uv pip install --python $ciPython packaging matplotlib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install Windows development tools
+        run: |
+          $ciPython = (Get-Command python).Source
+          foreach ($tool in @("r-lib-ir", "ruff", "yamark")) {
+            uv tool install --python $ciPython $tool
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          uv tool dir --bin >> $env:GITHUB_PATH
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install Windows R bridge
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          cache-version: windows-runtime-v2-${{ steps.epoch.outputs.week }}
+          upgrade: "FALSE"
+          dependencies: "NA"
+          packages: |
+            any::reticulate
+            any::jsonlite
+      - name: Inventory Windows development prerequisites
+        run: |
+          scripts/preflight.cmd --json
+      - name: Stage native Windows sandbox
+        run: scripts/stage-sandbox-runner.cmd
+      - name: Run native Windows development and installation checks
+        run: |
+          scripts/check.cmd --full
+      - name: Save Windows caches
+        if: >-
+          github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit !=
+          'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+            target/release
+            ${{ runner.temp }}/console-windows-cache
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
   check:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Install missing system requirements, retaining the runner's installed versions.
+      PKG_SYSREQS_UPDATE: "false"
     strategy:
       fail-fast: false
       matrix:
@@ -92,7 +189,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: ${{ env.UV_VERSION }}
+          version: latest
           cache-local-path: ${{ runner.temp }}/mcp-console-cache
           cache-suffix: runtime-v2-${{ steps.cache-epoch.outputs.value }}
           prune-cache: false
@@ -103,8 +200,11 @@ jobs:
         run: |
           uv tool install r-lib-ir
           uv tool install yamark
+          # Match the supported build backend range in pyproject.toml.
+          uv tool install 'maturin>=1.15,<2.0'
           uv tool dir --bin >> "$GITHUB_PATH"
           printf 'ir_version=%s\n' "$(ir --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+          printf 'maturin_version=%s\n' "$(maturin --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
 
       # Chrome is unused here; its repository can block apt with inconsistent metadata.
       - name: Disable unused Chrome apt repository
@@ -135,11 +235,24 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Restore Linux dependency downloads
+        if: runner.os == 'Linux'
+        id: apt-cache
+        uses: actions/cache/restore@v6
+        with:
+          # Cache compressed downloads only, never the installed system or apt lists.
+          # One baseline per runner OS and week, without accumulating older versions.
+          path: ${{ runner.temp }}/apt-archives/*.deb
+          key: apt-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.arch }}
+
       - name: Install Linux build and sandbox dependencies
         if: runner.os == 'Linux'
         run: |
+          sudo mkdir -p "$RUNNER_TEMP/apt-archives/partial"
+          printf 'Dir::Cache::archives "%s";\nAPT::Install-Recommends "false";\n' \
+            "$RUNNER_TEMP/apt-archives" | sudo tee /etc/apt/apt.conf.d/99-ci-archives
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev openssh-server
+          sudo apt-get install -y --no-upgrade build-essential pkg-config libcurl4-openssl-dev libcap-dev openssh-server
           sudo mkdir -p /run/sshd
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
@@ -152,14 +265,18 @@ jobs:
         id: ir-cache
         uses: actions/cache/restore@v6
         with:
-          # v4 covers the three prewarmed requirement sets below.
+          # v5 includes explicit bridge dependencies in the prewarmed sets below.
           # Bump it when that contract changes.
           path: ${{ runner.temp }}/mcp-console-r-cache
           key: >-
-            ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
+            ir-v5-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-${{ hashFiles('src/worker_client.rs', 'src/resolver/managed_r.rs', 'tests/boundaries/client_server/requirements/test_r_automatic.py', 'tests/boundaries/client_server/requirements/test_r.py') }}
           restore-keys: |
+            ir-v5-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v4-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
             ir-v3-${{ steps.cache-epoch.outputs.value }}-${{ runner.os }}-${{ runner.arch }}-r-${{ steps.setup-r.outputs.installed-r-version }}-${{ steps.tools.outputs.ir_version }}-
+
+      - name: Validate restored R library links
+        run: python3 scripts/prune-r-cache "$RUNNER_TEMP/mcp-console-r-cache"
 
       - name: Restore Cargo downloads
         id: cargo-downloads
@@ -251,7 +368,7 @@ jobs:
           # Only exact matches skip packaging. On a miss, Maturin invokes Cargo
           # using the build data restored above, including earlier revisions.
           key: >-
-            release-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
+            release-v1-${{ steps.cache-epoch.outputs.value }}-${{ steps.cache-epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.setup-r.outputs.installed-r-version }}-py-${{ steps.python.outputs.python-version }}-maturin-${{ steps.tools.outputs.maturin_version }}-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('src/**', 'python/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', 'build.rs', 'scripts/build_backend.py', 'pyproject.toml', 'sandbox-runner.json', 'target/sandbox-runner-build.json', 'scripts/stage-sandbox-runner', 'README.md', 'LICENSE') }}
 
       - name: Build Rust test targets
         run: cargo test --locked --no-run --all-targets --all-features
@@ -273,8 +390,7 @@ jobs:
           set -euo pipefail
 
           rm -rf dist
-          uvx --from 'maturin==1.15.0' \
-            maturin build \
+          maturin build \
             --release \
             --locked \
             --compatibility pypi \
@@ -314,7 +430,7 @@ jobs:
       - name: Run core checks
         env:
           GITHUB_PAT: ${{ github.token }}
-        run: scripts/check-core
+        run: scripts/check-core --full
 
       - name: Smoke-test Python package
         env:
@@ -329,6 +445,11 @@ jobs:
             smoke-wheel \
             dist/*.whl \
             target/release/mcp-console
+          python3 scripts/release.py \
+            smoke-wheel \
+            dist/*.whl \
+            target/release/mcp-console \
+            --without-r
 
       - name: Install R package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -355,13 +476,45 @@ jobs:
       - name: Install transcript dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          cache-version: transcripts-v1-${{ steps.cache-epoch.outputs.value }}
-          install-quarto: true
+          cache: always
+          cache-version: transcripts-v2-${{ steps.cache-epoch.outputs.value }}
+          install-quarto: false
           upgrade: "FALSE"
+          dependencies: "NA"
           packages: |
             any::devtools
             any::processx
             any::reticulate
+
+      - name: Save Linux dependency downloads
+        if: runner.os == 'Linux' && steps.apt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/apt-archives/*.deb
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
+
+      - name: Install Quarto portable archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          tag=$(gh release view --repo quarto-dev/quarto-cli --json tagName --jq .tagName)
+          version=${tag#v}
+          case "$RUNNER_OS" in
+            macOS) platform=macos ;;
+            Linux) platform=linux-amd64 ;;
+            *) exit 1 ;;
+          esac
+          archive="quarto-$version-$platform.tar.gz"
+          checksums="quarto-$version-checksums.txt"
+          gh release download "$tag" --repo quarto-dev/quarto-cli \
+            --pattern "$archive" --pattern "$checksums"
+          grep "  $archive$" "$checksums" | shasum -a 256 --check --strict
+          mkdir quarto
+          tar -xzf "$archive" --strip-components=1 -C quarto
+          test "$(quarto/bin/quarto --version)" = "$version"
+          printf '%s\n' "$RUNNER_TEMP/quarto/bin" >> "$GITHUB_PATH"
+          rm "$archive" "$checksums"
 
       - name: Prewarm R test environments
         env:
@@ -377,20 +530,61 @@ jobs:
               --with duckdb \
               --with arrow \
               --with nanoarrow \
+              --with jsonlite \
+              --with pillar \
+              --with tibble \
+              --with utf8 \
               --isolated \
               --vanilla \
               "$@" \
-              -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow"))'
+              -e 'sessionInfo(package = c("tidyverse", "reticulate", "DBI", "duckdb", "arrow", "nanoarrow", "jsonlite", "pillar", "tibble", "utf8"))'
           }
+          # shellcheck disable=SC2016 # The dollar sign belongs to R, not the shell.
           prewarm_r -e 'cat("MCP_CONSOLE_TEST_SSH_R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep), "\n", sep = "", file = Sys.getenv("GITHUB_ENV"), append = TRUE)'
           prewarm_r --with praise
           prewarm_r --with praise --with zeallot
 
       - name: Run transcripts
+        id: transcripts
         env:
           GITHUB_PAT: ${{ github.token }}
+          MCP_CONSOLE_TEST_TIMINGS: ${{ runner.temp }}/transcript-metrics/case-timings.jsonl
         # Use the prepared executable; scripts/test also invokes Cargo.
-        run: uv run --script tests/boundaries/_run.py --jobs 6
+        run: |
+          mkdir -p "$RUNNER_TEMP/transcript-metrics"
+          {
+            printf 'Revision: %s\n' "$(git rev-parse HEAD)"
+            printf 'Transcript workers: 6\n'
+            printf 'Runner: %s / %s / %s\n' "$RUNNER_OS" "$RUNNER_ARCH" "$ImageVersion"
+            python3 -c 'import os; print(f"Logical CPUs: {os.cpu_count()}")'
+          } > "$RUNNER_TEMP/transcript-metrics/environment.txt"
+          case "$RUNNER_OS" in
+            macOS) time_args=(-l) ;;
+            Linux) time_args=(-v) ;;
+            *) exit 1 ;;
+          esac
+          /usr/bin/time "${time_args[@]}" \
+            -o "$RUNNER_TEMP/transcript-metrics/resource-usage.txt" \
+            uv run --script tests/boundaries/_run.py --full --jobs 6
+
+      - name: Summarize transcript measurements
+        if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
+        run: |
+          {
+            printf '### Transcript measurements\n\n```text\n'
+            cat "$RUNNER_TEMP/transcript-metrics/environment.txt"
+            cat "$RUNNER_TEMP/transcript-metrics/resource-usage.txt"
+            printf '\n```\n\n'
+            printf 'Maximum RSS is a per-process high-water mark, not the combined peak of concurrent workers. Units: bytes on macOS, KiB on Linux.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload transcript measurements
+        if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: transcript-metrics-${{ matrix.os }}-6-workers
+          path: ${{ runner.temp }}/transcript-metrics
+          retention-days: 14
 
       - name: Check uv source installations
         env:

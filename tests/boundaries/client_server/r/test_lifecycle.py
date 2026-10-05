@@ -21,6 +21,7 @@ from support.requirements import (
     NATIVE_FIXTURES,
     NULL_FAULT_ACCERR,
     NULL_FAULT_MAPERR,
+    POSIX,
     requires,
 )
 from support.records import Transcript
@@ -127,7 +128,10 @@ def restart_after_r_segfault(client: McpClient, cause: str) -> Transcript:
     assert normalized.startswith(
         "\n *** caught segfault ***\n"
         f"address 0x0, cause '{cause}'\n"
-        '\nTraceback:\n 1: .C("mcp_test_segfault")\n'
+        """
+Traceback:
+ 1: .C("mcp_test_segfault")
+"""
     ), repr(fatal_output)
     client.transcript[-1]["result"]["content"][0]["text"] = normalized
     wait_for_evaluation_output(
@@ -176,6 +180,7 @@ def test_reports_r_worker_exit_status(binary: Path, execution: Execution) -> Tra
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_r_worker_restart_with_idle_stdin(
     binary: Path, execution: Execution
@@ -264,6 +269,7 @@ def test_restart_while_r_waits_for_input(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_skips_cell_boundary_callbacks(
     binary: Path, execution: Execution
@@ -319,6 +325,7 @@ def test_restart_skips_cell_boundary_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_skips_direct_stdin_boundary_callback(
     binary: Path, execution: Execution
@@ -356,22 +363,29 @@ def test_restart_skips_direct_stdin_boundary_callback(
         )
         fifo.write_bytes(b"x")
 
-        waiting = client.start_send(
+        # The callback can start while the worker is idle, so its checkpoint
+        # does not prove that the server has admitted this evaluation.
+        # Receive the running response before requesting restart.
+        client.send(
             r='cat("direct stdin cell ran\\n")',
-            timeout_ms=30_000,
+            timeout_ms=0,
         )
+        assert last_tool_text(client) == "\n[running; poll with an empty send]"
         wait_for_worker_file(
             directory,
             "direct-stdin-boundary-checkpoint",
             client,
         )
 
-        restarted = client.start_send(control="restart")
-        client.receive(waiting)
-        client.receive(restarted)
-        assert "direct callback released" in waiting["result"]["content"][0]["text"]
-        assert "direct stdin cell ran" not in waiting["result"]["content"][0]["text"]
-        assert "direct stdin cell ran" not in restarted["result"]["content"][0]["text"]
+        client.send(control="restart")
+        output = last_tool_text(client)
+        assert output == (
+            "direct callback released\n"
+            "[active evaluation stopped by session restart request]\n"
+            "[worker stopped: in-memory state lost]\n"
+            "[starting new worker]\n"
+            "[idle]"
+        ), output
         return client.finish()
 
 
@@ -429,6 +443,7 @@ def test_times_out_and_polls_running_evaluation(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_r_evaluation(
     binary: Path, execution: Execution
@@ -664,6 +679,7 @@ def test_interrupts_managed_console_input(
             stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_replays_console_prefix_after_operation_boundary_interrupt(
     binary: Path,

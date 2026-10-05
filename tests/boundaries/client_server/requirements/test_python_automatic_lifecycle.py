@@ -2,12 +2,14 @@
 
 import re
 import signal
+import shlex
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -19,16 +21,18 @@ from support.processes import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from boundaries.client_server.python.test_peer_runtime import without_r
 from support.resolvers import (
     checkpoint_uv_environment,
     initialize_python_and_record_baseline,
+    local_resolver_owner,
     recording_uv_environment,
     uv_tool_run_requirements,
 )
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_background_thread(
     binary: Path,
@@ -37,7 +41,7 @@ def test_rejects_automatic_resolution_from_background_thread(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -81,6 +85,7 @@ def test_rejects_automatic_resolution_from_background_thread(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_fork_child(
     binary: Path, execution: Execution
@@ -88,7 +93,7 @@ def test_rejects_automatic_resolution_from_fork_child(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -163,6 +168,7 @@ def test_rejects_automatic_resolution_from_fork_child(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_times_out_and_polls_automatic_python_resolution(
     binary: Path,
@@ -175,7 +181,7 @@ def test_times_out_and_polls_automatic_python_resolution(
             "py-yaml12",
         )
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
         try:
@@ -222,10 +228,31 @@ def test_times_out_and_polls_automatic_python_resolution(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, R)
 def test_interrupts_automatic_python_resolver_and_preserves_worker(
     binary: Path,
     execution: Execution,
+) -> Transcript:
+    return interrupts_automatic_python_resolver_and_preserves_worker(binary, execution)
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(PROCESS_EVENTS)
+def test_interrupts_no_r_automatic_python_resolver_and_preserves_worker(
+    binary: Path,
+    execution: Execution,
+) -> Transcript:
+    # The recorded candidate includes the no-R SQL provider's Python dependency.
+    return interrupts_automatic_python_resolver_and_preserves_worker(
+        binary, execution, with_r=False
+    )
+
+
+def interrupts_automatic_python_resolver_and_preserves_worker(
+    binary: Path,
+    execution: Execution,
+    *,
+    with_r: bool = True,
 ) -> Transcript:
     requirement = "mcp_console_blocked_automatic_import"
     with tempfile.TemporaryDirectory() as temporary:
@@ -235,21 +262,32 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             requirement,
         )
         environment.pop("RETICULATE_PYTHON", None)
+        if not with_r:
+            uv = environment["RETICULATE_UV"]
+            without_r(environment, directory)
+            environment["RETICULATE_UV"] = uv
+            commands = Path(environment["PATH"])
+            wrapper = commands / "uv"
+            wrapper.write_text(f'#!/bin/sh\nexec {shlex.quote(uv)} "$@"\n')
+            wrapper.chmod(0o755)
+            (commands / "python3").symlink_to(sys.executable)
         environment["RUST_LOG"] = "error"
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         passed = False
         try:
             client.initialize_and_list_tools()
-            client.send(python="None")
-            assert last_result_text(client) == "[done]"
+            client.send(python="import sys; print(sys.executable)")
+            executable = last_result_text(client).strip()
+            client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
             server = capture_process_identity(client.process.pid)
-            existing_children = child_process_identities(server)
+            owner = local_resolver_owner(server, binary)
+            existing_children = child_process_identities(owner)
             # fmt: python
             python = code(f"""
                 import importlib
@@ -265,7 +303,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             started.wait("automatic Python resolver")
             resolver = [
                 child
-                for child in child_process_identities(server)
+                for child in child_process_identities(owner)
                 if child not in existing_children
             ]
             assert len(resolver) == 1, resolver
@@ -285,7 +323,7 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
             ):
                 assert expected in error, (expected, error)
             interrupt["result"]["content"][0]["text"] = (
-                normalize_python_resolution_error(error)
+                normalize_python_resolution_error(error, executable=executable)
             )
 
             client.send(
@@ -307,7 +345,9 @@ def test_interrupts_automatic_python_resolver_and_preserves_worker(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_restart_discards_unactivated_automatic_python_candidate(
     binary: Path,
     execution: Execution,
@@ -324,7 +364,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         environment.pop("RETICULATE_PYTHON", None)
         environment["TMPDIR"] = temporary
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:

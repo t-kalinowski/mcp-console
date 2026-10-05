@@ -22,6 +22,7 @@ from support.suites import run_this_suite
 def _writable_roots_reach_every_runner_launch(
     binary: Path, *, macos: bool
 ) -> TranscriptWithCompanions:
+    # fmt: python
     exercise = code(r"""
         import errno
         import os
@@ -41,8 +42,11 @@ def _writable_roots_reach_every_runner_launch(
             _ = (root / "persistent").write_text("user data")
             subprocess.run(["touch", str(root / "child")], check=True)
         _ = (host / "cache" / "temporary-path").write_text(str(temporary))
-        for denied in (host / "parent-write", host / "neighbor" / "created",
-                       host / "output café 雪" / "escape" / "created"):
+        for denied in (
+            host / "parent-write",
+            host / "neighbor" / "created",
+            host / "output café 雪" / "escape" / "created",
+        ):
             try:
                 _ = denied.write_text("must not be written")
             except OSError as error:
@@ -50,8 +54,11 @@ def _writable_roots_reach_every_runner_launch(
             else:
                 raise AssertionError(f"unexpected write: {denied}")
         os.chdir(host / "output café 雪")
-        print("both grants and subprocess writes verified; neighboring and symlink writes denied")
+        print(
+            "both grants and subprocess writes verified; neighboring and symlink writes denied"
+        )
         """)
+    # fmt: python
     write_future = code(r"""
         _ = (host / "future output" / "persistent").write_text("user data")
         print("future root is writable after restart")
@@ -98,15 +105,16 @@ def _writable_roots_reach_every_runner_launch(
             ), last_tool_text(client)
             assert not future.exists(), "launcher created a writable root"
             client.send(
+                # fmt: python
                 python=code(r"""
-                try:
-                    Path("../future output").mkdir()
-                except OSError as error:
-                    assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
-                    print(error)
-                else:
-                    print("runtime created the writable root")
-                """)
+                    try:
+                        Path("../future output").mkdir()
+                    except OSError as error:
+                        assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS)
+                        print(error)
+                    else:
+                        print("runtime created the writable root")
+                    """)
             )
             assert future.is_dir() == macos, last_tool_text(client)
             future.mkdir(exist_ok=True)

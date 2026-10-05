@@ -1,5 +1,6 @@
 import difflib
 import json
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -22,6 +23,16 @@ initialization_reference = (
     .relative_to(root)
     .as_posix()
 )
+
+
+def platform_snapshots(*platforms: str):
+    """Declare observable platform differences without duplicating shared records."""
+
+    def decorate(case):
+        case.snapshot_platforms = platforms
+        return case
+
+    return decorate
 
 
 def identical(left: object, right: object) -> bool:
@@ -152,12 +163,36 @@ def check_text_snapshot(
         raise SystemExit(f"{difference}{case} differs from its snapshot")
 
 
-def without_request_ids(transcript: Transcript) -> Transcript:
+def normalize_request_ids(transcript: Transcript) -> Transcript:
+    # CLI transcripts also record raw input strings under the same key.
+    cancelled_ids = {
+        message["params"]["requestId"]
+        for entry in transcript
+        if isinstance(message := entry.get("input"), dict)
+        and message.get("method") == "notifications/cancelled"
+    }
+    labels = {}
+    for entry in transcript:
+        if "id" in entry and entry["id"] in cancelled_ids:
+            labels[entry["id"]] = f"<cancelled request {len(labels) + 1}>"
     rendered = []
     for entry in transcript:
         entry = entry.copy()
         if entry.keys() & {"input", "send"}:
-            entry.pop("id", None)
+            request_id = entry.pop("id", None)
+            if request_id in labels:
+                entry["id"] = labels[request_id]
+        message = entry.get("input", {})
+        if (
+            isinstance(message, dict)
+            and message.get("method") == "notifications/cancelled"
+        ):
+            params = message["params"]
+            if params["requestId"] in labels:
+                entry["input"] = {
+                    **message,
+                    "params": {**params, "requestId": labels[params["requestId"]]},
+                }
         rendered.append(entry)
     return rendered
 
@@ -166,7 +201,8 @@ def compact_initializations(
     actual: Transcript, references: list[Path], *, execution: str | None
 ) -> YamlStream:
     expected = [
-        (path, without_request_ids(read_yaml(path, multi=True))) for path in references
+        (path, normalize_request_ids(read_yaml(path, multi=True)))
+        for path in references
     ]
     assert all(reference for _, reference in expected), "empty initialization reference"
     compacted = []
@@ -179,6 +215,7 @@ def compact_initializations(
                     .removesuffix(".direct")
                     .removeprefix(".")
                 )
+                variant = variant.replace(".win32", "").removeprefix("win32")
                 target = (
                     f"{variant + ' ' if variant else ''}MCP initialization for this execution mode"
                     if execution is not None
@@ -200,16 +237,19 @@ def check_recording(
     *,
     update: bool,
     execution: str | None = None,
+    platform_specific: bool = False,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
     initialization = snapshot == root / initialization_reference
-    mode_suffix = ".direct" if initialization and execution == "direct" else ""
+    mode_suffix = (f".{sys.platform}" if platform_specific else "") + (
+        ".direct" if initialization and execution == "direct" else ""
+    )
     primary = snapshot.with_suffix(f"{mode_suffix}.yaml")
     case = f"{suite_name}::{case_name}"
     if execution is not None:
         case += f"[{execution}]"
     if isinstance(recorded, TranscriptWithCompanions):
-        actual = without_request_ids(recorded.transcript)
+        actual = normalize_request_ids(recorded.transcript)
         companions = []
         for name, contents in recorded.companions.items():
             assert name and Path(name).name == name and not name.startswith("."), name
@@ -217,23 +257,43 @@ def check_recording(
             suffix = (
                 f".{name.removesuffix('.yaml')}{mode_suffix}.yaml"
                 if initialization
-                else f".{name}"
+                else f"{mode_suffix}.{name}"
             )
             companions.append((snapshot.with_suffix(suffix), contents))
     else:
-        actual = without_request_ids(recorded)
+        actual = normalize_request_ids(recorded)
         companions = []
     if not initialization:
         reference = root / initialization_reference
         references = [
             reference,
-            *sorted(reference.parent.glob(f"{reference.stem}.*.yaml")),
+            # Prefer the canonical direct handshake when variant schemas are equal.
+            *sorted(
+                reference.parent.glob(f"{reference.stem}.*.yaml"),
+                key=lambda path: (
+                    path
+                    != reference.with_suffix(
+                        ".win32.direct.yaml"
+                        if sys.platform == "win32"
+                        else ".direct.yaml"
+                    ),
+                    path,
+                ),
+            ),
         ]
         if execution is not None:
             references = [
                 path
                 for path in references
                 if path.stem.endswith(".direct") == (execution == "direct")
+            ]
+        if sys.platform != "win32" or any(
+            "win32" in path.stem.split(".") for path in references
+        ):
+            references = [
+                path
+                for path in references
+                if ("win32" in path.stem.split(".")) == (sys.platform == "win32")
             ]
         assert references, f"no initialization reference for {execution}"
         actual = compact_initializations(actual, references, execution=execution)
@@ -247,7 +307,7 @@ def check_recording(
             if initialization:
                 # These companions are MCP handshakes; other YAML companions
                 # can carry protocol IDs that must remain visible.
-                contents = without_request_ids(contents)
+                contents = normalize_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)
     return checked

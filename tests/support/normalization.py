@@ -1,3 +1,4 @@
+import json
 import re
 from textwrap import dedent
 
@@ -9,19 +10,26 @@ def code(source: str) -> str:
     return dedent(source).removeprefix("\n")
 
 
-def normalize_python_resolution_error(error: str, invalid: str | None = None) -> str:
+def normalize_python_resolution_error(
+    error: str, invalid: str | None = None, *, executable: str | None = None
+) -> str:
     error = normalize_python_traceback_paths(error)
-    error, python_patch = re.subn(
-        r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\))?(",)$',
-        r"\1.x\2\3",
-        error,
-        count=1,
-    )
-    assert python_patch == 1, error
+    if executable is not None:
+        selected = f'  "python": {json.dumps(executable)},'
+        assert error.count(selected) == 1, error
+        error = error.replace(selected, '  "python": "<running Python>",')
+    else:
+        error, python_patch = re.subn(
+            r'(?m)^(  "python": "\d+\.\d+)\.\d+( \(reticulate default\))?(",)$',
+            r"\1.XX\2\3",
+            error,
+            count=1,
+        )
+        assert python_patch == 1, error
     has_python_version = '\n  "python_version": [\n' in error
     error, python_version_patch = re.subn(
         r'(?m)^(  "python_version": \[\n    "\d+\.\d+)\.\d+("\n  \])$',
-        r"\1.x\2",
+        r"\1.XX\2",
         error,
         count=1,
     )
@@ -34,7 +42,7 @@ def normalize_python_resolution_error(error: str, invalid: str | None = None) ->
 def normalize_python_traceback_paths(error: str) -> str:
     replacements = (
         (
-            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/loader\.py")',
+            r'(?m)^(\s+File ")[^"\n]*/reticulate/python/(rpytools/(?:loader|call)\.py")',
             r"\1<reticulate>/python/\2",
         ),
         (
@@ -53,8 +61,23 @@ def normalize_python_traceback_paths(error: str) -> str:
     return error
 
 
+def normalize_onnx_device_probe(output: str) -> str:
+    # DuckDB's VSS extension probes host devices when ONNX Runtime loads.
+    # Azure's synthetic PCI paths can warn once per process, independently of
+    # the database operation. Keep every other diagnostic, including IO errors.
+    return re.sub(
+        r"(?m)^\x1b\[0;93m[^\n]+ \[W:onnxruntime:Default, "
+        r"device_discovery\.cc:\d+ GetPciBusId\] Skipping pci_bus_id for PCI path at "
+        r'"/sys/devices/[^"\n]+" because filename "[^"\n]+" did not match expected '
+        r"pattern of \[0-9a-f\]\+:\[0-9a-f\]\+:\[0-9a-f\]\+\[\.\]\[0-9a-f\]\+"
+        r"\x1b\[m\n",
+        "",
+        output,
+    )
+
+
 def normalize_duckdb_progress(client: McpClient) -> str:
-    output = last_tool_text(client)
+    output = normalize_onnx_device_probe(last_tool_text(client))
     sections = output.split("\r")
     assert all(
         not section.strip() or section.startswith("DuckDB progress:")

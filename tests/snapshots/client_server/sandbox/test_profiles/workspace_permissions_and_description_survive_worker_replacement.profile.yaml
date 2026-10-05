@@ -1,7 +1,7 @@
 ---
-native_profile: ':workspace'
+native_profile: :workspace
 fixed_workspace: true
-identical_launches: 5
+identical_launches: 4
 network_inherited: true
 workspace_options:
   exclude_tmpdir_env_var: true

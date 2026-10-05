@@ -14,7 +14,13 @@ class Execution:
 
     def serve(self, *arguments: str) -> tuple[str, ...]:
         assert self.name in {"direct", "sandbox"}, self.name
-        assert "--no-sandbox" not in arguments
+        assert "--no-sandbox" not in arguments, (
+            "execution.serve() selects --no-sandbox; pass only shared serve arguments"
+        )
+        assert self.name == "sandbox" or not any(
+            argument == "--writable-root" or argument.startswith("--writable-root=")
+            for argument in arguments
+        ), "--writable-root requires sandbox execution; use SANDBOXED.serve()"
         return (
             "serve",
             *(("--no-sandbox",) if self.name == "direct" else ()),

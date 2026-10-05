@@ -1,0 +1,50 @@
+---
+compute:
+  image: example
+  pull: sometimes
+error: >
+  .agents/console/config.yaml: target.compute: unknown variant
+  `sometimes`, expected one of `never`, `if_missing`, `always`
+---
+compute:
+  image: example
+  build:
+    context: .
+    dockerfile: Dockerfile
+error: >
+  .agents/console/config.yaml: target.compute.image and build are mutually
+  exclusive
+---
+compute:
+  build:
+    context: .
+error: |
+  .agents/console/config.yaml: target.compute: missing field `dockerfile`
+---
+compute:
+  build:
+    context: .
+    dockerfile: Dockerfile
+  pull: never
+error: |
+  .agents/console/config.yaml: target.compute.pull requires image, not build
+---
+compute: {}
+error: |
+  .agents/console/config.yaml: target.compute requires image or build
+---
+compute:
+  image: example
+  mounts:
+    - source: .
+      target: relative
+error: >
+  .agents/console/config.yaml: target.compute.mounts.target must be an
+  absolute container path
+---
+compute:
+  image: example
+  privileged: true
+error: >
+  .agents/console/config.yaml: target.compute: unknown field `privileged`,
+  expected one of `image`, `build`, `pull`, `mounts`, `user`
