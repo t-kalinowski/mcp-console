@@ -70,13 +70,12 @@ pub(crate) fn configure(
             }
         }
     }
+    std::fs::create_dir_all(&root)
+        .map_err(|error| format!("cannot create Console cache '{}': {error}", root.display()))?;
     let filesystem = resolver.entry("filesystem").or_insert_with(|| json!({}));
     if let Value::Object(filesystem) = filesystem
         && !filesystem.contains_key("entries")
     {
-        std::fs::create_dir_all(&root).map_err(|error| {
-            format!("cannot create Console cache '{}': {error}", root.display())
-        })?;
         filesystem.insert(
             "entries".into(),
             json!([

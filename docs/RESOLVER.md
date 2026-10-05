@@ -25,6 +25,7 @@ Downloaded Python installations, uv environments, IR libraries, reticulate tooli
 | Windows  | `%LOCALAPPDATA%/mcp-console/cache` |
 
 An absolute `XDG_CACHE_HOME` selects `<XDG_CACHE_HOME>/mcp-console` on any platform.
+This selection does not require `HOME`.
 The root uses the resolver's effective environment, before Console redirects the cache variables.
 On Windows, missing `LOCALAPPDATA` uses `USERPROFILE/AppData/Local` or the absolute `HOME` equivalent.
 Console captures this selection once for preparation and worker restarts.
@@ -46,6 +47,7 @@ cache: host
 ```
 
 Or launch with `mcp-console serve -c cache=host`.
+Custom workers that need no dependency preparation can use this setting to start without `HOME` or `XDG_CACHE_HOME`.
 This retains resolver sandboxing on macOS/Linux while restoring host cache selection and its default write grants.
 `serve --no-sandbox` defaults to host caches; `cache: console` with `--no-sandbox` is rejected to avoid executing Console cache artifacts in a session that disables sandboxing.
 The setting applies to local sessions.
@@ -66,6 +68,7 @@ Explicit `filesystem.entries` replaces all default entries; explicit `proxy.doma
 An empty domains mapping allows no proxy destinations.
 Literal paths are relative to the execution workspace; they do not expand `~` or environment variables.
 Default cache directories are created before launch.
+The Console cache root is created even with explicit filesystem entries.
 Create custom writable directories before launch on Linux, where absent roots cannot be bound.
 
 With `cache: console`, the default resolver write grant covers only the Console cache root, in addition to private temporary storage.
@@ -198,7 +201,7 @@ An explicit `IR_LIBRARY_ROOT` also receives writes.
 macOS additionally permits uv's legacy `$HOME/Library/Caches/uv` and `$HOME/Library/Application Support/uv` locations.
 Existing uv and reticulate cache selection remains unchanged in host cache mode.
 For uv grants, relative `XDG_CACHE_HOME` and `XDG_DATA_HOME` values are ignored in favor of the defaults beneath `HOME`.
-An absolute `HOME` is needed for resolver sandbox setup.
+Default host cache grants require an absolute `HOME`.
 Selected cache paths must be UTF-8, as required by the native policy protocol.
 Host cache selection lives in [`src/resolver/cache.rs`](../src/resolver/cache.rs), shared by resolver grants and captured DuckDB runtime paths.
 

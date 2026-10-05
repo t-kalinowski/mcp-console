@@ -44,12 +44,24 @@ CACHE_VARIABLES = (
 
 @requires(SANDBOX)
 def test_default_caches_are_console_owned(binary: Path) -> Transcript:
-    return cache_locations(binary, host=False)
+    return cache_locations(
+        binary, host=False, sources=("default", "platform", "isolated")
+    )
+
+
+@requires(SANDBOX)
+def test_absolute_xdg_cache_starts_without_home(binary: Path) -> Transcript:
+    return cache_locations(binary, host=False, sources=("xdg_without_home",))
+
+
+@requires(SANDBOX)
+def test_console_root_is_created_with_explicit_entries(binary: Path) -> Transcript:
+    return cache_locations(binary, host=False, sources=("explicit_entries",))
 
 
 @requires(SANDBOX)
 def test_host_cache_opt_out(binary: Path) -> Transcript:
-    return cache_locations(binary, host=True)
+    return cache_locations(binary, host=True, sources=("direct", "config", "cli"))
 
 
 def test_console_cache_rejects_unsandboxed_execution(binary: Path) -> Transcript:
@@ -174,10 +186,10 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
     ]
 
 
-def cache_locations(binary: Path, *, host: bool) -> Transcript:
-    for source in (
-        ("direct", "config", "cli") if host else ("default", "platform", "isolated")
-    ):
+def cache_locations(
+    binary: Path, *, host: bool, sources: tuple[str, ...]
+) -> Transcript:
+    for source in sources:
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             tools = root / "bin"
@@ -229,6 +241,24 @@ def cache_locations(binary: Path, *, host: bool) -> Transcript:
                     }
                     for policy in ("resolver", "sandbox")
                 }
+            if source == "xdg_without_home":
+                env.pop("HOME", None)
+            if source == "explicit_entries":
+                settings["resolver"] = {
+                    "filesystem": {
+                        "entries": [
+                            {
+                                "path": {"type": "special", "value": {"kind": "root"}},
+                                "access": "read",
+                            },
+                            {
+                                "path": {"type": "path", "path": str(console_root)},
+                                "access": "write",
+                            },
+                        ]
+                    }
+                }
+                assert not console_root.exists()
             config.write_text(json.dumps(settings))
             expected = {
                 name: env[name] if host else str(console_root)
@@ -273,6 +303,8 @@ def cache_locations(binary: Path, *, host: bool) -> Transcript:
                 arguments.extend(["-c", "cache=host"])
             with McpClient(binary, arguments, env, root) as client:
                 client.initialize_and_list_tools()
+                if not host:
+                    assert console_root.is_dir(), console_root
                 for restart in (False, True):
                     if restart:
                         config.write_text(
