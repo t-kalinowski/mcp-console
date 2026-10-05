@@ -6,7 +6,8 @@ import os
 import sys
 import tempfile
 import time
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -51,18 +52,27 @@ from boundaries.client_server._harness import (
 )
 
 
-def ansi_client(binary: Path, execution: Execution) -> McpClient:
+@contextmanager
+def ansi_client(binary: Path, execution: Execution) -> Iterator[McpClient]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
-    return McpClient(
-        binary,
-        execution.serve(
-            "--worker",
-            str(fixtures / "zod"),
-            "--relay",
-            str(fixtures / "server_relay/scripted_relay.py"),
-        ),
-        {**os.environ, "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_projection"},
-    )
+    with (
+        tempfile.TemporaryDirectory() as temporary,
+        McpClient(
+            binary,
+            execution.serve(
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "server_relay/scripted_relay.py"),
+            ),
+            {
+                **os.environ,
+                "TMPDIR": temporary,
+                "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_projection",
+            },
+        ) as client,
+    ):
+        yield client
 
 
 @requires(POSIX)
