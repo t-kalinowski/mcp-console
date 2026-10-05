@@ -2,8 +2,5 @@
 recorded_provider_bytes: 340000
 tool_calls: 0
 setup_cancelled: true
-exit_status: 1
-standard_error: >
-  Docker Sandbox setup cancelled; install standalone sbx v0.42.1 or newer
-  and complete Docker login and policy setup before starting Console; see
-  docs/DOCKER_SANDBOX.md
+exit_status: 0
+standard_error: ""

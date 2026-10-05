@@ -39,12 +39,20 @@ def uses_resolver_font_cache(binary: Path, *, with_r: bool) -> Transcript:
         )
         env["XDG_CACHE_HOME"] = str(root / "cache")
         env.pop("MPLCONFIGDIR", None)
-        cache = root / "cache/mcp-console/dependencies/matplotlib"
+        # Reuse the prepared host R environment; rebuilding unrelated R packages
+        # is independent of the shared font cache contract. The R-free case
+        # covers the default Console cache selection.
+        cache = root / (
+            "cache/matplotlib"
+            if with_r
+            else "cache/mcp-console/dependencies/matplotlib"
+        )
         env["MCP_CONSOLE_TEST_FONT_CACHE"] = str(cache)
         config = root / "matplotlibrc"
         config.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
         env["MATPLOTLIBRC"] = str(config)
-        with McpClient(binary, SANDBOXED.serve(), env, root) as client:
+        arguments = SANDBOXED.serve("-c", "cache=host") if with_r else SANDBOXED.serve()
+        with McpClient(binary, arguments, env, root) as client:
             client.initialize_and_list_tools()
             wait_for_worker_ready(client, "resolver font cache readiness")
             client.expect("[prepared]", requirements={"python": ["matplotlib"]})

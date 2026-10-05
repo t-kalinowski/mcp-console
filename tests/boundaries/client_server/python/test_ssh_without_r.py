@@ -23,6 +23,7 @@ from support.assertions import assert_result_content, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
@@ -56,6 +57,7 @@ def ssh_session(
         remote_bin = remote / "bin"
         local.mkdir()
         remote_bin.mkdir(parents=True)
+        retain_system_bwrap(remote_bin)
         for name, source in (("python3", sys.executable),):
             assert source is not None
             (remote_bin / name).symlink_to(source)

@@ -1,0 +1,4 @@
+---
+fault: setup stdin
+control_inferred: false
+provider_receipt: false

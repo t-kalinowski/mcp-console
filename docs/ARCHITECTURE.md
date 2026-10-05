@@ -175,6 +175,19 @@ SSH and compute generations carry explicit retirement receipts: transport exit a
 Unconfirmed retirement blocks replacement.
 Provider setup, command, and retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
 
+Target setup retains the first accepted interrupt or shutdown for its complete capture/probe operation.
+The I/O token only wakes work; a poll, read, or write failure does not create a requested control.
+Command I/O failures abort that command without closing the operation's control token, so required provider cleanup commands remain admissible.
+Completion closes control admission, so a later interrupt cannot target the completed setup or its successor.
+Each target CLI settles its child exit observation, input, and output tasks before setup publishes terminal evidence.
+Before provider launch, that evidence covers only local command retirement.
+After the probe owner launches, setup also requires the generation's provider receipt, including receipts carried with workload errors.
+Confirmed cleanup does not turn a workload or infrastructure failure into successful setup or suppress it during connection shutdown.
+Independent target CLI and probe-owner exit failures survive cancellation and valid provider retirement receipts; only the matching SIGKILL sent by command retirement is treated as its termination result.
+Connection closure that refuses the next preparation stage is separate from control of a completed operation.
+It permits a quiet exit only after the refused stage's cleanup is confirmed.
+Errors closing the preparation connection remain visible.
+
 Interrupt targets the active resolver, otherwise the current worker.
 It is not retried against a replacement.
 Each materializer invocation owns its child, non-reaping exit observer, stdin writer, and stdout/stderr readers.

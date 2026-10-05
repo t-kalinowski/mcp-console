@@ -101,11 +101,14 @@ pub(crate) struct Captured {
 }
 
 impl Captured {
-    pub fn capture(target: Target, cancel: &process::Cancel) -> Result<Self, String> {
+    pub fn capture(
+        target: Target,
+        cancel: &process::Cancel,
+    ) -> Result<Self, target_launch::SetupFailure> {
         let mut command = Command::new("sbx");
         command.arg("version");
-        let bytes = process::run(command, cancel, Some(Instant::now() + COMMAND_TIMEOUT), process::OutputMode::Data, None)
-            .map_err(|error| format!("{error}; install standalone sbx v0.42.1 or newer and complete Docker login and policy setup before starting Console; see docs/DOCKER_SANDBOX.md"))?;
+        let bytes = process::run_setup(command, cancel, Some(Instant::now() + COMMAND_TIMEOUT), process::OutputMode::Data, None)
+            .map_err(|error| error.context("install standalone sbx v0.42.1 or newer and complete Docker login and policy setup before starting Console; see docs/DOCKER_SANDBOX.md"))?;
         let version = String::from_utf8(bytes).map_err(|error| error.to_string())?;
         let release = version
             .strip_prefix("sbx version: v")
@@ -116,7 +119,8 @@ impl Captured {
             return Err(format!(
                 "Docker Sandbox requires sbx v0.42.1 or newer; received {}",
                 version.trim()
-            ));
+            )
+            .into());
         }
         Ok(Self {
             target,

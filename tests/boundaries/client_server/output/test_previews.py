@@ -114,18 +114,14 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
             source = code(f"""
                 cat("startup head\\n", strrep("s", 32768L), "\\nstartup tail\\n", sep = "")
                 ready <- fifo(
-                  {
-                    json.dumps(str(reached.path))
-                  },
+                  {json.dumps(str(reached.path))},
                   "wb",
                   blocking = TRUE
                 )
                 writeBin(charToRaw("1"), ready)
                 close(ready)
                 gate <- fifo(
-                  {
-                    json.dumps(str(release.path))
-                  },
+                  {json.dumps(str(release.path))},
                   "rb",
                   blocking = TRUE
                 )

@@ -1,60 +1,79 @@
 ---
 rejected_before_worker_startup: workspace
 container_absent: true
-stderr: |
+startup: |-
   cannot access remote target.workspace '/missing-workspace-must-not-be-created': No such file or directory (os error 2)
   cannot access remote target.workspace '/missing-workspace-must-not-be-created': No such file or directory (os error 2)
+stderr: >
+  cannot access remote target.workspace
+  '/missing-workspace-must-not-be-created': No such file or directory (os
+  error 2)
 ---
 rejected_before_worker_startup: mount
 container_absent: true
-stderr: |
+startup: |-
   Docker command failed with exit status: 1: Error response from daemon: invalid mount config for type "bind": bind source path does not exist: <controller>/missing-bind
   ; Docker container '<owned container>' (creation ID unavailable) retirement is unconfirmed: container creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation
+  Docker command failed with exit status: 1
+stderr: |
   Docker command failed with exit status: 1
 ---
 rejected_before_worker_startup: runtime
 container_absent: true
-stderr: |
+startup: |-
   prepared target RETICULATE_PYTHON validation failed: selected Python executable is not an absolute file: /missing-python
   remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+stderr: |
   remote launcher exited with exit status: 1
 ---
 rejected_before_worker_startup: python_executable
 container_absent: true
-stderr: |
+startup: |-
   prepared target RETICULATE_PYTHON validation failed: failed to inspect selected Python executable `/etc/hostname`: Permission denied (os error 13)
   remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+stderr: |
   remote launcher exited with exit status: 1
 ---
 rejected_before_worker_startup: python_version
 container_absent: true
-stderr: |
+startup: |-
   prepared target RETICULATE_PYTHON validation failed: selected Python inspection failed (exit status: 1): Traceback (most recent call last):
     File "/python-version", line 7, in <module>
       exec(sys.argv[sys.argv.index("-c") + 1])
-    File "<string>", line 98, in <module>
-    File "<string>", line 15, in describe
+    File "<string>", line 145, in <module>
+    File "<string>", line 19, in describe
   RuntimeError: MCP Console requires Python 3.10 or later
 
   remote launcher exited with exit status: 1
   remote launcher exited with exit status: 1
+stderr: |
+  remote launcher exited with exit status: 1
 ---
 rejected_before_worker_startup: compatibility
 container_absent: true
+startup: >-
+  incompatible Docker bootstrap: expected protocol 11, Console 0.0.4;
+  received protocol 999, Console incompatible
 stderr: >
-  incompatible Docker bootstrap: expected protocol 7, Console 0.0.4;
+  incompatible Docker bootstrap: expected protocol 11, Console 0.0.4;
   received protocol 999, Console incompatible
 ---
 rejected_before_worker_startup: native_environment
 container_absent: true
-stderr: |
+startup: |-
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 89)
   remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+stderr: |
   remote launcher exited with exit status: 1
 ---
 rejected_before_worker_startup: native_policy
 container_absent: true
-stderr: |
+startup: |-
   mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 51)
   remote launcher exited with exit status: 1
+  remote launcher exited with exit status: 1
+stderr: |
   remote launcher exited with exit status: 1

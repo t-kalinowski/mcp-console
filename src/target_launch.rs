@@ -164,6 +164,74 @@ impl Retirement {
     }
 }
 
+/// A setup failure retains an operation diagnostic separately from a requested
+/// control. A control-only failure has no operation error; its cause belongs to
+/// the setup owner, which formats it after retirement.
+#[derive(Clone)]
+pub(crate) struct SetupFailure {
+    pub error: Option<String>,
+    context: Option<String>,
+}
+
+impl SetupFailure {
+    pub fn controlled() -> Self {
+        Self {
+            error: None,
+            context: None,
+        }
+    }
+
+    pub fn context(mut self, context: &str) -> Self {
+        self.context = Some(context.into());
+        self
+    }
+
+    pub fn message(
+        self,
+        protocol: Protocol,
+        cause: Option<crate::resolver::ResolverControlOutcome>,
+    ) -> String {
+        let control = cause.map(|cause| {
+            format!(
+                "{} setup {}",
+                protocol.0,
+                match cause {
+                    crate::resolver::ResolverControlOutcome::Interrupted => "interrupted",
+                    crate::resolver::ResolverControlOutcome::Cancelled => "cancelled",
+                }
+            )
+        });
+        // Avoid repeating a provider's identical control text. Attribution was
+        // already settled by the owner; this is diagnostic formatting only.
+        let control = control.filter(|control| {
+            self.error
+                .as_ref()
+                .is_none_or(|error| !error.starts_with(control))
+        });
+        control
+            .into_iter()
+            .chain(self.error)
+            .chain(self.context)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+}
+
+impl From<String> for SetupFailure {
+    fn from(error: String) -> Self {
+        Self {
+            error: Some(error),
+            context: None,
+        }
+    }
+}
+
+impl From<&str> for SetupFailure {
+    fn from(error: &str) -> Self {
+        error.to_string().into()
+    }
+}
+
 pub(crate) struct Output<R> {
     reader: R,
     protocol: Protocol,
@@ -209,6 +277,10 @@ impl<R: Read> Output<R> {
         self.runtime
             .take()
             .ok_or("prepared runtime probe returned no runtime result".into())
+    }
+
+    pub fn retirement_received(&self) -> bool {
+        self.finished
     }
 
     fn next_frame(&mut self) -> io::Result<bool> {

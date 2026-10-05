@@ -89,11 +89,14 @@ def test_native_selection_is_enforced_or_rejected(binary: Path) -> Transcript:
                 )
                 client.finish()
             else:
-                client.startup_error()
+                error = client.startup_error()
+                assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
                 client.stdin.close()
                 assert client.stdout.read(timeout=30) == ""
-                error = client.stderr.read(timeout=30)
-                assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
+                assert (
+                    client.stderr.read(timeout=30)
+                    == "remote launcher exited with exit status: 1\n"
+                )
                 assert client.process.wait(timeout=5) != 0
                 print(error, file=sys.stderr, end="")
         for call in peer_calls(root):
@@ -193,7 +196,7 @@ def test_delegated_environment_and_no_sandbox(binary: Path) -> Transcript:
                     client,
                     """No module named 'mcpConsoleDefinitelyMissingPackage'.
 
-MCP Console dynamic environment resolution is unavailable for Docker targets. Install the distribution in the image and start a new server session.
+automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session
 """,
                     "missing preinstalled Python package",
                     # fmt: python
@@ -309,10 +312,14 @@ def test_explicit_proxy_uses_native_setup(binary: Path) -> Transcript:
                 )
                 client.finish()
             else:
+                error = last_result_text(client)
+                assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
                 client.stdin.close()
                 assert client.stdout.read(timeout=15) == ""
-                error = client.stderr.read(timeout=15)
-                assert "bwrap:" in error or "mcp-console-sandbox:" in error, error
+                assert (
+                    client.stderr.read(timeout=15)
+                    == "remote launcher exited with exit status: 1\n"
+                )
                 assert client.process.wait(timeout=5) != 0
                 print(error, file=sys.stderr, end="")
         return [

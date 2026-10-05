@@ -55,6 +55,8 @@ signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 if args == ["version"]:
+    if mode == "version-signal":
+        os.kill(os.getpid(), int((root / "version-signal").read_text()))
     if mode == "diagnostics-gate":
         print("provider startup\n" * 20000, end="", file=sys.stderr, flush=True)
         gate()
@@ -264,14 +266,24 @@ elif args[0] == "exec":
             3,
             {
                 "confirmed": mode != "probe-unconfirmed",
-                "error": "probe validation failed" if mode == "probe-failed" else None,
+                "error": "probe validation failed"
+                if mode in ("probe-failed", "probe-failed-gate")
+                else None,
             },
         )
+        if mode == "probe-failed-gate":
+            gate()
     else:
         frame(2, {"kind": "ready"})
         initializing = mode == "bootstrap-input"
         if initializing:
+            assert (root / "prompt-release").is_fifo()
+            with (root / "prompt-release").open("rb", buffering=0) as stream:
+                assert stream.read(1) == b"1"
             frame(2, {"kind": "input_requested", "prompt": "target startup> "})
+            assert (root / "prompt-ready").is_fifo()
+            with (root / "prompt-ready").open("wb", buffering=0) as stream:
+                stream.write(b"1")
         else:
             frame(2, {"kind": "runtime_initialized", "interrupted": False})
         for line in source:
@@ -299,7 +311,26 @@ elif args[0] == "exec":
                     for _ in range(2048):
                         frame(2, {"kind": "console_output", "data": "x" * 32768})
                 frame(2, {"kind": "console_output", "data": "provider peer\n"})
+                if mode != "interrupt-cell":
+                    frame(2, {"kind": "completed"})
+            elif command["kind"] == "interrupt":
+                assert mode == "interrupt-cell", command
+                frame(
+                    2,
+                    {
+                        "kind": "interrupt_result",
+                        "request_id": command["request_id"],
+                        "error": None,
+                    },
+                )
+                frame(2, {"kind": "console_output", "data": "provider interrupted\n"})
                 frame(2, {"kind": "completed"})
+            elif command["kind"] == "interrupt":
+                with (root / "interrupts").open("a") as stream:
+                    stream.write(json.dumps(command) + "\n")
+                frame(
+                    2, {"kind": "interrupt_result", "request_id": command["request_id"]}
+                )
             elif command["kind"] == "shutdown":
                 frame(2, {"kind": "shutdown_started"})
                 frame(2, {"kind": "worker_exited", "code": 0})

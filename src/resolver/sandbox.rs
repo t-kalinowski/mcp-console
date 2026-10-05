@@ -50,14 +50,13 @@ fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String>
             })];
             for path in caches {
                 let path = workspace.join(path);
-                let path_text = path.to_str().ok_or("resolver policy paths must be UTF-8")?;
+                let grants = super::cache::writable_cache_entries(&path)?;
                 // Linux cannot bind an absent writable root. Prepare default
                 // cache directories on the host, including on cold starts.
                 std::fs::create_dir_all(&path).map_err(|error| {
                     format!("cannot create resolver cache '{}': {error}", path.display())
                 })?;
-                entries
-                    .push(json!({"path": {"type": "path", "path": path_text}, "access": "write"}));
+                entries.extend(grants);
             }
             filesystem.insert("entries".into(), entries.into());
         }
