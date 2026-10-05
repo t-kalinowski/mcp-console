@@ -23,8 +23,6 @@ pub(super) struct CommandReader {
 
 impl CommandReader {
     pub(super) fn start(
-        sideband: mpsc::Sender<SidebandWrite>,
-        stdin: mpsc::Sender<StdinWrite>,
         controls: mpsc::Sender<Control>,
         failures: FailureReporter,
     ) -> Result<Self, String> {
@@ -74,22 +72,10 @@ impl CommandReader {
                             return;
                         }
                     };
-                    let message = match Operation::from(command) {
-                        Operation::Worker(message) => message,
-                        Operation::Stdin { data } => {
-                            if stdin.send(StdinWrite::Write(data.into_bytes())).is_err() {
-                                failures.report("worker stdin writer stopped".to_string());
-                                return;
-                            }
-                            continue;
-                        }
-                        Operation::Interrupt { request_id } => {
-                            if controls.send(Control::Interrupt { request_id }).is_err() {
-                                failures.report("relay supervisor stopped".to_string());
-                                return;
-                            }
-                            continue;
-                        }
+                    let control = match Operation::from(command) {
+                        Operation::Worker(message) => Control::Worker(message),
+                        Operation::Stdin { data } => Control::Stdin { data },
+                        Operation::Interrupt { request_id } => Control::Interrupt { request_id },
                         Operation::Shutdown { grace_millis } => {
                             let deadline = Instant::now() + Duration::from_millis(grace_millis);
                             if controls.send(Control::Shutdown { deadline }).is_err() {
@@ -99,8 +85,8 @@ impl CommandReader {
                             return;
                         }
                     };
-                    if sideband.send(SidebandWrite::Message(message)).is_err() {
-                        failures.report("worker sideband writer stopped".to_string());
+                    if controls.send(control).is_err() {
+                        failures.report("relay supervisor stopped".to_string());
                         return;
                     }
                 }

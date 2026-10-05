@@ -329,19 +329,33 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
         # fmt: python
         worker = code(r"""
             import os
+            import sys
 
             os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
+            with open(os.environ["TEST_WORKER_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            sys.stdin.buffer.read()
             """)
-        result = subprocess.run(
+        ready = FifoCheckpoint.create(root / "worker-ready")
+        environment["TEST_WORKER_READY"] = str(ready.path)
+        process = subprocess.Popen(
             [binary, "worker-relay", sys.executable, "-c", worker],
-            input="",
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             env=environment,
-            timeout=10,
         )
+        try:
+            ready.wait("worker initialized before controller EOF")
+            stdout, stderr = process.communicate(timeout=10)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+            ready.close()
         completed.wait("retirement clock advanced after final output")
-        events = [json.loads(line) for line in result.stdout.splitlines()]
+        events = [json.loads(line) for line in stdout.splitlines()]
         assert events == [
             {"kind": "ready"},
             {"kind": "stdout_closed"},
@@ -349,11 +363,9 @@ def test_succeeds_when_deadline_passes_after_final_output(binary: Path) -> Trans
             {"kind": "worker_sideband_closed"},
             {"kind": "worker_exited", "code": 0},
         ], events
-        assert result.returncode == 0, result.stderr
-        assert result.stderr == "", result.stderr
-        return [
-            {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
-        ]
+        assert process.returncode == 0, stderr
+        assert stderr == "", stderr
+        return [{"events": events, "exit_code": process.returncode, "stderr": stderr}]
 
 
 @requires(WORKER, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -366,23 +378,36 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
         # fmt: python
         worker = code(r"""
             import os
+            import sys
 
             os.write(int(os.environ["MCP_CONSOLE_SIDEBAND_WRITE_FD"]), b'{"kind":"ready"}\n')
+            with open(os.environ["TEST_WORKER_READY"], "wb", buffering=0) as ready:
+                ready.write(b"1")
+            sys.stdin.buffer.read()
             """)
         destination = root / "relay.jsonl"
+        ready = FifoCheckpoint.create(root / "worker-ready")
+        environment["TEST_WORKER_READY"] = str(ready.path)
         with destination.open("w") as output:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 [binary, "worker-relay", sys.executable, "-c", worker],
-                input="",
+                stdin=subprocess.PIPE,
                 stdout=output,
                 stderr=subprocess.PIPE,
                 text=True,
                 env=environment,
-                timeout=10,
             )
+            try:
+                ready.wait("worker initialized before controller EOF")
+                _, stderr = process.communicate(timeout=10)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=10)
+                ready.close()
         completed.wait("retirement clock advanced before regular-file output")
-        assert result.returncode == 0, result.stderr
-        assert result.stderr == "", result.stderr
+        assert process.returncode == 0, stderr
+        assert stderr == "", stderr
         events = [json.loads(line) for line in destination.read_text().splitlines()]
         assert events == [
             {"kind": "ready"},
@@ -391,9 +416,7 @@ def test_writes_regular_file_after_retirement_deadline(binary: Path) -> Transcri
             {"kind": "worker_sideband_closed"},
             {"kind": "worker_exited", "code": 0},
         ], events
-        return [
-            {"events": events, "exit_code": result.returncode, "stderr": result.stderr}
-        ]
+        return [{"events": events, "exit_code": process.returncode, "stderr": stderr}]
 
 
 if __name__ == "__main__":

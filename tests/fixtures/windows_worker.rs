@@ -112,6 +112,9 @@ fn main() -> io::Result<()> {
     if scenario.starts_with("framing_") {
         return windows_framing::run(&scenario, read, write, ready);
     }
+    if scenario.starts_with("retirement_") {
+        return retirement(&scenario, read, write, ready);
+    }
     drop(ready);
     if scenario == "closed_stdin" {
         assert_eq!(unsafe { _close(0) }, 0);
@@ -176,6 +179,65 @@ fn main() -> io::Result<()> {
                 return Ok(());
             }
             _ => {}
+        }
+    }
+}
+
+fn retirement(
+    scenario: &str,
+    read: *mut c_void,
+    write: *mut c_void,
+    ready: TcpStream,
+) -> io::Result<()> {
+    let marker = std::path::PathBuf::from(std::env::var("TEST_DISPATCHED").unwrap());
+    let sideband_eof = scenario == "retirement_sideband";
+    let mut stdin_ready = ready.try_clone()?;
+    let stdin_marker = marker.with_extension("stdin");
+    let (stdin_closed_tx, stdin_closed_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        io::stdin().read_to_end(&mut bytes).unwrap();
+        std::fs::write(stdin_marker, bytes).unwrap();
+        if sideband_eof {
+            writeln!(stdin_ready, "stdin closed").unwrap();
+            stdin_closed_tx.send(()).unwrap();
+        }
+    });
+    let mut ready = ready;
+    let mut writer = Some(unsafe { OwnedHandle::from_raw_handle(write) });
+    send(write, "{\"kind\":\"ready\"}\n")?;
+    let mut journal = std::fs::File::create(marker)?;
+    loop {
+        let mut command = Vec::new();
+        loop {
+            let mut byte = [0];
+            if transfer(read, &mut byte, false)? == 0 {
+                std::thread::park();
+            }
+            command.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        journal.write_all(&command)?;
+        let command = String::from_utf8(command).unwrap();
+        if scenario == "retirement_backpressure" && command.contains("evaluate") {
+            // Keep the outer writer inside one frame while the sideband reader
+            // waits for ordinary event capacity. Neither endpoint closes.
+            let data = "x".repeat(1024 * 1024);
+            send(write, &format!("{{\"kind\":\"console_output\",\"data\":\"{data}\"}}\n"))?;
+            loop {
+                send(write, "{\"kind\":\"console_output\",\"data\":\"blocked\"}\n")?;
+            }
+        } else if sideband_eof && command.contains("evaluate") {
+            writer.take();
+        } else if command.trim() == "{\"kind\":\"shutdown\"}" {
+            if sideband_eof {
+                // Retirement closes stdin and sends shutdown concurrently.
+                // Publish the EOF checkpoint before acknowledging shutdown.
+                stdin_closed_rx.recv().unwrap();
+            }
+            writeln!(ready, "shutdown")?;
         }
     }
 }
