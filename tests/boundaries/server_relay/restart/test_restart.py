@@ -25,8 +25,10 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
+from support.requirements import POSIX, requires
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     binary: Path,
@@ -88,6 +90,7 @@ def test_controlled_restart_routes_stdin_and_cell_to_replacement(
     return old_transcript + replacement_transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement_idle(
     binary: Path,
@@ -115,6 +118,7 @@ def test_controlled_restart_with_requirements_and_stdin_only_reports_replacement
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_restart_resolves_requirements_before_replacement_and_timeout(
     binary: Path,
@@ -270,6 +274,7 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
     return old_transcript + replacement_transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_restart_requirement_failure_preserves_old_worker(
     binary: Path,

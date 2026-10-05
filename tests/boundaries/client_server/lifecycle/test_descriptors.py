@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import fcntl
 import errno
 import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+if os.name == "posix":
+    import fcntl
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 

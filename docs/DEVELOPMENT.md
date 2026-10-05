@@ -140,23 +140,27 @@ On Windows, it uses the previously staged companion, performs the same source an
 `--quick` is an alias for this default, not a narrower check.
 
 The full gate adds platform-applicable repository-tooling self-tests, all capability-applicable acceptance cases, and source/wheel installation checks.
-Windows runs native workflow, formatting, and development-report regressions; Unix transcript/provider and release-staging self-tests remain Unix coverage.
+Windows also runs portable transcript-runner, MCP-client, and release-manifest regressions.
+Unix provider and release-staging fixtures retain their declared platform requirements.
 Installation checks run last because Unix checks temporarily replace the application `target` directory.
 Windows builds a wheel and exercises wheel and source installs in a temporary virtualenv without installing into the caller's Python environment.
 CI runs the full profiles and is the comprehensive merge gate.
 Run the owning focused tests when changing tooling; the default gate does not cover all tooling regressions.
 
 On macOS/Linux, `scripts/test` without selectors runs the smoke profile in [`_profiles.py`](../tests/boundaries/_profiles.py); `--full` runs all applicable cases.
-On Windows, the default, `--quick`, and `--full` run the native suite; selectors use `CLASS[.CASE]`, for example `WindowsConsole.test_python_without_r`.
+On Windows, the default and `--quick` run the native suite; selectors use `CLASS[.CASE]`, for example `WindowsConsole.test_python_without_r`.
+An unscoped `--full` also runs all applicable shared boundary cases.
+Boundary selectors use the same `BOUNDARY/SUITE::CASE` syntax on every platform.
 Both platforms support `--list` and `--locate` without building or acquiring checkout ownership.
-Windows native cases use unittest assertions rather than transcript snapshots; `--update`, `--jobs`, and transcript timeout flags are not Windows options.
+Windows native cases use unittest assertions.
+Shared boundary cases support `--update`, `--jobs`, and transcript deadlines on Windows; these options require a boundary selector or an unscoped `--full`.
 Explicit selectors keep their scope with either profile.
 Only an unscoped full run audits orphan snapshots, and only a successful full update removes them.
 Focused updates preserve unselected snapshots.
 
 Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the checkout build for transcripts; sandboxed cases still need its companion bundle.
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
-The default concurrency is twice the logical CPU count, with a minimum of four cases.
+The default concurrency is twice the logical CPU count, with a minimum of four cases; Windows caps this default at six.
 
 ## Find the public test
 

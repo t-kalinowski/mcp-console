@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import platform_snapshots
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
@@ -200,6 +201,7 @@ def test_native_validation_preserves_protocol_availability(binary: Path) -> Tran
     return transcript
 
 
+@platform_snapshots("win32")
 def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     cases = (
         ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
@@ -258,6 +260,7 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     return transcript
 
 
+@platform_snapshots("win32")
 def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcript:
     transcript = []
     with TemporaryDirectory() as directory:

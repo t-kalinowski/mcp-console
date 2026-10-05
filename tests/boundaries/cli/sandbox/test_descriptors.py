@@ -1,12 +1,15 @@
 #!/usr/bin/env -S uv run --script
 
-import fcntl
 import os
 import select
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+if os.name == "posix":
+    import fcntl
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 

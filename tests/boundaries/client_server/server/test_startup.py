@@ -14,13 +14,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R, requires
 from support.checkpoints import FifoCheckpoint
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.r import r_test_environment
-from support.requirements import R, requires
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
@@ -95,6 +96,7 @@ def gated_discovery(
             yield client, release
 
 
+@requires(POSIX)
 def test_closed_input_cancels_discovery_with_blocked_stdout(binary: Path) -> Transcript:
     with discovery_environment() as (environment, reached, release, alive):
         read_output, write_output = os.pipe()
@@ -156,6 +158,7 @@ def test_closed_input_cancels_discovery_with_blocked_stdout(binary: Path) -> Tra
     return [{"closed_input_retired_discovery_with_blocked_stdout": True}]
 
 
+@requires(POSIX)
 def test_closed_input_before_handshake_reports_cancelled_preparation(
     binary: Path,
 ) -> Transcript:
@@ -168,6 +171,7 @@ def test_closed_input_before_handshake_reports_cancelled_preparation(
         return [{"stderr": errors}]
 
 
+@requires(POSIX)
 def test_initializes_while_runtime_discovery_is_blocked(binary: Path) -> Transcript:
     with gated_discovery(binary) as (client, _):
         client.initialize_and_list_tools()
@@ -175,6 +179,7 @@ def test_initializes_while_runtime_discovery_is_blocked(binary: Path) -> Transcr
         return client.finish()
 
 
+@requires(POSIX)
 def test_reports_discovery_failure_without_losing_mcp(binary: Path) -> Transcript:
     with gated_discovery(binary) as (client, release):
         client.initialize_and_list_tools()
@@ -195,6 +200,7 @@ def test_reports_discovery_failure_without_losing_mcp(binary: Path) -> Transcrip
         return transcript + [{"stderr": errors}]
 
 
+@requires(POSIX)
 def test_failed_handshake_cancels_discovery_with_input_open(binary: Path) -> Transcript:
     with gated_discovery(binary) as (client, _):
         client.start_request("tools/list")
@@ -204,6 +210,7 @@ def test_failed_handshake_cancels_discovery_with_input_open(binary: Path) -> Tra
         return [{"stderr": errors, "input_remained_open": not client.stdin.closed}]
 
 
+@requires(POSIX)
 def test_bounds_discovery_failure_during_requirement_inspection(
     binary: Path,
 ) -> Transcript:
@@ -230,6 +237,7 @@ def test_bounds_discovery_failure_during_requirement_inspection(
             return [{"inspection_error": "bounded to 8 KiB", "isError": True}]
 
 
+@requires(POSIX)
 def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transcript:
     with gated_discovery(binary) as (client, release):
         client.initialize_and_list_tools()
@@ -276,6 +284,7 @@ def wait_for_send_admission(client: McpClient) -> None:
     client.transcript[first_poll:] = [client.transcript[-1]]
 
 
+@requires(POSIX)
 @requires(R)
 def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
@@ -314,6 +323,7 @@ def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript
         return client.finish()
 
 
+@requires(POSIX)
 @requires(R)
 def test_cancelled_wait_preserves_admitted_cell_after_discovery(
     binary: Path,
@@ -344,6 +354,7 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
         return client.finish()
 
 
+@platform_snapshots("win32")
 def test_first_send_uses_background_runtime(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment = os.environ.copy()

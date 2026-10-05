@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R_EVENT_LOOP, command, requires
 from support.assertions import (
     last_result_text,
     release_worker_callback_gate,
@@ -19,7 +20,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import command, requires
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     checkpoint_uv_environment,
     ir_requirements,
@@ -36,6 +37,7 @@ def named_requirement_error(requirement: str) -> str:
     )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_unsupported_ir_version(
     binary: Path, execution: Execution
@@ -90,6 +92,7 @@ def test_rejects_unsupported_ir_version(
 
 
 @executions(DIRECT, SANDBOXED)
+@platform_snapshots("win32")
 def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -127,7 +130,8 @@ def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Tra
         progress, diagnostic_start, diagnostic = error.partition(
             "Error: IR_NO_LOCAL_SOURCES is set"
         )
-        failure_prefix = "R package resolution failed with exit status: 1: "
+        status = "exit code" if os.name == "nt" else "exit status"
+        failure_prefix = f"R package resolution failed with {status}: 1: "
         assert progress.startswith(failure_prefix), error
         assert diagnostic_start and "Resolving" in progress, error
         # `ir` may load cached metadata or refresh it before the same rejection.
@@ -298,6 +302,7 @@ def test_prepares_r_requirements_after_worker_startup(
     return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_stops_live_preparation_for_idle_callback_input(
     binary: Path, execution: Execution
@@ -359,6 +364,7 @@ def test_stops_live_preparation_for_idle_callback_input(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"), command("uv"))
 def test_failed_mixed_preparation_retains_live_python_activation(
@@ -497,6 +503,7 @@ def test_failed_late_mixed_preparation_preserves_worker(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_evaluates_with_default_managed_r(
@@ -583,6 +590,7 @@ def test_evaluates_with_default_managed_r(
 
 
 @executions(DIRECT, SANDBOXED)
+@platform_snapshots("win32")
 def test_prepares_initial_r_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -638,15 +646,15 @@ def test_prepares_initial_r_requirements(
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         error = result["content"][0]["text"]
-        assert error.startswith(
-            "R package resolution failed with exit status: 1: Error:"
-        ), error
+        status = "exit code" if os.name == "nt" else "exit status"
+        failure_prefix = f"R package resolution failed with {status}: 1: "
+        assert error.startswith(failure_prefix + "Error:"), error
         assert f"Cannot parse package: {invalid_r}." in error, error
-        assert error.endswith("Execution halted\nir: dependency resolution failed"), (
-            error
-        )
-        assert error == (
-            f"R package resolution failed with exit status: 1: {reference.stderr.strip()}"
+        assert error.replace("\r\n", "\n").endswith(
+            "Execution halted\nir: dependency resolution failed"
+        ), error
+        assert error.replace("\r\n", "\n") == (
+            f"{failure_prefix}{reference.stderr.strip()}"
         ), error
         # Keep the complete diagnostic; `ir` releases change pkg_deps arguments.
         pak_call = next(

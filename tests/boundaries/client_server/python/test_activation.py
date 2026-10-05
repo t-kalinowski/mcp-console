@@ -18,6 +18,7 @@ from support.normalization import code
 from support.processes import host_process_id, process_exists
 from support.r import r_test_environment
 from support.suites import run_this_suite
+from support.requirements import POSIX, SQL, requires
 
 
 def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[str, str]:
@@ -143,6 +144,7 @@ def write_distribution(root: Path, name: str, module: str, version: str) -> None
     (metadata / "RECORD").write_text(f"{source.as_posix()},,\n")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_removes_previous_environment_pth_paths(
     binary: Path, execution: Execution
@@ -182,6 +184,7 @@ def test_removes_previous_environment_pth_paths(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_site_hooks_observe_candidate_identity(
     binary: Path, execution: Execution
@@ -218,6 +221,7 @@ def test_site_hooks_observe_candidate_identity(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rolls_back_interrupted_python_site_activation(
     binary: Path, execution: Execution
@@ -275,6 +279,7 @@ def test_rolls_back_interrupted_python_site_activation(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_r_interrupt_during_python_site_activation(
     binary: Path, execution: Execution
@@ -350,6 +355,7 @@ def test_preserves_r_interrupt_during_python_site_activation(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_publication_after_committing_python(
     binary: Path, execution: Execution
@@ -401,6 +407,7 @@ def test_interrupts_publication_after_committing_python(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_suspended_r_interrupt_during_publication(
     binary: Path, execution: Execution
@@ -454,6 +461,7 @@ def test_preserves_suspended_r_interrupt_during_publication(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_replacement_of_loaded_distribution(
     binary: Path, execution: Execution
@@ -517,6 +525,7 @@ def test_rejects_replacement_of_loaded_distribution(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_allows_changes_to_unloaded_namespace_distributions(
     binary: Path, execution: Execution
@@ -695,6 +704,7 @@ def cancelled_candidate_probe(
                 checkpoint.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_cancels_candidate_probe_and_reaps_its_child(
     binary: Path, execution: Execution
@@ -702,11 +712,13 @@ def test_cancels_candidate_probe_and_reaps_its_child(
     return cancelled_candidate_probe(binary, execution, "interrupt")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restarts_during_candidate_probe(binary: Path, execution: Execution) -> list:
     return cancelled_candidate_probe(binary, execution, "restart")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_r_interrupt_during_candidate_probe(
     binary: Path, execution: Execution
@@ -714,6 +726,7 @@ def test_preserves_r_interrupt_during_candidate_probe(
     return cancelled_candidate_probe(binary, execution, "interrupt", r_transition=True)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_previous_candidate_after_lazy_projection_failure(
     binary: Path, execution: Execution
@@ -775,6 +788,7 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_with_prepared_candidate_without_r(
     binary: Path, execution: Execution
@@ -879,6 +893,7 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
             release.close()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_probe_with_live_r_and_sql(
     binary: Path, execution: Execution

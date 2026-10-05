@@ -15,7 +15,7 @@ from support.normalization import code
 from support.processes import capture_process_identity, host_process_id, live_processes
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import SANDBOX, WORKER, requires
+from support.requirements import POSIX, SANDBOX, WORKER, requires
 from support.ssh import bootstrap, read_frame
 from support.suites import run_this_suite
 
@@ -143,6 +143,7 @@ def test_connection_closure_with_backpressured_output(binary: Path) -> Transcrip
     return _connection_closed(binary, before_ready=False)
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_direct_connection_closure_with_backpressured_output(
     binary: Path,

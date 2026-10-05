@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import array
-import fcntl
 import json
 import os
 import select
@@ -15,11 +14,15 @@ import socket
 import subprocess
 import sys
 import tempfile
-import termios
 import threading
 import time
 from pathlib import Path
 from typing import Self
+
+if os.name == "posix":
+    import fcntl
+    import termios
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 

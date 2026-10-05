@@ -33,9 +33,18 @@ pub(super) fn initialize_r(
         .set((r_home, user_home))
         .map_err(|_| io::Error::other("R startup paths were already initialized"))?;
     let (r_home, user_home) = STARTUP_PATHS.get().expect("R startup paths initialized");
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")?;
+    let set_arguments = unsafe {
+        *library.get::<unsafe extern "C-unwind" fn(c_int, *mut *mut c_char)>(
+            b"R_set_command_line_arguments\0",
+        )?
+    };
     unsafe {
         libr::set(libr::R_SignalHandlers, 0);
         libr::cmdlineoptions(1, arguments.as_mut_ptr());
+        // cmdlineoptions records only its minimal bootstrap arguments. Preserve
+        // the full interactive identity before common option parsing mutates it.
+        set_arguments(arguments.len() as c_int, arguments.as_mut_ptr());
         let mut params = MaybeUninit::<libr::structRstart>::uninit();
         libr::R_DefParamsEx(params.as_mut_ptr(), 0);
         let mut params = params.assume_init();
@@ -43,6 +52,8 @@ pub(super) fn initialize_r(
         libr::R_common_command_line(&mut count, arguments.as_mut_ptr(), &mut params);
         params.R_Interactive = 1;
         params.CharacterMode = libr::UImode_RGui;
+        // Console transports plain UTF-8, not RGui's marked UTF-8 spans.
+        params.EmitEmbeddedUTF8 = libr::Rboolean_FALSE;
         params.LoadInitFile = libr::Rboolean_FALSE;
         params.LoadSiteFile = libr::Rboolean_FALSE;
         params.rhome = r_home.as_ptr().cast_mut();

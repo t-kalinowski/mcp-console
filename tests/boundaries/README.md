@@ -50,7 +50,8 @@ Cases run in separate processes.
 `--jobs N` controls concurrency; `--timeout
 SECONDS` changes the default 600-second case deadline, including snapshot work.
 On cancellation or timeout, the supervisor requests cleanup and allows 15 seconds before forcibly killing the case.
-Fixtures must retire their own subprocesses; killing a case cannot guarantee descendant cleanup.
+Fixtures must retire their own subprocesses.
+Unix case supervision cannot guarantee descendant cleanup; Windows cases additionally use kill-on-close Jobs and confirm empty Jobs before deleting workspaces.
 Runner progress and rerun messages are UI output, not captured protocol records.
 
 Locally and in CI, case failures are collected while the remaining cases continue.
@@ -83,6 +84,9 @@ Available modes run sequentially within one case deadline and compare against on
 During updates, the first mode writes and later modes must match, not overwrite differences.
 Unavailable modes report a skip, not validation.
 Test-host requirements such as Linux process-observation facilities do not imply the same runtime requirements.
+Windows full checks run shared direct cases in addition to native acceptance.
+Declare `SQL`, remote-controller capabilities, and `POSIX` for Unix-only shell/FIFO fixtures explicitly; fixture exclusions are remaining parity debt, not evidence that the supported runtime behavior is unavailable.
+The shared sandbox mode uses Seatbelt/bubblewrap fixtures; Windows native sandbox acceptance owns Windows policy coverage.
 
 Each case uses a temporary workspace and private `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's R/Python/uv/provider environment.
 Home-discovery cases supply their environment explicitly with `use_home_configuration=True`; remove inherited `MCP_CONSOLE_HOME` when testing the default home location.
@@ -99,6 +103,8 @@ Never edit snapshots by hand.
 Regenerate intentional changes with `scripts/test --update SELECTOR`, review them, and rerun without `--update`.
 Only a full unscoped run audits orphan snapshots; a successful full update can remove them.
 Focused updates preserve unselected snapshots, and skipped cases retain their snapshots even during full updates.
+Use `@platform_snapshots("win32")` from `support.snapshots` when Windows exposes a different public schema or OS diagnostic.
+Windows companions use `.win32` before the execution suffix; updates preserve generic references for other platforms and prune only stale platform companions of the updated case.
 
 Preserve complete errors, tracebacks, output, and meaningful ordering.
 Normalize only incidental values such as temporary paths.

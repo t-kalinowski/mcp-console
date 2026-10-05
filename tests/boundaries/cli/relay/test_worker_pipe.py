@@ -11,10 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.capture import read_lines
 from support.records import Transcript
-from support.requirements import WORKER, requires
+from support.requirements import POSIX, WORKER, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
     binary: Path,

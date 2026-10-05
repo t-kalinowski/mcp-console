@@ -13,6 +13,7 @@ from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.python import virtualenv_python
 from support.records import Transcript
 from support.requirements import R, command, requires
 
@@ -57,7 +58,7 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
         subprocess.run(
             [sys.executable, "-m", "venv", "--without-pip", str(selected)], check=True
         )
-        executable = selected / "bin/python"
+        executable = virtualenv_python(selected)
         subprocess.run(
             ["uv", "pip", "install", "--python", str(executable), "numpy"],
             check=True,
@@ -122,7 +123,7 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
                         assert sys.orig_argv == [sys.executable], sys.orig_argv
                         assert builtins.startup_identity == (sys.executable, [""], [sys.executable])
                         assert os.environ["VIRTUAL_ENV"] == sys.prefix
-                        assert shutil.which("python") == sys.executable
+                        assert Path(shutil.which("python")).samefile(sys.executable)
                         assert "PYTHONHOME" not in os.environ
                         assert "PYTHONPLATLIBDIR" not in os.environ
                         assert "__PYVENV_LAUNCHER__" not in os.environ
@@ -154,7 +155,9 @@ def test_launches_children_without_confusing_executable_and_script_arguments(
                             child = json.loads(
                                 subprocess.check_output([sys.executable, *arguments], input=stdin, text=True)
                             )
-                            assert child["identity"] == identity, (child, identity)
+                            assert all(
+                                Path(a).samefile(b) for a, b in zip(child["identity"], identity, strict=True)
+                            ), (child, identity)
                             assert child["argv"] == expected_argv, child
                             assert child["orig_argv"] == [native_program_name, *arguments], child
                             assert child["virtualenv"] == sys.prefix, child

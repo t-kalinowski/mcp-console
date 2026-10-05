@@ -42,6 +42,7 @@ from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolution(
     binary: Path,
@@ -94,6 +95,7 @@ def test_prepares_initial_requirements_before_stdin_and_skips_retained_resolutio
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_send_timeout_includes_blocked_requirements_resolver(
@@ -252,6 +254,7 @@ def test_stdin_forwarding_failure_does_not_execute_cell(
             client._temporary.cleanup()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_consumes_late_r_preparation_retirement_events(
     binary: Path,
@@ -364,6 +367,7 @@ def test_restart_consumes_late_r_preparation_retirement_events(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_discards_pre_marker_r_preparation_result(
     binary: Path,
@@ -511,6 +515,7 @@ def test_restart_discards_pre_marker_r_preparation_result(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_r_preparation_failure_requires_restart_and_preserves_worker(
     binary: Path,
@@ -577,6 +582,7 @@ def test_r_preparation_failure_requires_restart_and_preserves_worker(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_runtime_r_resolution_during_r_preparation(
     binary: Path,
@@ -651,6 +657,7 @@ def test_rejects_runtime_r_resolution_during_r_preparation(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_idle_runtime_r_resolution_owns_environment_until_activation(
     binary: Path,
@@ -740,6 +747,7 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_explicit_r_preparation_owns_environment_before_host_resolution(
     binary: Path,
@@ -853,6 +861,7 @@ def test_explicit_r_preparation_owns_environment_before_host_resolution(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_completion_before_runtime_r_activation(
     binary: Path,

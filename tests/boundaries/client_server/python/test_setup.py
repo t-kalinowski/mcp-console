@@ -11,6 +11,7 @@ from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.assertions import (
     assert_exact_interleaving,
     last_result_text,
@@ -22,9 +23,9 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
-from support.python import runtime_source_line
+from support.python import runtime_source_line, virtualenv_python
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     bare_runtime_environment,
     send_and_collect_runtime_python_resolution,
@@ -80,6 +81,14 @@ def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
                 """),
         )
         environment = bare_runtime_environment(environment, library)
+        if os.name == "nt":
+            # Windows eagerly inspects a PATH Python in bare R sessions. This
+            # fixture specifically arranges unresolved R-side selection.
+            environment["PATH"] = os.pathsep.join(
+                entry
+                for entry in environment["PATH"].split(os.pathsep)
+                if not (Path(entry) / "python.exe").exists()
+            )
         with McpClient(binary, serve, environment, directory) as client:
             client.initialize_and_list_tools()
             initialized = client.transcript.copy()
@@ -170,6 +179,7 @@ def test_preserves_queued_inspection_interrupt(
             return records
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_cancels_native_inspection_and_retries(
     binary: Path, execution: Execution
@@ -181,7 +191,7 @@ def test_cancels_native_inspection_and_retries(
             check=True,
             capture_output=True,
         )
-        selected = temporary / "venv/bin/python"
+        selected = virtualenv_python(temporary / "venv")
         subprocess.run(
             ["uv", "pip", "install", "--python", selected, "numpy", "pandas"],
             check=True,
@@ -269,7 +279,7 @@ def test_cancels_native_inspection_and_retries(
                 for record in records:
                     if "send" in record and "r" in record["send"]:
                         record["send"]["r"] = record["send"]["r"].replace(
-                            str(selected), "<selected python>"
+                            json.dumps(str(selected))[1:-1], "<selected python>"
                         )
                 return records
         finally:
@@ -347,6 +357,9 @@ def test_retries_failed_native_inspection(
             # fmt: python
             python=code("""
                 retried_value = 43
+                import sys
+
+                assert sys.orig_argv == [sys.executable], (sys.orig_argv, sys.executable)
                 retried_value
                 """)
         )
@@ -374,7 +387,7 @@ def test_console_configures_selected_python(
                 check=True,
                 capture_output=True,
             )
-            selected = temporary / "venv/bin/python"
+            selected = virtualenv_python(temporary / "venv")
             subprocess.run(
                 ["uv", "pip", "install", "--python", selected, "numpy", "pandas"],
                 check=True,
@@ -447,7 +460,7 @@ def test_console_configures_selected_python(
                 for record in records:
                     if "send" in record and "r" in record["send"]:
                         record["send"]["r"] = record["send"]["r"].replace(
-                            str(selected), "<selected python>"
+                            json.dumps(str(selected))[1:-1], "<selected python>"
                         )
                 transcript.extend(records)
     return transcript
@@ -473,7 +486,7 @@ def test_python_first_initializes_before_reticulate_attaches(
                 startup_calls <- 0L
                 callback_calls <- 0L
                 Sys.unsetenv("RETICULATE_PYTHON")
-                expected_python <- normalizePath(Sys.which("python3"))
+                expected_python <- normalizePath(if (.Platform$OS.type == "windows") Sys.getenv("MCP_CONSOLE_TEST_PYTHON") else Sys.which("python3"))
                 options(reticulate.python.beforeInitialized = function() {{
                   callback_calls <<- callback_calls + 1L
                   initialized <- .C(
@@ -604,7 +617,13 @@ def test_r_first_runs_selection_callback_once(
         # fmt: r
         r = code("""
             Sys.unsetenv("RETICULATE_PYTHON")
-            expected_python <- normalizePath(Sys.which("python3"))
+            expected_python <- normalizePath(
+              if (.Platform$OS.type == "windows") {
+                Sys.getenv("MCP_CONSOLE_TEST_PYTHON")
+              } else {
+                Sys.which("python3")
+              }
+            )
             callback_calls <- 0L
             options(reticulate.python.beforeInitialized = function() {
               callback_calls <<- callback_calls + 1L
@@ -853,7 +872,16 @@ def test_restores_virtualenv_after_selection_interrupt(
     with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
-            reticulate::use_python(normalizePath(Sys.which("python3")), required = TRUE)
+            reticulate::use_python(
+              normalizePath(
+                if (.Platform$OS.type == "windows") {
+                  Sys.getenv("MCP_CONSOLE_TEST_PYTHON")
+                } else {
+                  Sys.which("python3")
+                }
+              ),
+              required = TRUE
+            )
             interrupted <- TRUE
             invisible(suppressMessages(base::trace(
               "py_discover_config",
@@ -1135,6 +1163,7 @@ def test_preserves_setup_after_r_initialization(
 
 
 @executions(DIRECT, SANDBOXED)
+@platform_snapshots("win32")
 def test_retries_managed_import_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:

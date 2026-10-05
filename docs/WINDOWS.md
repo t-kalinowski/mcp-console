@@ -95,6 +95,7 @@ Resolvers and Python inspection enter kill-on-close Jobs while suspended, before
 Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
 These Jobs own trusted host preparation, not evaluated user code, and are not sandboxes.
 The server invokes `mcp-console resolve` over cancellable pipes; a lost or unconfirmed cleanup receipt blocks replacement.
+After spawning a resolver, the parent releases the command builder's child-side pipe handles so a rejected startup can confirm shutdown and EOF without a spurious retirement timeout.
 R resolver scripts remain compile-time embedded and are passed through temporary files because Windows Rscript does not preserve multiline `-e` arguments.
 Unsandboxed evaluated code runs with the user's permissions.
 Normal retirement reaps the direct worker but does not promise cleanup of its descendants, matching the existing direct-execution boundary.
@@ -106,6 +107,11 @@ Startup EOF cancels active Python inspection once the reader observes it; queue 
 After startup finishes, EOF is reported only after the queued MCP input is consumed, preserving final request responses.
 Windows uses a UTF-8 executable manifest, UTF-16 Python configuration, and native executable suffixes.
 The built-in worker uses the C runtime's inherited stdin descriptor because R subprocess helpers can clear the Windows standard-handle table.
+After R compatibility calls, Console restores that table from the live CRT descriptors so Python subprocesses can inherit stdio.
+Deferred R startup synchronizes the Win32 and CRT environment views before restoring default packages.
+Python bootstrap uses native separators when R supplies a forward-slash executable path, so CPython finds the selected virtualenv's `pyvenv.cfg`.
+R's `commandArgs()` retains the selected launcher and the full interactive startup arguments, matching the Unix worker's interpreter identity.
+Live Python activation also updates an already imported Joblib process backend's interpreter selection; virtualenv launchers must not retain handles intended for its task processes.
 
 ## Validation
 
@@ -114,7 +120,8 @@ Native runtime acceptance covers Python-first and R-first startup, each runtime 
 `tests/windows.py` includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
 It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir/uv arguments, real environment materialization, failures, interrupts, and descendant retirement.
 Run native commands exclusively in a checkout.
-The shared workflows choose Windows acceptance rather than the Unix transcript/sandbox suites.
+The default workflow runs native Windows acceptance.
+The full workflow also discovers and runs the shared boundary cases whose declared capabilities are available.
 The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
 Python 3.11 or newer is required; CI uses Python 3.13.
 
@@ -131,6 +138,8 @@ scripts/stage-sandbox-runner.cmd
 scripts/test.cmd --list
 scripts/test.cmd --locate WindowsConsole.test_python_without_r
 scripts/test.cmd WindowsConsole.test_python_without_r
+scripts/test.cmd client_server/python/test_runtime
+scripts/test.cmd --full --list
 scripts/format.cmd
 scripts/check.cmd
 scripts/check.cmd --full
@@ -143,10 +152,36 @@ Stage the Windows companion with `scripts/stage-sandbox-runner.cmd` before nativ
 R is optional in its inventory so Python-only setups can be inspected; the complete acceptance suite needs both runtimes.
 Failed optional R probes remain visible in the inventory without failing preflight; required tool and probe failures still fail it.
 `test` builds `target/debug/mcp-console.exe` unless `MCP_CONSOLE_TEST_BINARY` selects an installed executable; no selectors runs all native cases.
+Boundary selectors use the shared `BOUNDARY/SUITE::CASE` syntax and support `--update`, `--jobs`, and `--timeout`.
+Unscoped `test --full` adds all applicable shared cases.
+Shared concurrency defaults to at most six cases on Windows.
 `check` validates embedded sources, architecture, Rust formatting, Clippy, Rust tests, and native acceptance.
-`--full` adds supported tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
+`--full` adds shared boundary cases, portable transcript-runner/MCP-client/release tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
 `format` runs ruff, yamark, rustfmt, and air, reports every failure, and only returns failure with `--strict`.
 Install those formatters separately; missing tools and host policy blocks are reported rather than silently ignored.
+
+### Testing parity and remaining gaps
+
+Shared discovery reports unavailable capabilities per case and execution mode; a skip is not validation.
+Windows full checks exercise portable R/Python execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.
+The shared Windows pipe reader uses blocking native reads with socket notifications.
+Each shared case runs in a kill-on-close Job; cancellation gives the case 15 seconds to run cleanup, then requires confirmed descendant retirement before deleting its workspace.
+Owner-loss cleanup remains independent of the case interpreter, including native calls holding Python's GIL.
+Idle R callbacks remain a runtime parity gap: Windows command waiting does not integrate R's polled-event hooks.
+Those cases declare `R_EVENT_LOOP`; Unix FIFO input-handler fixtures declare `POSIX`.
+Shared interpreter-identity cases launch native `R.exe` and `Rscript.exe` and compare resource paths by filesystem identity, since the stock Windows launcher may shorten `R_HOME` to an 8.3 path.
+The native child-launch fixture uses ASCII arguments because the stock `R.exe` delegates through an ANSI command line; shared cell tests separately exercise Unicode R input.
+
+| Exclusion                                                                                                                  | Assessment and Windows coverage                                                                                                                                                                                                                                                     |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL and SSH/Docker/SBX controllers                                                                                         | Runtime features are deferred; cases declare those capabilities rather than failing while launching an unavailable runtime.                                                                                                                                                         |
+| Seatbelt/bubblewrap policy, ELF interposition, procfs, Unix signals, PTYs, descriptor inheritance, and non-UTF-8 filenames | OS-specific contracts and fixtures remain on their owning platforms. Native Windows policy, relay, input, cancellation, and Job retirement have separate acceptance cases. The shared `sandbox` capability refers to Unix fixtures, not absence of a Windows sandbox.               |
+| Shell/shebang fake workers and resolvers, FIFO checkpoints, Unix virtualenv or R-library layouts                           | Remaining fixture debt for otherwise supported behavior. These cases declare `POSIX`; Windows native tests cover some corresponding contracts, but do not replace every skipped admission, SDK, resolver, and lifecycle scenario. Port the fixture before removing its requirement. |
+| Unix staging/release executable fixtures and Rust Unix descriptor fixtures                                                 | Keep the native ABI/build requirements. Windows checkout ownership, packaging, and installation are exercised through the native workflow; portable release-manifest, client, and runner checks run on both platforms.                                                              |
+
+Handshakes, CLI usage, and early explicit-selection failures retain Windows snapshots where public behavior differs.
+Generic snapshots remain the Unix references; platform updates preserve both and remove only obsolete companions owned by the updated case.
+Use `test --full --list` and capability skip diagnostics to audit current coverage instead of treating native acceptance alone as parity.
 
 Build, test, and packaging entry points share `.dev-workflow/checkout.lock`, outside `target`.
 Use `with-checkout` for direct build commands.
