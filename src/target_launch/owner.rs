@@ -233,23 +233,28 @@ pub(crate) fn attach(
         ],
         None,
     )?;
-    if events[0] != 0 || events[1] != 0 {
+    let drain = if events[0] != 0 || events[1] != 0 {
         // A malformed/closed stream is never an instruction to replay work.
         unsafe {
             libc::kill(-(child.id() as i32), libc::SIGKILL);
         }
-    } else if child.wait().map_err(|e| e.to_string())?.success() {
-        // Preserve queued output after an ordinary exit. A failed attachment
-        // must instead cancel blocked forwarding so container retirement can
-        // proceed even when the controller is not draining this pipe.
+        Ok(())
+    } else {
+        // Let finite queued output finish after failure, preserving in-flight
+        // frames and protocol diagnostics while the controller is draining.
+        // Bound failed-exit draining so a blocked controller cannot hold up
+        // retirement. Controller loss still cancels either drain immediately.
+        let deadline = (!child.wait().map_err(|e| e.to_string())?.success())
+            .then(|| Instant::now() + Duration::from_secs(1));
         poll(
             &[
                 (cancel.reader.as_raw_fd(), libc::POLLIN),
                 (output_finished.as_raw_fd(), libc::POLLIN),
             ],
-            None,
-        )?;
-    }
+            deadline,
+        )
+        .map(|_| ())
+    };
     cancel.cancel();
     if !exit.wait(Duration::from_secs(1))? {
         unsafe {
@@ -265,6 +270,7 @@ pub(crate) fn attach(
         .join()
         .map_err(|_| "target output task panicked")?;
     output?;
+    drain?;
     if !status.success() {
         return Err(format!("target execution transport exited with {status}"));
     }

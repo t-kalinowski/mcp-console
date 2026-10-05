@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 from queue import Queue
-import socket
 import subprocess
 import tempfile
 from threading import Thread
@@ -25,6 +24,7 @@ from support.relay_lifecycle import (
     assert_failure_tail,
     exercise_shutdown_admission,
 )
+from windows_gate import Gate
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -93,11 +93,8 @@ class WindowsRelay(unittest.TestCase):
         return reader, writer
 
     def start(self, scenario: str, *, command_pipe: bool = False):
-        listener = socket.socket()
-        self.addCleanup(listener.close)
-        listener.bind(("127.0.0.1", 0))
-        listener.listen(1)
-        listener.settimeout(10)
+        ready = Gate()
+        self.addCleanup(ready.close)
         directory = tempfile.TemporaryDirectory(prefix="console relay records ")
         self.addCleanup(directory.cleanup)
         marker = Path(directory.name) / "dispatched"
@@ -109,7 +106,7 @@ class WindowsRelay(unittest.TestCase):
             env=dict(
                 os.environ,
                 TEST_WORKER_SCENARIO=scenario,
-                TEST_WORKER_READY=f"127.0.0.1:{listener.getsockname()[1]}",
+                TEST_WORKER_READY=ready.name,
                 TEST_DISPATCHED=str(marker),
                 TEST_CONSOLE_BINARY=str(BINARY),
                 TMPDIR=directory.name,
@@ -124,8 +121,8 @@ class WindowsRelay(unittest.TestCase):
             process.stdin = command_writer
         self.addCleanup(self.stop, process)
         try:
-            ready = listener.accept()[0]
-        except TimeoutError:
+            ready.accept(process)
+        except (TimeoutError, RuntimeError, OSError):
             if process.poll() is not None:
                 output, errors = process.communicate()
                 self.fail(
@@ -133,17 +130,10 @@ class WindowsRelay(unittest.TestCase):
                     f"{output.decode(errors='replace')}{errors.decode(errors='replace')}"
                 )
             raise
-        ready.settimeout(10)
-        stream = ready.makefile("rb")
-        pid = int(stream.readline())
+        pid = int(ready.readline())
         if scenario.startswith(("framing_", "retirement_")):
             self.framing_control = ready
-            self.framing_stream = stream
-            self.addCleanup(ready.close)
-            self.addCleanup(stream.close)
-        else:
-            stream.close()
-            ready.close()
+            self.framing_stream = ready
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         kernel.OpenProcess.restype = wintypes.HANDLE
@@ -165,6 +155,9 @@ class WindowsRelay(unittest.TestCase):
                     kernel.WaitForSingleObject(owned_worker, 10000)
 
             self.addCleanup(retire)
+        ready.sendall(b"1")
+        if not scenario.startswith(("framing_", "retirement_")):
+            ready.close()
         self.assertEqual(json.loads(process.stdout.readline()), {"kind": "ready"})
         return process, kernel, owned_worker, marker
 

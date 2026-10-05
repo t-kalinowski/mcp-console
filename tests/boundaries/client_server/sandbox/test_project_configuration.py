@@ -82,10 +82,12 @@ def _snapshot_survives_replacement(
                 encoding="utf-8",
             )
         capture = host / "payloads.jsonl"
+        resolver_capture = host / "resolver-payloads.jsonl"
         environment = {
             **os.environ,
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
+            "MCP_CONSOLE_TEST_RESOLVER_CONFIGURATION": str(resolver_capture),
             "MCP_CONSOLE_TEST_PROJECT": str(host),
             "MCP_CONSOLE_TEST_CONFIGURED": str(int(configured)),
             "MCP_CONSOLE_SANDBOX_SETTINGS": "invalid ambient settings",
@@ -127,8 +129,12 @@ def _snapshot_survives_replacement(
             transcript = client.finish()
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
-        assert len(payloads) == 5, len(payloads)
-        resolver = payloads.pop(0)
+        assert len(payloads) == 4, len(payloads)
+        resolvers = [
+            json.loads(line) for line in resolver_capture.read_text().splitlines()
+        ]
+        assert len(resolvers) == 1, resolvers
+        resolver = resolvers[0]
         assert resolver["proxy"]["enabled"] is True
         assert resolver["proxy"]["domains"]["pypi.org"] == "allow"
         assert all(payload == payloads[0] for payload in payloads), payloads

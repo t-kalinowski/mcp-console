@@ -225,7 +225,9 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
                 print(received)
                 """),
         )
-        assert "[waiting for stdin]" in last_result_text(client)
+        assert "[waiting for stdin]" in last_result_text(client), last_result_text(
+            client
+        )
         for requirements, expected in (
             (
                 {"r": ["praise"]},
@@ -248,19 +250,20 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
             assert result["isError"], result
             assert last_result_text(client) == expected, result
             client.send()
-            assert "[waiting for stdin]" in last_result_text(client)
-        client.send(stdin="fresh input\n")
-        assert last_result_text(client) == "fresh input\n"
-        client.send(
+            assert "[waiting for stdin]" in last_result_text(client), last_result_text(
+                client
+            )
+        client.expect("fresh input\n", stdin="fresh input\n")
+        client.expect(
+            "original cell and worker retained\n",
             # fmt: python
             python=code("""
                 assert os.getpid() == original_pid
                 assert received == "fresh input"
                 assert "interrupt_followup_ran" not in globals()
                 print("original cell and worker retained")
-                """)
+                """),
         )
-        assert last_result_text(client) == "original cell and worker retained\n"
         return client.finish()[3:]
 
 
