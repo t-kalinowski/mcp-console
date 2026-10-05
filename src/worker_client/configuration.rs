@@ -49,19 +49,13 @@ impl ClientConfiguration {
         mut self,
         settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
-        let settings = if !self.no_sandbox && cfg!(unix) {
-            crate::resolver::cache::isolated_defaults(settings)?
-        } else {
-            settings
-        };
         let host_policy = Default::default();
-        self.duckdb_extension_directory = crate::resolver::cache::duckdb_extension_directory(
-            if !self.no_sandbox && cfg!(unix) {
+        self.duckdb_extension_directory =
+            crate::resolver::cache::duckdb_extension_directory(if !self.no_sandbox {
                 &settings
             } else {
                 &host_policy
-            },
-        )?;
+            })?;
         self.resolver_settings = settings;
         Ok(self)
     }
@@ -100,14 +94,9 @@ impl ClientConfiguration {
     ) -> Result<Self, String> {
         #[cfg(windows)]
         let _ = &diagnostics;
-        let resolver_settings = if !no_sandbox && cfg!(unix) {
-            crate::resolver::cache::isolated_defaults(resolver_settings)?
-        } else {
-            resolver_settings
-        };
         let host_policy = Default::default();
         let duckdb_extension_directory =
-            crate::resolver::cache::duckdb_extension_directory(if !no_sandbox && cfg!(unix) {
+            crate::resolver::cache::duckdb_extension_directory(if !no_sandbox {
                 &resolver_settings
             } else {
                 &host_policy
@@ -124,7 +113,7 @@ impl ClientConfiguration {
         #[cfg(any(unix, windows))]
         let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
             crate::resolver::preparation::Mode::Auto,
-            (!no_sandbox && cfg!(unix)).then(|| resolver_settings.clone()),
+            (!no_sandbox).then(|| resolver_settings.clone()),
             configured_python.as_deref(),
             diagnostics.clone(),
             on_started,

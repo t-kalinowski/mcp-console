@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use crate::resolver::ResolverStopHandle;
-use crate::resolver::process::{ResolverProcess, completed_write, read_output, resolver_command};
+use crate::resolver::process::{ResolverProcess, resolver_command};
 
 use super::startup::SelectedPython;
 
@@ -86,26 +86,10 @@ pub(crate) fn inspect_native(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = crate::resolver::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!("failed to inspect selected Python executable `{selected}`: {error}")
     })?;
-    let stdout = read_output(child.stdout.take().expect("inspection stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("inspection stderr is piped"));
-    resolver.watch_exit(child.id());
-    if let Err(error) = on_started(resolver.stop_handle()) {
-        resolver
-            .abort(&mut child, executable, "Python inspection")
-            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
-        return Err(error);
-    }
-    let output = resolver.wait(
-        &mut child,
-        completed_write(),
-        stdout,
-        stderr,
-        executable,
-        "Python inspection",
-    )?;
+    let output = resolver.collect(invocation, executable, "Python inspection", on_started)?;
     output.write_result.map_err(|error| error.to_string())?;
     if !output.status.success() {
         let diagnostic = String::from_utf8_lossy(&output.stderr);
