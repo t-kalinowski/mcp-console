@@ -15,7 +15,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8072
+        text_bytes: 8041
         concat:
           - |
             zod old stdout
@@ -23,7 +23,7 @@ result:
             count: 3825
           - |
 
-            [output preview: omitted 4186655 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 4194335 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 4186655 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 4194335 raw bytes retained, 0 raw bytes not retained]
           - repeat: y
             count: 3824
           - |-

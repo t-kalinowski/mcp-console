@@ -13,8 +13,8 @@ use crate::process_exit::ChildExitWaiter;
 pub(super) type Cancel = io::PipeWriter;
 
 pub(super) fn prepare_io(command: &mut Command, input: bool) -> io::Result<super::Endpoints> {
+    use crate::process_io::Io;
     use crate::process_output::RelayOutput;
-    use crate::target_launch::transfer::Io;
     use std::process::Stdio;
     let (input_cancelled, input_cancel) = io::pipe()?;
     let (output_cancelled, output_cancel) = io::pipe()?;
@@ -22,7 +22,7 @@ pub(super) fn prepare_io(command: &mut Command, input: bool) -> io::Result<super
     let (stderr, stderr_child) = io::pipe()?;
     let writer = if input {
         let (stdin_child, stdin) = io::pipe()?;
-        let stdin = Io::new(stdin, Some(input_cancelled), None).map_err(io::Error::other)?;
+        let stdin = Io::new(stdin, Some(input_cancelled)).map_err(io::Error::other)?;
         command.stdin(Stdio::from(stdin_child));
         Some(Box::new(stdin) as Box<dyn io::Write + Send>)
     } else {

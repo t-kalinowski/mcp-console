@@ -7,19 +7,19 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8042
+        text_bytes: 8108
         concat:
           - |
             idle head
           - repeat: s
-            count: 3766
+            count: 3830
           - |
 
-            [output preview: omitted 16237 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace; controller for remote targets); 20011 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 16173 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace); 20011 raw bytes retained, 0 raw bytes not retained]
 
-            [output preview: omitted 29013 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 32789 raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted 28949 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 32789 raw bytes retained, 0 raw bytes not retained]
           - repeat: x
-            count: 3765
+            count: 3829
           - |
 
             cell tail

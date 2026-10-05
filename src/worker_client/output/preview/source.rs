@@ -12,7 +12,7 @@ impl Source {
     pub(super) fn notice(&self, omitted: u64, notices: u64) -> String {
         let location = match &self.file {
             Some(file) => format!(
-                "raw cell log: {} (Console server recording workspace; controller for remote targets); {} raw bytes retained, {} raw bytes not retained{}",
+                "raw cell log: {} (Console server recording workspace); {} raw bytes retained, {} raw bytes not retained{}",
                 file.public_path(),
                 self.retained_bytes,
                 self.discarded_bytes,
@@ -96,7 +96,7 @@ impl Summary {
     pub(super) fn notice(&self) -> String {
         let location = match &self.journal {
             Some(journal) => format!(
-                "raw cell log paths and per-cell counts: {journal} (Console server recording workspace; controller for remote targets)"
+                "raw cell log paths and per-cell counts: {journal} (Console server recording workspace)"
             ),
             None => "no retained cell logs".to_owned(),
         };

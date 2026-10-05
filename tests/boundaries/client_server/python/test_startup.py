@@ -332,9 +332,11 @@ def interrupted_initialization(
                 r_environment,
                 # fmt: r
                 code(f"""
-                Sys.setenv(RETICULATE_PYTHON = {json.dumps(str(python))})
+                Sys.setenv(RETICULATE_PYTHON = {
+                  json.dumps(str(python))
+                })
                 writeLines(as.character(Sys.getpid()), {
-                    json.dumps(str(worker_identity))
+                  json.dumps(str(worker_identity))
                 })
                 startup_state <- 41L
                     """),

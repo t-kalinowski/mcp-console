@@ -1,8 +1,0 @@
----
-boundary: control-gate
-first_cause: interrupt
-probe_launched: false
----
-boundary: stage-gate
-first_cause: interrupt
-probe_launched: false

@@ -39,7 +39,7 @@ Report commands actually run and any unavailable coverage.
 CI is the comprehensive merge gate.
 
 Windows x64 supports experimental local sandboxed and `serve --no-sandbox` sessions with R/Python and host dependency resolution through `ir`/`uv`.
-SQL and Windows SSH/Docker/SBX controllers are deferred.
+Windows SQL is deferred.
 Follow [Windows validation](docs/WINDOWS.md#validation); shared workflow commands select native Windows checks.
 Run native build and validation commands exclusively in the checkout; Windows packaging holds a blocking native checkout lock outside `target`.
 

@@ -82,19 +82,10 @@ def main() -> None:
         )
     }
 
-    # Reuse public-test probes only; never call provider provisioning fixtures.
     if WINDOWS:
-        providers = {
-            name: {"status": "skip", "reason": "Windows controllers are unsupported"}
-            for name in ("docker", "docker_sandbox", "external_ssh")
-        }
-        host = None
         capabilities = {}
     else:
         sys.path.insert(0, str(ROOT / "tests"))
-        from support.docker import DOCKER
-        from support.docker_sandbox import DOCKER_SANDBOX
-        from support.ssh_external import EXTERNAL_SSH, HOST
         from support.requirements import (
             FRESH_PROCFS,
             LANDLOCK,
@@ -102,18 +93,6 @@ def main() -> None:
             PROCESS_EVENTS,
         )
 
-        providers = {
-            name: {
-                "status": "available" if requirement.available else "skip",
-                "reason": None if requirement.available else requirement.reason,
-            }
-            for name, requirement in {
-                "docker": DOCKER,
-                "docker_sandbox": DOCKER_SANDBOX,
-                "external_ssh": EXTERNAL_SSH,
-            }.items()
-        }
-        host = HOST
         capabilities = {
             item.name: {"available": item.available, "reason": item.reason}
             for item in (PROCESS_EVENTS, LANDLOCK, NESTED_PROCFS, FRESH_PROCFS)
@@ -153,8 +132,6 @@ def main() -> None:
             if tools["rustup"]["version"] and tools["cargo"]["version"]
             else None,
         },
-        "providers": providers,
-        "external_ssh_host": host,
         "host_capabilities": capabilities,
         "caches": {
             "checkout_build": str(ROOT / "target"),
@@ -195,11 +172,6 @@ def main() -> None:
             )
             if value["error"]:
                 print(value["error"])
-        for name, item in providers.items():
-            print(
-                f"Optional {name}: {item['status']}"
-                + (f"; {item['reason']}" if item["reason"] else "")
-            )
         for name, item in report["host_capabilities"].items():
             print(
                 f"Host {name}: {'available' if item['available'] else 'skip; ' + item['reason']}"
