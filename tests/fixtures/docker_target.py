@@ -29,6 +29,7 @@ length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
 bootstrap = json.loads(sys.stdin.buffer.read(length))
 frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
 frame(2, {"kind": "ready"})
+frame(2, {"kind": "runtime_initialized", "interrupted": False})
 for line in sys.stdin.buffer:
     command = json.loads(line)
     if command["kind"] == "evaluate":
