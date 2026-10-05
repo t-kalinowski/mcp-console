@@ -2,6 +2,7 @@
 
 import json
 import os
+import select
 import signal
 import struct
 import subprocess
@@ -166,6 +167,19 @@ elif args[0] == "exec":
         },
     )
     if probe and mode == "probe-closed-output":
+        if os.environ.get("MCP_CONSOLE_TEST_PREPARED_PROBE"):
+            # Keep the original HELLO and SIGPIPE failure. The public test
+            # releases this peer only after the owner accepted its own header.
+            with (root / "peer-ready").open("wb", buffering=0) as reached:
+                reached.write(b"1")
+            release = os.open(root / "peer-release", os.O_RDONLY)
+            abort = os.open(root / "abort", os.O_RDONLY)
+            ready, _, _ = select.select([release, abort], [], [])
+            if abort in ready:
+                sys.exit(0)
+            assert os.read(release, 1) == b"1"
+            os.close(release)
+            os.close(abort)
         # Keep the attachment pipe open until this peer exits, so the owner
         # cannot cancel the peer before its next write hits the closed reader.
         attachment = os.dup(1)

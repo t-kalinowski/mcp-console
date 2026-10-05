@@ -2,14 +2,18 @@
 
 import json
 import sys
+from contextlib import ExitStack, closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.docker_sandbox import calls, cli_peer, configure, workspace
-from support.requirements import POSIX, requires
+from support.native import LOADER_VARIABLE, build_interposer
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
@@ -272,6 +276,79 @@ def test_invalid_probe_results_retire_before_worker_startup(binary: Path) -> lis
                 }
             records.append({"mode": mode, "diagnostic": diagnostics})
     return records
+
+
+@requires(POSIX, NATIVE_FIXTURES)
+def test_failed_probe_preserves_diagnostic_during_owner_hello(binary: Path) -> list:
+    with workspace() as root, TemporaryDirectory(dir="/tmp") as native:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("probe-closed-output")
+        peer_frames = root / "peer/probe-frames"
+        owner_frames = root / "peer/owner-frames"
+        peer_frames.touch()
+        owner_frames.touch()
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(Path(native), "prepared_probe_frames")
+        )
+        environment["MCP_CONSOLE_TEST_PREPARED_PROBE"] = str(root / "peer")
+        with ExitStack() as stack:
+            checkpoints = {
+                name: stack.enter_context(
+                    closing(FifoCheckpoint.create(root / "peer" / name))
+                )
+                for name in (
+                    "owner-header",
+                    "owner-release",
+                    "owner-cancelled",
+                    "peer-ready",
+                    "peer-release",
+                    "abort",
+                )
+            }
+            client = stack.enter_context(
+                McpClient(binary, ("serve",), environment, root)
+            )
+            # Release both causal gates before MCP cleanup on any test failure.
+            stack.callback(checkpoints["abort"].release)
+            client.initialize_and_list_tools()
+            pending = client.start_send(requirements={"action": "get"})
+            checkpoints["peer-ready"].wait("inner HELLO flushed before peer SIGPIPE")
+            checkpoints["owner-header"].wait("outer HELLO header accepted by stdout")
+            checkpoints["peer-release"].release()
+            checkpoints["owner-cancelled"].wait(
+                "failed attachment cancelled forwarding"
+            )
+            checkpoints["owner-release"].release()
+            client.receive(pending)
+            result = pending["result"]
+            assert result["isError"], result
+            error = "".join(part["text"] for part in result["content"])
+            _, diagnostics = client.finish_with_standard_error(expected_exit_status=1)
+        evidence = {
+            "mode": "probe-closed-output",
+            "actual": error,
+            "stderr": diagnostics,
+            "peer_frames": peer_frames.read_text(),
+            "owner_frames": owner_frames.read_text(),
+            "calls": calls(root),
+        }
+        assert not (root / "peer/vms").exists(), evidence
+        assert not (root / "peer/evaluations").exists(), evidence
+        operations = calls(root)
+        executions = [call["args"] for call in operations if call["args"][0] == "exec"]
+        assert len(executions) == 1 and executions[0][-1] == "docker-sandbox-probe", (
+            evidence
+        )
+        for operation in ("create", "rm"):
+            assert sum(call["args"][0] == operation for call in operations) == 1, (
+                evidence
+            )
+        expected = "launch stream ended before confirmed retirement"
+        assert expected in error, evidence
+        assert expected in diagnostics, evidence
+        assert "BrokenPipeError" not in diagnostics, evidence
+        return [{"failed_probe_diagnostic_preserved": True, "removed_once": True}]
 
 
 if __name__ == "__main__":
