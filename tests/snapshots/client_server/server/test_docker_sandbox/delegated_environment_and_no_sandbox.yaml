@@ -48,9 +48,9 @@ result:
         No module named 'mcpConsoleDefinitelyMissingPackage'.
 
 
-        MCP Console dynamic environment resolution is unavailable for Docker
-        targets. Install the distribution in the image and start a new server
-        session.
+        automatic package installation is unavailable in prepared Docker
+        targets; preinstall the distribution in the image and start a new server
+        session
   isError: false
 ---
 arguments:
@@ -103,7 +103,7 @@ result:
         No module named 'mcpConsoleDefinitelyMissingPackage'.
 
 
-        MCP Console dynamic environment resolution is unavailable for Docker
-        targets. Install the distribution in the image and start a new server
-        session.
+        automatic package installation is unavailable in prepared Docker
+        targets; preinstall the distribution in the image and start a new server
+        session
   isError: false

@@ -28,6 +28,16 @@ pub(super) fn run(
     // Unix exec preserves the caller. Windows waits while the native runner
     // watches both this frontend and the supplied generation owner.
     let mut runner = Command::new(installation::private_runner()?);
+    if settings.get("inherit_environment") == Some(&Value::Bool(false)) {
+        // The native Linux launcher serializes its host environment before
+        // applying workload controls. Non-inherited bytes are not policy input;
+        // retain the trusted tool environment without serializing those values.
+        for (name, value) in std::env::vars_os() {
+            if name.to_str().is_none() || value.to_str().is_none() {
+                runner.env_remove(name);
+            }
+        }
+    }
     if let Some(name) = settings_env {
         runner.env_remove(name);
     }

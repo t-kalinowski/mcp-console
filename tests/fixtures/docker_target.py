@@ -6,12 +6,13 @@ import signal
 import struct
 import sys
 
-mode, operation = sys.argv[1:]
+mode, operation = sys.argv[1], sys.argv[-1]
 if (mode, operation) in (
     ("probe-gate", "docker-probe"),
     ("launch-gate", "docker-launch"),
 ):
-    print("target launch gate", file=sys.stderr, flush=True)
+    with open(sys.argv[2], "wb", buffering=0) as checkpoint:
+        checkpoint.write(b"1")
     signal.pause()
     raise SystemExit(91)
 
@@ -29,6 +30,7 @@ length = struct.unpack(">I", sys.stdin.buffer.read(4))[0]
 bootstrap = json.loads(sys.stdin.buffer.read(length))
 frame(1, {"version": bootstrap["version"], "build": bootstrap["build"]})
 frame(2, {"kind": "ready"})
+frame(2, {"kind": "runtime_initialized", "interrupted": False})
 for line in sys.stdin.buffer:
     command = json.loads(line)
     if command["kind"] == "evaluate":

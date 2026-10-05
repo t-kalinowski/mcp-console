@@ -1,0 +1,6 @@
+---
+stop_output_exceeded_capture_limit: true
+forced_removal_and_absence_query_completed: true
+stderr: >
+  Docker launch stream ended before confirmed retirement: failed to fill
+  whole buffer

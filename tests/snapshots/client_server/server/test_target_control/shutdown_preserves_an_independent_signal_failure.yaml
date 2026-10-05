@@ -1,0 +1,8 @@
+---
+independent_signal: SIGKILL
+exit_status: 1
+stderr: >
+  Docker Sandbox setup cancelled; Docker Sandbox command failed with
+  signal: 9 (SIGKILL); install standalone sbx v0.42.1 or newer and
+  complete Docker login and policy setup before starting Console; see
+  docs/DOCKER_SANDBOX.md

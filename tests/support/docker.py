@@ -177,7 +177,7 @@ def normalize_recording(records: list, root: Path) -> list:
 
 
 @contextmanager
-def removal_event(container: str):
+def container_event(event: str, *filters: str):
     from support.client import TextReader
 
     process = subprocess.Popen(
@@ -187,9 +187,8 @@ def removal_event(container: str):
             "--since",
             str(time.time()),
             "--filter",
-            f"container={container}",
-            "--filter",
-            "event=destroy",
+            f"event={event}",
+            *(argument for value in filters for argument in ("--filter", value)),
             "--format",
             "{{json .}}",
         ],
@@ -204,3 +203,7 @@ def removal_event(container: str):
         process.terminate()
         process.wait(timeout=5)
         reader.close()
+
+
+def removal_event(container: str):
+    return container_event("destroy", f"container={container}")

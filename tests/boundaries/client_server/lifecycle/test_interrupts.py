@@ -13,7 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.processes import stop_process, stop_process_group
+from support.processes import (
+    capture_process_identity,
+    host_process_id,
+    live_processes,
+    stop_process,
+    stop_process_group,
+)
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.resolvers import resolver_interrupt_permission_environment
@@ -239,12 +245,14 @@ def test_reports_resolver_interrupt_permission_error(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait("permission-denied R resolver")
-            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            namespace_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            resolver_group = host_process_id(namespace_group, client.process.pid)
+            resolver_identity = capture_process_identity(resolver_group)
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
             wait_for_path(
-                resolver_watches / str(resolver_group),
+                resolver_watches / str(namespace_group),
                 "active resolver supervision",
                 client,
             )
@@ -267,10 +275,13 @@ def test_reports_resolver_interrupt_permission_error(
                 watchdog.join()
 
             denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
-            assert denied_group == resolver_group, (
+            assert denied_group == namespace_group, (
                 "SIGINT denial targeted a different process group"
             )
             wait_for_process_group_exit(resolver_group, client)
+            assert not live_processes([resolver_identity]), (
+                "resolver survived its failed interrupt"
+            )
             assert not forced_stop.is_set(), (
                 "resolver interrupt failure did not terminate both calls"
             )
@@ -344,13 +355,19 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             evaluation = client.start_send(
                 r="report runtime R resolution failure",
             )
-            resolver_started.wait("permission-denied runtime R resolver")
-            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            try:
+                resolver_started.wait("permission-denied runtime R resolver")
+            except AssertionError:
+                client.receive(evaluation)
+                raise AssertionError(evaluation) from None
+            namespace_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            resolver_group = host_process_id(namespace_group, client.process.pid)
+            resolver_identity = capture_process_identity(resolver_group)
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
             wait_for_path(
-                resolver_watches / str(resolver_group),
+                resolver_watches / str(namespace_group),
                 "active resolver supervision",
                 client,
             )
@@ -373,10 +390,13 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 watchdog.join()
 
             denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
-            assert denied_group == resolver_group, (
+            assert denied_group == namespace_group, (
                 "SIGINT denial targeted a different process group"
             )
             wait_for_process_group_exit(resolver_group, client)
+            assert not live_processes([resolver_identity]), (
+                "resolver survived its failed interrupt"
+            )
             assert not forced_stop.is_set(), (
                 "resolver interrupt failure did not terminate both calls"
             )

@@ -1,0 +1,4 @@
+---
+fault: setup stdout
+provider_receipt: false
+replacement_launched: false

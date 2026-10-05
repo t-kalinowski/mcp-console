@@ -10,13 +10,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
-from support.assertions import last_result_text, wait_for_evaluation_output
+from support.assertions import (
+    last_result_text,
+    wait_for_evaluation_output,
+    wait_for_prepared_ready,
+)
 from support.docker_sandbox import calls, cli_peer, configure, workspace
 from support.native import LOADER_VARIABLE, build_interposer
 from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
+
+
+@requires(POSIX)
+def test_interrupt_reaches_worker_after_prepared_probe_retirement(binary: Path) -> list:
+    with workspace() as root:
+        environment = cli_peer(root / "peer")
+        configure(root, template=TEMPLATE)
+        (root / "peer/mode").write_text("interrupt-cell")
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            wait_for_prepared_ready(client)
+            wait_for_evaluation_output(
+                client,
+                "provider peer\n\n[running; poll with an empty send]",
+                "prepared evaluation admitted",
+                python="while True: pass",
+                timeout_ms=1,
+            )
+            wait_for_evaluation_output(
+                client,
+                "provider interrupted\n",
+                "prepared interrupt completion",
+                control="interrupt",
+                timeout_ms=100,
+            )
+            client.finish()
+        assert not (root / "peer/vms").exists()
+        return client.transcript[3:]
 
 
 @requires(POSIX)
@@ -97,15 +129,21 @@ def test_prepared_bootstrap_withholds_and_runs_first_cell_once(binary: Path) -> 
         environment = cli_peer(root / "peer")
         configure(root, template=TEMPLATE)
         (root / "peer/mode").write_text("bootstrap-input")
-        with McpClient(binary, ("serve",), environment, root) as client:
+        with (
+            closing(FifoCheckpoint.create(root / "peer/prompt-ready")) as prompt,
+            closing(FifoCheckpoint.create(root / "peer/prompt-release")) as release,
+            McpClient(binary, ("serve",), environment, root) as client,
+        ):
             client.initialize_and_list_tools()
-            # A short deadline admits the cell while the prepared worker's
-            # startup prompt blocks initialization. Polling must not replay it.
+            # Admit the cell before releasing the startup prompt so its first
+            # response cannot consume output needed by the following collector.
+            client.send(python="first_cell = 42", timeout_ms=0)
+            release.release()
+            prompt.wait("prepared worker emitted its startup prompt")
             wait_for_evaluation_output(
                 client,
                 '[input requested: "target startup> "]\n[waiting for stdin]',
                 "prepared worker startup prompt",
-                python="first_cell = 42",
                 timeout_ms=10,
             )
             client.send(timeout_ms=0)

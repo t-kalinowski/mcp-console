@@ -482,6 +482,12 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
         fixture.workspace() if provider == "docker" else fixture.workspace(real=True)
     )
     with workspace as root:
+        tools = root / "r-tools"
+        tools.mkdir()
+        # Linux R's launcher needs these shell tools; keep Python absent.
+        (tools / "sh").symlink_to("/bin/sh")
+        (tools / "uname").symlink_to("/usr/bin/uname")
+        mounts = [{"source": str(tools), "target": "/no-python"}]
         environment = {
             "R_HOME": "/usr/lib/R",
             "PATH": "/no-python",
@@ -493,10 +499,14 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
                 fixture.image(),
                 command=["/opt/analysis/bin/mcp-console"],
                 environment=environment,
+                mounts=mounts,
             )
         else:
             config = fixture.configure(
-                root, command=["/usr/local/bin/mcp-console"], environment=environment
+                root,
+                command=["/usr/local/bin/mcp-console"],
+                environment=environment,
+                mounts=mounts,
             )
         policy = json.loads(config.read_text())
         policy["sandbox"]["inherit_environment"] = False
@@ -539,9 +549,14 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
         with McpClient(
             binary, ("serve", "--no-sandbox"), current_directory=root
         ) as client:
-            assert client.stdout.read(timeout=30) == ""
-            error = client.stderr.read(timeout=30)
+            error = client.startup_error()
             assert "python configuration validation failed" in error, error
+            client.stdin.close()
+            assert client.stdout.read(timeout=30) == ""
+            assert (
+                client.stderr.read(timeout=30)
+                == "remote launcher exited with exit status: 1\n"
+            )
             assert client.process.wait(timeout=5) != 0
 
 

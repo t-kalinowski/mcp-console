@@ -32,6 +32,7 @@ from support.assertions import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
@@ -151,6 +152,7 @@ def check_ssh_optional_python_absence(binary: Path, execution: Execution) -> Non
         )
         commands, home = remote / "commands", remote / "home"
         commands.mkdir()
+        retain_system_bwrap(commands)
         home.mkdir()
         (commands / "sh").symlink_to(shutil.which("sh"))
         workload = {

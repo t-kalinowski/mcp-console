@@ -368,6 +368,11 @@ where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
     let mut command = resolver_command(python);
+    // Matplotlib checks its config directory before its separate Linux cache.
+    // A read-only host config must not redirect warmup to private temporary data.
+    if let Some(cache) = crate::python::matplotlib_cache_directory() {
+        command.env("MPLCONFIGDIR", cache);
+    }
     command
         .args(["-I", "-c", "import matplotlib.font_manager"])
         .stdin(Stdio::null())

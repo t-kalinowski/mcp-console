@@ -60,86 +60,121 @@ impl Session {
             Compute::Host {} => unreachable!("host compute has its own runtime discovery"),
         };
         let cancel = process::Cancel::new(profile.protocol)?.with_diagnostics(diagnostics);
-        started(crate::resolver::ResolverStopHandle::new(cancel.clone()))?;
-        let state = ComputeState {
-            profile,
-            roots,
-            languages,
-            blocked: Arc::default(),
-            runtime: None,
-        };
-        let mut session = match target.compute {
-            Compute::Docker(_) => {
-                Self::Docker(crate::docker::Captured::capture(target, &cancel)?, state)
+        let mut provider_retirement: Option<Retirement> = None;
+        let result: Result<Self, target_launch::SetupFailure> = (|| {
+            started(crate::resolver::ResolverStopHandle::new(cancel.clone()))?;
+            let state = ComputeState {
+                profile,
+                roots,
+                languages,
+                blocked: Arc::default(),
+                runtime: None,
+            };
+            let mut session = match target.compute {
+                Compute::Docker(_) => {
+                    Self::Docker(crate::docker::Captured::capture(target, &cancel)?, state)
+                }
+                Compute::DockerSandbox(_) => Self::DockerSandbox(
+                    crate::docker_sandbox::Captured::capture(target, &cancel)?,
+                    state,
+                ),
+                Compute::Host {} => unreachable!(),
+            };
+            let configured = python
+                .map(|path| {
+                    path.to_str()
+                        .map(str::to_owned)
+                        .ok_or("target python selection is not UTF-8")
+                })
+                .transpose()?;
+            let (command, bytes, generation) = match &session {
+                Self::Docker(captured, state) => state.launch(
+                    captured,
+                    &captured.target,
+                    policy,
+                    no_sandbox,
+                    session.provider(),
+                    ComputeLaunch::Probe(configured),
+                )?,
+                Self::DockerSandbox(captured, state) => state.launch(
+                    captured,
+                    &captured.target,
+                    policy,
+                    no_sandbox,
+                    session.provider(),
+                    ComputeLaunch::Probe(configured),
+                )?,
+                Self::Ssh(_) => unreachable!(),
+            };
+            let generation = Generation {
+                retirement: Retirement::default(),
+                owner: generation,
+            };
+            let report = process::run_report(
+                command,
+                &cancel,
+                Some(Instant::now() + PROBE_TIMEOUT),
+                profile.probe_output,
+                Some(process::OwnerInput {
+                    bytes,
+                    retirement_grace: profile.probe_retirement_grace,
+                }),
+            )?;
+            provider_retirement = Some(generation.retirement.clone());
+            let mut output = generation
+                .output(std::io::Cursor::new(report.output), None)
+                .for_probe();
+            let mut unexpected = Vec::new();
+            let parsed = output
+                .read_to_end(&mut unexpected)
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let parsed = if !output.retirement_received() {
+                parsed.map_err(|error| {
+                    format!(
+                        "{error}; {}",
+                        generation
+                            .retirement
+                            .check()
+                            .expect_err("missing provider receipt")
+                    )
+                })
+            } else {
+                parsed
+            };
+            // A command failure cannot discard a valid receipt or protocol bytes.
+            // Conversely, a receipt confirms only provider retirement, not work.
+            match (report.result, parsed) {
+                (Err(mut failure), Err(error)) => {
+                    failure.error = Some(match failure.error {
+                        Some(primary) => format!("{primary}; {error}"),
+                        None => error,
+                    });
+                    return Err(failure);
+                }
+                (Err(failure), Ok(())) => return Err(failure),
+                (Ok(()), Err(error)) => return Err(error.into()),
+                (Ok(()), Ok(())) => {}
             }
-            Compute::DockerSandbox(_) => Self::DockerSandbox(
-                crate::docker_sandbox::Captured::capture(target, &cancel)?,
-                state,
-            ),
-            Compute::Host {} => unreachable!(),
-        };
-        let configured = python
-            .map(|path| {
-                path.to_str()
-                    .map(str::to_owned)
-                    .ok_or("target python selection is not UTF-8")
-            })
-            .transpose()?;
-        let (command, bytes, generation) = match &session {
-            Self::Docker(captured, state) => state.launch(
-                captured,
-                &captured.target,
-                policy,
-                no_sandbox,
-                session.provider(),
-                ComputeLaunch::Probe(configured),
-            )?,
-            Self::DockerSandbox(captured, state) => state.launch(
-                captured,
-                &captured.target,
-                policy,
-                no_sandbox,
-                session.provider(),
-                ComputeLaunch::Probe(configured),
-            )?,
-            Self::Ssh(_) => unreachable!(),
-        };
-        let generation = Generation {
-            retirement: Retirement::default(),
-            owner: generation,
-        };
-        let bytes = process::run(
-            command,
-            &cancel,
-            Some(Instant::now() + PROBE_TIMEOUT),
-            profile.probe_output,
-            Some(process::OwnerInput {
-                bytes,
-                retirement_grace: profile.probe_retirement_grace,
-            }),
-        )?;
-        let mut output = generation
-            .output(std::io::Cursor::new(bytes), None)
-            .for_probe();
-        let mut unexpected = Vec::new();
-        output
-            .read_to_end(&mut unexpected)
-            .map_err(|error| error.to_string())?;
-        generation.retirement.check()?;
-        if !unexpected.is_empty() {
-            return Err(format!(
-                "unexpected {} runtime probe output",
-                profile.protocol.0
-            ));
-        }
-        let runtime = output.take_runtime()?;
-        match &mut session {
-            Self::Docker(_, state) | Self::DockerSandbox(_, state) => {
-                state.runtime = Some(Arc::new(runtime))
+            generation.retirement.check()?;
+            if !unexpected.is_empty() {
+                return Err(
+                    format!("unexpected {} runtime probe output", profile.protocol.0).into(),
+                );
             }
-            Self::Ssh(_) => unreachable!(),
-        }
-        Ok(session)
+            let runtime = output.take_runtime()?;
+            match &mut session {
+                Self::Docker(_, state) | Self::DockerSandbox(_, state) => {
+                    state.runtime = Some(Arc::new(runtime))
+                }
+                Self::Ssh(_) => unreachable!(),
+            }
+            Ok(session)
+        })();
+        let confirmed = provider_retirement
+            .as_ref()
+            .is_none_or(|retirement| retirement.check().is_ok());
+        cancel.finish(result, confirmed)
     }
 
     fn compute(&self) -> Option<&ComputeState> {
