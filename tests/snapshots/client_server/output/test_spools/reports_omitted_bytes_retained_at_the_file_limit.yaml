@@ -1,0 +1,41 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: overflow cell retention limit
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8007
+        concat:
+          - repeat: x
+            count: 3776
+          - |
+
+            [output preview: omitted 1073734277 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 1073741824 raw bytes retained, 5 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+          - repeat: x
+            count: 3771
+          - |
+            tail
+            [cell output retention limit reached at 1073741824 bytes for .agents/console/sessions/<run ID>/outputs/call-000002.log; later text is not retained in this file]
+  isError: false

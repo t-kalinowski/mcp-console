@@ -16,7 +16,7 @@ The architecture must support:
 - complete-cell evaluation plus genuine interactive stdin;
 - precise state, interrupt, and failure behavior;
 - bounded model-facing output with complete retained streams;
-- a generated Quarto transcript;
+- generated Markdown and source-only Quarto documents;
 - process-scoped human observation and typed large-object inspection;
 - process-level isolation around arbitrary code.
 
@@ -85,7 +85,7 @@ Backend transport must not leak into MCP, session, transcript, or local sidecar 
 12. Full explicit stream output remains outside model context.
 13. Known large values are previewed before full textual materialization.
 14. Restart and crash create explicit state-loss boundaries.
-15. The QMD transcript is generated from a more authoritative internal record.
+15. The Markdown transcript and source-only QMD are generated from a more authoritative internal record.
 16. Runtime transport is encapsulated.
     Ark/Jupyter or a native `harp`/`libr` worker may implement the same service, but backend-specific types never cross the adapter boundary.
 17. Live-object inspection is typed, bounded, revisioned, and distinct from arbitrary evaluation.
@@ -158,7 +158,7 @@ An Ark-backed implementation must still provide:
 - minimal and truthful Python/SQL bridge frames and source locations;
 - compact MCP wait and polling semantics;
 - bounded text output and managed sidecars;
-- named sessions, requirement manifests, sandbox policy, and QMD transcripts;
+- named sessions, requirement manifests, sandbox policy, and generated session documents;
 - a process-scoped local API that proxies or translates Ark comms rather than exposing them directly;
 - an upgrade strategy that avoids an unmaintainable fork.
 
@@ -317,7 +317,7 @@ Responsibilities:
 - launch workers under explicit sandbox policy;
 - own command, sideband, control, stdout, and stderr channels;
 - enforce wait, polling, cancellation, and output-budget behavior;
-- write output spools, internal records, and QMD projections;
+- write output spools, internal records, and document projections;
 - report worker crashes without corrupting MCP stdout;
 - restart, close, and retain session files according to policy.
 
@@ -488,12 +488,12 @@ There is no universal interpreted R call such as `.mcp_console_eval(id)` around 
 
 The stack contract is intentionally asymmetric:
 
-| Input | Required semantic boundary | Console-owned interpreted R frame |
-| --- | --- | ---: |
-| R | native top-level R cell behavior | no |
-| Python | private reticulate cell boundary | minimal and truthful if present |
-| SQL | private DBI/DuckDB boundary | minimal and truthful if present |
-| stdin | append to worker input stream | no new top-level frame |
+| Input  | Required semantic boundary       | Console-owned interpreted R frame |
+| ------ | -------------------------------- | --------------------------------: |
+| R      | native top-level R cell behavior |                                no |
+| Python | private reticulate cell boundary |   minimal and truthful if present |
+| SQL    | private DBI/DuckDB boundary      |   minimal and truthful if present |
+| stdin  | append to worker input stream    |            no new top-level frame |
 
 This asymmetry follows the actual implementation boundaries and should be documented rather than concealed.
 
@@ -788,14 +788,18 @@ R packages may declare requirements by calling `py_require()` from load hooks.
 For a server-managed worker, seed reticulate's manifest and intercept its internal `uv_get_or_create_env` and `resolve_python_version` bindings rather than wrapping `py_require()`.
 This retains originating-package attribution, manifest history, and reticulate's native validation and activation behavior within the live R process.
 The environment binding reports the physical resolver manifest and the logical manifest to retain if accepted, together with the worker's `UV_*` settings except `UV_OFFLINE`, and waits for the host resolver to return an interpreter path.
-The version binding reports only the requested constraints and UV settings, then waits for the host resolver to return the selected version without creating a candidate environment.
+The version binding reports only the requested constraints and `uv` settings, then waits for the host resolver to return the selected version without creating a candidate environment.
 
-If reticulate is loaded but Python remains uninitialized at cell end, the worker calls the replacement resolver to materialize the final manifest before completing.
-After initialization, reticulate resolves late additions with the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged, and each host result remains only a candidate until the evaluation completes.
+Before initialization, a lazy `py_require()` declaration remains worker-owned until Python initializes or explicit preparation materializes it.
+Losing the worker before either boundary can therefore lose that declaration.
+After initialization, reticulate resolves late additions with the exact active Python patch version while leaving the logical `py_require()` Python constraints unchanged, and each host result remains only a candidate until reticulate accepts it.
 Reticulate must verify that it uses the exact live `libpython`, run the candidate's `activate_this.py`, swap its Python configuration, and update its manifest.
-The worker reports only the normalized final manifest on `completed`; the supervisor accepts the last matching candidate, or its prior environment when that manifest did not change.
+The worker then reports the normalized logical manifest through a standalone `python_activated` event.
+The supervisor immediately accepts the matching candidate, or its prior environment when that manifest did not change.
+Acceptance and the restart-generation check are atomic; a receipt still pending when restart claims the generation is discarded with that worker.
+The `completed` and `python_prepared` operation receipts carry no Python manifest.
 The Python interpreter and its live objects remain in place throughout a successful activation.
-Reticulate owns the live manifest during an evaluation, while the supervisor owns the last accepted checkpoint between evaluations and worker generations.
+Reticulate owns the live manifest, while the supervisor owns the last reported activation between worker generations.
 
 Only newly added package requirements fit the v1 late-layering contract.
 Removals and constraint changes remain unsupported after initialization.
@@ -803,17 +807,17 @@ Idle `session prepare` uses this path for compatible Python additions; mixed R a
 
 ### 14.2 R
 
-The implemented implicit session uses IR for explicit R requirements.
+The implemented implicit session uses `ir` for explicit R requirements.
 The supervisor requires `ir --version` from `PATH` to report 0.4.0 or later, then runs `ir run` outside the worker sandbox with the same Rscript selection as the worker and one `--with` argument per exact requirement.
-It validates IR's returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
+It validates `ir`'s returned library and prepends it to inherited `R_LIBS` before each worker generation initializes R.
 The prepared library persists across explicit restart and crash replacement.
 While the built-in worker is idle, the supervisor can resolve the complete additive R requirement set and ask a fixed private R bridge to prepend the candidate to `.libPaths()` and remove the previous managed entry.
 Each candidate contains the complete retained R requirement set, so replacing the previous managed entry keeps live package lookup consistent with restart and crash replacement instead of accumulating stale candidates.
 The bridge preserves the other live library paths and in-memory state.
 Only after the worker confirms the normalized library path does the supervisor retain that library for later generations.
 The supervisor sets `IR_NO_LOCAL_SOURCES` for every invocation.
-IR owns package-reference parsing and prevents direct or transitive local package installation before materialization.
-This does not sandbox build code from accepted repository or remote packages, and IR may reuse an already materialized library.
+`ir` owns package-reference parsing and prevents direct or transitive local package installation before materialization.
+This does not sandbox build code from accepted repository or remote packages, and `ir` may reuse an already materialized library.
 The exact package-reference grammar belongs in a later `docs/DEPENDENCIES.md`.
 
 ### 14.3 Atomic public behavior
@@ -824,14 +828,15 @@ Before worker startup, an explicit `prepare` action remains atomic:
 2. resolve and prepare the candidate environment outside the arbitrary-code worker;
 3. commit the R library, Python interpreter, and manifests only after every requested resolution succeeds.
 
-After startup, preparation remains an atomic public operation while the built-in worker is idle:
+After startup, live preparation has one immediate Python commitment boundary:
 
 1. merge additions into the complete retained R and Python requirement sets;
-2. resolve each new candidate through its language-specific host resolver without changing the retained checkpoints;
+2. resolve each new candidate through its language-specific host resolver;
 3. apply the R candidate through the private `.libPaths()` bridge and compatible Python additions through reticulate;
-4. commit both retained configurations only after every requested live change succeeds and the worker generation is still current.
+4. retain a Python environment immediately when the worker reports `python_activated` or successful explicit materialization;
+5. retain the R and DuckDB configurations only after every requested live change succeeds and the worker generation is still current.
 
-A failure leaves the prior retained configuration unchanged.
+A later R failure does not roll back a Python environment already accepted during the same mixed operation.
 If a synchronized failure may have partially changed the live worker, the supervisor keeps it available for evaluation but rejects new requirement additions until a successful explicit restart.
 This gives the caller an opportunity to save in-memory state before replacing the worker.
 Transport or protocol failures still stop a worker whose usability is unknown.
@@ -843,21 +848,26 @@ Its `restart` action reuses the retained R library and accepts only optional Pyt
 
 An explicit `restart` with requirements is atomic until the worker replacement boundary:
 
-1. merge additions into the complete checkpointed manifest;
+1. merge additions into the complete retained manifest;
 2. resolve the candidate outside the arbitrary-code worker while the current worker remains intact;
 3. leave the current worker, manifest, and interpreter unchanged if resolution fails;
 4. after resolution succeeds, commit the candidate and replace the worker.
 
-During a server-managed worker evaluation, runtime layering is atomic at `completed`:
+The ordered dispatcher still validates semantic events queued before the old generation's retirement marker.
+If restart reuses the retained environment, successful old-generation preparation results and managed-Python activations commit before replacement.
+If restart has already committed a newly resolved environment, those successful old-generation environment commits are discarded so they cannot overwrite the replacement, and a discarded preparation reports restart cancellation.
+Worker-reported preparation failures and protocol, resolver, or environment-commit failures remain failures.
+
+During a server-managed worker evaluation, runtime layering follows activation events:
 
 1. reticulate updates its live manifest and requests host resolution when it needs an environment;
-2. the supervisor retains every resolved candidate for that evaluation without changing its checkpoint;
+2. the supervisor retains each resolved result as a candidate;
 3. reticulate performs its exact-`libpython` check, activation, and configuration swap when Python is already initialized;
-4. the worker materializes an uninitialized final manifest when needed and reports the normalized manifest on `completed`;
-5. the supervisor accepts the last matching candidate or its unchanged prior environment, then updates its checkpoint.
+4. the worker reports the accepted logical manifest through `python_activated`;
+5. the supervisor immediately retains the matching candidate or its unchanged prior environment.
 
-Normal language outcomes reach this boundary because their state remains live in the worker.
-An infrastructure or protocol failure before `completed` discards the evaluation's candidates and leaves the prior checkpoint unchanged.
+A later normal-language, infrastructure, or protocol failure does not roll back an already reported activation.
+Candidates without a matching activation event are discarded when the operation ends.
 
 ## 15. Output architecture
 
@@ -930,16 +940,18 @@ The transcript links to the same files.
 
 ### 16.1 Directory layout
 
-The implemented journal-only slice creates one run-specific directory at `.mcp-console/sessions/<UTC-first-use>-<pid>/` when the first ordinary `send` or `session` call arrives, with `artifacts/` and `internal/events.jsonl` beneath it.
+The implemented slice creates one run-specific directory at `.agents/console/sessions/<UTC-first-use>-<pid>/` when the first ordinary `send` call arrives, with `transcript.md`, `transcript.qmd`, `artifacts/`, and `internal/events.jsonl` beneath it.
 Initialization, tool listing, unknown tool calls, and an unused server process create no record.
-On Unix, it creates the record directories with mode `0700` and journal and artifact files with mode `0600`.
+On Unix, it creates the record directories with mode `0700` and journal, document, and artifact files with mode `0600`.
 Its journal records MCP tool calls and results plus image artifacts when worker frames arrive; it does not yet implement the complete evaluation-event vocabulary below.
-Recording is optional: the first recording failure disables it for that server process, emits one diagnostic to standard error, and does not change console results or worker lifecycle.
+Recording is optional: the first journal or artifact failure disables it for that server process, emits one diagnostic to standard error, and does not change console results or worker lifecycle.
+Failure of either generated document disables both projections while the journal and artifacts continue.
 An existing journal may therefore end with the last successfully flushed event.
-The generated transcript and named-session design will replace that temporary run identity with the planned layout below:
+The named-session design will replace that temporary run identity with the planned layout below:
 
 ```text
-.mcp-console/sessions/default/
+.agents/console/sessions/default/
+├── transcript.md
 ├── transcript.qmd
 ├── environment.json
 ├── outputs/
@@ -976,19 +988,26 @@ generation_started
 This file is not the normal agent-facing artifact and need not expose Rust's internal serialization directly.
 Give it an explicit private schema version.
 
-### 16.3 Generated QMD
+### 16.3 Generated documents
 
-`transcript.qmd` is the compact human- and agent-facing projection.
-Update it at stable boundaries: completion, error, interruption, input request, worker stop, and generation change.
+`transcript.md` is the compact human- and agent-facing projection.
+The current server appends once for each recorded session, call, artifact, or result event.
+The planned evaluation-event vocabulary adds explicit completion, error, interruption, input-request, worker-stop, and generation-change boundaries.
 
-It contains complete source, labels, bounded output, errors, supplied input when safe, and relative artifact paths.
-It is marked non-executing and generated.
+It contains complete source, labels, bounded output, errors, supplied input, and relative artifact paths without redaction.
+It is generated and formatted with Yamark without applying embedded formatters to submitted code or result content.
+
+`transcript.qmd` contains source from calls with exactly one submitted R, Python, or SQL field in call order, including source from a call that later fails option validation or preparation.
+It is regenerated from incremental source and requirement state when those inputs change, without rereading prior result events from the journal.
+Its `ir` front matter records those declarations without selecting a Python version, so reticulate chooses its default managed Python when users run `ir render`.
+Yamark formatting does not rewrite submitted cells, and rendering executes the captured client-authored action stream in a fresh environment.
+The direction is to reproduce the analysis represented by the Markdown transcript, while accepting that runtime state, artifacts, and SQL connections are not fully reconstructable yet.
 
 Do not continuously embed unlimited output.
 Refer to full output sidecars when excerpts are insufficient.
 
-Do not let agents edit the live generated transcript in place.
-Refined notebooks, reports, and scripts are separate files created from the transcript and runtime artifacts.
+Do not let agents edit the live generated documents in place.
+Refined notebooks, reports, and scripts are separate files created from the transcript, code-cell projection, and runtime artifacts.
 
 ## 17. Session manager and concurrency
 
@@ -1125,7 +1144,7 @@ Required scenarios include:
 - bounded stdout/stderr and sidecars;
 - bounded R, Python, and SQL values;
 - plot paths;
-- QMD transcript recovery;
+- generated-document recovery;
 - sandbox restrictions.
 
 ### 22.2 Stack-semantics tests
@@ -1198,10 +1217,10 @@ Exit: persistent R, visible values, `readline()`, `browser()`, large live-table 
 
 - add output spools and reply cursors;
 - add structural previews;
-- add internal journal and generated QMD;
+- extend the internal journal and generated documents with evaluation-level events and bounded output references;
 - add plot/artifact files and full-resolution viewer delivery.
 
-Exit: no tested reply exceeds its configured budget and the QMD reconstructs useful session history.
+Exit: no tested reply exceeds its configured budget and the Markdown transcript reconstructs useful session history.
 
 ### Milestone 4: reticulate Python
 
@@ -1265,7 +1284,7 @@ Exit: supported-platform security and resource tests pass in CI.
 11. **DuckDB environment scan:** verify the exact R environment used, name precedence, rebinding, and registration lifetimes.
 12. **DuckDB bounded fetch:** compare bounded DBI, Arrow, and record-batch paths and confirm interruption behavior.
 13. **Output ordering:** define the merge contract for managed events and raw process streams.
-14. **Transcript recovery:** choose incremental QMD updates versus deterministic rebuild on startup.
+14. **Transcript recovery:** define recovery for a partial final Markdown append or interrupted QMD replacement without mutating the authoritative journal.
 15. **Cancellation:** define exact mapping between MCP cancellation, initiating calls, later poll waiters, and runtime interrupts.
 
 Resolve the remaining portions of spikes 1–8 before treating the full backend substrate as settled.

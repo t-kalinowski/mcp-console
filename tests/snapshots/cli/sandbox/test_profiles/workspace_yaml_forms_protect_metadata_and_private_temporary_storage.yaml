@@ -1,0 +1,21 @@
+---
+configuration: |
+  extends: ":workspace"
+cli_writable_parent: true
+stdout: >
+  project edits; readable metadata; denied writes, creation, deletion,
+  replacement and child mutations; private-only temp
+stderr: ""
+---
+configuration: |
+  extends: :workspace
+  sandbox:
+    filesystem:
+      entries:
+        - path: {type: path, path: ..}
+          access: write
+cli_writable_parent: false
+stdout: >
+  project edits; readable metadata; denied writes, creation, deletion,
+  replacement and child mutations; private-only temp
+stderr: ""

@@ -1,0 +1,20 @@
+---
+configuration: |
+  extends: ":workspace"
+  sandbox:
+    filesystem:
+      kind: {restricted: null}
+      future_native_field: true
+      entries:
+        - path: {type: path, path: .claude}
+          access: write
+        - path: {type: path, path: .agents/allowed}
+          access: write
+        - path: {type: path, path: .git/keep}
+          access: deny
+        - path: {type: special, value: {kind: unknown, path: ":future"}}
+          access: read
+stdout: >
+  equal-path and descendant write exceptions, native field forwarding and
+  read denial verified
+stderr: ""

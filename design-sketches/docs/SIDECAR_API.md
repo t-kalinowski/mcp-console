@@ -266,7 +266,7 @@ A session snapshot includes bounded current state:
     "label": "Fit candidate models",
     "started_at": "2026-07-26T22:20:11Z"
   },
-  "transcript": "transcript.qmd",
+  "transcript": "transcript.md",
   "artifact_count": 7
 }
 ```

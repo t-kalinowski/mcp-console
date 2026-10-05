@@ -1,0 +1,45 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: violate protocol after stdout
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8041
+        concat:
+          - |
+            zod old stdout
+          - repeat: x
+            count: 3825
+          - |
+
+            [output preview: omitted 4186655 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 4194335 raw bytes retained, 0 raw bytes not retained]
+          - repeat: y
+            count: 3824
+          - |-
+            zod stdout tail
+            [worker sent an unexpected ready message]
+            [worker terminated by signal 9]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            [idle]
+  isError: true
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false

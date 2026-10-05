@@ -1,295 +1,234 @@
 use std::ffi::OsString;
-use std::process::ExitCode;
+use std::path::PathBuf;
+use std::process::{Command, ExitCode, Stdio};
 
-#[cfg(target_os = "macos")]
-use std::ffi::OsStr;
-#[cfg(target_os = "macos")]
-use std::os::unix::process::CommandExt as _;
-#[cfg(target_os = "macos")]
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
-#[cfg(target_os = "macos")]
-use std::time::Duration;
+use serde_json::{Value, json};
 
-#[cfg(target_os = "macos")]
-use wait_timeout::ChildExt as _;
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+mod installation;
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+mod runner;
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+mod unsupported;
 
-#[cfg(target_os = "macos")]
-#[path = "sandbox/macos.rs"]
-mod platform;
+const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
-#[cfg(not(target_os = "macos"))]
-#[path = "sandbox/unsupported.rs"]
-mod platform;
-
-#[cfg(target_os = "macos")]
-pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
-    let (program, arguments) = command_line
-        .split_first()
-        .expect("sandbox command must include a program");
-    let mut sandboxed = SandboxedCommand::new(program)?;
-    sandboxed
-        .args(arguments)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    sandboxed.status()
+pub fn capture_settings(
+    roots: Vec<PathBuf>,
+    overrides: &[String],
+) -> Result<crate::settings::SandboxSettings, String> {
+    let crate::settings::Captured {
+        source,
+        policy: settings,
+        ..
+    } = crate::settings::discover(overrides)?;
+    capture_policy(source.as_deref(), settings, roots)
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn run(command_line: &[OsString]) -> Result<ExitCode, String> {
-    platform::run(command_line)
-}
-
-#[cfg(target_os = "macos")]
-/// A command configured to run under the macOS sandbox.
-///
-/// The public sandbox transcript exercises this interaction. This example is
-/// ignored as a doctest because the type is crate-private in a binary target.
-///
-/// # Example
-///
-/// ```ignore
-/// use crate::sandbox::SandboxedCommand;
-/// use std::ffi::OsStr;
-/// use std::io::{Read, Write};
-/// use std::process::Stdio;
-///
-/// fn read_echo(mut stream: impl Read) -> [u8; 6] {
-///     let mut output = [0; 6];
-///     stream
-///         .read_exact(&mut output)
-///         .expect("output should be readable");
-///     output
-/// }
-///
-/// let script = r#"
-/// import sys
-///
-/// for line in sys.stdin:
-///     if line == "EXIT\n":
-///         break
-///
-///     sys.stdout.write(line)
-///     sys.stdout.flush()
-///     sys.stderr.write(line)
-///     sys.stderr.flush()
-/// "#;
-///
-/// let mut command =
-///     SandboxedCommand::new(OsStr::new("python")).expect("sandbox should be configured");
-/// command
-///     .args(["-c", script])
-///     .stdin(Stdio::piped())
-///     .stdout(Stdio::piped())
-///     .stderr(Stdio::piped());
-///
-/// let mut child = command.spawn().expect("sandboxed Python should spawn");
-/// let mut stdin = child.take_stdin().expect("stdin should be piped");
-/// let stdout = child.take_stdout().expect("stdout should be piped");
-/// let stderr = child.take_stderr().expect("stderr should be piped");
-/// let stdout = std::thread::spawn(move || read_echo(stdout));
-/// let stderr = std::thread::spawn(move || read_echo(stderr));
-///
-/// stdin
-///     .write_all(b"hello\n")
-///     .expect("input should be written");
-/// assert_eq!(stdout.join().expect("stdout reader should finish"), *b"hello\n");
-/// assert_eq!(stderr.join().expect("stderr reader should finish"), *b"hello\n");
-///
-/// stdin
-///     .write_all(b"EXIT\n")
-///     .expect("EXIT should be written");
-/// assert!(child.wait().expect("child should exit").success());
-/// ```
-pub(crate) struct SandboxedCommand {
-    command: Command,
-    temporary_directory: platform::TemporaryDirectory,
-}
-
-#[cfg(target_os = "macos")]
-/// A direct sandboxed child that retains its private temporary directory.
-///
-/// Retain this owner until the child exits, then call `wait`. Dropping it does
-/// not terminate the child and removes the private directory. Background
-/// descendants are unsupported and may outlive this owner. Piped streams can
-/// be taken and moved to independent I/O tasks before waiting.
-#[must_use = "retain the sandboxed child until it is explicitly waited"]
-pub(crate) struct SandboxedChild {
-    child: Child,
-    _temporary_directory: platform::TemporaryDirectory,
-}
-
-#[cfg(target_os = "macos")]
-impl SandboxedCommand {
-    pub(crate) fn new(program: &OsStr) -> Result<Self, String> {
-        let (command, temporary_directory) = platform::sandboxed_command()?;
-        let temporary_directory_path = temporary_directory.path().as_os_str().to_os_string();
-        let mut sandboxed = Self {
-            command,
-            temporary_directory,
-        };
-        sandboxed
-            .env("TMPDIR", temporary_directory_path)
-            .arg(program);
-        Ok(sandboxed)
+fn capture_policy(
+    source: Option<&str>,
+    settings: crate::settings::SandboxSettings,
+    roots: Vec<PathBuf>,
+) -> Result<crate::settings::SandboxSettings, String> {
+    let workspace = std::env::current_dir()
+        .map_err(|error| format!("cannot find launch workspace: {error}"))?;
+    let settings = materialize_settings(settings, roots, &workspace)?;
+    if let Some(source) = source {
+        preflight(&settings).map_err(|error| format!("{source}: {error}"))?;
     }
+    Ok(settings)
+}
 
-    pub(crate) fn arg(&mut self, argument: impl AsRef<OsStr>) -> &mut Self {
-        self.command.arg(argument);
-        self
+/// Apply execution-host additions to an explicitly selected policy. No discovery.
+pub fn materialize_settings(
+    mut settings: crate::settings::SandboxSettings,
+    roots: Vec<PathBuf>,
+    workspace: &std::path::Path,
+) -> Result<crate::settings::SandboxSettings, String> {
+    let selected = settings.contains_key("extends");
+    let workspace_profile = settings.get("extends").and_then(Value::as_str) == Some(":workspace");
+    if selected {
+        settings.insert(
+            "workspace".into(),
+            resolve_writable_root(".".into(), workspace)?.into(),
+        );
     }
-
-    pub(crate) fn args<I, S>(&mut self, arguments: I) -> &mut Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        for argument in arguments {
-            self.arg(argument);
+    if workspace_profile {
+        // Preserve explicit native values, including null and malformed inputs.
+        if let Value::Object(options) = settings
+            .entry("workspace_options")
+            .or_insert_with(|| json!({}))
+        {
+            options
+                .entry("exclude_tmpdir_env_var")
+                .or_insert(true.into());
+            options.entry("exclude_slash_tmp").or_insert(true.into());
         }
-        self
     }
-
-    /// Adds an environment variable inherited by the sandboxed program.
-    ///
-    /// macOS filters `DYLD_*` variables when launching `sandbox-exec`; this
-    /// wrapper intentionally does not restore them inside the sandbox.
-    /// `TMPDIR` is reserved and reset to the private directory when spawning.
-    pub(crate) fn env(&mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> &mut Self {
-        self.command.env(key, value);
-        self
+    let writable_roots = roots
+        .into_iter()
+        .map(|path| resolve_writable_root(path, workspace))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Augment the captured application policy once. Other shapes and kinds
+    // remain untouched for native validation.
+    if !selected || workspace_profile || !writable_roots.is_empty() {
+        settings.entry("filesystem").or_insert_with(|| json!({}));
     }
-
-    pub(crate) fn stdin(&mut self, configuration: Stdio) -> &mut Self {
-        self.command.stdin(configuration);
-        self
-    }
-
-    pub(crate) fn stdout(&mut self, configuration: Stdio) -> &mut Self {
-        self.command.stdout(configuration);
-        self
-    }
-
-    pub(crate) fn stderr(&mut self, configuration: Stdio) -> &mut Self {
-        self.command.stderr(configuration);
-        self
-    }
-
-    /// Isolates a background sandbox command for bounded forced termination.
-    pub(crate) fn new_process_group(&mut self) -> &mut Self {
-        self.command.process_group(0);
-        self
-    }
-
-    /// Spawns the sandboxed program and transfers the temporary-directory
-    /// guard to the returned child.
-    pub(crate) fn spawn(mut self) -> Result<SandboxedChild, String> {
-        self.command.env("TMPDIR", self.temporary_directory.path());
-        let child = self
-            .command
-            .spawn()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))?;
-        Ok(SandboxedChild {
-            child,
-            _temporary_directory: self.temporary_directory,
-        })
-    }
-
-    pub(crate) fn status(self) -> Result<ExitCode, String> {
-        let status = self.spawn()?.wait()?;
-        Ok(platform::exit_code(status))
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl SandboxedChild {
-    #[allow(dead_code, reason = "used by spawned callers with piped stdin")]
-    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
-    }
-
-    #[allow(dead_code, reason = "used by spawned callers with piped stdout")]
-    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
-    }
-
-    #[allow(dead_code, reason = "used by spawned callers with piped stderr")]
-    pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
-        self.child.stderr.take()
-    }
-
-    pub(crate) fn wait(mut self) -> Result<ExitStatus, String> {
-        self.child
-            .wait()
-            .map_err(|error| format!("failed to launch `{}`: {error}", platform::SANDBOX_EXEC))
-    }
-
-    /// Waits at most `timeout` for the direct sandbox process to exit.
-    pub(crate) fn wait_timeout(&mut self, timeout: Duration) -> Result<Option<ExitStatus>, String> {
-        self.child.wait_timeout(timeout).map_err(|error| {
-            format!(
-                "failed to wait for `{}` to exit: {error}",
-                platform::SANDBOX_EXEC
-            )
-        })
-    }
-
-    /// Kills the live sandbox process group and reaps its direct process.
-    ///
-    /// Full descendant supervision, including a group whose leader has already
-    /// exited, belongs to the sandbox lifetime supervisor.
-    pub(crate) fn force_stop(&mut self) -> Result<(), String> {
-        match self.child.try_wait() {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) => {}
-            Err(error) => {
-                return Err(format!(
-                    "failed to read `{}` status before stopping it: {error}",
-                    platform::SANDBOX_EXEC
-                ));
-            }
+    let mut restricted = selected && !settings.contains_key("filesystem");
+    if let Some(Value::Object(filesystem)) = settings.get_mut("filesystem") {
+        restricted = crate::settings::native_variant_name(
+            filesystem
+                .entry("kind")
+                .or_insert_with(|| "restricted".into()),
+        ) == Some("restricted");
+        if restricted || !writable_roots.is_empty() {
+            filesystem.entry("entries").or_insert_with(|| json!([]));
         }
-
-        // `new_process_group` made the child's PID its process-group ID. If
-        // descendant cleanup fails, still stop and reap the direct child while
-        // preserving that error so a replacement is not started.
-        if let Err(group_error) = platform::kill_process_group(self.child.id()) {
-            let group_error = format!(
-                "failed to stop `{}` process group: {group_error}",
-                platform::SANDBOX_EXEC
-            );
-            match self.child.try_wait() {
-                Ok(Some(_)) => return Err(group_error),
-                Ok(None) => {}
-                Err(error) => {
-                    return Err(format!(
-                        "{group_error}; failed to read `{}` status: {error}",
-                        platform::SANDBOX_EXEC
-                    ));
+        if let Some(Value::Array(entries)) = filesystem.get_mut("entries") {
+            for entry in entries.iter_mut() {
+                if entry.pointer("/path/type").and_then(Value::as_str) == Some("path")
+                    && let Some(Value::String(path)) = entry.pointer_mut("/path/path")
+                {
+                    *path = resolve_writable_root(PathBuf::from(&*path), workspace)?;
                 }
             }
-            if let Err(error) = self.child.kill()
-                && error.raw_os_error() != Some(libc::ESRCH)
-            {
-                return Err(format!(
-                    "{group_error}; failed to stop direct `{}` process: {error}",
-                    platform::SANDBOX_EXEC
-                ));
+            if restricted && !selected {
+                entries.insert(
+                    0,
+                    json!({
+                        "path": {"type": "special", "value": {"kind": "root"}},
+                        "access": "read",
+                    }),
+                );
             }
-            return match self.child.wait() {
-                Ok(_) => Err(group_error),
-                Err(error) => Err(format!(
-                    "{group_error}; failed to reap direct `{}` process: {error}",
-                    platform::SANDBOX_EXEC
-                )),
-            };
+            if restricted && workspace_profile {
+                // This is an ordinary read grant, subject to native precedence.
+                // The constructor supplies the other workspace metadata defaults.
+                entries.push(json!({
+                    "path": {"type": "special", "value": {"kind": "project_roots", "subpath": ".claude"}},
+                    "access": "read",
+                }));
+            }
+            entries.extend(writable_roots.into_iter().map(|root| {
+                json!({
+                    "path": {"type": "path", "path": root},
+                    "access": "write",
+                })
+            }));
         }
-
-        self.child.wait().map(|_| ()).map_err(|error| {
-            format!(
-                "failed to reap stopped `{}`: {error}",
-                platform::SANDBOX_EXEC
-            )
-        })
     }
+    if !selected {
+        settings
+            .entry("network")
+            .or_insert_with(|| "restricted".into());
+    }
+    if settings.get("proxy").is_some_and(Value::is_null) {
+        settings.remove("proxy");
+    }
+    if cfg!(target_os = "macos") && restricted {
+        settings
+            .entry("macos_seatbelt_profile_extension")
+            .or_insert_with(|| include_str!("sandbox/policy_extensions.sbpl").into());
+    }
+    crate::settings::preserve_environment(&mut settings, [(MARKER.as_ref(), Some("1".as_ref()))])?;
+    Ok(settings)
+}
+
+/// Validate native policy and setup for the standalone sandbox command.
+/// The child explicitly consumes the snapshot, so it cannot rediscover settings.
+fn preflight(settings: &crate::settings::SandboxSettings) -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot locate sandbox launcher: {error}"))?;
+    let payload = serde_json::to_string(settings)
+        .map_err(|error| format!("cannot encode sandbox settings: {error}"))?;
+    let mut command = Command::new(executable);
+    command
+        .args(["sandbox", "--exit-with-parent"])
+        .arg(std::process::id().to_string())
+        .args(["--settings-env", crate::settings::ENVIRONMENT, "--"])
+        .env(crate::settings::ENVIRONMENT, payload)
+        .stdin(Stdio::null());
+    #[cfg(unix)]
+    command.arg("/usr/bin/true");
+    #[cfg(windows)]
+    command
+        .arg(
+            std::path::PathBuf::from(
+                std::env::var_os("SystemRoot").ok_or("SystemRoot is unavailable")?,
+            )
+            .join("System32")
+            .join("cmd.exe"),
+        )
+        .args(["/d", "/c", "exit", "0"]);
+    let output = command
+        .output()
+        .map_err(|error| format!("cannot start sandbox preflight: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "sandbox preflight failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim_end()
+        ));
+    }
+    Ok(())
+}
+
+/// Capture launch-relative paths without hiding symlinks from runner validation.
+fn resolve_writable_root(path: PathBuf, workspace: &std::path::Path) -> Result<String, String> {
+    let root = std::path::absolute(workspace.join(&path))
+        .map_err(|error| format!("cannot resolve writable root '{}': {error}", path.display()))?;
+    // The runner configuration carries paths as JSON strings.
+    root.into_os_string()
+        .into_string()
+        .map_err(|_| format!("writable root '{}' is not valid UTF-8", path.display()))
+}
+
+pub fn run(
+    command: &[OsString],
+    exit_with_parent: Option<u32>,
+    config_env: Option<&str>,
+    settings_env: Option<&str>,
+    writable_roots: Vec<PathBuf>,
+    overrides: &[String],
+) -> Result<ExitCode, String> {
+    if !overrides.is_empty() && (config_env.is_some() || settings_env.is_some()) {
+        return Err(
+            "configuration overrides cannot be combined with --config-env or --settings-env".into(),
+        );
+    }
+    let settings = if config_env.is_some() {
+        crate::settings::SandboxSettings::default()
+    } else if let Some(name) = settings_env {
+        crate::settings::from_environment(name)?
+    } else {
+        capture_settings(writable_roots, overrides)?
+    };
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    {
+        runner::run(
+            command,
+            exit_with_parent,
+            config_env,
+            settings_env,
+            settings,
+        )
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = (exit_with_parent, config_env, settings_env, settings);
+        unsupported::run(command)
+    }
+}
+
+#[cfg(windows)]
+pub fn windows_setup(status: bool, state_dir: Option<PathBuf>) -> Result<ExitCode, String> {
+    let mut runner = Command::new(installation::private_runner()?);
+    runner.arg(if status { "status" } else { "setup" });
+    if let Some(state_dir) = state_dir {
+        runner.arg("--state-dir").arg(state_dir);
+    }
+    let status = runner
+        .status()
+        .map_err(|error| format!("failed to launch Windows sandbox setup: {error}"))?;
+    Ok(ExitCode::from(status.code().unwrap_or(1) as u8))
 }

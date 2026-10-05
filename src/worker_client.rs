@@ -1,68 +1,239 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
+mod configuration;
+mod control;
 mod environment;
 mod evaluation;
+mod execution;
 mod lifecycle;
 mod output;
+mod send;
 
-#[cfg(target_os = "macos")]
-#[path = "worker_client/macos.rs"]
+#[cfg(any(unix, windows))]
+mod events;
+
+#[cfg(any(unix, windows))]
+mod transport;
+
+#[cfg(any(unix, windows))]
+#[path = "worker_client/process.rs"]
 mod platform;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(unix, windows)))]
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
-use environment::Environment;
-pub(crate) use environment::{PrepareResult, Requirements};
-use evaluation::{Evaluation, EvaluationWait};
-use lifecycle::{LifecycleControl, WorkerGeneration};
-#[cfg(target_os = "macos")]
-use output::DirectOutput;
+pub(crate) use configuration::ClientConfiguration;
+use configuration::RResolver;
+use environment::{Environment, PythonEnvironment, RuntimeRResolutionFailure};
+pub(crate) use environment::{Requirements, RequirementsAction};
+use evaluation::Evaluation;
+use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
 pub(crate) use output::{Content, Response, ResponseDelivery};
-use output::{OutputTape, SendFailure, SendResponse};
+use output::{OutputTape, SendFailure};
 
-#[cfg(target_os = "macos")]
-const DEFAULT_R_REQUIREMENTS: &[&str] = &[
+pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
-    "github::rstudio/reticulate",
+    "reticulate",
     "DBI",
     "duckdb",
     "arrow",
     "nanoarrow",
+    "yyjsonr",
 ];
 
-#[cfg(target_os = "macos")]
-const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json"];
+#[cfg(not(windows))]
+const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json", "sqlite"];
+#[cfg(windows)]
+const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &[];
 
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
+pub(crate) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+const INTERRUPT_GRACE: Duration = Duration::from_millis(100);
 
-/// A cloneable handle to one lazily started worker.
+#[derive(Clone, Copy)]
+pub(crate) enum SendControl {
+    Interrupt,
+    Restart,
+}
+
+pub(crate) struct SendRequest {
+    pub(crate) cell: Option<crate::cell::Cell>,
+    pub(crate) stdin: Option<String>,
+    pub(crate) requirements: Option<Requirements>,
+    pub(crate) control: Option<SendControl>,
+    pub(crate) deadline: Instant,
+    pub(crate) transcript: crate::transcript::Transcript,
+    pub(crate) call_id: Option<u64>,
+}
+
+impl SendRequest {
+    fn validate(&self, requirements_available: bool) -> Result<(), String> {
+        let Some(requirements) = &self.requirements else {
+            return Ok(());
+        };
+        if matches!(
+            requirements.action,
+            RequirementsAction::Set | RequirementsAction::Reset
+        ) && matches!(self.control, Some(SendControl::Interrupt))
+        {
+            return Err("requirements.action=set/reset cannot accompany interrupt; use control=\"restart\" to replace a live environment".into());
+        }
+        if !requirements_available {
+            return Err(
+                "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
+                    .to_string(),
+            );
+        }
+        if self.cell.is_none()
+            && self.control.is_none()
+            && self.stdin.as_ref().is_some_and(|stdin| !stdin.is_empty())
+        {
+            return Err(
+                "requirements-only `send` performs standalone preparation and cannot also queue stdin"
+                    .to_string(),
+            );
+        }
+        if self.cell.is_none() && matches!(self.control, Some(SendControl::Interrupt)) {
+            return Err(
+                "`requirements` with `control = \"interrupt\"` requires a code cell".to_string(),
+            );
+        }
+        // An interrupt and its stdin precede requirement-content errors. Validate
+        // those only after the previous evaluation settles, before the new cell.
+        if !matches!(self.control, Some(SendControl::Interrupt)) {
+            requirements.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// A cloneable handle to the single implicit session, including its startup.
 #[derive(Clone)]
 pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
-    runtime: platform::WorkerRuntime,
-    program: PathBuf,
-    arguments: Vec<OsString>,
-    worker: Mutex<WorkerState>,
+    configuration: OnceLock<ClientConfiguration>,
+    startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
+    /// Settles operations admitted before inline control reserves its optional new cell.
+    admission: tokio::sync::RwLock<()>,
     preparation: tokio::sync::RwLock<()>,
     output: OutputTape,
     lifecycle: Mutex<LifecycleControl>,
-    environment: Option<Mutex<Environment>>,
+    recording: Mutex<Option<crate::transcript::Transcript>>,
+    startup_failed: AtomicBool,
+    startup_stdin: Mutex<String>,
+}
+
+impl std::ops::Deref for ClientInner {
+    type Target = ClientConfiguration;
+
+    fn deref(&self) -> &Self::Target {
+        self.configuration
+            .get()
+            .expect("runtime configuration is ready")
+    }
 }
 
 /// Describes one worker launch for the current runtime.
 struct WorkerSpec<'a> {
+    builtin: bool,
+    languages: Option<crate::cell::Languages>,
     executable: &'a std::path::Path,
     arguments: &'a [OsString],
-    managed_python: Option<&'a crate::resolver::ManagedPython>,
+    relay: Option<&'a std::path::Path>,
+    no_sandbox: bool,
+    sandbox_settings: &'a crate::settings::SandboxSettings,
+    duckdb_extension_directory: Option<&'a std::path::Path>,
+    resolver_matplotlib_cache: Option<&'a str>,
+    python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
+    dynamic_resolution: bool,
+    callbacks: WorkerCallbacks,
+    local_runtime: Option<&'a crate::local_runtime::Selection>,
+}
+
+struct IdleResponseSnapshot {
+    cut: output::OutputCut,
+    failure: Option<String>,
+    input_requested: bool,
+}
+
+type RPreparationCommit =
+    Box<dyn FnOnce(Result<(), String>) -> Result<PreparationOutcome, String> + Send + 'static>;
+
+type PythonCandidate = (crate::resolver::ManagedPython, crate::python::NativePython);
+
+type PythonPreparationCommit = Box<
+    dyn FnOnce(Result<Option<PythonCandidate>, String>) -> Result<PreparationOutcome, String>
+        + Send
+        + 'static,
+>;
+
+enum PreparationOutcome {
+    Completed(Result<(), String>),
+    DiscardedByReplacement,
+}
+
+enum EnvironmentPreparationAdmissionFailure {
+    Busy(String),
+    Infrastructure(String),
+}
+
+#[derive(Clone, Copy)]
+enum WorkerProcessOutcome {
+    Exited(i32),
+    Signaled(i32),
+}
+
+impl WorkerProcessOutcome {
+    fn diagnostic(self) -> String {
+        match self {
+            Self::Exited(code) => format!("worker exited with status {code}"),
+            Self::Signaled(signal) => format!("worker terminated by signal {signal}"),
+        }
+    }
+}
+
+struct WorkerRetirementFailure {
+    message: String,
+    outcome: Option<WorkerProcessOutcome>,
+    can_replace: bool,
+}
+
+impl WorkerRetirementFailure {
+    fn new(message: String, outcome: Option<WorkerProcessOutcome>) -> Self {
+        Self {
+            message,
+            outcome,
+            can_replace: false,
+        }
+    }
+
+    fn attach_to(self, mut failure: SendFailure) -> SendFailure {
+        failure.message.push_str(&format!(
+            "; additionally failed to stop the worker: {}",
+            self.message
+        ));
+        failure.worker_outcome(self.outcome)
+    }
+}
+
+impl From<String> for WorkerRetirementFailure {
+    fn from(message: String) -> Self {
+        Self::new(message, None)
+    }
+}
+
+#[derive(Clone)]
+struct WorkerCallbacks {
+    client: Client,
+    generation: WorkerGeneration,
 }
 
 enum WorkerState {
@@ -75,16 +246,23 @@ enum WorkerState {
 enum WorkerRetirement {
     NeverStarted,
     AlreadyStopped,
-    Stopped,
+    Stopped {
+        outcome: Option<WorkerProcessOutcome>,
+        failed: bool,
+    },
 }
 
 impl WorkerState {
-    fn stop(&mut self, deadline: std::time::Instant) -> Result<WorkerRetirement, String> {
+    fn stop_failed(&mut self) -> Result<WorkerRetirement, WorkerRetirementFailure> {
         match self {
             Self::Running(worker) => {
-                worker.shutdown(deadline)?;
+                let retirement = worker.shutdown_after_failure();
+                let failed = worker.has_failure();
                 *self = Self::Stopped;
-                Ok(WorkerRetirement::Stopped)
+                let outcome = retirement?;
+                let failed =
+                    failed.map_err(|message| WorkerRetirementFailure::new(message, outcome))?;
+                Ok(WorkerRetirement::Stopped { outcome, failed })
             }
             Self::Initial => Ok(WorkerRetirement::NeverStarted),
             Self::Stopped => Ok(WorkerRetirement::AlreadyStopped),
@@ -94,9 +272,10 @@ impl WorkerState {
     fn finish_retirement(&mut self) -> Result<WorkerRetirement, String> {
         match self {
             Self::Running(worker) => {
-                worker.finish_retirement()?;
+                let outcome = worker.finish_retirement()?;
+                let failed = worker.has_failure()?;
                 *self = Self::Stopped;
-                Ok(WorkerRetirement::Stopped)
+                Ok(WorkerRetirement::Stopped { outcome, failed })
             }
             Self::Initial => Ok(WorkerRetirement::NeverStarted),
             Self::Stopped => Ok(WorkerRetirement::AlreadyStopped),
@@ -108,497 +287,231 @@ impl WorkerState {
 struct ActiveEvaluation {
     generation: WorkerGeneration,
     evaluation: Arc<Evaluation>,
+    language: crate::cell::Language,
+    initial_requirements: Arc<Mutex<Option<Requirements>>>,
 }
 
 impl Client {
-    pub(crate) fn new(program: PathBuf) -> Result<Self, String> {
-        Ok(Self::with_arguments(
-            program,
-            Vec::new(),
-            Some(Environment {
-                custom_worker: true,
-                duckdb_extensions: Default::default(),
-                duckdb_r_targets: Vec::new(),
-                python: None,
-                r: None,
-            }),
-        ))
-    }
-
-    pub(crate) fn builtin() -> Result<Self, String> {
-        let program = std::env::current_exe()
-            .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
-        #[cfg(target_os = "macos")]
-        let (r, duckdb_extensions) = {
-            let r = crate::resolver::resolve_r(
-                DEFAULT_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string())
-                    .collect(),
-                |_| Ok(()),
-            )?;
-            let duckdb_extensions = DEFAULT_DUCKDB_EXTENSIONS
-                .iter()
-                .map(|extension| (*extension).to_string())
-                .collect::<Vec<_>>();
-            crate::resolver::resolve_duckdb_extensions(&r, &duckdb_extensions, |_| Ok(()))?;
-            (Some(r), duckdb_extensions.into_iter().collect())
-        };
-        #[cfg(not(target_os = "macos"))]
-        let (r, duckdb_extensions) = (None, Default::default());
-        let python = crate::resolver::resolve_python(&[], |_| Ok(()))?;
-        Ok(Self::with_arguments(
-            program,
-            vec![OsString::from("worker")],
-            Some(Environment {
-                custom_worker: false,
-                duckdb_extensions,
-                duckdb_r_targets: Vec::new(),
-                python,
-                r,
-            }),
-        ))
-    }
-
-    fn with_arguments(
-        program: PathBuf,
-        arguments: Vec<OsString>,
-        environment: Option<Environment>,
-    ) -> Self {
+    pub(crate) fn pending() -> Self {
+        let (startup, _) = tokio::sync::watch::channel(None);
         Self(Arc::new(ClientInner {
-            runtime: platform::WorkerRuntime,
-            program,
-            arguments,
-            worker: Mutex::new(WorkerState::Initial),
+            configuration: OnceLock::new(),
+            startup,
             evaluation: Mutex::new(None),
+            admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
             output: OutputTape::new(),
             lifecycle: Mutex::new(LifecycleControl::new()),
-            environment: environment.map(Mutex::new),
+            recording: Mutex::new(None),
+            startup_failed: AtomicBool::new(false),
+            startup_stdin: Mutex::new(String::new()),
         }))
     }
 
-    /// Starts one cell, supplies its stdin, or polls the cell already running.
-    pub(crate) async fn send(
-        &self,
-        cell: Option<crate::cell::Cell>,
-        stdin: Option<String>,
-        timeout: Duration,
-        transcript: crate::transcript::Transcript,
-        call_id: Option<u64>,
-    ) -> Response {
-        match self
-            .send_inner(cell, stdin, timeout, transcript, call_id)
-            .await
-        {
-            Ok(response) => output::render_response(response),
-            Err(failure) => output::direct_failure(failure.message),
-        }
+    pub(crate) fn configure(&self, configuration: ClientConfiguration) {
+        assert!(self.0.configuration.set(configuration).is_ok());
+        self.0.unused_default.store(
+            self.0.environment.as_ref().is_some_and(|environment| {
+                !environment
+                    .lock()
+                    .expect("worker environment lock")
+                    .custom_worker
+            }),
+            Ordering::Release,
+        );
     }
 
-    async fn send_inner(
-        &self,
-        cell: Option<crate::cell::Cell>,
-        stdin: Option<String>,
-        timeout: Duration,
-        transcript: crate::transcript::Transcript,
-        call_id: Option<u64>,
-    ) -> Result<SendResponse, SendFailure> {
-        let generation = self.admit()?;
-        let preparation = self.admit_send()?;
-        let (evaluation, wait_claim) = match cell {
-            Some(cell) => self.start_evaluation(cell, stdin, generation, transcript, call_id)?,
-            None => match self.current_evaluation()? {
-                Some(active) => {
-                    self.ensure_generation(&generation)?;
-                    if !active.generation.is(&generation) {
-                        return Err("session restarted before the operation began"
-                            .to_string()
-                            .into());
-                    }
-                    let wait_claim = active.evaluation.claim()?;
-                    if let Some(stdin) = stdin {
-                        active.evaluation.submit_stdin(stdin)?;
-                    }
-                    (active.evaluation, wait_claim)
-                }
-                None => {
-                    if let Some(stdin) = stdin
-                        && let Err(failure) = self.write_idle_stdin(stdin, generation.clone()).await
-                    {
-                        match self.generation_status(&generation)? {
-                            lifecycle::GenerationStatus::CurrentReady => {
-                                self.0.output.push_failure(failure);
-                            }
-                            lifecycle::GenerationStatus::CurrentClosing
-                            | lifecycle::GenerationStatus::Changed => {
-                                return Err(failure);
-                            }
-                        }
-                    }
-                    return Ok(SendResponse::Idle(self.take_idle_output(&generation)?));
-                }
-            },
-        };
-        drop(preparation);
-
-        match evaluation.wait(wait_claim, timeout).await? {
-            EvaluationWait::Running(output) => Ok(SendResponse::Running(output)),
-            EvaluationWait::InputRequested(output) => Ok(SendResponse::InputRequested(output)),
-            EvaluationWait::ReplacementStarting(output) => {
-                Ok(SendResponse::ReplacementStarting(output))
+    pub(crate) fn finish_startup(&self, result: Result<(), String>) {
+        self.0.startup.send_if_modified(|outcome| {
+            if outcome.is_some() {
+                return false;
             }
-            EvaluationWait::ReplacementReady(output) => {
-                self.clear_evaluation(&evaluation)?;
-                Ok(SendResponse::ReplacementReady(output))
-            }
-            EvaluationWait::Completed(output) => {
-                self.clear_evaluation(&evaluation)?;
-                Ok(SendResponse::Completed(output))
-            }
-            EvaluationWait::Restarted(output) => Ok(SendResponse::Restarted(output)),
-        }
-    }
-
-    fn start_evaluation(
-        &self,
-        cell: crate::cell::Cell,
-        stdin: Option<String>,
-        generation: WorkerGeneration,
-        transcript: crate::transcript::Transcript,
-        call_id: Option<u64>,
-    ) -> Result<(Arc<Evaluation>, evaluation::WaitClaim), String> {
-        self.ensure_generation(&generation)?;
-
-        let evaluation = Arc::new(Evaluation::new(transcript, call_id, self.0.output.clone()));
-        let wait_claim = evaluation.claim()?;
-        if let Some(stdin) = stdin {
-            evaluation.submit_stdin(stdin)?;
-        }
-
-        let mut active = self.evaluation()?;
-        if active.is_some() {
-            return Err(
-                "worker is already evaluating a cell; poll without a code field".to_string(),
-            );
-        }
-        self.ensure_generation(&generation)?;
-        *active = Some(ActiveEvaluation {
-            generation: generation.clone(),
-            evaluation: evaluation.clone(),
+            *outcome = Some(result);
+            true
         });
-        drop(active);
-
-        let client = self.clone();
-        let evaluator = evaluation.clone();
-        let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, &evaluator, generation);
-        });
-        let failed = evaluation.clone();
-        let _completion_task = tokio::spawn(async move {
-            if let Err(error) = evaluation_task.await {
-                failed.complete_cell(Err(SendFailure::from(format!(
-                    "worker task failed: {error}"
-                ))));
-            }
-        });
-        Ok((evaluation, wait_claim))
     }
 
-    fn current_evaluation(&self) -> Result<Option<ActiveEvaluation>, String> {
-        Ok(self.evaluation()?.clone())
-    }
-
-    fn evaluation(&self) -> Result<MutexGuard<'_, Option<ActiveEvaluation>>, String> {
-        self.0
-            .evaluation
-            .lock()
-            .map_err(|_| "worker evaluation lock poisoned".to_string())
-    }
-
-    fn admit_send(&self) -> Result<tokio::sync::RwLockReadGuard<'_, ()>, String> {
-        self.0
-            .preparation
-            .try_read()
-            .map_err(|_| "session is preparing requirements".to_string())
-    }
-
-    fn admit_preparation(&self) -> Result<tokio::sync::RwLockWriteGuard<'_, ()>, String> {
-        match self.0.preparation.try_write() {
-            Ok(preparation) => Ok(preparation),
-            Err(_) if self.0.preparation.try_read().is_ok() => {
-                Err("[requirements not prepared: worker is starting]".to_string())
-            }
-            Err(_) => Err("session is preparing requirements".to_string()),
-        }
-    }
-
-    async fn write_idle_stdin(
-        &self,
-        stdin: String,
-        generation: WorkerGeneration,
-    ) -> Result<(), SendFailure> {
-        if stdin.is_empty() {
-            return Ok(());
-        }
-        let client = self.clone();
-        tokio::task::spawn_blocking(move || client.write_idle_stdin_blocking(stdin, generation))
-            .await
-            .map_err(|error| SendFailure::from(format!("worker stdin task failed: {error}")))?
-    }
-
-    fn write_idle_stdin_blocking(
-        &self,
-        stdin: String,
-        generation: WorkerGeneration,
-    ) -> Result<(), SendFailure> {
-        self.with_worker(&generation, |worker| {
-            worker.write_stdin(stdin).map_err(SendFailure::from)
-        })
-    }
-
-    fn clear_evaluation(&self, completed: &Arc<Evaluation>) -> Result<(), String> {
-        let mut active = self
-            .0
-            .evaluation
-            .lock()
-            .map_err(|_| "worker evaluation lock poisoned".to_string())?;
-        if active
-            .as_ref()
-            .is_some_and(|active| Arc::ptr_eq(&active.evaluation, completed))
-        {
-            *active = None;
-        }
-        Ok(())
-    }
-
-    /// Drains idle output only while this call still owns the admitted generation.
-    fn take_idle_output(&self, generation: &WorkerGeneration) -> Result<Response, String> {
-        let evaluation = self.evaluation()?;
-        if evaluation.is_some() {
-            return Err("worker started evaluating before idle output was collected".to_string());
-        }
+    fn take_startup_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
         let lifecycle = self
             .0
             .lifecycle
             .lock()
-            .map_err(|_| "worker lifecycle lock poisoned".to_string())?;
-        if lifecycle.state != lifecycle::LifecycleState::Ready
-            || !lifecycle.generation.is(generation)
-        {
-            return Err("session restarted before the operation completed".to_string());
-        }
-        Ok(self.0.output.take())
+            .map_err(|_| "worker lifecycle lock poisoned")?;
+        lifecycle.ensure_generation(generation)?;
+        Ok(self.0.startup_failed.swap(false, Ordering::AcqRel))
     }
 
-    fn evaluate_blocking(
-        &self,
-        cell: crate::cell::Cell,
-        evaluation: &Evaluation,
-        generation: WorkerGeneration,
-    ) {
-        let resolver = self.clone();
-        let version_resolver = self.clone();
-        let checkpointer = self.clone();
-        let resolver_generation = generation.clone();
-        let version_generation = generation.clone();
-        let checkpoint_generation = generation.clone();
-        let result = self.evaluate_with_worker(
-            cell,
-            evaluation,
-            generation,
-            move |request| resolver.resolve_runtime_python(resolver_generation.clone(), request),
-            move |request| {
-                version_resolver.resolve_runtime_python_version(version_generation.clone(), request)
-            },
-            move |checkpoint, candidates| {
-                checkpointer.checkpoint_runtime_python(
-                    checkpoint_generation.clone(),
-                    checkpoint,
-                    candidates,
-                )
-            },
-        );
-        if let Err(failure) = result {
-            evaluation.complete_cell(Err(failure));
-        }
+    pub(crate) async fn ready(&self) -> Result<(), String> {
+        let mut result = self.0.startup.subscribe();
+        let ready = result
+            .wait_for(Option::is_some)
+            .await
+            .map_err(|_| "runtime startup stopped without a result".to_string())?;
+        ready.as_ref().expect("startup completed").clone()
     }
 
-    fn evaluate_with_worker(
-        &self,
-        cell: crate::cell::Cell,
-        evaluation: &Evaluation,
-        generation: WorkerGeneration,
-        resolve_python: impl FnMut(
-            crate::worker_protocol::PythonResolveRequest,
-        ) -> Result<crate::resolver::ManagedPython, String>,
-        resolve_python_version: impl FnMut(
-            crate::worker_protocol::PythonVersionResolveRequest,
-        ) -> Result<String, String>,
-        checkpoint_python: impl FnMut(
-            Option<crate::worker_protocol::PythonRequirementManifest>,
-            Vec<crate::resolver::ManagedPython>,
-        ) -> Result<(), String>,
-    ) -> Result<(), SendFailure> {
-        self.ensure_generation(&generation)
-            .map_err(SendFailure::from)?;
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
-        self.ensure_generation(&generation)
-            .map_err(SendFailure::from)?;
-        if let Err(error) = self.start_worker(&mut worker, true, |stop_handle| {
-            self.register_stop_handle(&generation, stop_handle)
-        }) {
-            let error = match self.clear_worker_stop_handle(&generation) {
-                Ok(()) => error,
-                Err(clear_error) => format!(
-                    "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
-                ),
-            };
-            return Err(SendFailure::from(error));
-        }
-        let WorkerState::Running(running) = &mut *worker else {
-            unreachable!("worker should be running");
-        };
-        let result = running
-            .evaluate(
-                cell,
-                evaluation,
-                resolve_python,
-                resolve_python_version,
-                checkpoint_python,
-            )
-            .map_err(|message| evaluation.classify_failure(message));
-        let failure = match result {
-            Ok(()) => {
-                evaluation.complete_cell(Ok(()));
-                return Ok(());
+    pub(crate) fn is_configured(&self) -> bool {
+        self.0.configuration.get().is_some()
+    }
+
+    pub(crate) fn startup_finished(&self) -> bool {
+        self.0.startup.borrow().is_some()
+    }
+
+    /// Launch the default process through the ordinary readiness/retirement path.
+    /// Language runtimes retain their existing first-use initialization.
+    pub(crate) fn prelaunch(&self, generation: &WorkerGeneration) {
+        let result = (|| -> Result<(), SendFailure> {
+            self.ensure_startup(generation)?;
+            // An already admitted declaration selects the initial candidate through
+            // the same transaction the evaluator uses after readiness.
+            if let Some(active) = self.current_evaluation()? {
+                let requirements = active
+                    .initial_requirements
+                    .lock()
+                    .map_err(|_| "initial requirements lock poisoned".to_string())?
+                    .take();
+                if let Some(requirements) = requirements {
+                    if let Err(error) = self
+                        .validate_language(active.language)
+                        .and_then(|()| self.validate_requirements(&requirements))
+                    {
+                        Response::tool_error(error).recover_to(self.0.output.clone());
+                        active.evaluation.complete_cell(Ok(()));
+                    } else {
+                        self.prepare_cell_requirements(requirements, generation)?;
+                    }
+                }
             }
-            Err(failure) => failure,
-        };
-        match self.stop_failed_worker(&mut worker, &generation) {
-            Ok(lifecycle::FailedWorkerStop::Stopped) => {}
-            Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => return Err(failure),
-            Err(stop_error) => {
-                let mut failure = failure;
-                failure.message.push_str(&format!(
-                    "; additionally failed to stop the worker: {stop_error}"
-                ));
+            let _preparation = self.0.preparation.blocking_read();
+            let mut worker = self
+                .0
+                .worker
+                .lock()
+                .map_err(|_| "worker lock poisoned".to_string())?;
+            if let Err(mut failure) = self.start_worker(
+                &mut worker,
+                generation.clone(),
+                false,
+                |handle| self.register_stop_handle(generation, handle),
+                || Ok(()),
+            ) {
+                if let Err(error) = self.clear_worker_stop_handle(generation) {
+                    failure.message.push_str(&format!("; {error}"));
+                }
                 return Err(failure);
             }
-        }
-
-        let _replacement_startup = self.0.preparation.blocking_read();
-        evaluation.start_replacement(failure.worker_stopped());
-        let replacement = self
-            .start_worker(&mut worker, true, |stop_handle| {
-                self.register_stop_handle(&generation, stop_handle)
-            })
-            .map_err(|error| {
-                let error = match self.clear_worker_stop_handle(&generation) {
-                    Ok(()) => error,
-                    Err(clear_error) => format!(
-                        "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
-                    ),
-                };
-                SendFailure::from(error)
-            });
-        evaluation.finish_replacement(replacement);
-        Ok(())
-    }
-
-    fn with_worker<T>(
-        &self,
-        generation: &WorkerGeneration,
-        operation: impl FnOnce(&mut platform::Worker) -> Result<T, SendFailure>,
-    ) -> Result<T, SendFailure> {
-        self.ensure_generation(generation)
-            .map_err(SendFailure::from)?;
-
-        let mut worker = self
-            .0
-            .worker
-            .lock()
-            .map_err(|_| SendFailure::from("worker lock poisoned".to_string()))?;
-        self.ensure_generation(generation)
-            .map_err(SendFailure::from)?;
-
-        if let Err(error) = self.start_worker(&mut worker, true, |stop_handle| {
-            self.register_stop_handle(generation, stop_handle)
-        }) {
-            let error = match self.clear_worker_stop_handle(generation) {
-                Ok(()) => error,
-                Err(clear_error) => format!(
-                    "{error}; additionally failed to clear the worker shutdown handle: {clear_error}"
-                ),
-            };
-            return Err(SendFailure::from(error));
-        }
-        let WorkerState::Running(running) = &mut *worker else {
-            unreachable!("worker should be running");
-        };
-        match operation(running) {
-            Ok(result) => Ok(result),
-            Err(mut failure) => match self.stop_failed_worker(&mut worker, generation) {
-                Ok(lifecycle::FailedWorkerStop::Stopped) => Err(failure.worker_stopped()),
-                Ok(lifecycle::FailedWorkerStop::RestartOwnsWorker) => Err(failure),
-                Err(stop_error) => {
-                    failure.message.push_str(&format!(
-                        "; additionally failed to stop the worker: {stop_error}"
-                    ));
-                    Err(failure)
+            Ok(())
+        })();
+        if let Err(failure) = result {
+            let lifecycle = self.0.lifecycle.lock().expect("worker lifecycle lock");
+            if lifecycle.state == lifecycle::LifecycleState::Ready
+                && lifecycle.generation.is(generation)
+            {
+                if let Some(recording) = self.0.recording.lock().expect("recording lock").as_ref() {
+                    recording.startup_failed(&failure.message);
                 }
-            },
+                self.0.output.push_failure(failure);
+                self.0.startup_failed.store(true, Ordering::Release);
+            }
         }
     }
 
-    fn start_worker(
-        &self,
-        worker: &mut WorkerState,
-        announce_replacement: bool,
-        on_started: impl FnOnce(platform::WorkerShutdownHandle) -> Result<(), String>,
-    ) -> Result<(), String> {
-        let replacing = matches!(&*worker, WorkerState::Stopped);
-        if !matches!(&*worker, WorkerState::Running(_)) {
-            let mut environment = match &self.0.environment {
-                Some(environment) => Some(
-                    environment
-                        .lock()
-                        .map_err(|_| "worker environment lock poisoned".to_string())?,
-                ),
-                None => None,
-            };
-            let managed_python = environment
-                .as_ref()
-                .and_then(|environment| environment.python.as_ref());
-            let managed_r = environment
-                .as_ref()
-                .and_then(|environment| environment.r.as_ref());
-            let spec = WorkerSpec {
-                executable: &self.0.program,
-                arguments: &self.0.arguments,
-                managed_python,
-                managed_r,
-            };
-            if replacing && announce_replacement {
-                self.0
-                    .output
-                    .push_notice_line(output::WORKER_STARTING_NOTICE);
-            }
-            let running = self
-                .0
-                .runtime
-                .spawn(spec, self.0.output.clone(), on_started)?;
-            if let Some(environment) = environment.as_mut() {
-                // An external `--worker` must apply its first managed R layer before
-                // loading DuckDB; arbitrary preloaded namespaces are not tracked.
-                environment.duckdb_r_targets = environment.r.iter().cloned().collect();
-            }
-            *worker = WorkerState::Running(running);
+    pub(crate) fn diagnostics(&self) -> crate::process_output::Diagnostics {
+        self.0.output.diagnostics()
+    }
+
+    pub(crate) fn startup_failure_response(&self, error: String) -> Response {
+        let mut response = self.0.output.take();
+        response.push_tool_error(error);
+        response
+    }
+
+    pub(crate) fn finish_recording(&self) {
+        self.0.output.finish_session_output();
+    }
+
+    pub(crate) fn record_with(&self, transcript: crate::transcript::Transcript) {
+        self.0.output.record_session_output(transcript.clone());
+        *self.0.recording.lock().expect("recording lock") = Some(transcript);
+    }
+}
+
+impl WorkerCallbacks {
+    fn interrupt_bootstrap_cell(&self) -> Result<(), String> {
+        // Admission and interruption share the evaluation-slot lock. The marker
+        // survives delayed blocking-task scheduling and applies only to the
+        // generation whose bootstrap was interrupted.
+        let active = self.client.evaluation()?;
+        if let Some(active) = active.as_ref()
+            && active.generation.is(&self.generation)
+        {
+            active.evaluation.interrupt_bootstrap()?;
         }
         Ok(())
+    }
+
+    fn resolve_r(
+        &self,
+        packages: Vec<String>,
+    ) -> Result<crate::resolver::ManagedR, RuntimeRResolutionFailure> {
+        self.client
+            .resolve_runtime_r(self.generation.clone(), packages)
+    }
+
+    fn activate_r(
+        &self,
+        library: String,
+        candidates: &mut Vec<crate::resolver::ManagedR>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        self.client
+            .activate_runtime_r(self.generation.clone(), library, candidates)
+    }
+
+    fn fail_r_activation(
+        &self,
+        library: String,
+        candidates: &mut Vec<crate::resolver::ManagedR>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        self.client
+            .fail_runtime_r_activation(self.generation.clone(), library, candidates)
+    }
+
+    fn resolve_python(
+        &self,
+        request: crate::worker_protocol::PythonResolveRequest,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+    ) -> Result<PythonCandidate, String> {
+        self.client
+            .resolve_runtime_python(self.generation.clone(), request, duckdb_extensions)
+    }
+
+    fn fail_python_activation(&self) -> Result<OldGenerationCommitDisposition, String> {
+        self.client
+            .require_restart_for_requirement_changes(&self.generation)
+    }
+
+    fn resolve_python_version(
+        &self,
+        request: crate::worker_protocol::PythonVersionResolveRequest,
+    ) -> Result<String, String> {
+        self.client
+            .resolve_runtime_python_version(self.generation.clone(), request)
+    }
+
+    fn activate_python(
+        &self,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        candidate: Option<crate::resolver::ManagedPython>,
+        configuration: Option<crate::python::NativePython>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+    ) -> Result<OldGenerationCommitDisposition, String> {
+        self.client.activate_runtime_python(
+            self.generation.clone(),
+            requirements,
+            candidate,
+            configuration,
+            duckdb_extensions,
+        )
     }
 }

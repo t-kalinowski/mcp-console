@@ -1,0 +1,28 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: overflow console output
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8156
+        concat:
+          - repeat: x
+            count: 3968
+          - |
+
+            [output preview: omitted 8380679 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 8388615 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3968
+  isError: false
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false

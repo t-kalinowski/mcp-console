@@ -1,0 +1,47 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: wait for stdin close
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8147
+        concat:
+          - |
+            zod stdin closed
+          - repeat: x
+            count: 3887
+          - |
+
+            [output preview: omitted 4186513 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace); 4194321 raw bytes retained, 0 raw bytes not retained]
+          - repeat: y
+            count: 3904
+          - |-
+
+            [active evaluation stopped by session restart request]
+            [worker stopped: in-memory state lost]
+            [starting new worker]
+            [idle]
+  isError: false
+---
+send:
+  r: echo echo
+result:
+  content:
+    - type: text
+      text: |
+        zod: echo
+  isError: false

@@ -4,6 +4,10 @@
 **Date:** 2026-07-27 \
 **Scope:** Agent-facing MCP tools and observable behavior
 
+This is an exploratory interface sketch, not the current public contract.
+Its transcript paths reflect an earlier layout; [`CONFIGURATION.md`](../CONFIGURATION.md#17-logs-caches-and-retention) proposes the canonical Console directory and a journal spanning each server lifetime.
+These drafts need not be synchronized before implementation; current behavior is documented under [`docs/`](../../docs/README.md).
+
 ## 1. Interface summary
 
 MCP Console exposes two text-returning tools:
@@ -35,7 +39,7 @@ The interface is optimized for frequent use and global enablement:
 ```json
 {
   "name": "send",
-  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin on its own to queue exact text to the session worker; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, and the Quarto transcript are saved in the workspace.",
+  "description": "Persistent R, Python, and DuckDB SQL console. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. State persists across calls; R and Python exchange objects, and SQL queries live or registered tabular data. Language-native help, introspection, interactive input, and debuggers work. Send exactly one complete r, python, or sql cell, optionally with stdin; send stdin on its own to queue exact text to the session worker; send neither to wait/poll. Large values are previewed; oversized stdout/stderr, plots, artifacts, the Markdown transcript, and the source-only Quarto document are saved in the workspace.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -68,7 +72,7 @@ The interface is optimized for frequent use and global enablement:
         "type": "string",
         "minLength": 1,
         "maxLength": 160,
-        "description": "Optional short heading for this cell in the Quarto transcript; it has no effect on execution."
+        "description": "Optional short heading for this cell in the Markdown transcript; it has no effect on execution."
       },
       "wait_ms": {
         "type": "integer",
@@ -87,12 +91,12 @@ The server performs semantic mode validation and returns a short tool error for 
 
 ### 2.2 Modes
 
-| Present mode fields | Operation |
-| --- | --- |
-| exactly one of `r`, `python`, `sql`, optionally with `stdin` | Evaluate one complete cell |
-| `stdin` only | Queue exact text to the session worker |
-| none of `r`, `python`, `sql`, `stdin` | Wait for or poll the session |
-| any other combination | Tool error |
+| Present mode fields                                          | Operation                              |
+| ------------------------------------------------------------ | -------------------------------------- |
+| exactly one of `r`, `python`, `sql`, optionally with `stdin` | Evaluate one complete cell             |
+| `stdin` only                                                 | Queue exact text to the session worker |
+| none of `r`, `python`, `sql`, `stdin`                        | Wait for or poll the session           |
+| any other combination                                        | Tool error                             |
 
 `session`, `label`, and `wait_ms` are modifiers, not modes.
 
@@ -332,7 +336,7 @@ Package download access does not imply general network access for user code.
             "type": "array",
             "items": { "type": "string", "minLength": 1 },
             "maxItems": 64,
-            "description": "R package requirement strings. IR prevents installation from local package sources because it runs with server permissions. prepare can add them to an idle built-in runtime without replacing it."
+            "description": "R package requirement strings. `ir` prevents installation from local package sources because it runs with server permissions. prepare can add them to an idle built-in runtime without replacing it."
           },
           "python": {
             "type": "array",
@@ -371,7 +375,7 @@ model-fit  running  python  18s
 ```text
 default  generation=1  input_required  r
 requirements: r=2 python=1
-transcript: .mcp-console/sessions/default/transcript.qmd
+transcript: .agents/console/sessions/default/transcript.md
 ```
 
 `prepare` follows the requirement semantics above.
@@ -510,10 +514,10 @@ The implementation should distinguish three output classes.
 
 ### 10.1 Explicit stdout and stderr
 
-All explicit stream output is appended to a per-evaluation file, for example:
+Emitted cell streams are appended to the existing per-evaluation raw file, up to 1 GiB, for example:
 
 ```text
-.mcp-console/sessions/default/outputs/e0017.log
+.agents/console/sessions/<run ID>/outputs/call-000017.log
 ```
 
 Each MCP reply considers only bytes produced since the previous sealed reply for that evaluation.
@@ -523,7 +527,7 @@ If it exceeds the budget:
 
 1. return a bounded useful excerpt, normally preserving both the beginning and the most recent tail;
 2. state how much was omitted;
-3. include the relative path to the complete output;
+3. include the retained-file path and distinguish a complete retained stream, a retained prefix, and sources with no cell log;
 4. advance the reply cursor to the current end of the spool.
 
 Example:
@@ -537,16 +541,19 @@ Loading partition 2...
 Loading partition 98...
 Loading partition 99...
 
-[truncated: .mcp-console/sessions/default/outputs/e0017.log]
+[truncated: .agents/console/sessions/<run ID>/outputs/call-000017.log]
 [running]
 ```
 
 A later poll reports only output created after that reply.
 It does not force the agent to page through an old truncated backlog.
-The complete prior output remains available through ordinary host file-reading and search tools.
+Retained prior output remains available through ordinary file tools with access to the Console server recording workspace.
+The path is controller-owned for SSH, Docker, and Docker Sandbox; worker-only file access is insufficient.
+Omitted output beyond a retention limit or write failure, and omitted output from sources without a cell log, is unavailable.
 
 When an evaluation completes, unread omitted bytes are not injected into later unrelated evaluations.
-The file path is the continuation mechanism for clients with workspace file tools; v1 does not add a second output-reading protocol.
+The file path is the continuation mechanism for clients with access to that recording workspace; v1 does not add an output-reading protocol.
+Clients without that access still receive bounded previews and final diagnostics; their retrieval workflow remains deferred.
 
 ### 10.2 Large returned values
 
@@ -575,26 +582,31 @@ Do not claim a structural preview that the runtime cannot safely produce.
 
 ### 10.3 Plots and binary artifacts
 
-Plots and binary outputs are written to the session artifact directory.
-The text response reports a relative path:
+Current plot responses use whole MCP image blocks under independent image budgets.
+Images admitted for recording are also saved in the session artifact directory.
+Text-preview exhaustion does not suppress a later image that fits its own budget.
+Images rejected at ingestion are not retained; broader binary-artifact retention and retrieval remain future work.
 
-```text
-Plot saved: .mcp-console/sessions/default/artifacts/e0021-plot-1.png
-```
-
-Viewing the file is delegated to the host agent's ordinary file or image capabilities.
+Viewing a retained file requires ordinary file or image tools with access to the Console server recording workspace.
 
 ### 10.4 Initial default budgets
 
-Exact values are configurable.
-Suggested starting defaults:
+The selected initial text default is 8 KiB across the complete result, with approximately equal head and tail space after reserving notices.
+It has no per-call control or configuration field in the current implementation; configuration remains future work.
+Other suggested printer defaults in this sketch remain exploratory:
 
 ```text
-inline text per reply:  12 KiB
+inline text per reply:  8 KiB of rendered UTF-8, including notices
 preview rows:           20
 preview columns:        12
 maximum cell width:     160 characters
 ```
+
+Retained-file continuation uses the existing raw per-cell logs and their 1 GiB limit.
+Advertised paths belong to the Console server recording workspace, on the controller for SSH, Docker, and Docker Sandbox.
+Full retained text requires existing filesystem tools with access there; tools confined to another host cannot retrieve it.
+A retained prefix is not the complete emitted output, and preview tails remain independent of retention failures.
+Console-owned read/search, file transfer, export, and a retrieval workflow for clients without suitable file access remain unresolved and deferred.
 
 Tests should assert hard bounds and semantic markers, not incidental table glyphs or terminal widths.
 
@@ -603,10 +615,12 @@ Tests should assert hard bounds and semantic markers, not incidental table glyph
 Each session exposes:
 
 ```text
-.mcp-console/sessions/<session>/transcript.qmd
+.agents/console/sessions/<session>/transcript.md
 ```
 
-The transcript is generated at stable boundaries and contains:
+The transcript is append-only and grows as recorded events arrive.
+The planned evaluation-level event vocabulary makes completion, interruption, restart, stop, and crash explicit boundaries.
+It contains:
 
 - session and generation metadata;
 - stable evaluation IDs;
@@ -614,15 +628,17 @@ The transcript is generated at stable boundaries and contains:
 - complete submitted source;
 - bounded stdout, stderr, result, and error excerpts;
 - paths to complete output and artifacts;
-- input prompts and supplied interactive lines when safe to record;
+- input prompts and supplied interactive lines without redaction;
 - restart, stop, and crash boundaries.
 
-The document is marked non-executing.
 It is a chronological execution record, not a promise of reproducibility and not a polished notebook.
+The companion `transcript.qmd` contains executable submitted code cells plus `ir` front matter for declared R and Python requirements.
+Users can reuse its source or run `ir render` to execute the client-authored action stream in a fresh environment and export a new report.
+The goal is to reproduce the analysis represented by the Markdown transcript, although not every runtime detail can be reconstructed yet.
 Agents create refined `.qmd`, `.R`, `.py`, or `.ipynb` files separately.
 
 A granular event journal may back transcript recovery.
-It is internal implementation state, is not advertised as the normal agent artifact, and need not share the QMD format's compatibility guarantees.
+It is internal implementation state, is not advertised as the normal agent artifact, and need not share the Markdown format's compatibility guarantees.
 
 ## 12. SQL behavior
 

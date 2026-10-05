@@ -7,25 +7,57 @@ use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use chrono::{DateTime, SecondsFormat, Utc};
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, ContentBlock, ErrorData, Meta, RequestId,
+use event::{Envelope, Event, Outcome, RecordedContent, RecordedResult};
+use rmcp::{
+    ErrorData,
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, RequestId,
+        RequestMetaObject,
+    },
 };
-use serde_json::{Value, json};
 
-const SCHEMA_VERSION: u64 = 1;
+mod event;
+
+mod markdown;
+mod output;
+
+pub(crate) use output::{CellOutput, OutputRecord};
 
 #[derive(Clone)]
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
 struct TranscriptState {
+    started_at: DateTime<Utc>,
     working_directory: Result<PathBuf, String>,
+    dynamic_resolution: bool,
+    python_preparation: bool,
+    r_available: bool,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
+    pending_calls: Option<Vec<PendingCall>>,
+    next_pending_call_id: u64,
+}
+
+enum PendingCall {
+    Begin {
+        id: u64,
+        request_id: RequestId,
+        request: CallToolRequestParams,
+        at: DateTime<Utc>,
+    },
+    Finish {
+        call: Call,
+        response: Result<CallToolResponse, ErrorData>,
+        at: DateTime<Utc>,
+    },
 }
 
 struct ActiveTranscript {
     directory: PathBuf,
+    public_directory: PathBuf,
     writer: BufWriter<File>,
+    projections: Option<markdown::Writers>,
+    pending_projection_failure: Option<String>,
     run_id: String,
     sequence: u64,
     next_call_id: u64,
@@ -38,6 +70,7 @@ pub(crate) struct Call {
     result_images: Arc<Mutex<Option<Vec<Artifact>>>>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Artifact {
     id: u64,
     path: String,
@@ -45,22 +78,134 @@ pub(crate) struct Artifact {
 }
 
 impl Transcript {
-    pub(crate) fn new() -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(dynamic_resolution: bool) -> Self {
+        Self::configured(std::env::current_dir(), dynamic_resolution, false, true)
+    }
+
+    pub(crate) fn configured(
+        working_directory: std::io::Result<PathBuf>,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+    ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
-            working_directory: std::env::current_dir()
+            started_at: Utc::now(),
+            working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
+            dynamic_resolution,
+            python_preparation,
+            r_available,
             active: None,
             failure: None,
+            pending_calls: None,
+            next_pending_call_id: 0,
         })))
+    }
+
+    /// Retain early tool records until discovery supplies the recording metadata.
+    pub(crate) fn pending(working_directory: std::io::Result<PathBuf>) -> Self {
+        let transcript = Self::configured(working_directory, false, false, false);
+        transcript.0.lock().expect("transcript lock").pending_calls = Some(Vec::new());
+        transcript
+    }
+
+    pub(crate) fn configure(&self, configured: Self) {
+        let (configuration, _) = configured.lock();
+        self.update(|state| {
+            state.dynamic_resolution = configuration.dynamic_resolution;
+            state.python_preparation = configuration.python_preparation;
+            state.r_available = configuration.r_available;
+            let materialized_before_discovery = state.active.is_some();
+            if let Some(projections) = state
+                .active
+                .as_mut()
+                .and_then(|active| active.projections.as_mut())
+            {
+                projections.configure(
+                    configuration.dynamic_resolution,
+                    configuration.python_preparation,
+                    configuration.r_available,
+                );
+            }
+            state.replay_pending()?;
+            if materialized_before_discovery && let Some(active) = state.active.as_mut() {
+                active.append(
+                    Event::EnvironmentDiscovered {
+                        dynamic_resolution: configuration.dynamic_resolution,
+                        python_preparation: configuration.python_preparation,
+                        r_available: configuration.r_available,
+                    },
+                    Utc::now(),
+                )?;
+            }
+            Ok(())
+        });
+    }
+
+    pub(crate) fn requirements_selected(
+        &self,
+        call_id: Option<u64>,
+        action: &str,
+        snapshot: &serde_json::Value,
+    ) {
+        self.update(|state| {
+            state.materialize()?.append(
+                Event::RequirementsSelected {
+                    call_id,
+                    action,
+                    snapshot,
+                },
+                Utc::now(),
+            )
+        });
+    }
+
+    pub(crate) fn startup_failed(&self, message: &str) {
+        self.update(|state| {
+            // Discovery may never supply metadata, but the failure still owns
+            // a journal and the responses of calls admitted before it failed.
+            state.materialize()?;
+            state.replay_pending()?;
+            state
+                .active()?
+                .append(Event::StartupFailed { message }, Utc::now())
+        });
+    }
+
+    pub(crate) fn python_environment_accepted(&self, packages: &[String]) {
+        self.update(|state| {
+            state
+                .materialize()?
+                .append(Event::PythonEnvironmentAccepted { packages }, Utc::now())
+        });
     }
 
     pub(crate) fn begin(
         &self,
         request_id: &RequestId,
-        request_meta: &Meta,
+        request_meta: &RequestMetaObject,
         request: &CallToolRequestParams,
     ) -> Call {
         self.update(|state| {
+            if let Some(pending) = &mut state.pending_calls {
+                state.next_pending_call_id += 1;
+                let id = state.next_pending_call_id;
+                let mut request = request.clone();
+                if !request_meta.is_empty() {
+                    request.meta = Some(request_meta.clone());
+                }
+                pending.push(PendingCall::Begin {
+                    id,
+                    request_id: request_id.clone(),
+                    request,
+                    at: Utc::now(),
+                });
+                return Ok(Call {
+                    id: Some(id),
+                    result_images: Arc::new(Mutex::new(None)),
+                });
+            }
             let active = state.materialize()?;
             active.next_call_id += 1;
             let call_id = active.next_call_id;
@@ -73,12 +218,11 @@ impl Transcript {
                 request.meta = Some(request_meta.clone());
             }
             active.append(
-                json!({
-                    "event": "tool_call",
-                    "call_id": call_id,
-                    "request_id": request_id,
-                    "request": request,
-                }),
+                Event::ToolCall {
+                    call_id,
+                    request_id,
+                    request: &request,
+                },
                 Utc::now(),
             )?;
             Ok(call)
@@ -92,22 +236,50 @@ impl Transcript {
         data: &str,
         mime_type: &str,
     ) -> Result<Option<Artifact>, String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|error| format!("worker returned invalid base64 image data: {error}"))?;
-        let Some(call_id) = call_id else {
-            return Ok(None);
-        };
-        Ok(self.update(|state| state.active()?.persist_image(call_id, &bytes, mime_type)))
+        let bytes = decode_image_data(data)?;
+        Ok(self.persist_decoded_image(call_id, &bytes, mime_type))
     }
 
-    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResult, ErrorData>) {
+    pub(crate) fn persist_decoded_image(
+        &self,
+        call_id: Option<u64>,
+        bytes: &[u8],
+        mime_type: &str,
+    ) -> Option<Artifact> {
+        let call_id = call_id?;
+        self.update(|state| {
+            state
+                .active()?
+                .persist_image(Some(call_id), bytes, mime_type)
+        })
+    }
+
+    pub(crate) fn persist_session_image(
+        &self,
+        data: &str,
+        mime_type: &str,
+    ) -> Result<Option<Artifact>, String> {
+        let bytes = decode_image_data(data)?;
+        Ok(self.update(|state| state.materialize()?.persist_image(None, &bytes, mime_type)))
+    }
+
+    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
         let Some(call_id) = call.id else {
             return;
         };
         self.update(|state| {
+            if let Some(pending) = &mut state.pending_calls {
+                pending.push(PendingCall::Finish {
+                    call,
+                    response: response.clone(),
+                    at: Utc::now(),
+                });
+                return Ok(());
+            }
             let images = call.take_result_images()?;
-            state.active()?.finish(call_id, images, response)
+            state
+                .active()?
+                .finish(call_id, images, response, Utc::now())
         });
     }
 
@@ -144,7 +316,17 @@ impl Transcript {
         }
         let result = operation(&mut state);
         match result {
-            Ok(value) => Some(value),
+            Ok(value) => {
+                let projection_failure = state
+                    .active
+                    .as_mut()
+                    .and_then(ActiveTranscript::take_projection_failure);
+                drop(state);
+                if let Some(error) = projection_failure {
+                    report_projection_failure(&error);
+                }
+                Some(value)
+            }
             Err(error) => {
                 state.disable(error.clone());
                 drop(state);
@@ -155,11 +337,64 @@ impl Transcript {
     }
 }
 
+pub(crate) fn validate_image_data(data: &str) -> Result<(), String> {
+    decode_image_data(data).map(drop)
+}
+
+pub(crate) fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .map_err(|error| format!("worker returned invalid base64 image data: {error}"))
+}
+
 impl TranscriptState {
+    fn replay_pending(&mut self) -> Result<(), String> {
+        let Some(pending) = self.pending_calls.take() else {
+            return Ok(());
+        };
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let next_call_id = self.next_pending_call_id;
+        let active = self.materialize()?;
+        active.next_call_id = next_call_id;
+        for record in pending {
+            match record {
+                PendingCall::Begin {
+                    id,
+                    request_id,
+                    request,
+                    at,
+                } => active.append(
+                    Event::ToolCall {
+                        call_id: id,
+                        request_id: &request_id,
+                        request: &request,
+                    },
+                    at,
+                )?,
+                PendingCall::Finish { call, response, at } => active.finish(
+                    call.id.expect("pending call id"),
+                    call.take_result_images()?,
+                    &response,
+                    at,
+                )?,
+            }
+        }
+        Ok(())
+    }
+
     fn materialize(&mut self) -> Result<&mut ActiveTranscript, String> {
         if self.active.is_none() {
             let working_directory = self.working_directory.clone()?;
-            self.active = Some(ActiveTranscript::create(&working_directory)?);
+            self.active = Some(ActiveTranscript::create(
+                &working_directory,
+                self.started_at,
+                self.dynamic_resolution,
+                self.python_preparation,
+                self.r_available,
+                self.pending_calls.is_none(),
+            )?);
         }
         self.active()
     }
@@ -175,22 +410,62 @@ impl TranscriptState {
             return false;
         }
         self.active = None;
+        self.pending_calls = None;
         self.failure = Some(error);
         true
     }
 }
 
 impl ActiveTranscript {
-    fn create(working_directory: &Path) -> Result<Self, String> {
+    fn create(
+        working_directory: &Path,
+        started_at: DateTime<Utc>,
+        dynamic_resolution: bool,
+        python_preparation: bool,
+        r_available: bool,
+        metadata_known: bool,
+    ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
-        let started_at = Utc::now();
+        // Keep incidental process-ID widths from shifting bounded output previews.
         let run_id = format!(
-            "{}-{}",
+            "{}-{:010}",
             started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
-        let sessions = working_directory.join(".mcp-console/sessions");
+        let project_console = working_directory.join(".agents/console");
+        let in_project = match std::fs::metadata(&project_console) {
+            Ok(metadata) => metadata.is_dir(),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect {}: {error}",
+                    project_console.display()
+                ));
+            }
+        };
+        let console = if in_project {
+            project_console
+        } else {
+            crate::console_paths::home_console_directory()?
+                .ok_or_else(|| "HOME is not set".to_string())?
+        };
+        let sessions = console.join("sessions");
         let directory = sessions.join(&run_id);
+        let public_directory = if in_project {
+            PathBuf::from(".agents/console/sessions").join(&run_id)
+        } else {
+            directory.clone()
+        };
+        if public_directory.to_str().is_none() {
+            return Err("recording path must be UTF-8".to_string());
+        }
         create_private_directory(&sessions, true)
             .map_err(|error| format!("failed to create {}: {error}", sessions.display()))?;
         create_private_directory(&directory, false)
@@ -201,6 +476,12 @@ impl ActiveTranscript {
                 directory.join("artifacts").display()
             )
         })?;
+        create_private_directory(&directory.join("outputs"), false).map_err(|error| {
+            format!(
+                "failed to create {}: {error}",
+                directory.join("outputs").display()
+            )
+        })?;
         let internal = directory.join("internal");
         create_private_directory(&internal, false)
             .map_err(|error| format!("failed to create {}: {error}", internal.display()))?;
@@ -208,21 +489,50 @@ impl ActiveTranscript {
         let writer = create_private_file(&journal)
             .map(BufWriter::new)
             .map_err(|error| format!("failed to create {}: {error}", journal.display()))?;
+        let projections = (|| {
+            let working_directory = working_directory.to_str().ok_or_else(|| {
+                "Quarto execution root requires a UTF-8 working directory".to_string()
+            })?;
+            let markdown_path = directory.join("transcript.md");
+            let markdown = create_private_file(&markdown_path).map_err(|error| {
+                format!("failed to create {}: {error}", markdown_path.display())
+            })?;
+            let quarto_path = directory.join("transcript.qmd");
+            let quarto = create_private_file(&quarto_path)
+                .map_err(|error| format!("failed to create {}: {error}", quarto_path.display()))?;
+            drop(quarto);
+            Ok(markdown::Writers::new(
+                markdown,
+                quarto_path,
+                working_directory,
+                dynamic_resolution,
+                python_preparation,
+                r_available,
+            ))
+        })();
+        let (projections, pending_projection_failure) = match projections {
+            Ok(projections) => (Some(projections), None),
+            Err(error) => (None, Some(error)),
+        };
 
         let mut transcript = Self {
             directory,
+            public_directory,
             writer,
+            projections,
+            pending_projection_failure,
             run_id,
             sequence: 0,
             next_call_id: 0,
             next_artifact_id: 0,
         };
         transcript.append(
-            json!({
-                "event": "session_started",
-                "session": "default",
-                "working_directory": working_directory_text,
-            }),
+            Event::SessionStarted {
+                session: "default",
+                working_directory: &working_directory_text,
+                dynamic_resolution: metadata_known.then_some(dynamic_resolution),
+                python_preparation: metadata_known.then_some(python_preparation),
+            },
             started_at,
         )?;
         Ok(transcript)
@@ -267,15 +577,14 @@ impl Call {
 }
 
 impl ActiveTranscript {
-    fn append(&mut self, mut event: Value, at: DateTime<Utc>) -> Result<(), String> {
+    fn append(&mut self, event: Event<'_>, at: DateTime<Utc>) -> Result<(), String> {
         let sequence = self.sequence + 1;
-        let fields = event
-            .as_object_mut()
-            .ok_or_else(|| "transcript event must be a JSON object".to_string())?;
-        fields.insert("schema_version".to_string(), json!(SCHEMA_VERSION));
-        fields.insert("run_id".to_string(), json!(self.run_id));
-        fields.insert("sequence".to_string(), json!(sequence));
-        fields.insert("at".to_string(), json!(timestamp(at)));
+        let event = Envelope {
+            event,
+            run_id: &self.run_id,
+            sequence,
+            at: timestamp(at),
+        };
 
         let mut record = serde_json::to_vec(&event)
             .map_err(|error| format!("failed to serialize transcript event: {error}"))?;
@@ -285,38 +594,48 @@ impl ActiveTranscript {
             .and_then(|()| self.writer.flush())
             .map_err(|error| format!("failed to append transcript event: {error}"))?;
         self.sequence = sequence;
+        if let Some(projections) = &mut self.projections
+            && let Err(error) = projections.append(&event)
+        {
+            self.projections = None;
+            self.pending_projection_failure = Some(error);
+        }
         Ok(())
+    }
+
+    fn take_projection_failure(&mut self) -> Option<String> {
+        self.pending_projection_failure.take()
     }
 
     fn finish(
         &mut self,
         call_id: u64,
         result_images: Vec<Artifact>,
-        response: &Result<CallToolResult, ErrorData>,
+        response: &Result<CallToolResponse, ErrorData>,
+        at: DateTime<Utc>,
     ) -> Result<(), String> {
-        let event = match response {
-            Ok(result) => json!({
-                "event": "tool_result",
-                "call_id": call_id,
-                "result": self.project_result(call_id, result_images, result)?,
-            }),
+        let outcome = match response {
+            Ok(CallToolResponse::Complete(result)) => Outcome::Result {
+                result: Self::project_result(call_id, result_images, result)?,
+            },
+            Ok(_) => {
+                return Err(
+                    "console tool unexpectedly returned a non-final MCP response".to_string(),
+                );
+            }
             Err(error) => {
                 if !result_images.is_empty() {
                     return Err("tool error unexpectedly retained result images".to_string());
                 }
-                json!({
-                    "event": "tool_result",
-                    "call_id": call_id,
-                    "error": error,
-                })
+                Outcome::Error { error }
             }
         };
-        self.append(event, Utc::now())
+        self.append(Event::ToolResult { call_id, outcome }, at)
     }
 
     fn persist_image(
         &mut self,
-        call_id: u64,
+        call_id: Option<u64>,
         bytes: &[u8],
         mime_type: &str,
     ) -> Result<Artifact, String> {
@@ -325,18 +644,18 @@ impl ActiveTranscript {
             "image/png" => "png",
             _ => "bin",
         };
-        let filename = format!("call-{call_id:06}-image-{artifact_id:06}.{extension}");
+        let owner = call_id.map_or_else(|| "session".into(), |id| format!("call-{id:06}"));
+        let filename = format!("{owner}-image-{artifact_id:06}.{extension}");
         let relative_path = format!("artifacts/{filename}");
         write_new(&self.directory.join(&relative_path), bytes)?;
         self.append(
-            json!({
-                "event": "artifact_created",
-                "artifact_id": artifact_id,
-                "call_id": call_id,
-                "path": relative_path,
-                "mime_type": mime_type,
-                "bytes": bytes.len(),
-            }),
+            Event::ArtifactCreated {
+                artifact_id,
+                call_id,
+                path: &relative_path,
+                mime_type,
+                bytes: bytes.len(),
+            },
             Utc::now(),
         )?;
         self.next_artifact_id = artifact_id;
@@ -348,45 +667,46 @@ impl ActiveTranscript {
     }
 
     fn project_result(
-        &mut self,
         call_id: u64,
         result_images: Vec<Artifact>,
         result: &CallToolResult,
-    ) -> Result<Value, String> {
-        let mut value = serde_json::to_value(result)
-            .map_err(|error| format!("failed to serialize tool result: {error}"))?;
-        let recorded_content = value
-            .get_mut("content")
-            .and_then(Value::as_array_mut)
-            .ok_or_else(|| "serialized tool result has no content array".to_string())?;
+    ) -> Result<RecordedResult<'_>, String> {
         let mut result_images = result_images.into_iter();
-
-        for (index, content) in result.content.iter().enumerate() {
-            let ContentBlock::Image(image) = content else {
-                continue;
-            };
-            let artifact = result_images.next().ok_or_else(|| {
-                format!("tool call {call_id} returned an image without a retained artifact")
-            })?;
-            if image.mime_type != artifact.mime_type {
-                return Err(format!(
-                    "tool call {call_id} returned an image with a different MIME type than its artifact"
-                ));
-            }
-
-            let recorded_image = recorded_content[index]
-                .as_object_mut()
-                .ok_or_else(|| "serialized image content is not an object".to_string())?;
-            recorded_image.remove("data");
-            recorded_image.insert("artifactId".to_string(), json!(artifact.id));
-            recorded_image.insert("path".to_string(), json!(artifact.path));
+        let mut content = Vec::with_capacity(result.content.len());
+        for item in &result.content {
+            content.push(match item {
+                ContentBlock::Text(text) => RecordedContent::Text(text),
+                ContentBlock::Image(image) => {
+                    let artifact = result_images.next().ok_or_else(|| {
+                        format!("tool call {call_id} returned an image without a retained artifact")
+                    })?;
+                    if image.mime_type != artifact.mime_type {
+                        return Err(format!(
+                            "tool call {call_id} returned an image with a different MIME type than its artifact"
+                        ));
+                    }
+                    RecordedContent::Image {
+                        mime_type: &image.mime_type,
+                        meta: image.meta.as_ref(),
+                        annotations: image.annotations.as_ref(),
+                        artifact_id: artifact.id,
+                        path: artifact.path,
+                    }
+                }
+                other => RecordedContent::Other(other),
+            });
         }
         if result_images.next().is_some() {
             return Err(format!(
                 "tool call {call_id} retained more artifacts than it returned"
             ));
         }
-        Ok(value)
+        Ok(RecordedResult {
+            content,
+            structured_content: result.structured_content.as_ref(),
+            is_error: result.is_error,
+            meta: result.meta.as_ref(),
+        })
     }
 }
 
@@ -398,6 +718,13 @@ fn report_failure(error: &str) {
     let _ = writeln!(
         std::io::stderr().lock(),
         "mcp-console: transcript recording disabled: {error}"
+    );
+}
+
+fn report_projection_failure(error: &str) {
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "mcp-console: transcript projections disabled: {error}"
     );
 }
 
@@ -423,4 +750,21 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .and_then(|()| file.flush())
         .map_err(|error| format!("failed to write {}: {error}", path.display()))
+}
+
+fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let temporary = path.with_file_name(".transcript.qmd.tmp");
+    if let Err(error) = write_new(&temporary, bytes) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(format!(
+            "failed to replace {} from {}: {error}",
+            path.display(),
+            temporary.display()
+        ));
+    }
+    Ok(())
 }

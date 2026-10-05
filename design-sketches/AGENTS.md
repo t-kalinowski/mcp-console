@@ -1,8 +1,10 @@
 # AGENTS.md
 
-This file is the durable project context for coding agents working on MCP Console.
-Keep it current as the repository changes.
-It should be sufficient to understand the product direction, locate the relevant implementation, and avoid reopening settled architectural decisions.
+This file records an exploratory product sketch for MCP Console.
+It is not repository-wide implementation guidance or documentation of current behavior.
+Files in this directory may describe different directions and need not be complete or mutually consistent.
+Production correctness and consistency requirements apply when a proposal is implemented; a sketch does not need to settle every edge case or update every related draft.
+Use the repository-root `AGENTS.md` and `docs/README.md` for the implemented system.
 
 ## Product intent
 
@@ -27,7 +29,9 @@ Common calls should look like:
 The empty object waits for or polls the default session.
 Replies are bounded text.
 Complete explicit stream output and generated artifacts live in managed session files.
-Each session maintains a generated, non-executing `transcript.qmd` that an agent can read after context compaction and use as source material for a refined notebook, script, or report.
+Each server lifetime maintains one durable JSONL journal across worker restarts.
+Every worker generation has its own generated `transcript.md` that an agent can read after context compaction, plus an executable `transcript.qmd` containing only that generation's submitted code cells for later source reuse or reproducible rendering.
+The nested layout and retention rules are described in [`CONFIGURATION.md`](CONFIGURATION.md).
 
 Humans may attach to the live MCP server through a process-scoped local API.
 That API supports observation, structured inspection, plot viewing, bounded live-table exploration, point-in-time snapshots, and explicitly attributed external control without adding more MCP tools or flooding model context.
@@ -36,7 +40,7 @@ It is not a persistent daemon and does not keep the MCP server alive.
 MCP Console is effectively shell-class capability.
 Safety is enforced around the worker process and its descendants, not by filtering language source.
 
-## Settled product decisions
+## Decisions in this sketch
 
 - Product and binary name: `mcp-console`.
 - MCP initialization identity: `mcp-console`.
@@ -60,11 +64,11 @@ Safety is enforced around the worker process and its descendants, not by filteri
 - MCP results are text-only; v1 has no `outputSchema`, structured-content mirror, MCP resource dependency, or inline image result.
 - Oversized explicit output is retained in bounded session spools; each response contains only a bounded current excerpt.
 - Large values and SQL relations are previewed structurally before full textual materialization.
-- The agent-facing durable record is `transcript.qmd`; a granular JSONL journal is internal implementation state.
+- The agent-facing durable records are the retained generations' `transcript.md` files; each `transcript.qmd` is a source-only code-cell projection, and one granular JSONL journal spans the server lifetime.
 - Requirements are additive logical-session configuration managed by `session`.
   They survive runtime restarts and are not accepted on ordinary `send` calls.
 - Interrupt, restart, close, and worker crash are distinct observable events.
-  `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, and transcript.
+  `restart` loses in-memory R, Python, SQL, debugger, and process state while retaining requirements, workspace files, the server journal, and all earlier generation projections.
   A crash fails the active evaluation and is recorded before the next evaluation starts a fresh worker generation.
 
 See [`VISION.md`](VISION.md) for the fuller rationale and [`docs/MCP_INTERFACE.md`](docs/MCP_INTERFACE.md) for normative MCP behavior.
@@ -135,7 +139,7 @@ Store source out of band and pass a short evaluation ID through bridge calls so 
   - **Inspect:** sends typed, bounded requests to supported runtime adapters; accepts no caller-supplied R, Python, or SQL source.
   - **Control:** submits code, stdin, environment changes, or lifecycle operations through the same session state machine as MCP.
 - Arbitrary external code is always a primary attributed evaluation.
-  It receives an evaluation ID, appears in `transcript.qmd`, emits ordinary events, and causes a compact notice to the MCP-side agent before later state-dependent work.
+  It receives an evaluation ID, appears in `transcript.md`, emits ordinary events, and causes a compact notice to the MCP-side agent before later state-dependent work.
   Never add a hidden or nominally “read-only” arbitrary-code path.
 - R and embedded Python are owned by one runtime thread.
   Generic inspection runs only while the session is idle and returns `session_busy` otherwise.
@@ -166,6 +170,7 @@ Update this map whenever ownership moves.
 - `README.md` — user-facing overview, status, examples, installation, and document index.
 - `VISION.md` — product purpose, goals, non-goals, and success criteria.
 - `AGENTS.md` — durable agent context, settled decisions, repository map, and working rules.
+- `CONFIGURATION.md` — proposed `.agents/console/config.yaml`, session profiles, sandbox-owned policy validation, and centralized Console records and storage; design sketch only.
 - `docs/MCP_INTERFACE.md` — normative agent-facing schema and observable behavior.
 - `docs/TOOL_DESCRIPTIONS.md` — exact registered tool and property descriptions.
 - `docs/CLI.md` — standalone binary, installation, diagnostics, viewer, watch, and sidecar-control commands.
@@ -178,7 +183,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 
 - `docs/WORKER_PROTOCOL.md` — exact private IPC messages and ordering.
 - `docs/LOCAL_API_PROTOCOL.md` — generated local API contract once endpoint names stabilize.
-- `docs/OUTPUT_AND_TRANSCRIPTS.md` — output timeline, spools, previews, QMD generation, and retention.
+- `docs/OUTPUT_AND_TRANSCRIPTS.md` — output timeline, spools, previews, document generation, and retention.
 - `docs/SANDBOX.md` — platform policies and inherited-host sandbox behavior.
 - `docs/DEPENDENCIES.md` — R/Python requirement grammar, resolution, caching, and activation.
 - `docs/TESTING.md` — supported runtime matrix, integration harness, fixtures, and snapshot rules.
@@ -221,8 +226,8 @@ Create focused documents only when a subsystem has enough detail to justify a se
 
 - `src/output/` — managed and raw stream intake, per-evaluation spools, reply cursors, value/table previews, and final response budgets.
 
-- `src/transcript/` — internal journal model and generated Quarto projection.
-  The QMD must be rebuildable and must not be edited in place.
+- `src/transcript/` — internal journal model, generated Markdown ledger, and source-only Quarto projection.
+  Users and agents must not edit the live generated documents; the server appends Markdown and regenerates the QMD from incremental source and requirement state.
 
 - `src/local_api/` — process-scoped service router, local transports, protected discovery records, handshake, authorization, snapshots, event replay, and managed-file delivery.
 
@@ -244,8 +249,8 @@ Create focused documents only when a subsystem has enough detail to justify a se
 
 1. Preserve the two-tool MCP surface.
    Viewer and integration capabilities belong on the local sidecar API, not as more globally visible MCP tools.
-2. Treat `docs/MCP_INTERFACE.md` as the normative MCP contract and `docs/SIDECAR_API.md` as the normative local-integration design.
-   Behavior changes require corresponding integration tests and documentation in the same patch.
+2. `docs/MCP_INTERFACE.md` and `docs/SIDECAR_API.md` are related interface sketches, not production contracts.
+   Reconcile the relevant interface, integration tests, and implemented documentation when implementing a proposal; exploratory edits do not require synchronizing every draft.
 3. Keep complete cells separate from `stdin`.
    Never route top-level code through the runtime input queue.
 4. Never infer idle, completion, debugger state, or input state from visible prompt strings.
@@ -256,8 +261,8 @@ Create focused documents only when a subsystem has enough detail to justify a se
    Do not stringify or collect an arbitrary object or relation in full and truncate afterward.
 8. Polls return only newly observed bounded output and current state.
    Unseen overflow stays in the evaluation spool and is not forced through later calls.
-9. Keep the internal journal and generated QMD separate.
-   The journal may be granular; the QMD is the readable agent artifact.
+9. Keep the internal journal and generated documents separate.
+   The journal may be granular; Markdown is the readable agent artifact and QMD contains only source cells.
 10. Record a worker crash before automatically starting a fresh worker.
     Preserve honest state-loss and generation boundaries.
 11. Observation must never enter the runtime.
@@ -267,6 +272,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 13. Slow or disconnected viewers must never block evaluation, transcript writing, or event publication.
     Use bounded queues, cursors, replay, and explicit resynchronization.
 14. Never let object handles, table views, or artifacts escape their instance, session, generation, revision, and retention boundaries.
+    These are local-API identity boundaries; managed files remain readable across sessions and generations unless the user explicitly restricts filesystem reads, as described in [`CONFIGURATION.md`](CONFIGURATION.md).
 15. Do not serve arbitrary paths.
     Local API clients fetch only supervisor-managed output, artifact, transcript, and snapshot IDs.
 16. Test through the built binary and real runtimes.
@@ -286,7 +292,7 @@ Create focused documents only when a subsystem has enough detail to justify a se
 1. Build the session state machine, normalized runtime interface, and deterministic fake backend around the implemented persistent R worker.
 2. Complete the remaining backend evaluation covering interrupts, plots/help, Python and SQL dispatch, and an independent large-table viewer using live viewport requests.
 3. Record the full-runtime backend decision, then extend the selected worker with structured interrupt, restart, crash reporting, and capability negotiation.
-4. Bounded output spools, reply cursors, value previews, generated `transcript.qmd`, and managed artifacts.
+4. Bounded output spools, reply cursors, value previews, generated `transcript.md` and source-only `transcript.qmd`, and managed artifacts.
 5. Reticulate Python cell execution and interactive input.
 6. Persistent DuckDB through R/DBI, bounded SQL results, R environment scanning, and explicit registration.
 7. Atomic session requirement preparation and restart.

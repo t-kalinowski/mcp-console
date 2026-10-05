@@ -1,0 +1,8 @@
+---
+yaml: |
+  !configuration
+  !key cache: !cache host
+  sandbox: !policy
+    environment: !environment {LABEL: !text tagged}
+    filesystem: !filesystem {entries: !entries []}
+initialized: true

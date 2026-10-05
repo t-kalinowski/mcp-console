@@ -1,0 +1,61 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: "42"
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "python runtime configuring> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 929, in _mcp_console_configure_module_defaults
+          File "<string>", line 887, in apply
+          File "<runtime setup checkpoint>", line 9, in configuration_checkpoint
+          File "<string>", line 50, in _console_input
+        KeyboardInterrupt
+  isError: false
+---
+send:
+  python: assert id(runtime_identity) == runtime_identity_id; 42
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  python: import yaml12; yaml12.__name__
+result:
+  content:
+    - type: text
+      text: |
+        [resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']
+        'yaml12'
+  isError: false
+---
+send:
+  python: |
+    import logging
+
+    sum(
+        getattr(filter_, "_mcp_console_filter", False)
+        for filter_ in logging.getLogger("matplotlib.font_manager").filters
+    )
+result:
+  content:
+    - type: text
+      text: |
+        1
+  isError: false

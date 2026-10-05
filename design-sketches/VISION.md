@@ -75,7 +75,7 @@ Explicit stdout and stderr are retained in bounded session spools, while each MC
 
 ### 8. Durable context outside the conversation
 
-Each session maintains a generated `transcript.qmd` containing submitted code, labels, bounded output, errors, input interactions, origins, and artifact paths.
+Each session maintains a generated `transcript.md` containing submitted code, labels, bounded output, errors, input interactions, origins, and artifact paths, plus a source-only `transcript.qmd` containing submitted code cells.
 After context compaction, the agent can recover what happened using ordinary file tools.
 
 The transcript is a chronological execution record, not a polished or necessarily reproducible notebook.
@@ -155,7 +155,7 @@ Every new public MCP field or tool has a permanent model-context cost.
 - Submission: one complete R, Python, or SQL cell.
 - Evaluation: execution of one submission.
 - `stdin`: exact stream text queued to the session worker, not another code submission; it may contain multiple lines, receives no implicit newline, and is not acknowledged as consumed.
-- Durable record: generated `transcript.qmd` plus retained output and artifact files.
+- Durable record: generated `transcript.md`, source-only `transcript.qmd`, and retained output and artifact files.
 - Refined notebook, report, or script: a separate user artifact.
 - Local sidecar API: process-scoped observation, structured inspection, and attributed external control.
 - Viewer: a short-lived client of an already-running server, never its owner.
@@ -196,7 +196,7 @@ The design is successful when:
 5. R top-level evaluation does not introduce a console-owned R wrapper frame.
 6. Debuggers and runtime input work without making normal code line-oriented.
 7. No evaluation can inject unbounded text into model context.
-8. After context compaction, the agent can inspect `transcript.qmd` and recover its work.
+8. After context compaction, the agent can inspect `transcript.md` and recover its work.
 9. A worker crash cannot corrupt MCP transport or masquerade as preserved state.
 10. A human viewer can discover and attach to a live server without starting or prolonging a daemon.
 11. A disconnected or slow viewer can resume or resynchronize without blocking execution or causing unbounded memory growth.

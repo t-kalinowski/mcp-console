@@ -1,0 +1,90 @@
+---
+scenario: malformed JSON
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Eof at line 1, column 1)
+---
+scenario: file reference
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Syntax at line 1, column 1)
+---
+scenario: missing policy
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 2)
+---
+scenario: duplicate field
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 22)
+---
+scenario: duplicate command
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 176)
+---
+scenario: duplicate cwd
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 172)
+---
+scenario: file include
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 176)
+---
+scenario: transport export
+exit_code: 1
+stdout: ""
+stderr: >
+  mcp-console-sandbox: configuration transport variable cannot be exported
+  to the target
+---
+scenario: invalid lifecycle
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: cleanup_timeout_ms must be 1..=60000
+---
+scenario: invalid environment
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 212)
+---
+scenario: --config-env ABSENT_POLICY
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: selected configuration variable is not set
+---
+scenario: --config-env TEST_POLICY --config-env
+exit_code: 2
+stdout: ""
+stderr: |
+  error: the argument '--config-env <NAME>' cannot be used multiple times
+
+  Usage: mcp-console sandbox [OPTIONS] <COMMAND>...
+
+  For more information, try '--help'.
+---
+scenario: --config-env TEST_POLICY --exit-with-parent
+exit_code: 2
+stdout: ""
+stderr: >
+  error: the argument '--config-env <NAME>' cannot be used with
+  '--exit-with-parent <PID>'
+
+
+  Usage: mcp-console sandbox --config-env <NAME> <COMMAND>...
+
+
+  For more information, try '--help'.

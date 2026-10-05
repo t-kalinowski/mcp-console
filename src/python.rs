@@ -1,415 +1,266 @@
-#[cfg(target_os = "macos")]
+mod environment;
+mod inspection;
+mod probe;
+mod requirements;
+mod reticulate;
+mod startup;
+
+pub(crate) use inspection::{NativePython, explicit_executable, inspect_native};
+pub(crate) use requirements::{ActivationFailure, ensure_libpython_compatible};
+#[cfg(all(test, unix))]
+pub(crate) use requirements::{ActivationInput, activate_managed_environment};
+pub(crate) use startup::{finish_initialization, initialize_selected, setup_runtime};
+
+const RUNTIME_SOURCE: &str = include_str!("python/runtime.py");
+
+/// Import policy installed before shared runtime setup is complete.
+pub(crate) enum ImportResolution<'a> {
+    Managed,
+    Disabled(&'a str),
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum PreparationOutcome {
+    #[serde(deserialize_with = "crate::worker_protocol::deserialize_payload_free")]
+    Prepared,
+    Failed {
+        message: String,
+    },
+    Rejected {
+        message: String,
+    },
+}
+
+/// Rust-owned Python runtime boundary.
+///
+/// Every cell enters the same private evaluator through the retained CPython
+/// library. The optional reticulate adapter retains R-side discovery and
+/// attachment policy; it is absent until R is initialized.
+pub(crate) struct Runtime {
+    next_evaluation_id: u64,
+}
+
+pub(crate) enum SqlProvider {
+    R,
+    Managed,
+    Handled,
+}
+
+pub(crate) use platform::configure_worker_environment as configure_native_worker_environment;
+
+pub(crate) use reticulate::{
+    configure_worker_environment as configure_r_environment, defer_r_startup, finish_r_startup,
+};
+
+thread_local! {
+    static ADAPTER: std::cell::RefCell<Option<std::rc::Rc<reticulate::Adapter>>> = const { std::cell::RefCell::new(None) };
+}
+static SELECTION: std::sync::OnceLock<crate::local_runtime::WorkerSelection> =
+    std::sync::OnceLock::new();
+
+pub(crate) fn attach_r_adapter() -> Result<(), String> {
+    if let Some(manifest) = requirements::retained_manifest() {
+        unsafe {
+            std::env::set_var(
+                "MCP_CONSOLE_MANAGED_PYTHON",
+                serde_json::to_string(&manifest).map_err(|error| error.to_string())?,
+            )
+        };
+    }
+    let adapter = std::rc::Rc::new(reticulate::Adapter::initialize()?);
+    ADAPTER.with(|slot| *slot.borrow_mut() = Some(adapter));
+    Ok(())
+}
+
+fn adapter() -> Option<std::rc::Rc<reticulate::Adapter>> {
+    ADAPTER.with(|slot| slot.borrow().clone())
+}
+
+pub(crate) fn attach_bridge() -> Result<bool, String> {
+    adapter()
+        .ok_or("R bridge is unavailable")?
+        .ensure_initialized()
+}
+
+pub(crate) fn reinstall_services() -> Result<(), String> {
+    #[cfg(windows)]
+    crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
+    if library::initialized_selection()?.is_some() && library::services_installed()? {
+        library::install_services()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_initialized() -> Result<bool, String> {
+    if library::runtime_configured()? {
+        return Ok(true);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(candidate) = requirements::materialized()
+    {
+        return startup::initialize_native(&candidate.selected, true);
+    }
+    let selection = SELECTION
+        .get()
+        .ok_or("Python capability is not configured")?;
+    if !crate::worker::r_initialized()
+        && let Some(python) = &selection.python
+    {
+        return startup::initialize_native(&python.selected, python.managed);
+    }
+    if !crate::worker::r_initialized()
+        && let Some(explicit) = std::env::var_os("RETICULATE_PYTHON")
+            .filter(|value| !value.is_empty() && value != "managed")
+    {
+        let selected = match explicit_executable(&explicit)
+            .and_then(|path| crate::worker::inspect_python(&path))
+        {
+            Ok(selected) => selected,
+            Err(error) => {
+                crate::worker::emit_output(
+                    crate::worker_protocol::ConsoleChannel::Diagnostic,
+                    format!("Error: {error}\n").as_bytes(),
+                );
+                return Ok(false);
+            }
+        };
+        return startup::initialize_native(&selected, false);
+    }
+    // R declarations and selection callbacks genuinely require R. Only an
+    // unresolved compatibility selection enters this path.
+    crate::worker::ensure_r()?;
+    if crate::worker::bootstrapping() {
+        // A bare R library can genuinely lack the Python selection adapter.
+        // Its advertised Python field is not an installed runtime capability;
+        // eager startup must leave ordinary R cells usable in that session.
+        let available = harp::parse_eval_base(r#"requireNamespace("reticulate", quietly = TRUE)"#)
+            .and_then(bool::try_from)
+            .map_err(|error| error.to_string())?;
+        if !available {
+            return Ok(true);
+        }
+    }
+    let adapter = adapter().ok_or("R selection adapter is unavailable")?;
+    let selected = match adapter.select(crate::worker::bootstrapping())? {
+        reticulate::Selection::Selected(selected) => selected,
+        // Discovery ran its ordinary callbacks and found no interpreter. This
+        // completes optional bootstrap; an actual Python cell still reports
+        // the selection error through the ordinary, required path.
+        reticulate::Selection::Unavailable => return Ok(true),
+        reticulate::Selection::Incomplete => return Ok(false),
+    };
+    startup::initialize_native(&selected, adapter.managed)
+}
+
+impl Runtime {
+    pub(crate) fn new(selection: crate::local_runtime::WorkerSelection) -> Result<Self, String> {
+        requirements::configure()?;
+        SELECTION
+            .set(selection)
+            .map_err(|_| "runtime capabilities already configured")?;
+        Ok(Self {
+            next_evaluation_id: 1,
+        })
+    }
+
+    pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
+        let filename = format!("<mcp-console:python:e{}>", self.next_evaluation_id);
+        self.next_evaluation_id += 1;
+        if !ensure_initialized()? {
+            return Ok(());
+        }
+        evaluate_embedded(source, &filename)
+    }
+
+    pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
+        requirements::prepare(packages)
+    }
+}
+
+pub(crate) fn resolve_managed_import(
+    resolution: crate::worker_protocol::PythonImportResolution,
+) -> Result<String, String> {
+    requirements::resolve_import(resolution)
+}
+
+pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
+    library::evaluate(source, filename)
+}
+
+pub(crate) fn install_sql_runtime(source: &str) -> Result<bool, String> {
+    library::install_sql_runtime(source)
+}
+
+pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
+    library::dispatch_sql(source)
+}
+
+pub(crate) fn use_r_sql() -> Result<(), String> {
+    library::use_r_sql()
+}
+
+pub(crate) fn initialize_managed_sql() -> Result<(), String> {
+    if ensure_initialized()? {
+        library::initialize_managed_sql()?;
+    }
+    Ok(())
+}
+
+pub(crate) fn take_sql_restore_request() -> Result<bool, String> {
+    library::take_sql_restore_request()
+}
+
+pub(crate) fn prepare_process_exit() -> Result<(), String> {
+    library::prepare_process_exit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PreparationOutcome;
+
+    #[test]
+    fn python_preparation_outcome_rejects_unknown_fields() {
+        assert!(serde_json::from_str::<PreparationOutcome>(r#"{"kind":"prepared"}"#).is_ok());
+        assert!(
+            serde_json::from_str::<PreparationOutcome>(
+                r#"{"kind":"prepared","checkpoint":{"packages":[]}}"#
+            )
+            .is_err()
+        );
+    }
+}
+
+mod library;
+
 mod platform {
     use std::ffi::{CStr, CString};
     use std::fs;
     use std::io;
-    use std::os::unix::ffi::OsStrExt as _;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
-    use libr::SEXP;
-
     static MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
-    const BRIDGE_INIT: &str = r#"
-base::local({
-  evaluator <- NULL
-  managed <- Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON", unset = NA_character_)
-  source <- NULL
-
-  manifest <- function(packages, python_version, exclude_newer) {
-    list(
-      packages = I(sort(unique(packages %||% character()))),
-      python_version = I(sort(unique(python_version %||% character()))),
-      exclude_newer = exclude_newer
-    )
-  }
-
-  uv_environment <- function() {
-    environment <- Sys.getenv()
-    as.list(environment[
-      startsWith(names(environment), "UV_") &
-        names(environment) != "UV_OFFLINE"
-    ])
-  }
-
-  request_json <- function(requirements, retained_requirements) {
-    jsonlite::toJSON(
-      list(
-        requirements = requirements,
-        retained_requirements = retained_requirements,
-        environment = uv_environment()
-      ),
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  version_request_json <- function(constraints) {
-    jsonlite::toJSON(
-      list(
-        constraints = I(as.character(constraints %||% character())),
-        environment = uv_environment()
-      ),
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  install_managed_python <- function(...) {
-    namespace <- asNamespace("reticulate")
-    current_requirements <- function() {
-      get("py_reqs_get", envir = namespace)()
-    }
-    resolve <- function(
-      packages = current_requirements()$packages,
-      python_version = get("py_reqs_python_version", envir = namespace)(),
-      exclude_newer = current_requirements()$exclude_newer
-    ) {
-      current <- current_requirements()
-      requirements <- manifest(packages, python_version, exclude_newer)
-      retained_requirements <- manifest(
-        packages,
-        current$python_version,
-        exclude_newer
-      )
-      .Call(
-        "mcp_console_resolve_python",
-        request_json(requirements, retained_requirements)
-      )
-    }
-    resolve_version <- function(constraints = NULL, uv = NULL) {
-      # The host resolver owns the executable; worker code supplies only
-      # version constraints and supported UV settings.
-      .Call(
-        "mcp_console_resolve_python_version",
-        version_request_json(constraints)
-      )
-    }
-
-    seed <- jsonlite::fromJSON(managed)
-    packages <- unlist(seed$packages, use.names = FALSE)
-    python_version <- unlist(seed$python_version, use.names = FALSE)
-    if (!length(python_version)) {
-      python_version <- NULL
-    }
-    globals <- get(".globals", envir = namespace)
-    requirements <- get("py_reqs_get", envir = namespace)()
-    changed <- !identical(
-      manifest(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      ),
-      manifest(packages, python_version, seed$exclude_newer)
-    )
-    if (changed) {
-      requirements$packages <- packages
-      requirements$python_version <- python_version
-      requirements$exclude_newer <- seed$exclude_newer
-      requirements$history <- c(requirements$history, list(list(
-        requested_from = "mcp-console",
-        env_is_package = FALSE,
-        packages = packages,
-        python_version = python_version,
-        exclude_newer = seed$exclude_newer,
-        exclude_newer_supplied = !is.null(seed$exclude_newer),
-        action = "set"
-      )))
-      globals$python_requirements <- requirements
-    }
-
-    replace_binding <- function(name, value) {
-      was_locked <- bindingIsLocked(name, namespace)
-      if (was_locked) {
-        unlockBinding(name, namespace)
-      }
-      on.exit(
-        if (was_locked) lockBinding(name, namespace),
-        add = TRUE
-      )
-      assign(name, value, envir = namespace)
-      invisible()
-    }
-    replace_binding("uv_get_or_create_env", resolve)
-    replace_binding("resolve_python_version", resolve_version)
-    invisible()
-  }
-
-  if (!is.na(managed)) {
-    Sys.unsetenv("MCP_CONSOLE_MANAGED_PYTHON")
-    `%||%` <- function(x, y) if (is.null(x)) y else x
-    setHook(
-      packageEvent("reticulate", "onLoad"),
-      install_managed_python,
-      action = "append"
-    )
-    if ("reticulate" %in% loadedNamespaces()) {
-      install_managed_python()
-    }
-  }
-
-  console_width <- getOption("width")
-  install_console_width <- function(...) {
-    configure_numpy <- function() {
-      numpy <- reticulate::import("numpy", convert = FALSE)
-      numpy$set_printoptions(linewidth = console_width)
-    }
-    configure_pandas <- function() {
-      pandas <- reticulate::import("pandas", convert = FALSE)
-      pandas$set_option("display.width", console_width)
-    }
-    # Reticulate imports NumPy before its module-load hooks are installed.
-    setHook("reticulate.onPyInit", function() {
-      reticulate::py_register_load_hook("numpy", configure_numpy)
-      reticulate::py_register_load_hook("pandas", configure_pandas)
-    }, action = "append")
-    invisible()
-  }
-  setHook(
-    packageEvent("reticulate", "onLoad"),
-    install_console_width,
-    action = "append"
-  )
-  if ("reticulate" %in% loadedNamespaces()) {
-    install_console_width()
-  }
-
-  checkpoint_manifest <- function() {
-    if (is.na(managed) || !"reticulate" %in% loadedNamespaces()) {
-      return(NULL)
-    }
-    namespace <- asNamespace("reticulate")
-    requirements <- reticulate::py_require()
-    initialized <- get("is_python_initialized", envir = namespace)()
-    if (!initialized) {
-      invisible(get("uv_get_or_create_env", envir = namespace)(
-        requirements$packages,
-        requirements$python_version,
-        requirements$exclude_newer
-      ))
-    }
-    manifest(
-      requirements$packages,
-      requirements$python_version,
-      requirements$exclude_newer
-    )
-  }
-
-  checkpoint <- function() {
-    checkpoint <- checkpoint_manifest()
-    if (is.null(checkpoint)) {
-      return(NA_character_)
-    }
-    jsonlite::toJSON(
-      checkpoint,
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  prepare <- function(request) {
-    if (is.na(managed)) {
-      stop("Python preparation requires a server-managed interpreter")
-    }
-    namespace <- asNamespace("reticulate")
-    globals <- get(".globals", envir = namespace)
-    snapshot <- get("py_reqs_get", envir = namespace)()
-    result <- tryCatch({
-      packages <- unlist(jsonlite::fromJSON(request), use.names = FALSE)
-      reticulate::py_require(packages, action = "add")
-      checkpoint <- checkpoint_manifest()
-      if (is.null(checkpoint)) {
-        stop("Python preparation did not produce a managed checkpoint")
-      }
-      list(kind = "prepared", checkpoint = checkpoint)
-    }, error = function(error) {
-      globals$python_requirements <- snapshot
-      list(kind = "failed", message = conditionMessage(error))
-    })
-    jsonlite::toJSON(
-      result,
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    )
-  }
-
-  evaluate <- function(id) {
-    if (is.null(evaluator)) {
-      private <- reticulate::py_run_string(r"---(
-import __main__ as _main
-import ast as _ast
-import base64 as _base64
-import builtins as _builtins
-import io as _io
-import logging as _logging
-import sys as _sys
-import traceback as _traceback
-
-
-class _McpConsoleMatplotlibLogFilter(_logging.Filter):
-    def filter(self, record):
-        return record.getMessage() != (
-            "Matplotlib is building the font cache; this may take a moment."
-        )
-
-
-_logging.getLogger("matplotlib.font_manager").addFilter(
-    _McpConsoleMatplotlibLogFilter()
-)
-
-
-def _mcp_console_collect_plots(
-    _BaseException=_builtins.BaseException,
-    _base64=_base64,
-    _io=_io,
-    _print_exc=_traceback.print_exc,
-    _sys=_sys,
-):
-    pyplot = _sys.modules.get("matplotlib.pyplot")
-    if pyplot is None:
-        return ()
-
-    images = []
-    try:
-        for number in sorted(pyplot.get_fignums()):
-            if number not in pyplot.get_fignums():
-                continue
-            try:
-                figure = pyplot.figure(number)
-                output = _io.BytesIO()
-                figure.savefig(output, format="png")
-                images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
-            except _BaseException:
-                _print_exc()
-    finally:
-        try:
-            pyplot.close("all")
-        except _BaseException:
-            _print_exc()
-    return tuple(images)
-
-
-def _mcp_console_eval_cell(
-    source,
-    filename,
-    _main=_main,
-    _parse=_ast.parse,
-    _Expr=_ast.Expr,
-    _Expression=_ast.Expression,
-    _isinstance=_builtins.isinstance,
-    _compile=_builtins.compile,
-    _exec=_builtins.exec,
-    _eval=_builtins.eval,
-    _BaseException=_builtins.BaseException,
-    _collect_plots=_mcp_console_collect_plots,
-    _sys=_sys,
-    _print_exc=_traceback.print_exc,
-):
-    try:
-        module = _parse(source, filename=filename, mode="exec")
-        final = module.body[-1] if module.body else None
-        if _isinstance(final, _Expr):
-            module.body.pop()
-            statements = _compile(module, filename, "exec") if module.body else None
-            expression = _compile(_Expression(final.value), filename, "eval")
-        else:
-            statements = _compile(module, filename, "exec")
-            expression = None
-
-        if statements is not None:
-            _exec(statements, _main.__dict__)
-        if expression is not None:
-            _sys.displayhook(_eval(expression, _main.__dict__))
-    except _BaseException:
-        _print_exc()
-    try:
-        return _collect_plots()
-    except _BaseException:
-        _print_exc()
-        return ()
-)---", local = TRUE, convert = FALSE)
-      reticulate::py_register_load_hook("matplotlib.pyplot", function() {
-        pyplot <- reticulate::import("matplotlib.pyplot", convert = FALSE)
-        pyplot$show <- function(...) reticulate::py_none()
-      })
-      evaluator <<- private$`_mcp_console_eval_cell`
-    }
-
-    filename <- paste0("<mcp-console:python:", id, ">")
-    images <- reticulate::py_to_r(evaluator(source, filename))
-    for (image in images) {
-      invisible(.Call("mcp_console_publish_python_plot", image))
-    }
-    invisible()
-  }
-
-  environment()
-}, envir = base::new.env(parent = base::baseenv()))
-"#;
-
-    #[derive(serde::Deserialize)]
-    #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-    pub(crate) enum PreparationOutcome {
-        Prepared {
-            checkpoint: crate::worker_protocol::PythonRequirementManifest,
-        },
-        Failed {
-            message: String,
-        },
-    }
-
-    pub(crate) struct Bridge(crate::r_bridge::Bridge);
-
-    impl Bridge {
-        pub(crate) fn initialize() -> Result<Self, String> {
-            crate::r_bridge::Bridge::initialize(BRIDGE_INIT, "Python").map(Self)
-        }
-
-        pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-            self.0.evaluate(source)
-        }
-
-        pub(crate) fn prepare(&self, packages: Vec<String>) -> Result<PreparationOutcome, String> {
-            let request = serde_json::to_string(&packages)
-                .map_err(|error| format!("failed to serialize Python preparation: {error}"))?;
-            let response = self
-                .0
-                .call1_string(c"prepare", &request)?
-                .ok_or_else(|| "Python preparation bridge returned no response".to_string())?;
-            serde_json::from_str(&response)
-                .map_err(|error| format!("invalid Python preparation response: {error}"))
-        }
-
-        pub(crate) fn checkpoint(
-            &self,
-        ) -> Result<Option<crate::worker_protocol::PythonRequirementManifest>, String> {
-            self.0
-                .call0_string(c"checkpoint")?
-                .map(|checkpoint| {
-                    serde_json::from_str(&checkpoint)
-                        .map_err(|error| format!("invalid Python checkpoint: {error}"))
-                })
-                .transpose()
-        }
-    }
-
-    pub(crate) fn configure_worker_environment() -> io::Result<()> {
-        let matplotlib_cache_directory = inherited_matplotlib_directory();
+    pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
+        let matplotlib_cache_directory = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE")
+            .map(std::path::absolute)
+            .transpose()?
+            .or_else(matplotlib_cache_directory);
+        let matplotlib_config_directory =
+            inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all
         // Matplotlib writes to the worker's private directory.
-        if let Some(config) = inherited_matplotlibrc(matplotlib_cache_directory.as_deref()) {
-            let config = CString::new(config.as_os_str().as_bytes())
+        if let Some(config) = inherited_matplotlibrc(matplotlib_config_directory.as_deref()) {
+            let config = path_cstring(&config)
                 .expect("Matplotlib configuration path should not contain NUL");
             set_environment(c"MATPLOTLIBRC", &config, true)?;
         }
-        let temporary_directory = std::env::temp_dir();
         let matplotlib_directory = temporary_directory.join("matplotlib");
         MATPLOTLIB_DIRECTORY
             .set(matplotlib_directory.clone())
@@ -421,7 +272,6 @@ def _mcp_console_eval_cell(
 
         for (name, value, overwrite) in [
             (c"COLUMNS", c"200", true),
-            (c"RETICULATE_REMAP_OUTPUT_STREAMS", c"1", true),
             (c"UV_OFFLINE", c"1", true),
             (c"MPLBACKEND", c"agg", false),
         ] {
@@ -432,8 +282,8 @@ def _mcp_console_eval_cell(
             (c"MPLCONFIGDIR", matplotlib_directory),
             (c"XDG_CACHE_HOME", temporary_directory.join("cache")),
         ] {
-            let directory = CString::new(directory.as_os_str().as_bytes())
-                .expect("temporary directory should not contain NUL");
+            let directory =
+                path_cstring(&directory).expect("temporary directory should not contain NUL");
             set_environment(name, &directory, true)?;
         }
         Ok(())
@@ -465,7 +315,10 @@ def _mcp_console_eval_cell(
             }
             let link = directory.join(name);
             if fs::symlink_metadata(&link).is_err() {
+                #[cfg(unix)]
                 let _ = symlink(cache.path(), link);
+                #[cfg(windows)]
+                let _ = fs::copy(cache.path(), link);
             }
         }
     }
@@ -483,9 +336,24 @@ def _mcp_console_eval_cell(
         regular_file(&config_directory?.join("matplotlibrc"))
     }
 
-    fn inherited_matplotlib_directory() -> Option<PathBuf> {
+    pub(crate) fn matplotlib_cache_directory() -> Option<PathBuf> {
+        inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache")
+    }
+
+    fn inherited_matplotlib_directory(xdg_variable: &str, xdg_default: &str) -> Option<PathBuf> {
         let directory = match std::env::var_os("MPLCONFIGDIR") {
             Some(directory) if !directory.is_empty() => PathBuf::from(directory),
+            Some(_) | None if cfg!(target_os = "linux") => {
+                let root = std::env::var_os(xdg_variable)
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME")
+                            .filter(|home| !home.is_empty())
+                            .map(|home| PathBuf::from(home).join(xdg_default))
+                    })?;
+                root.join("matplotlib")
+            }
             Some(_) | None => {
                 PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
                     .join(".matplotlib")
@@ -503,45 +371,42 @@ def _mcp_console_eval_cell(
         path.is_file().then_some(path)
     }
 
-    fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
+    fn path_cstring(path: &Path) -> Result<CString, std::ffi::NulError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            CString::new(path.as_os_str().as_bytes())
+        }
+        #[cfg(windows)]
+        {
+            CString::new(path.to_string_lossy().as_bytes())
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
         if unsafe { libc::setenv(name.as_ptr(), value.as_ptr(), overwrite.into()) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_publish_python_plot(data: SEXP) -> harp::Result<SEXP> {
-        let data = String::try_from(harp::object::RObject::view(data))?;
-        crate::worker::publish_plot(Ok(data));
-        unsafe { Ok(libr::R_NilValue) }
-    }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_resolve_python(request: SEXP) -> harp::Result<SEXP> {
-        let request = String::try_from(harp::object::RObject::view(request))?;
-        let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
-        let python =
-            crate::worker::resolve_python(request).map_err(|error| harp::anyhow!("{error}"))?;
-        Ok(harp::object::RObject::from(python).sexp)
-    }
-
-    #[allow(clippy::result_large_err)]
-    #[harp::register]
-    pub extern "C-unwind" fn mcp_console_resolve_python_version(
-        request: SEXP,
-    ) -> harp::Result<SEXP> {
-        let request = String::try_from(harp::object::RObject::view(request))?;
-        let request = serde_json::from_str(&request).map_err(|error| harp::anyhow!("{error}"))?;
-        let version = crate::worker::resolve_python_version(request)
-            .map_err(|error| harp::anyhow!("{error}"))?;
-        Ok(harp::object::RObject::from(version).sexp)
+    #[cfg(windows)]
+    pub(super) fn set_environment(name: &CStr, value: &CStr, overwrite: bool) -> io::Result<()> {
+        let name = name.to_str().map_err(io::Error::other)?;
+        if overwrite || std::env::var_os(name).is_none() {
+            let value = value.to_str().map_err(io::Error::other)?;
+            let assignment = CString::new(format!("{name}={value}")).map_err(io::Error::other)?;
+            // Keep both the Win32 environment and the UCRT getenv view used by
+            // embedded R/Python synchronized. _putenv copies its argument.
+            unsafe {
+                std::env::set_var(name, value);
+                if libc::putenv(assignment.as_ptr()) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+        }
+        Ok(())
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) use platform::{
-    Bridge, PreparationOutcome, configure_worker_environment, link_matplotlib_caches,
-};
+pub(crate) use platform::{link_matplotlib_caches, matplotlib_cache_directory};

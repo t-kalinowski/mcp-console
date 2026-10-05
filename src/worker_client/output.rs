@@ -1,6 +1,13 @@
 use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
 
+mod terminal;
+
+mod preview;
+mod tape;
+use preview::{Part, Preview};
+use tape::OutputTapeState;
+
 pub(super) const WORKER_STARTING_NOTICE: &str = "starting new worker";
 const WORKER_STARTING_STATE: &str = "worker starting";
 pub(super) const WORKER_STOPPED_NOTICE: &str = "worker stopped: in-memory state lost";
@@ -14,58 +21,15 @@ pub(super) const ACTIVE_EVALUATION_STOPPED_NOTICE: &str =
 #[derive(Clone)]
 pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 
-#[derive(Default)]
-struct OutputTapeState {
-    direct_stdout: Vec<u8>,
-    direct_stderr: Vec<u8>,
-    events: Vec<OutputEvent>,
-}
+/// An opaque boundary between sealed response intervals.
+#[derive(Clone, Copy)]
+pub(super) struct OutputCut(u64);
 
-/// One publication from a directly captured worker file descriptor.
-///
-/// These paths capture output that bypasses worker console-text frames, including
-/// Python `.buffer` writes, native fd writes, forked or execed descendants, and
-/// custom workers.
-enum DirectOutputEvent {
-    Bytes(Vec<u8>),
-    Closed,
-}
-
-enum OutputEvent {
-    /// Raw bytes or closure from the worker's directly captured stdout (fd 1).
-    DirectStdout(DirectOutputEvent),
-    /// Raw bytes or closure from the worker's directly captured stderr (fd 2).
-    DirectStderr(DirectOutputEvent),
-    /// Text from a worker console-text sideband frame.
-    WorkerConsoleText {
-        channel: crate::worker_protocol::ConsoleChannel,
-        text: String,
-    },
-    /// An image from a worker `image` sideband frame, already persisted when enabled.
-    WorkerImage {
-        data: String,
-        mime_type: String,
-        artifact: Option<crate::transcript::Artifact>,
-    },
-    /// An unbracketed server-owned lifecycle, state, or input notice.
-    ServerNotice {
-        message: String,
-        /// End the notice with a newline before later worker output arrives.
-        terminate_line: bool,
-    },
-    /// A server infrastructure, transport, or protocol failure.
-    ///
-    /// Language errors are normal evaluation output and do not use this event.
-    ServerFailure(SendFailure),
-}
-
-#[cfg(target_os = "macos")]
 pub(super) struct DirectOutput {
     output: OutputTape,
     stream: DirectOutputStream,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 enum DirectOutputStream {
     Stdout,
@@ -74,9 +38,9 @@ enum DirectOutputStream {
 
 #[derive(Default)]
 pub(crate) struct Response {
-    content: Vec<Content>,
+    preview: Box<Preview>,
     is_error: bool,
-    acknowledgment: Option<SyncSender<ResponseAcknowledgment>>,
+    delivery: Option<ResponseDeliveryTarget>,
 }
 
 pub(super) enum ResponseAcknowledgment {
@@ -84,9 +48,21 @@ pub(super) enum ResponseAcknowledgment {
     Unclaimed(Response),
 }
 
-/// Releases an explicit restart after the interrupted `send` reply is written.
-pub(crate) struct ResponseDelivery(Option<SyncSender<ResponseAcknowledgment>>);
+enum ResponseDeliveryTarget {
+    Evaluation(SyncSender<ResponseAcknowledgment>, Arc<tokio::sync::Notify>),
+    Output(OutputTape),
+}
 
+/// Reports whether an assembled console response reached the MCP transport.
+///
+/// The bounded recovery response remains owned here after MCP projection so transport
+/// cancellation or write failure can return the complete reply to restart.
+pub(crate) struct ResponseDelivery {
+    target: Option<ResponseDeliveryTarget>,
+    unclaimed: Option<Response>,
+}
+
+#[derive(Clone)]
 pub(crate) enum Content {
     Text(String),
     Image {
@@ -96,8 +72,25 @@ pub(crate) enum Content {
     },
 }
 
+/// Constructs response regions and control state before bounded MCP projection.
+#[derive(Default)]
+pub(super) struct ResponseBuilder {
+    response: Response,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TerminalState {
+    Completed,
+    Running,
+    StdinNeeded,
+    Idle,
+    WorkerStarting,
+    ReplacementReady,
+}
+
 pub(super) enum SendResponse {
     Idle(Response),
+    Failed(Response),
     Running(Response),
     InputRequested(Response),
     Completed(Response),
@@ -110,6 +103,7 @@ pub(super) struct SendFailure {
     pub(super) message: String,
     pub(super) worker_stopped: bool,
     preceded_restart: bool,
+    worker_outcome: Option<super::WorkerProcessOutcome>,
 }
 
 impl From<String> for SendFailure {
@@ -118,6 +112,7 @@ impl From<String> for SendFailure {
             message,
             worker_stopped: false,
             preceded_restart: false,
+            worker_outcome: None,
         }
     }
 }
@@ -125,6 +120,11 @@ impl From<String> for SendFailure {
 impl SendFailure {
     pub(super) fn worker_stopped(mut self) -> Self {
         self.worker_stopped = true;
+        self
+    }
+
+    pub(super) fn worker_outcome(mut self, outcome: Option<super::WorkerProcessOutcome>) -> Self {
+        self.worker_outcome = outcome;
         self
     }
 
@@ -139,349 +139,375 @@ impl SendFailure {
 }
 
 impl Response {
+    pub(crate) fn tool_error(message: String) -> Self {
+        let mut response = Self::default();
+        response.push_tool_error(message);
+        response
+    }
+
+    pub(crate) fn persist_images(
+        &mut self,
+        transcript: &crate::transcript::Transcript,
+        call_id: Option<u64>,
+    ) -> Result<(), String> {
+        for part in &mut self.preview.parts {
+            let Part::Image(content) = part else {
+                continue;
+            };
+            let Content::Image {
+                data,
+                mime_type,
+                artifact,
+            } = content
+            else {
+                continue;
+            };
+            if artifact.is_none() {
+                *artifact = transcript.persist_image(call_id, data, mime_type)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
-        let content = std::mem::take(&mut self.content);
+        let content = self.preview.render();
         let is_error = self.is_error;
-        let delivery = self
-            .acknowledgment
-            .take()
-            .map(|acknowledgment| ResponseDelivery(Some(acknowledgment)));
+        let delivery = self.delivery.take().map(|target| ResponseDelivery {
+            target: Some(target),
+            unclaimed: Some(Response {
+                preview: std::mem::take(&mut self.preview),
+                is_error,
+                delivery: None,
+            }),
+        });
         (content, is_error, delivery)
     }
 
     pub(super) fn extend(&mut self, mut other: Self) {
-        if other.acknowledgment.is_some() {
-            assert!(
-                self.acknowledgment.is_none(),
-                "a response can carry only one acknowledgment"
-            );
-            self.acknowledgment = other.acknowledgment.take();
-        }
-        for content in std::mem::take(&mut other.content) {
-            match content {
-                Content::Text(text) => self.push_text(text),
-                Content::Image {
-                    data,
-                    mime_type,
-                    artifact,
-                } => self.push_image(data, mime_type, artifact),
-            }
-        }
-        self.is_error |= other.is_error;
+        self.with_builder(|builder| builder.append_response(&mut other));
     }
 
-    pub(super) fn acknowledge_with(&mut self, acknowledgment: SyncSender<ResponseAcknowledgment>) {
+    /// Appends another logical response region without inserting a server notice.
+    pub(super) fn extend_logical_region(&mut self, other: Self) {
+        self.with_builder(|builder| builder.append_logical_region(other));
+    }
+
+    /// Appends cell output after this response's owned idle prelude.
+    ///
+    /// The canonical builder inserts the separator only when both regions are
+    /// nonempty, preserving images and their order on either side.
+    pub(super) fn extend_cell_after_idle_prelude(&mut self, other: Self) {
+        self.with_builder(|builder| builder.append_cell_after_idle_prelude(other));
+    }
+
+    pub(super) fn acknowledge_with(
+        &mut self,
+        acknowledgment: SyncSender<ResponseAcknowledgment>,
+        changed: Arc<tokio::sync::Notify>,
+    ) {
         assert!(
-            self.acknowledgment.is_none(),
+            self.delivery.is_none(),
             "a response can carry only one acknowledgment"
         );
-        self.acknowledgment = Some(acknowledgment);
+        self.delivery = Some(ResponseDeliveryTarget::Evaluation(acknowledgment, changed));
     }
 
-    fn push_text(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        if text.is_empty() {
-            return;
-        }
-        if let Some(Content::Text(output)) = self.content.last_mut() {
-            output.push_str(&text);
-        } else {
-            self.content.push(Content::Text(text));
-        }
-    }
-
-    fn push_image(
-        &mut self,
-        data: String,
-        mime_type: String,
-        artifact: Option<crate::transcript::Artifact>,
-    ) {
-        self.content.push(Content::Image {
-            data,
-            mime_type,
-            artifact,
-        });
+    pub(super) fn recover_to(&mut self, output: OutputTape) {
+        assert!(
+            self.delivery.is_none(),
+            "a response can carry only one delivery target"
+        );
+        self.delivery = Some(ResponseDeliveryTarget::Output(output));
     }
 
     fn is_empty(&self) -> bool {
-        self.content.is_empty()
+        self.preview.is_empty()
     }
 
     fn is_error(&self) -> bool {
         self.is_error
     }
 
-    fn text_needs_newline(&self) -> bool {
-        !matches!(self.content.last(), Some(Content::Text(text)) if text.ends_with('\n'))
-    }
-
-    fn push_line(&mut self, text: impl Into<String>) {
-        if !self.is_empty() && self.text_needs_newline() {
-            self.push_text("\n");
-        }
-        self.push_text(text);
-    }
-
-    pub(super) fn push_notice(&mut self, message: impl Into<String>) {
-        self.push_line(render_notice(message));
+    pub(crate) fn push_notice(&mut self, message: impl Into<String>) {
+        self.with_builder(|builder| builder.notice(message));
     }
 
     /// Adds a server notice and ends its line for any output appended later.
     pub(super) fn push_notice_line(&mut self, message: impl Into<String>) {
-        self.push_notice(message);
-        self.push_text("\n");
+        self.with_builder(|builder| builder.notice_line(message));
     }
 
-    pub(super) fn push_server_failure(&mut self, message: impl Into<String>) {
-        self.push_notice(message);
-        self.mark_error();
+    pub(super) fn push_tool_error(&mut self, message: impl Into<String>) {
+        self.with_builder(|builder| builder.tool_error(message));
+    }
+
+    pub(super) fn push_failure(&mut self, failure: SendFailure) {
+        self.with_builder(|builder| builder.send_failure(failure));
     }
 
     pub(super) fn mark_error(&mut self) {
-        self.is_error = true;
+        self.with_builder(ResponseBuilder::mark_error);
+    }
+
+    fn with_builder(&mut self, operation: impl FnOnce(&mut ResponseBuilder)) {
+        let mut builder = ResponseBuilder::from_response(std::mem::take(self));
+        operation(&mut builder);
+        *self = builder.finish();
     }
 }
 
-impl ResponseDelivery {
-    pub(crate) fn complete(mut self) {
-        if let Some(acknowledgment) = self.0.take() {
-            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
-        }
-    }
-}
-
-impl Drop for Response {
-    fn drop(&mut self) {
-        if let Some(acknowledgment) = self.acknowledgment.take() {
-            let response = Self {
-                content: std::mem::take(&mut self.content),
-                is_error: self.is_error,
-                acknowledgment: None,
-            };
-            let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
-        }
-    }
-}
-
-impl OutputTape {
+impl ResponseBuilder {
     pub(super) fn new() -> Self {
-        Self(Arc::new(Mutex::new(OutputTapeState::default())))
+        Self::default()
     }
 
-    #[cfg(target_os = "macos")]
-    pub(super) fn direct_stdout(&self) -> DirectOutput {
-        DirectOutput {
-            output: self.clone(),
-            stream: DirectOutputStream::Stdout,
-        }
+    pub(super) fn from_response(response: Response) -> Self {
+        Self { response }
     }
 
-    #[cfg(target_os = "macos")]
-    pub(super) fn direct_stderr(&self) -> DirectOutput {
-        DirectOutput {
-            output: self.clone(),
-            stream: DirectOutputStream::Stderr,
-        }
+    pub(super) fn finish(self) -> Response {
+        self.response
     }
 
-    pub(super) fn push_console_text(
-        &self,
-        channel: crate::worker_protocol::ConsoleChannel,
-        text: impl Into<String>,
-    ) {
-        let text = text.into();
-        if !text.is_empty() {
-            self.lock()
-                .events
-                .push(OutputEvent::WorkerConsoleText { channel, text });
-        }
-    }
-
-    pub(super) fn push_image(
-        &self,
+    pub(super) fn image(
+        &mut self,
         data: String,
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.lock().events.push(OutputEvent::WorkerImage {
+        self.response.preview.image(Content::Image {
             data,
             mime_type,
             artifact,
         });
     }
 
-    /// Publishes a server notice that ends its line before later worker output.
-    pub(super) fn push_notice_line(&self, message: impl Into<String>) {
-        self.lock().events.push(OutputEvent::ServerNotice {
-            message: message.into(),
-            terminate_line: true,
-        });
+    pub(super) fn append_response(&mut self, other: &mut Response) {
+        if other.delivery.is_some() {
+            assert!(
+                self.response.delivery.is_none(),
+                "a response can carry only one delivery target"
+            );
+            self.response.delivery = other.delivery.take();
+        }
+        self.response
+            .preview
+            .extend(*std::mem::take(&mut other.preview));
+        self.response.is_error |= other.is_error;
     }
 
-    pub(super) fn push_failure(&self, failure: SendFailure) {
-        self.lock().events.push(OutputEvent::ServerFailure(failure));
+    pub(super) fn append_logical_region(&mut self, mut other: Response) {
+        if matches!(
+            self.response.preview.last_visible(),
+            Some(Part::Text(_) | Part::Notice(_))
+        ) && !self.response.preview.ends_with_newline()
+            && other.preview.starts_with_text()
+        {
+            self.response.preview.notice("\n".to_owned());
+        }
+        self.append_response(&mut other);
     }
 
-    pub(super) fn take(&self) -> Response {
-        let mut state = self.lock();
-        let events = std::mem::take(&mut state.events);
-        let mut output = Response::default();
+    pub(super) fn append_cell_after_idle_prelude(&mut self, mut cell: Response) {
+        if !self.response.is_empty() && !cell.is_empty() {
+            self.notice_line("output produced while idle");
+        }
+        self.append_response(&mut cell);
+    }
 
-        for event in events {
-            match event {
-                OutputEvent::DirectStdout(event) => {
-                    append_direct_output(&mut output, &mut state.direct_stdout, event);
-                }
-                OutputEvent::DirectStderr(event) => {
-                    append_direct_output(&mut output, &mut state.direct_stderr, event);
-                }
-                OutputEvent::WorkerConsoleText { channel, text } => match channel {
-                    crate::worker_protocol::ConsoleChannel::Output
-                    | crate::worker_protocol::ConsoleChannel::Diagnostic => output.push_text(text),
-                },
-                OutputEvent::WorkerImage {
-                    data,
-                    mime_type,
-                    artifact,
-                } => output.push_image(data, mime_type, artifact),
-                OutputEvent::ServerNotice {
-                    message,
-                    terminate_line,
-                } => {
-                    if terminate_line {
-                        output.push_notice_line(message);
-                    } else {
-                        output.push_notice(message);
-                    }
-                }
-                OutputEvent::ServerFailure(SendFailure {
-                    message,
-                    worker_stopped,
-                    ..
-                }) => {
-                    output.push_server_failure(message);
-                    if worker_stopped {
-                        output.push_notice(WORKER_STOPPED_NOTICE);
-                    }
+    pub(super) fn notice(&mut self, message: impl Into<String>) {
+        self.control_text(render_notice(message));
+    }
+
+    pub(super) fn notice_line(&mut self, message: impl Into<String>) {
+        self.control_text(format!("{}\n", render_notice(message)));
+    }
+
+    fn control_text(&mut self, text: String) {
+        let prefix = if !self.response.is_empty() && self.needs_line_break() {
+            "\n"
+        } else {
+            ""
+        };
+        self.response.preview.notice(format!("{prefix}{text}"));
+    }
+
+    pub(super) fn server_failure(&mut self, message: impl Into<String>) {
+        self.notice(message);
+        self.mark_error();
+    }
+
+    fn send_failure(&mut self, failure: SendFailure) {
+        self.server_failure(failure.message);
+        if let Some(outcome) = failure.worker_outcome {
+            self.notice(outcome.diagnostic());
+        }
+        if failure.worker_stopped {
+            self.notice(WORKER_STOPPED_NOTICE);
+        }
+    }
+
+    pub(super) fn tool_error(&mut self, message: impl Into<String>) {
+        self.control_text(message.into());
+        self.mark_error();
+    }
+
+    pub(super) fn terminal(&mut self, state: TerminalState) {
+        match state {
+            TerminalState::Completed => {
+                if self.response.is_empty() {
+                    self.notice("done");
                 }
             }
+            TerminalState::Running => self.state_banner("running; poll with an empty send"),
+            TerminalState::StdinNeeded => {
+                let prefix = if self.needs_line_break() { "\n" } else { "" };
+                self.response
+                    .preview
+                    .notice(format!("{prefix}{}", render_notice("waiting for stdin")));
+            }
+            TerminalState::Idle => {
+                if !self.response.is_error() {
+                    self.state_banner(WORKER_IDLE_NOTICE);
+                }
+            }
+            TerminalState::WorkerStarting => self.notice(WORKER_STARTING_STATE),
+            TerminalState::ReplacementReady => self.notice(WORKER_IDLE_NOTICE),
         }
-
-        output
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, OutputTapeState> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    pub(super) fn mark_error(&mut self) {
+        self.response.is_error = true;
+    }
+
+    fn state_banner(&mut self, state: &str) {
+        self.response
+            .preview
+            .notice(format!("\n{}", render_notice(state)));
+    }
+
+    fn needs_line_break(&self) -> bool {
+        !self.response.preview.ends_with_newline()
     }
 }
 
-#[cfg(target_os = "macos")]
-impl DirectOutput {
-    pub(super) fn push(&self, bytes: &[u8]) {
-        self.push_event(DirectOutputEvent::Bytes(bytes.to_vec()));
+impl ResponseDelivery {
+    pub(crate) fn delivered(mut self) {
+        self.unclaimed = None;
+        if let Some(target) = self.target.take() {
+            target.delivered();
+        }
     }
 
-    pub(super) fn close(&self) {
-        self.push_event(DirectOutputEvent::Closed);
+    pub(crate) fn unclaimed(mut self) {
+        self.return_unclaimed();
     }
 
-    fn push_event(&self, event: DirectOutputEvent) {
-        let event = match self.stream {
-            DirectOutputStream::Stdout => OutputEvent::DirectStdout(event),
-            DirectOutputStream::Stderr => OutputEvent::DirectStderr(event),
+    fn return_unclaimed(&mut self) {
+        let Some(target) = self.target.take() else {
+            return;
         };
-        self.output.lock().events.push(event);
+        let response = self
+            .unclaimed
+            .take()
+            .expect("response delivery with a target must retain its reply");
+        target.unclaimed(response);
     }
 }
 
-fn append_direct_output(output: &mut Response, pending: &mut Vec<u8>, event: DirectOutputEvent) {
-    match event {
-        DirectOutputEvent::Bytes(bytes) => {
-            pending.extend_from_slice(&bytes);
-            let complete = complete_utf8_prefix(pending);
-            let incomplete = pending.split_off(complete);
-            let complete = std::mem::replace(pending, incomplete);
-            output.push_text(String::from_utf8_lossy(&complete));
+impl Drop for ResponseDelivery {
+    fn drop(&mut self) {
+        self.return_unclaimed();
+    }
+}
+
+impl Drop for Response {
+    fn drop(&mut self) {
+        let Some(target) = self.delivery.take() else {
+            return;
+        };
+        let response = Self {
+            preview: std::mem::take(&mut self.preview),
+            is_error: self.is_error,
+            delivery: None,
+        };
+        target.unclaimed(response);
+    }
+}
+
+impl ResponseDeliveryTarget {
+    fn delivered(self) {
+        if let Self::Evaluation(acknowledgment, changed) = self {
+            let _ = acknowledgment.send(ResponseAcknowledgment::Delivered);
+            changed.notify_waiters();
         }
-        DirectOutputEvent::Closed => {
-            output.push_text(String::from_utf8_lossy(pending));
-            pending.clear();
+    }
+
+    fn unclaimed(self, response: Response) {
+        match self {
+            Self::Evaluation(acknowledgment, changed) => {
+                let _ = acknowledgment.send(ResponseAcknowledgment::Unclaimed(response));
+                changed.notify_waiters();
+            }
+            Self::Output(output) => output.recover(response),
         }
     }
 }
 
-pub(super) fn project_completed(mut output: Response) -> Response {
-    if output.is_empty() {
-        output.push_notice("done");
-    }
-    output
+pub(super) fn project_completed(output: Response) -> Response {
+    project_terminal(output, TerminalState::Completed)
 }
 
-pub(super) fn project_replacement_ready(mut output: Response) -> Response {
-    output.push_notice(WORKER_IDLE_NOTICE);
-    output
+pub(super) fn project_controlled_completed(output: Response) -> Response {
+    if output.is_error() {
+        return output;
+    }
+    let mut builder = ResponseBuilder::from_response(output);
+    builder.notice("done");
+    builder.finish()
+}
+
+pub(super) fn project_replacement_ready(output: Response) -> Response {
+    project_terminal(output, TerminalState::ReplacementReady)
 }
 
 pub(super) fn render_response(response: SendResponse) -> Response {
-    match response {
-        SendResponse::Completed(output) => project_completed(output),
-        SendResponse::InputRequested(mut output) => {
-            append_input_banner(&mut output);
-            output
-        }
-        SendResponse::Running(mut output) => {
-            append_state_banner(&mut output, "running");
-            output
-        }
-        SendResponse::Idle(mut output) => {
-            if !output.is_error() {
-                append_state_banner(&mut output, "idle");
-            }
-            output
-        }
-        SendResponse::ReplacementStarting(mut output) => {
-            output.push_notice(WORKER_STARTING_STATE);
-            output
-        }
-        SendResponse::ReplacementReady(output) => project_replacement_ready(output),
-        SendResponse::Restarted(output) => output,
+    let (output, terminal) = match response {
+        SendResponse::Completed(output) => (output, Some(TerminalState::Completed)),
+        SendResponse::Failed(output) | SendResponse::Restarted(output) => (output, None),
+        SendResponse::InputRequested(output) => (output, Some(TerminalState::StdinNeeded)),
+        SendResponse::Running(output) => (output, Some(TerminalState::Running)),
+        SendResponse::Idle(output) => (output, Some(TerminalState::Idle)),
+        SendResponse::ReplacementStarting(output) => (output, Some(TerminalState::WorkerStarting)),
+        SendResponse::ReplacementReady(output) => (output, Some(TerminalState::ReplacementReady)),
+    };
+    match terminal {
+        Some(terminal) => project_terminal(output, terminal),
+        None => output,
     }
+}
+
+fn project_terminal(output: Response, terminal: TerminalState) -> Response {
+    let mut builder = ResponseBuilder::from_response(output);
+    builder.terminal(terminal);
+    builder.finish()
 }
 
 pub(super) fn direct_failure(message: impl Into<String>) -> Response {
-    let mut output = Response::default();
-    output.push_server_failure(message);
-    output
-}
-
-fn append_input_banner(output: &mut Response) {
-    if output.text_needs_newline() {
-        output.push_text("\n");
-    }
-    output.push_text(render_notice("stdin needed"));
-}
-
-fn append_state_banner(output: &mut Response, state: &str) {
-    output.push_text("\n");
-    output.push_text(render_notice(state));
+    let mut builder = ResponseBuilder::new();
+    builder.server_failure(message);
+    builder.finish()
 }
 
 fn render_notice(message: impl Into<String>) -> String {
     format!("[{}]", message.into())
 }
 
-fn complete_utf8_prefix(bytes: &[u8]) -> usize {
-    let mut offset = 0;
-    loop {
-        match std::str::from_utf8(&bytes[offset..]) {
-            Ok(_) => return bytes.len(),
-            Err(error) => match error.error_len() {
-                Some(length) => offset += error.valid_up_to() + length,
-                None => return offset + error.valid_up_to(),
-            },
-        }
+fn utf8_prefix_length(text: &str, limit: usize) -> usize {
+    let mut length = text.len().min(limit);
+    while !text.is_char_boundary(length) {
+        length -= 1;
     }
+    length
 }

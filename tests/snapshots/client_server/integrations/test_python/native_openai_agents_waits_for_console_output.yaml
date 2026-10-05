@@ -1,0 +1,8 @@
+---
+content:
+  - type: text
+    text: |-
+
+      [running; poll with an empty send]
+isError: false
+resultType: complete

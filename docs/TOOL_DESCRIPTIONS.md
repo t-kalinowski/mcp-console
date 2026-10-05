@@ -1,43 +1,45 @@
-# Registered MCP Tool Descriptions
+# MCP tool descriptions
 
-**Status:** Implemented v0.3 \
-**Date:** 2026-08-13
+Tool descriptions recur in agent context.
+Include information that changes tool choice, call construction, or result interpretation; keep architectural explanations in the guides.
 
-This document contains the exact descriptions registered with the MCP server.
-Keep these synchronized with the implementation; [`MCP_INTERFACE.md`](../design-sketches/docs/MCP_INTERFACE.md) describes a broader intended surface that includes unimplemented fields and actions.
-These strings are part of the agent-facing interface and should change only when the added context materially improves tool selection or correct use.
+## Source and stability
 
-## `send`
+[`src/server/presentation.rs`](../src/server/presentation.rs) composes named [prose sections](../src/server/presentation/sections.rs); [`src/server/arguments.rs`](../src/server/arguments.rs) defines the input schema.
+The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records it.
+Regenerate that snapshot deliberately through the [boundary tests](../tests/boundaries/README.md), never by editing expected output.
 
-```text
-Persistent mixed-language computational workbench. Use it whenever exact computation or direct inspection would improve accuracy—from arithmetic, string counting, parsing, and file or binary-data inspection to data wrangling, exploratory analysis, visualization, statistics, simulation, and model training or tuning. Choose the clearest language for each step and switch freely between calls. The default R environment includes tidyverse, reticulate, DBI, and duckdb, together with their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. The built-in managed Python environment includes NumPy and pandas. DuckDB SQL is also available. State persists across calls. Python reads R globals through `r.name`; R reads Python globals through `py$name`; SQL queries R data frames by name; R accesses the DuckDB catalog through `sql_connection()`. Language-native help and introspection are available. Do not probe package availability in cells. Use `session` to prepare other packages or DuckDB extensions before loading or importing them. If you use a custom Python installation, import packages already installed there directly. R default-device plots and open `matplotlib.pyplot` figures return as PNG images. Send exactly one complete `r`, `python`, or `sql` cell. Call `send` sequentially; concurrent calls are unsupported. Use `stdin` for interactive reads or debugger commands; omit code and stdin to poll. A wait timeout does not stop computation, and running work must be collected before new code is sent. R errors, Python exceptions, and DuckDB errors are ordinary console output, so inspect result text and continue or correct the cell. Evaluated code can read host files but cannot directly access the network and can write only within the worker's private temporary directory. Managed Python requirement resolution triggered by R code such as `reticulate::py_require()` or by an R package load is a host-side exception: it may access the network and execute installation or build code, so use only trusted requirements.
-```
+Descriptions depend on captured configuration, not completed runtime discovery.
+The presentation profile selects sections from configured languages, built-in or custom worker selection, and host preparation.
+Small platform conditionals select Windows language and interrupt guidance without matching or removing sentences.
+For the same configuration, they stay stable as background startup finishes or fails.
+`MCP_CONSOLE_LANGUAGES` filters direct code fields; execution still checks actual runtime availability.
 
-Property descriptions:
+Advertising an unavailable language lets an agent identify the missing prerequisite and ask for installation authorization, at the cost of a rejected call before discovery is known.
+It neither proves availability nor authorizes installation.
+Installing a runtime requires a new server session; worker restart retains captured selection.
 
-- `r`: `` Complete multiline R cell evaluated in persistent global state. The default R environment includes tidyverse, reticulate, DBI, duckdb, and their full dependency sets, such as ggplot2, dplyr, readr, and jsonlite. Packages are not attached automatically. Read Python globals through `py$name`; for example, `df <- tibble::as_tibble(py$df)`. R data frames are directly queryable by name from later SQL cells. Access DuckDB tables and views through the borrowed `sql_connection()` with DBI or dplyr; do not disconnect it. Default-device plots return as PNG images. Keep all drawing operations for one plot in the same cell. Set persistent dimensions with `options(console.plot.width = ..., console.plot.height = ..., console.plot.dpi = ...)`; width and height are in inches. Omit to send stdin or poll. ``
-- `python`: `` Complete multiline Python cell evaluated in persistent `__main__` state; its final expression is displayed. The built-in managed Python environment includes NumPy and pandas. If you use a custom Python installation, import packages already installed there directly. Use `session` to prepare other packages such as scikit-learn or Matplotlib. Read R globals and call R functions through `r.name`; for example, `frame = r.df`. Return Python globals to R through `py$name`. Python data frames are not automatically visible to SQL; bind them to an R name first. At cell end, including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG image and is closed. `show()` is optional. R plots called through `r` follow the R plot rules. Omit to send stdin or poll. ``
-- `sql`: `` Complete DuckDB SQL cell evaluated in the persistent catalog. Use it for filtering, joins, aggregation, and tabular inspection. An unqualified relation name can query a data frame in R global state; a DuckDB table or view with the same name takes precedence. Query results return a bounded preview. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN` for discovery. DuckDB CLI dot commands are not supported. Omit to send stdin or poll. ``
-- `stdin`: `` Text for interactive reads and debugger commands such as R `readline()` or `browser()` and Python `input()`, `breakpoint()`, or `pdb`. Its UTF-8 encoding is queued to worker stdin exactly; no newline is added. Send it with a cell to prequeue input or on its own while the worker is running or idle. If output ends in `[stdin needed]`, send the requested input here. Unread text can satisfy later reads and is discarded by restart. ``
-- `timeout_ms`: `` Maximum time this call waits for an evaluation or one automatic worker replacement attempt. On expiry, the call returns available output followed by the current state, such as `[running]` or `[worker starting]`, without stopping the computation or startup. Poll by calling `send` again without `r`, `python`, `sql`, or `stdin`. ``
+## Editorial rules
 
-## `session`
+Put scope, useful language-selection guidance, persistence, sequential execution, polling, interoperability, and the security boundary at tool level.
+Put field-specific input and ordering rules on the fields, without repeating them above.
+Keep exact bridge/helper names when they enable a workflow.
+Preserve warnings about effects surviving errors and restart discarding state.
 
-```text
-Make additional R or Python packages and DuckDB extensions available, or restart the persistent console session. The built-in worker prepares DuckDB's JSON and ICU extensions by default. Use `prepare` for packages not included in the built-in environments or for other DuckDB extensions. Packages and extensions are not imported, attached, or loaded automatically by preparation. An idle worker can add R requirements or DuckDB extensions without losing live state; compatible Python additions require a server-managed worker. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions require restart. Requirements are additive, idempotent, and persist across restart. `restart` may optionally add R, Python, and DuckDB requirements, then replaces the worker and loses all in-memory R, Python, and SQL state, debugger state, and unread stdin. Requirement resolution runs outside the execution sandbox and may download packages or extensions or execute package installation or build code on the host; use only trusted requirements.
-```
+Prefer concrete choices: SQL for structured-file/database inspection and aggregation, R for vectorized/statistical work, Python when its libraries fit the task.
+Make cross-language guidance conditional on configured languages.
+Do not turn the description into a tutorial, package inventory, backend explanation, or transcript-format specification.
 
-Property descriptions:
+## Capability and security claims
 
-- `action`: `` `prepare` adds R or Python requirements or DuckDB extensions before a worker starts. After startup, it can add R requirements or DuckDB extensions while the worker is idle; compatible Python additions require a server-managed worker. `restart` can add any of the same requirements before it replaces the worker and starts it if needed. ``
-- `requirements`: `` Additive packages or DuckDB extensions to make available. `prepare` requires at least one R, Python, or DuckDB entry. `restart` accepts the same additions; omit `requirements` to restart unchanged. Requirements persist across restart but do not import, attach, or load packages or extensions. After a recoverable live preparation failure, evaluation remains available so state can be saved, but new requirement additions return `[restart required]` until restart. The same marker follows a failed automatic replacement. Resolution runs outside the worker sandbox and may download packages or extensions or execute package installation or build code on the host. Managed Python startup and Matplotlib cache warming also run on the host and may execute selected code; use only trusted requirements. ``
-- `requirements.r`: `` Additive, single-line IR package references for `prepare` or `restart`, for example `data.table`, `sf`, or `yaml12`. An idle worker that implements R preparation can add R requirements without losing live state. Local package sources are rejected because resolution runs with server permissions. ``
-- `requirements.python`: `` Additive, single-line PEP 508 requirements for `prepare` or `restart`, for example `polars>=1`, `scikit-learn`, or `matplotlib`. An idle server-managed worker may activate compatible additions without losing state. ``
-- `requirements.duckdb`: `` Additive DuckDB extension names for `prepare` or `restart`, for example `fts`, `spatial`, or `excel`. JSON and ICU are already prepared for built-in workers. Names must start with a lowercase ASCII letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver uses DuckDB's own `INSTALL` outside the sandbox, with DuckDB's default extension repository and native cache. Preparation does not load extension code; `LOAD` and automatic loading happen later inside the sandbox. ``
+Distinguish supported capabilities from installed dependencies.
+An advertised SQL field does not prove that DuckDB, SQLite extensions, or an R/Python bridge is available.
+Custom workers do not inherit the built-in catalog or package defaults.
+Host preparation examples require resolver support; bare runtimes and explicitly selected Python require preinstalled dependencies.
+Requirement inspection is a declaration, not an installed-package inventory.
 
-## Inclusion rule
+Native prose must reflect selected filesystem and network policy.
+Workspace metadata is protected by default, not by an unchangeable denial ceiling; explicit native rules can alter those defaults.
+A `read` entry grants reads as well as narrowing writes.
 
-Descriptions should communicate facts that affect whether or how an agent calls the tools: breadth, language selection, persistence, exact interoperability paths, plotting, package preparation, cell/stdin/poll semantics, sandbox boundaries, ordinary language errors, and destructive lifecycle boundaries.
-
-Do not include internal facts that do not change agent behavior: Ark, Jupyter, `harp`, `libr`, worker IPC, stack-frame implementation, the internal JSONL journal, or exact output limits.
-Name familiar interfaces such as DuckDB, DBI, dplyr, and the `py`, `r`, and `sql_connection()` bridges when they tell the agent how to complete a workflow.
+Review the resulting handshake as an agent would: can it choose and call the tool without reading implementation details, and are its safety claims true for the configured session?

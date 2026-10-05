@@ -1,0 +1,24 @@
+---
+stdout: |
+  read-only workspace and writable private temp
+stderr: ""
+---
+stdout: |
+  read-only workspace and writable private temp
+stderr: ""
+---
+configuration: |
+  extends: ":workspace"
+  sandbox:
+    filesystem: {kind: unrestricted}
+stdout: |
+  explicit filesystem kind replaced the profile restrictions
+stderr: ""
+---
+configuration: |
+  extends: ":workspace"
+  sandbox:
+    filesystem: {kind: external-sandbox}
+stdout: |
+  explicit filesystem kind replaced the profile restrictions
+stderr: ""

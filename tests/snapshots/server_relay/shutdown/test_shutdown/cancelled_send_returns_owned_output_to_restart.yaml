@@ -1,0 +1,69 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: "42"
+  timeout_ms: 30000
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |
+        idle before image
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text: |
+        idle after image
+        [output produced while idle]
+        cell before image
+    - type: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mimeType: image/png
+    - type: text
+      text:
+        text_bytes: 8034
+        concat:
+          - repeat: x
+            count: 3787
+          - |
+
+            [output preview: omitted 8380988 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 8388633 raw bytes retained, 0 raw bytes not retained]
+          - repeat: x
+            count: 3840
+          - |-
+
+            [stopped by session restart request before evaluation finished]
+            [worker stopped: in-memory state lost]
+            [active evaluation stopped by session restart request]
+            [starting new worker]
+            [idle]
+  isError: true
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: <request ID>
+    reason: acceptance test cancelled the waiting send
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false

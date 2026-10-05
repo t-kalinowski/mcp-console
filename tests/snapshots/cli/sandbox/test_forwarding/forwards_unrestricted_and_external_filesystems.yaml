@@ -1,0 +1,8 @@
+---
+filesystem:
+  kind: unrestricted
+workload_write: allowed
+---
+filesystem:
+  kind: external-sandbox
+workload_write: allowed

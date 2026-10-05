@@ -1,0 +1,14 @@
+---
+proxy:
+  enabled: true
+  enableSocks5: true
+  enableSocks5Udp: true
+  allowUpstreamProxy: false
+  dangerouslyAllowAllUnixSockets: false
+  mode: full
+  allowLocalBinding: false
+  unixSockets: {}
+literal_path: launch-relative
+other_native_fields_preserved: true
+stdout: |
+  native

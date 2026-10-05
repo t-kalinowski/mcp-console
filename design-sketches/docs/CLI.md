@@ -245,7 +245,7 @@ Initial options:
 The viewer may show:
 
 - running evaluations and bounded live output;
-- the Quarto transcript;
+- the Markdown transcript;
 - full retained output by explicit request;
 - plot and artifact galleries;
 - R, Python, and SQL object inventories;
@@ -295,7 +295,7 @@ An R, Python, or SQL submission is a **primary external evaluation**:
 
 - it may mutate live state;
 - it receives an evaluation ID and origin attribution;
-- it appears in `transcript.qmd` as externally submitted work;
+- it appears in `transcript.md` as externally submitted work;
 - session observers receive its events;
 - the MCP-side agent is informed of intervening external evaluations before relying on stale assumptions.
 
@@ -314,7 +314,7 @@ mcp-console transcript model-fit
 mcp-console transcript --open
 ```
 
-Prints the selected session's generated `transcript.qmd` path.
+Prints the selected session's generated `transcript.md` path.
 `--open` asks the operating system to open the file.
 It does not regenerate or curate the transcript.
 

@@ -1,0 +1,61 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: overflow cell output file
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8064
+        concat:
+          - repeat: x
+            count: 3776
+          - |
+
+            [output preview: omitted 25158279 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 25165827 raw bytes retained, 4 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+          - repeat: x
+            count: 3776
+          - |-
+
+            [cell output file .agents/console/sessions/<run ID>/outputs/call-000001.log stopped after 25165827 retained bytes: File too large (os error 27); later text is not retained in this file]
+
+            [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 8103
+        concat:
+          - repeat: y
+            count: 3904
+          - |
+
+            [output preview: omitted 8380807 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 25165827 raw bytes retained, 8388619 raw bytes not retained; file contains only a prefix; omitted text beyond it is unavailable]
+          - repeat: y
+            count: 3904
+  isError: false
+---
+send:
+  r: echo after failure
+result:
+  content:
+    - type: text
+      text: |
+        zod: after failure
+  isError: false
