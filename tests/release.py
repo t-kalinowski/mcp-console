@@ -267,6 +267,126 @@ class ReleaseScriptTests(ReleaseFixture):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("requires a push event", result.stderr)
 
+    def test_linux_floor_checks_libraries_through_executable_entry_points(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            prefix = directory / "installed"
+            (prefix / "bin").mkdir(parents=True)
+            (prefix / "libexec").mkdir()
+            for name, fields in {
+                "bin/mcp-console": {
+                    "needed": ["liba.so"],
+                    "rpath": "$ORIGIN/../libexec",
+                },
+                "libexec/liba.so": {"interpreter": None, "needed": ["libb.so"]},
+                "libexec/libb.so": {"interpreter": None},
+                "libexec/bwrap": {},
+                "libexec/mcp-console-sandbox": {},
+                "libexec/extra-command": {},
+            }.items():
+                (prefix / name).write_bytes(elf_fixture(**fields))
+            launcher = directory / "floor.py"
+            write_executable(
+                launcher,
+                # fmt: python
+                """
+                import json
+                import os
+                import platform
+                import runpy
+                import shutil
+                import subprocess
+                import sys
+                from pathlib import Path
+                from unittest.mock import patch
+
+                # Supply the floor host and unrelated smoke observations; the
+                # CLI still discovers ELF files and chooses loader entry points.
+                original_read_text = Path.read_text
+                original_mkdir = Path.mkdir
+                def read_text(path: Path, *args, **kwargs) -> str:
+                    if path == Path("/etc/os-release"):
+                        return "ID=ubuntu\\nVERSION_ID=22.04\\n"
+                    return original_read_text(path, *args, **kwargs)
+                def mkdir(path: Path, *args, **kwargs) -> None:
+                    if path != Path("/evidence"):
+                        original_mkdir(path, *args, **kwargs)
+                def check_output(command: list[str], **kwargs) -> str:
+                    if command == ["getconf", "GNU_LIBC_VERSION"]:
+                        return "glibc 2.35\\n"
+                    if command[0] == "readelf":
+                        assert command[1:-1] == ["-l", "-W"]
+                        fields = json.loads(Path(command[-1]).read_bytes()[4:])
+                        if fields["interpreter"]:
+                            return "[Requesting program interpreter: " + fields["interpreter"] + "]"
+                        return ""
+                    assert command == ["dpkg-query", "-W"]
+                    return "libc6 2.35\\n"
+                def run(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+                    output = ""
+                    if command[0] == "ldd":
+                        artifact = Path(command[-1])
+                        with Path(os.environ["LOADER_CALLS"]).open("a") as log:
+                            log.write(artifact.name + "\\n")
+                        # liba needs the executable's inherited RPATH to find libb.
+                        if artifact.name == "liba.so":
+                            output = "libb.so => not found"
+                        else:
+                            output = "libc.so.6 => /lib/libc.so.6"
+                        if artifact.name == "extra-command":
+                            output = os.environ["EXTRA_LOADER_OUTPUT"]
+                    else:
+                        assert command[0] in (sys.executable, "uname", "uv")
+                    return subprocess.CompletedProcess(command, 0, output, "")
+                sys.argv = [sys.argv[1], "fixture.whl", "--target", "x86_64-unknown-linux-gnu"]
+                with patch.object(platform, "machine", return_value="x86_64"), \\
+                     patch.object(shutil, "which", return_value=None), \\
+                     patch.object(Path, "read_text", read_text), \\
+                     patch.object(Path, "mkdir", mkdir), \\
+                     patch.object(subprocess, "check_output", check_output), \\
+                     patch.object(subprocess, "run", run):
+                    runpy.run_path(sys.argv[0], run_name="__main__")
+                """,
+            )
+            for output, accepted in (
+                ("libc.so.6 => /lib/libc.so.6", True),
+                ("libmissing.so => not found", False),
+                ("libb.so => /build/libb.so", False),
+            ):
+                with self.subTest(output=output):
+                    calls = directory / "loader-calls"
+                    calls.unlink(missing_ok=True)
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(launcher),
+                            str(ROOT / "tests/linux_wheel_runtime.py"),
+                        ],
+                        cwd=directory,
+                        env=os.environ
+                        | {
+                            "UV_TOOL_BIN_DIR": str(prefix / "bin"),
+                            "LOADER_CALLS": str(calls),
+                            "EXTRA_LOADER_OUTPUT": output,
+                        },
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(
+                            set(calls.read_text().splitlines()),
+                            {
+                                "mcp-console",
+                                "mcp-console-sandbox",
+                                "bwrap",
+                                "extra-command",
+                            },
+                        )
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+
     def test_linux_floor_refreshes_expired_r_preparation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

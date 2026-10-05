@@ -77,13 +77,21 @@ def main() -> None:
 
     installed = (Path(os.environ["UV_TOOL_BIN_DIR"]) / "mcp-console").resolve()
     prefix = installed.parent.parent
-    # Inspect actual installed ELF files, including any wheel-bundled libraries.
+    # Inspect each dynamic executable's full tree, including bundled libraries.
+    # Loading a child independently loses the executable's inherited DT_RPATH.
     for artifact in sorted(prefix.rglob("*")):
         if not artifact.is_file() or artifact.is_symlink():
             continue
         with artifact.open("rb") as stream:
             if stream.read(4) != b"\x7fELF":
                 continue
+        headers = subprocess.check_output(
+            ["readelf", "-l", "-W", str(artifact)],
+            text=True,
+            env=os.environ | {"LC_ALL": "C"},
+        )
+        if "[Requesting program interpreter:" not in headers:
+            continue
         result = subprocess.run(
             ["ldd", str(artifact)], capture_output=True, text=True, check=True
         )

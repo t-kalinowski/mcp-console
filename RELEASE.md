@@ -147,6 +147,8 @@ Rerunning a failed floor job reuses the built wheel rather than rebuilding it.
 The probes require native namespace support and run in disposable containers with `SYS_ADMIN`, unconfined seccomp, and unconfined AppArmor.
 They do not change host sysctls.
 Startup, Python/R evaluation, bounded shutdown, installed loader resolution, and existing sandbox installation acceptance must pass.
+Installed loader checks run `ldd` from each dynamic ELF executable, including additional wheel entry points, so bundled libraries resolve in their executable's inherited RPATH context.
+Shared libraries are not required to load independently; `inspect-wheel` still audits every ELF member and its dependency chains.
 The empty-PATH probe establishes bundled-helper execution; host-helper precedence and integrity checks remain covered by installed acceptance.
 A namespace denial is separate from a loader/ABI failure, and a skipped native probe does not pass the gate.
 
