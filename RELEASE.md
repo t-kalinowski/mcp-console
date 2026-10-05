@@ -126,6 +126,8 @@ The no-R image contains standalone Python 3.13 and uv, while the R image additio
 Preparation uses serial make and `CXX17FLAGS=-O0 -g0` to bound DuckDB build memory; these settings do not affect the distributed wheel.
 Compilers, development packages, build directories, and cached CMake are excluded from the final runtime.
 Normal sandboxed startup keeps the documented Console cache policy.
+The Linux builder prepares the same default R environment before installed-wheel smoke, so cold source compilation completes separately from the startup observation budget.
+This preparation uses the same language-only compiler flags and runtime prerequisites as the floor fixture; it does not change the shipped binaries or smoke assertions.
 
 The probes require native namespace support and run in disposable containers with `SYS_ADMIN`, unconfined seccomp, and unconfined AppArmor.
 They do not change host sysctls.
