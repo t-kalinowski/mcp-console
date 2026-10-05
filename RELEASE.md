@@ -62,6 +62,12 @@ Dynamic libcap is not bundled; static libcap requires a nonempty `MCP_CONSOLE_LI
 The build does not certify that supplied license text.
 Wheel smoke verifies notices, source identity, helper digest, and actual linkage.
 
+`scripts/release.py inspect-wheel WHEEL --target TARGET --report abi.json` checks every ELF member, including private helpers and additional native libraries.
+It checks architecture, loader, declared system libraries, loader paths, and symbol requirements against every advertised wheel tag; filename and WHEEL metadata must agree.
+`--release` additionally enforces the proposed glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
+The report records the wheel digest and each member's loader, dependencies, paths, and version requirements.
+This inspection does not establish installed-runtime or namespace compatibility; clean native runtime validation is still required before lowering the support declaration.
+
 `scripts/build_backend.py` owns staging through wheel creation.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.
 On Windows, Cargo keeps each complete companion bundle in a content-addressed directory under `libexec` and binds the executable to it.

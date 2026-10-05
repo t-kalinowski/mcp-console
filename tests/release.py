@@ -58,12 +58,33 @@ def helper_metadata(pin: dict[str, object], helper: bytes) -> dict[str, object]:
     }
 
 
+def elf_fixture(**changes: object) -> bytes:
+    fields = {
+        "machine": "Advanced Micro Devices X86-64",
+        "interpreter": "/lib64/ld-linux-x86-64.so.2",
+        "needed": ["libc.so.6"],
+        "versions": ["GLIBC_2.34"],
+        "runpath": None,
+    }
+    fields.update(changes)
+    return b"\x7fELF" + json.dumps(fields).encode()
+
+
+def rewrite_wheel(wheel: Path, replacements: dict[str, bytes]) -> None:
+    with zipfile.ZipFile(wheel) as archive:
+        entries = [(info, archive.read(info)) for info in archive.infolist()]
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for info, contents in entries:
+            archive.writestr(info, replacements.get(info.filename, contents))
+
+
 def write_readelf_fixture(commands: Path) -> None:
     write_executable(
         commands / "readelf",
         # fmt: python
         """
         #!/usr/bin/env python3
+        import json
         import os
         import sys
         from pathlib import Path
@@ -73,11 +94,31 @@ def write_readelf_fixture(commands: Path) -> None:
             if not os.environ.get("FAKE_NO_LIBCAP"):
                 print("12: 0000000000100 42 FUNC GLOBAL DEFAULT 15 cap_get_proc")
             raise SystemExit(0)
-        assert sys.argv[1:3] == ["-d", "-W"]
-        assert Path(sys.argv[3]).read_bytes() in (b"fixture\\n", b"bwrap bytes")
-        print(" 0x0000000000000001 (NEEDED) Shared library: [libc.so.6]")
-        if not os.environ.get("FAKE_STATIC_LIBCAP"):
-            print(" 0x0000000000000001 (NEEDED) Shared library: [libcap.so.2]")
+        blob = Path(sys.argv[-1]).read_bytes()
+        if blob.startswith(b"\\x7fELF"):
+            fields = json.loads(blob[4:])
+            if sys.argv[1:-1] == ["-h", "-l", "-d", "-V", "-W"]:
+                print("  Class: ELF64")
+                print("  Data: 2's complement, little endian")
+                print("  Machine:", fields["machine"])
+                if fields["interpreter"]:
+                    print("[Requesting program interpreter: " + fields["interpreter"] + "]")
+            else:
+                assert sys.argv[1:3] == ["-d", "-W"]
+            for name in fields["needed"]:
+                if name != "libcap.so.2" or not os.environ.get("FAKE_STATIC_LIBCAP"):
+                    print(" (NEEDED) Shared library: [" + name + "]")
+            if fields["runpath"]:
+                print(" (RUNPATH) Library runpath: [" + fields["runpath"] + "]")
+            print("Version needs section '.gnu.version_r':")
+            for name in fields["versions"]:
+                print("  Name: " + name + " Flags: none Version: 2")
+        else:
+            assert sys.argv[1:3] == ["-d", "-W"]
+            assert blob in (b"fixture\\n", b"bwrap bytes")
+            print(" (NEEDED) Shared library: [libc.so.6]")
+            if not os.environ.get("FAKE_STATIC_LIBCAP"):
+                print(" (NEEDED) Shared library: [libcap.so.2]")
     """,
     )
 
@@ -429,7 +470,20 @@ class ReleaseScriptTests(ReleaseFixture):
         self, wheel: Path, *, omit: str | None = None, executable: bool = True
     ) -> None:
         with zipfile.ZipFile(wheel, "w") as archive:
-            archive.writestr("mcp_console-0.0.2.data/scripts/mcp-console", "fixture\n")
+            linux = "linux" in wheel.name
+            archive.writestr(
+                "mcp_console-0.0.2.data/scripts/mcp-console",
+                elf_fixture() if linux else b"fixture\n",
+            )
+            archive.writestr(
+                "mcp_console-0.0.2.dist-info/METADATA",
+                "Metadata-Version: 2.4\nName: mcp-console\nVersion: 0.0.2\n",
+            )
+            tag = wheel.name.removesuffix(".whl").split("-", 2)[2]
+            archive.writestr(
+                "mcp_console-0.0.2.dist-info/WHEEL",
+                f"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: {tag}\n",
+            )
             names = ("mcp-console-sandbox", "LICENSE", "NOTICE")
             if "linux" in wheel.name:
                 names += (
@@ -451,15 +505,125 @@ class ReleaseScriptTests(ReleaseFixture):
                 )
                 mode = 0o755 if directory == "libexec" and executable else 0o644
                 info.external_attr = (stat.S_IFREG | mode) << 16
-                contents = "fixture\n"
+                contents: str | bytes = "fixture\n"
+                if linux and name in ("mcp-console-sandbox", "bwrap"):
+                    contents = elf_fixture(
+                        needed=["libc.so.6", "libcap.so.2"]
+                        if name == "bwrap"
+                        else ["libc.so.6"]
+                    )
                 if name == "bubblewrap-NOTICE":
                     contents = bubblewrap_notice(
                         json.loads((ROOT / "sandbox-runner.json").read_text())
                     )
                 if name == "bubblewrap-SOURCE.json":
                     pin = json.loads((ROOT / "sandbox-runner.json").read_text())
-                    contents = json.dumps(helper_metadata(pin, b"fixture\n"))
+                    contents = json.dumps(
+                        helper_metadata(
+                            pin, elf_fixture(needed=["libc.so.6", "libcap.so.2"])
+                        )
+                    )
                 archive.writestr(info, contents)
+
+    def test_inspect_wheel_reports_every_shipped_elf_and_matching_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            self.write_wheel(wheel)
+            with zipfile.ZipFile(wheel, "a") as archive:
+                archive.writestr("mcp_console/extra.so", elf_fixture(interpreter=None))
+            report = directory / "abi.json"
+            result = self.run_script(
+                "inspect-wheel",
+                str(wheel),
+                "--release",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--report",
+                str(report),
+                cwd=directory,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            evidence = json.loads(report.read_text())
+            self.assertEqual(evidence["tags"], ["py3-none-manylinux_2_35_x86_64"])
+            self.assertEqual(len(evidence["elf"]), 4)
+            self.assertEqual(evidence["elf"]["mcp_console/extra.so"]["glibc"], ["2.34"])
+            self.assertIn(
+                "libcap.so.2",
+                evidence["elf"]["mcp_console-0.0.2.data/data/libexec/bwrap"]["needed"],
+            )
+
+    def test_inspect_wheel_rejects_incompatible_private_and_extra_elf(self) -> None:
+        defects = (
+            ({"versions": ["GLIBC_2.36"]}, "GLIBC_2.36"),
+            ({"versions": ["GLIBCXX_3.4.31"]}, "GLIBCXX_3.4.31"),
+            ({"machine": "AArch64"}, "machine"),
+            ({"interpreter": "/opt/builder/ld-linux.so"}, "interpreter"),
+            ({"runpath": "/opt/builder/lib"}, "RUNPATH"),
+            ({"needed": ["libssl.so.3"]}, "undeclared dependency"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            for member in (
+                "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox",
+                "mcp_console/extra.so",
+            ):
+                for fields, diagnostic in defects:
+                    with self.subTest(member=member, defect=fields):
+                        self.write_wheel(wheel)
+                        if member.endswith("extra.so"):
+                            with zipfile.ZipFile(wheel, "a") as archive:
+                                archive.writestr(member, elf_fixture(**fields))
+                        else:
+                            rewrite_wheel(wheel, {member: elf_fixture(**fields)})
+                        result = self.run_script(
+                            "inspect-wheel",
+                            str(wheel),
+                            "--release",
+                            cwd=directory,
+                            env=environment,
+                        )
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        self.assertIn(diagnostic, result.stderr)
+                        self.assertIn(member, result.stderr)
+
+    def test_inspect_wheel_rejects_false_or_inconsistent_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            for platform, metadata_tag, diagnostic in (
+                ("manylinux_2_28_x86_64", None, "GLIBC_2.34"),
+                ("manylinux_2_39_x86_64", None, "release floor"),
+                (
+                    "manylinux_2_35_x86_64",
+                    "py3-none-manylinux_2_35_aarch64",
+                    "WHEEL tags",
+                ),
+                ("manylinux_2_35_x86_64.manylinux_2_28_x86_64", None, "GLIBC_2.34"),
+            ):
+                with self.subTest(platform=platform, metadata=metadata_tag):
+                    wheel = directory / f"mcp_console-0.0.2-py3-none-{platform}.whl"
+                    self.write_wheel(wheel)
+                    if metadata_tag:
+                        rewrite_wheel(
+                            wheel,
+                            {
+                                "mcp_console-0.0.2.dist-info/WHEEL": f"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: {metadata_tag}\n".encode()
+                            },
+                        )
+                    result = self.run_script(
+                        "inspect-wheel",
+                        str(wheel),
+                        "--release",
+                        cwd=directory,
+                        env=environment,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(diagnostic, result.stderr)
 
     def test_smoke_wheel_requires_a_private_companion_bundle(self) -> None:
         for defect in (
