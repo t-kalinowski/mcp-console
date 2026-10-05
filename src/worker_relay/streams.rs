@@ -94,7 +94,7 @@ impl SidebandReader {
                 failures.report(error);
             }
             if ordinary_close {
-                let _ = controls.send(Control::SidebandClosed);
+                let _ = controls.send(Control::SidebandEof);
             }
         });
         Ok(Self { cancel, thread })
