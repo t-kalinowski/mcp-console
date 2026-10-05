@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections import deque
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
@@ -419,6 +420,7 @@ def inspect_linux_abi(
     data_prefix = f"mcp_console-{version}.data/"
     installed_elves: dict[str, str] = {}
     rpaths: dict[str, tuple[str, ...]] = {}
+    needed_order: dict[str, list[str]] = {}
     with zipfile.ZipFile(wheel) as archive, tempfile.TemporaryDirectory() as directory:
         for member in archive.namelist():
             with archive.open(member) as stream:
@@ -515,12 +517,13 @@ def inspect_linux_abi(
                         f"{member}: {symbol} exceeds the declared wheel/runtime floor",
                     )
                 requirements[family].append(number)
+            needed_order[member] = re.findall(r"\(NEEDED\).*\[([^]]+)\]", output)
             evidence[member] = {
                 "class": field("Class"),
                 "data": field("Data"),
                 "machine": field("Machine"),
                 "interpreter": interp[1] if interp else None,
-                "needed": sorted(re.findall(r"\(NEEDED\).*\[([^]]+)\]", output)),
+                "needed": sorted(needed_order[member]),
                 "rpath_runpath": dict(paths),
                 "search": search_paths.get("RUNPATH", search_paths.get("RPATH", [])),
                 "glibc": sorted(set(requirements["GLIBC"])),
@@ -537,46 +540,53 @@ def inspect_linux_abi(
         )
         for name in commands:
             require(name in evidence, f"{name}: required wheel executable is not ELF")
-        visited: set[tuple[str, tuple[str, ...]]] = set()
         checked: set[str] = set()
 
-        def check_dependencies(member: str, inherited: tuple[str, ...] = ()) -> None:
-            context = (member, inherited)
-            if context in visited:
-                return
-            visited.add(context)
-            checked.add(member)
-            elf = evidence[member]
-            # Each ancestor's paths already use that ancestor's installed $ORIGIN.
-            ancestors = tuple(dict.fromkeys((*rpaths[member], *inherited)))
-            search = elf["search"] if "RUNPATH" in elf["rpath_runpath"] else ancestors
-            for needed in elf["needed"]:
-                # glibc opens slash-containing filenames directly, bypassing search.
-                require(
-                    "/" not in needed,
-                    f"{member}: unsupported DT_NEEDED filename {needed}; "
-                    "dependencies must be library names without /",
+        def check_dependencies(entry: str) -> None:
+            loaded_names: set[str] = set()
+            loaded_members = {entry}
+            pending: deque[tuple[str, tuple[str, ...]]] = deque([(entry, ())])
+            # glibc maps dependencies breadth-first, reusing already loaded objects.
+            # Each executable starts with its own loader state and search paths.
+            while pending:
+                member, inherited = pending.popleft()
+                checked.add(member)
+                elf = evidence[member]
+                # Each ancestor's paths use that ancestor's installed $ORIGIN.
+                ancestors = tuple(dict.fromkeys((*rpaths[member], *inherited)))
+                search = (
+                    elf["search"] if "RUNPATH" in elf["rpath_runpath"] else ancestors
                 )
-                if needed in LINUX_SYSTEM_LIBRARIES:
-                    continue
-                dependency = next(
-                    (
-                        installed_elves[candidate]
-                        for path in search
-                        if (
-                            candidate := posixpath.normpath(
-                                posixpath.join(path, needed)
+                for needed in needed_order[member]:
+                    # Slash-containing filenames bypass glibc's library search.
+                    require(
+                        "/" not in needed,
+                        f"{member}: unsupported DT_NEEDED filename {needed}; "
+                        "dependencies must be library names without /",
+                    )
+                    if needed in LINUX_SYSTEM_LIBRARIES or needed in loaded_names:
+                        continue
+                    dependency = next(
+                        (
+                            installed_elves[candidate]
+                            for path in search
+                            if (
+                                candidate := posixpath.normpath(
+                                    posixpath.join(path, needed)
+                                )
                             )
-                        )
-                        in installed_elves
-                    ),
-                    None,
-                )
-                require(
-                    dependency is not None,
-                    f"{member}: undeclared dependency {needed}",
-                )
-                check_dependencies(dependency, ancestors)
+                            in installed_elves
+                        ),
+                        None,
+                    )
+                    require(
+                        dependency is not None,
+                        f"{member}: undeclared dependency {needed}",
+                    )
+                    loaded_names.add(needed)
+                    if dependency not in loaded_members:
+                        loaded_members.add(dependency)
+                        pending.append((dependency, ancestors))
 
         needed_names = {name for elf in evidence.values() for name in elf["needed"]}
         # Audit independent entry points separately; children inherit only their chain.

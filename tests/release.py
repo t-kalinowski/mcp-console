@@ -999,6 +999,98 @@ class ReleaseScriptTests(ReleaseFixture):
                 "mcp-console-sandbox: undeclared dependency liba.so", result.stderr
             )
 
+    def test_inspect_wheel_reuses_loaded_dependencies_per_entry_point(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            executable = "mcp_console-0.0.2.data/scripts/mcp-console"
+            libexec = "mcp_console-0.0.2.data/data/libexec"
+            for name, needed, libraries, separate_executable, accepted in (
+                (
+                    "direct RUNPATH siblings",
+                    ["liba.so", "libb.so"],
+                    {"liba.so": {"needed": ["libb.so"]}, "libb.so": {}},
+                    False,
+                    True,
+                ),
+                (
+                    "breadth-first transitive siblings",
+                    ["liba.so", "libb.so"],
+                    {
+                        "liba.so": {"needed": ["libcfixture.so"], "runpath": "$ORIGIN"},
+                        "libb.so": {"needed": ["libd.so"], "runpath": "$ORIGIN"},
+                        "libcfixture.so": {"needed": ["libd.so"]},
+                        "libd.so": {},
+                    },
+                    False,
+                    True,
+                ),
+                (
+                    "declared dependency order",
+                    ["libb.so", "liba.so"],
+                    {
+                        "libb.so": {"needed": ["libcfixture.so"], "runpath": "$ORIGIN"},
+                        "liba.so": {
+                            "needed": ["libcfixture.so"],
+                            "runpath": "$ORIGIN/missing",
+                        },
+                        "libcfixture.so": {},
+                    },
+                    False,
+                    True,
+                ),
+                (
+                    "unloaded transitive dependency",
+                    ["liba.so"],
+                    {"liba.so": {"needed": ["libb.so"]}, "libb.so": {}},
+                    False,
+                    False,
+                ),
+                (
+                    "independent executable cannot reuse loaded siblings",
+                    ["liba.so", "libb.so"],
+                    {"liba.so": {"needed": ["libb.so"]}, "libb.so": {}},
+                    True,
+                    False,
+                ),
+            ):
+                with self.subTest(name=name):
+                    self.write_wheel(wheel)
+                    replacements = {
+                        executable: elf_fixture(
+                            needed=needed, runpath="$ORIGIN/../libexec"
+                        )
+                    }
+                    if separate_executable:
+                        replacements[f"{libexec}/mcp-console-sandbox"] = elf_fixture(
+                            needed=["libb.so"]
+                        )
+                    rewrite_wheel(wheel, replacements)
+                    with zipfile.ZipFile(wheel, "a") as archive:
+                        for library, fields in libraries.items():
+                            archive.writestr(
+                                f"{libexec}/{library}",
+                                elf_fixture(interpreter=None, **fields),
+                            )
+                    result = self.run_script(
+                        "inspect-wheel",
+                        str(wheel),
+                        "--release",
+                        cwd=directory,
+                        env=environment,
+                    )
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        owner = (
+                            "mcp-console-sandbox" if separate_executable else "liba.so"
+                        )
+                        self.assertIn(
+                            f"{owner}: undeclared dependency libb.so", result.stderr
+                        )
+
     def test_inspect_wheel_rejects_loader_paths_outside_installed_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

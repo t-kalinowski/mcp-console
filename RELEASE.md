@@ -69,7 +69,9 @@ Loader paths and bundled dependencies resolve within the installed Unix prefix: 
 In particular, relative filenames depend on the launch directory even when a matching library exists under RPATH/RUNPATH.
 `$ORIGIN` paths may traverse between these installed directories but must stay within the prefix; reports retain archive-member keys and use prefix-relative search paths.
 Bundled dependencies inherit `DT_RPATH` along their loading chain, with each ancestor's paths resolved against its own installed `$ORIGIN`.
-`DT_RUNPATH` applies only to direct dependencies and suppresses RPATH lookup for that object's direct dependencies; independent executables do not share loader paths.
+`DT_RUNPATH` applies only to direct dependencies and suppresses RPATH lookup for that object's direct dependencies.
+The audit loads dependencies breadth-first in `DT_NEEDED` order, reusing already loaded libraries before searching paths again.
+Independent executables do not share loaded libraries or loader paths.
 Numeric GLIBCXX/CXXABI ceilings follow the advertised [manylinux policies](https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json), including architecture differences and legacy aliases; multiple tags use the strictest ceiling.
 Named CXXABI versions must be permitted by every advertised policy: `TM_1` from manylinux 2.17 on both architectures, and `FLOAT128` from 2.24 on x86_64 only.
 GCC requirements from libgcc use each tag's exact architecture-specific permitted versions; sparse version sets cannot be validated with a numeric ceiling.
