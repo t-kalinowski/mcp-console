@@ -21,11 +21,12 @@ from support.normalization import code
 from support.native import SHARED_LIBRARY_FLAG
 from support.python import runtime_source_line
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_python_preparation_while_evaluation_is_running(
     binary: Path,
@@ -236,6 +237,7 @@ def test_interrupts_running_python_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(POSIX)
 def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
@@ -288,6 +290,7 @@ def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Tran
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_nested_language_calls_once(
     binary: Path, execution: Execution
@@ -408,6 +411,7 @@ def test_interrupts_nested_language_calls_once(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_releases_python_threads_during_managed_input(
     binary: Path, execution: Execution
@@ -669,6 +673,7 @@ def test_dispatch_does_not_mutate_python_globals(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_live_python_resolver(
     binary: Path, execution: Execution
@@ -757,6 +762,7 @@ def test_interrupts_live_python_resolver(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_cancels_live_python_preparation(
     binary: Path, execution: Execution

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.server_relay._harness import ServerRelayClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
-from support.requirements import WORKER, requires
+from support.requirements import WORKER, requires, POSIX
 from support.suites import run_this_suite
 
 
@@ -35,6 +35,7 @@ def _reports_worker_outcome(
     return transcript, output
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_fatal_failure(binary: Path, execution: Execution) -> Transcript:
     client = ServerRelayClient(binary, "fatal", execution=execution)
@@ -49,6 +50,7 @@ def test_reports_fatal_failure(binary: Path, execution: Execution) -> Transcript
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_truncated_output(binary: Path, execution: Execution) -> Transcript:
     client = ServerRelayClient(binary, "truncated", execution=execution)
@@ -63,6 +65,7 @@ def test_rejects_truncated_output(binary: Path, execution: Execution) -> Transcr
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unexpected_worker_exit_zero(
     binary: Path, execution: Execution
@@ -77,6 +80,7 @@ def test_reports_unexpected_worker_exit_zero(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unexpected_worker_exit_nonzero_and_drains_output(
     binary: Path,
@@ -104,6 +108,7 @@ def test_reports_unexpected_worker_exit_nonzero_and_drains_output(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unexpected_worker_signal(
     binary: Path, execution: Execution
@@ -120,6 +125,7 @@ def test_reports_unexpected_worker_signal(
     return transcript
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_rejects_unsolicited_sigterm_without_sandbox(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "fatal_sigterm", execution=DIRECT)

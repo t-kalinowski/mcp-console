@@ -1,10 +1,15 @@
 """Local Python distributions for public preparation and runtime tests."""
 
 import subprocess
+import os
 import sys
 import sysconfig
 import zipfile
 from pathlib import Path
+
+
+def virtualenv_python(directory: Path) -> Path:
+    return directory / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
 def runtime_source_line(statement: str) -> int:

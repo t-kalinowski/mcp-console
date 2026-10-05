@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, SQL, requires
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -19,7 +20,6 @@ from support.normalization import code
 from support.processes import capture_process_identity, kill_processes
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
@@ -35,6 +35,7 @@ from boundaries.client_server._harness import (
 )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_skips_managed_python_preflight(
     binary: Path, execution: Execution
@@ -82,6 +83,7 @@ def test_custom_worker_skips_managed_python_preflight(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     binary: Path,
@@ -90,6 +92,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     return standalone_preparation(binary, execution, {})
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_standalone_replacement_is_inspectable_before_worker_startup(
     binary: Path, execution: Execution
@@ -232,6 +235,7 @@ def standalone_preparation(
                 stop_client(client)
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_starts_without_home(
     binary: Path, execution: Execution
@@ -274,6 +278,7 @@ def _write_selected_ir(path: Path) -> None:
     path.chmod(0o755)
 
 
+@requires(POSIX)
 @executions(DIRECT)
 def test_custom_worker_preserves_non_utf8_r_libs(
     binary: Path, execution: Execution
@@ -302,6 +307,7 @@ def test_custom_worker_preserves_non_utf8_r_libs(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_keeps_first_r_resolver_selection(
     binary: Path, execution: Execution
@@ -342,6 +348,7 @@ def test_custom_worker_keeps_first_r_resolver_selection(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_keeps_selection_after_failed_first_manifest(
     binary: Path, execution: Execution
@@ -649,6 +656,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_resolves_idle_activity_before_preparation(
     binary: Path,
@@ -793,6 +801,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     binary: Path,

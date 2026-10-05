@@ -18,6 +18,7 @@ from boundaries.client_server.python.test_startup import (
 from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
 )
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
@@ -25,7 +26,6 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.native import LOADER_VARIABLE, build_interposer
-from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     recording_uv_environment,
@@ -273,6 +273,7 @@ def test_failed_bootstrap_withholds_cell_and_replaces_worker(
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_incomplete_bootstrap_preserves_waiting_cell(
@@ -324,6 +325,7 @@ def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
     return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_short_startup_transcript(binary: Path, execution: Execution) -> list:
     with python_bootstrap(binary, execution, sans_r=True) as (client, release):
@@ -344,6 +346,7 @@ def test_short_startup_transcript(binary: Path, execution: Execution) -> list:
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_sans_r_starts_before_send_and_preserves_queued_input(
     binary: Path, execution: Execution
@@ -352,6 +355,7 @@ def test_sans_r_starts_before_send_and_preserves_queued_input(
         return queued_input(client, release)
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_selected_python_starts_independently_of_r(
@@ -362,6 +366,7 @@ def test_selected_python_starts_independently_of_r(
         return [{"selected_python_bootstrap_preserves_queued_input": True}]
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
@@ -491,6 +496,7 @@ def test_closure_retires_blocked_bootstrap(binary: Path, execution: Execution) -
             kill_processes(descendants)
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_r_bootstrap_resolves_python_version_and_import(
@@ -798,6 +804,7 @@ def managed_bootstrap(binary: Path, execution: Execution, *, inspect: bool = Fal
                 release.release()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_during_bootstrap_inspection_is_quiet(
     binary: Path, execution: Execution
@@ -821,6 +828,7 @@ def test_restart_during_bootstrap_inspection_is_quiet(
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_first_declaration_replaces_blocked_bootstrap(
     binary: Path, execution: Execution
@@ -864,6 +872,7 @@ def test_first_declaration_replaces_blocked_bootstrap(
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_failed_declaration_preserves_bootstrap_and_reset_remains_allowed(
     binary: Path, execution: Execution

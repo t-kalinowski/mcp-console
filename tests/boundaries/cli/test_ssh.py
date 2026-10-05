@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.records import Transcript
 from support.r import r_test_environment
-from support.requirements import SANDBOX, WORKER, requires
+from support.requirements import REMOTE_CONTROLLERS, SANDBOX, WORKER, requires
 from support.ssh import CONFIG, bootstrap, read_frame
 from support.suites import run_this_suite
 
@@ -54,6 +54,7 @@ def test_invalid_target_configuration(binary: Path) -> Transcript:
     return records
 
 
+@requires(REMOTE_CONTROLLERS)
 def test_bootstrap_framing_errors(binary: Path) -> Transcript:
     cases = (
         (b"\x00\x10\x00\x01", "exceeds"),
@@ -140,6 +141,7 @@ def test_bootstrap_preserves_following_relay_bytes(binary: Path) -> Transcript:
             process.wait(timeout=10)
 
 
+@requires(REMOTE_CONTROLLERS)
 def test_remote_workspace_and_compatibility_errors(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:

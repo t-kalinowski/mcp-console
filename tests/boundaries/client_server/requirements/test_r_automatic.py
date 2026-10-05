@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     entry_result_text,
     last_result_text,
@@ -27,7 +28,6 @@ from support.processes import (
 )
 from support.records import Transcript
 from support.r import r_test_environment, reference_r_error
-from support.requirements import PROCESS_EVENTS, command, requires
 from support.resolvers import (
     ir_requirements,
     ir_run_records,
@@ -158,6 +158,7 @@ def send_and_compare_r_error(
     }
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_missing_r_packages_during_evaluation(
@@ -207,6 +208,7 @@ def test_resolves_missing_r_packages_during_evaluation(
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
@@ -264,6 +266,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_reached_r_packages_at_runtime(
@@ -358,6 +361,7 @@ def test_resolves_reached_r_packages_at_runtime(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_retains_automatic_r_package_after_error_and_restart(
@@ -404,6 +408,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_preserves_missing_package_conditions_after_resolution_failure(
@@ -501,6 +506,7 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_matches_base_r_missing_package_error_display(
@@ -531,6 +537,7 @@ def test_matches_base_r_missing_package_error_display(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_does_not_resolve_unreached_package_loads(
@@ -562,6 +569,7 @@ def test_does_not_resolve_unreached_package_loads(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_rejects_non_package_runtime_names_before_ir(
@@ -605,6 +613,7 @@ def test_rejects_non_package_runtime_names_before_ir(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_preserves_base_r_loading_semantics_without_resolution(
@@ -749,6 +758,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Transcript:
@@ -807,6 +817,7 @@ $internal
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_r_activation_failure_requires_restart_without_stopping_worker(
@@ -872,6 +883,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_restart_discards_unactivated_r_candidate(
@@ -967,6 +979,7 @@ def test_restart_discards_unactivated_r_candidate(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_rejects_preparation_while_automatic_r_resolver_is_running(

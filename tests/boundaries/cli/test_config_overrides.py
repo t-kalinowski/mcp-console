@@ -9,11 +9,12 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from support.snapshots import platform_snapshots
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -257,6 +258,8 @@ def test_discovers_home_configuration_with_project_precedence(
         home.mkdir()
         workspace.mkdir()
         environment = {**os.environ, "HOME": str(home)}
+        if os.name == "nt":
+            environment["USERPROFILE"] = str(home)
         environment.pop("MCP_CONSOLE_HOME", None)
         configure(home, {"unknown": "home"})
 
@@ -273,7 +276,9 @@ def test_discovers_home_configuration_with_project_precedence(
             assert result.returncode == 1 and result.stdout == "", result
             return result.stderr
 
-        assert str(home / CONFIG) in launch_error()
+        assert str(home / CONFIG).replace("\\", "/") in launch_error().replace(
+            "\\", "/"
+        )
 
         fixture_workspace = root / "default-client"
         fixture_workspace.mkdir()
@@ -317,7 +322,9 @@ def test_discovers_home_configuration_with_project_precedence(
         assert CONFIG in error and str(home / CONFIG) not in error, error
 
         (workspace / CONFIG).unlink()
-        assert str(home / CONFIG) in launch_error()
+        assert str(home / CONFIG).replace("\\", "/") in launch_error().replace(
+            "\\", "/"
+        )
         configure(home, {})
         with McpClient(
             binary,
@@ -474,6 +481,7 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
     return records
 
 
+@platform_snapshots("win32")
 def test_validates_effective_configuration(binary: Path) -> Transcript:
     cases = (
         ("extends=true", "boolean"),
@@ -499,6 +507,7 @@ def test_validates_effective_configuration(binary: Path) -> Transcript:
     return records
 
 
+@requires(POSIX)
 def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
     binary: Path,
 ) -> Transcript:

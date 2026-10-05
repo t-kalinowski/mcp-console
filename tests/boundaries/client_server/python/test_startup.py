@@ -14,9 +14,17 @@ from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.requirements import FRAMEWORK_PYTHON, PYTHON_FRAMEWORK, R, requires
+from support.requirements import (
+    FRAMEWORK_PYTHON,
+    PYTHON_FRAMEWORK,
+    R,
+    POSIX,
+    SQL,
+    requires,
+)
 from support.r import install_r_startup, r_test_environment
 from support.resolvers import bare_runtime_environment
+from support.python import virtualenv_python
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
@@ -36,9 +44,10 @@ def isolated_python(directory: Path) -> tuple[Path, Path]:
         check=True,
         capture_output=True,
     )
-    python = environment / "bin/python"
+    python = virtualenv_python(environment)
     site = subprocess.check_output(
-        [python, "-c", "import site; print(site.getsitepackages()[0])"], text=True
+        [python, "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        text=True,
     ).strip()
     return python, Path(site)
 
@@ -65,6 +74,7 @@ def startup_input(binary: Path, execution: Execution, hook: str) -> list:
         environment = selected_python(root, python)
         environment["PYTHONPATH"] = str(site)
         environment["PYTHONNODEBUGRANGES"] = "1"
+        environment["RETICULATE_PYTHONPATH"] = str(site)
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(python="never_run = True")
@@ -103,7 +113,9 @@ def startup_input(binary: Path, execution: Execution, hook: str) -> list:
                 timeout_ms=0,
             )
             return json.loads(
-                json.dumps(client.finish()).replace(str(site), "<site-packages>")
+                json.dumps(client.finish()).replace(
+                    json.dumps(str(site) + os.sep)[1:-1], "<site-packages>/"
+                )
             )
 
 
@@ -140,6 +152,7 @@ def test_embeds_framework_python(binary: Path, execution: Execution) -> list:
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+@requires(POSIX)
 def test_preserves_broken_pipe_errors_after_r_startup(
     binary: Path, execution: Execution
 ) -> list:
@@ -264,7 +277,9 @@ def test_retries_after_sql_runtime_installation_interrupt(
             )
             assert last_result_text(client) == "42\n", last_result_text(client)
             return json.loads(
-                json.dumps(client.finish()).replace(str(site), "<site-packages>")
+                json.dumps(client.finish()).replace(
+                    json.dumps(str(site) + os.sep)[1:-1], "<site-packages>/"
+                )
             )
 
 
@@ -325,6 +340,12 @@ def interrupted_initialization(
                     """),
             )
             environment = bare_runtime_environment(r_environment, library)
+            if os.name == "nt":
+                environment["PATH"] = os.pathsep.join(
+                    entry
+                    for entry in environment["PATH"].split(os.pathsep)
+                    if not (Path(entry) / "python.exe").exists()
+                )
         if language == "sql":
             commands = root / "no-r-commands"
             commands.mkdir()
@@ -333,6 +354,7 @@ def interrupted_initialization(
             )
         environment["PYTHONPATH"] = str(site)
         environment["PYTHONNODEBUGRANGES"] = "1"
+        environment["RETICULATE_PYTHONPATH"] = str(site)
         with McpClient(
             binary,
             execution.serve(
@@ -383,7 +405,9 @@ def interrupted_initialization(
                 client.send(r="startup_state + 1L")
                 assert last_result_text(client) == "[1] 42\n", last_result_text(client)
             transcript = json.dumps(client.finish())
-            transcript = transcript.replace(str(site), "<site-packages>")
+            transcript = transcript.replace(
+                json.dumps(str(site) + os.sep)[1:-1], "<site-packages>/"
+            )
             transcript = transcript.replace(str(root), "<workspace>")
             return json.loads(transcript)
 
@@ -407,6 +431,7 @@ def test_interrupts_embedded_startup_after_r(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(SQL)
 def test_interrupts_sql_first_embedded_startup(
     binary: Path, execution: Execution
 ) -> list:

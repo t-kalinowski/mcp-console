@@ -12,10 +12,11 @@ from support.client import McpClient
 from support.execution import DIRECT
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import WORKER, requires
+from support.requirements import POSIX, WORKER, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_psutil_sees_host_processes_without_sandbox(binary: Path) -> Transcript:
     with subprocess.Popen(

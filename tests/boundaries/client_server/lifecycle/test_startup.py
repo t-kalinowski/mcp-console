@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     collect_running_output,
     last_tool_text,
@@ -34,7 +35,6 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.events import Events
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -222,6 +222,7 @@ def test_prepares_python_before_r_bootstrap_validation(
         return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_first_cell_prepares_defaults_after_running_response(

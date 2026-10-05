@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, requires
 from support.assertions import last_result_text
 from support.previews import (
     assert_preview,
@@ -20,6 +21,7 @@ from support.normalization import (
     normalize_python_traceback_paths,
 )
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     initialize_python_and_record_baseline,
     recording_uv_environment,
@@ -32,6 +34,7 @@ from support.suites import run_this_suite
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_resolves_missing_python_import_without_replaying_cell(
     binary: Path,
@@ -86,6 +89,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     binary: Path,
@@ -115,9 +119,9 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     session = next((workspace / ".agents/console" / "sessions").iterdir())
     relative_output = Path("outputs/call-000001.log")
     public_output = (
-        f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
+        f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
     )
-    assert f"raw cell log: {public_output}" in output
+    assert f"raw cell log: {public_output}" in output, output[len(prefix) :]
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )
@@ -128,6 +132,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
     binary: Path, execution: Execution
@@ -167,6 +172,7 @@ def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_new_meta_path_finders_after_automatic_resolution(
     binary: Path,
@@ -239,6 +245,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_infers_python_distributions_for_normal_import_forms(
     binary: Path,
@@ -287,6 +294,7 @@ def test_infers_python_distributions_for_normal_import_forms(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_resolve_unreached_or_available_python_imports(
     binary: Path,
@@ -369,6 +377,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_resolve_missing_python_imports_from_sql(
     binary: Path,
@@ -505,6 +514,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_reenter_automatic_python_resolution(
     binary: Path, execution: Execution
@@ -559,6 +569,7 @@ def test_does_not_reenter_automatic_python_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_automatic_python_requirement_after_error_and_restart(
     binary: Path,
@@ -596,6 +607,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_automatic_python_resolution_failure(
     binary: Path, execution: Execution
@@ -643,6 +655,7 @@ def test_reports_automatic_python_resolution_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_inferred_distribution_that_does_not_provide_import(
     binary: Path,
@@ -693,6 +706,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_explicit_python_requirements_preempt_automatic_resolution(
     binary: Path,
@@ -716,6 +730,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
     binary: Path,
@@ -794,6 +809,7 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unavailable_standard_library_module_without_resolution(
     binary: Path,
@@ -828,6 +844,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_disables_automatic_resolution_for_user_selected_python(
     binary: Path,
@@ -867,6 +884,7 @@ def test_disables_automatic_resolution_for_user_selected_python(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_runtime_toolchain_probe_does_not_install_a_distribution(
     binary: Path, execution: Execution

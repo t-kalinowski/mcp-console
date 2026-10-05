@@ -18,6 +18,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import assert_result_content, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -26,7 +27,6 @@ from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.ssh import (
     SSH,
     client_environment,
@@ -119,6 +119,7 @@ def ssh_session(
             assert not trap.exists()
 
 
+@requires(SQL)
 @requires(SSH, command("uv"), NATIVE_FIXTURES, PROCESS_EVENTS)
 @executions(DIRECT, SANDBOXED)
 def test_managed_sql_first_and_live_python(
@@ -197,6 +198,7 @@ def test_remote_missing_uv_does_not_select_path_python(binary: Path) -> Transcri
         return [{"standard_error": errors}]
 
 
+@requires(SQL)
 @requires(SSH)
 @executions(DIRECT, SANDBOXED)
 def test_selected_remote_python_uses_workspace_and_no_uv(
@@ -260,6 +262,7 @@ def test_selected_remote_filename_is_relative_to_workspace(
         return client.finish()[3:]
 
 
+@requires(SQL)
 @requires(SSH, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_automatic_import_restart_and_recording(
@@ -329,6 +332,7 @@ def test_automatic_import_restart_and_recording(
         return records
 
 
+@requires(SQL)
 @requires(SSH, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_combined_additions_extensions_and_requirement_actions(
@@ -415,6 +419,7 @@ def test_combined_additions_extensions_and_requirement_actions(
         return client.finish()[3:]
 
 
+@requires(SQL)
 @requires(SSH, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_failed_and_interrupted_remote_preparation_keeps_committed_state(
@@ -626,6 +631,7 @@ def test_connection_loss_blocks_replacement_and_retires_native_worker(
         return json.loads(json.dumps(records).replace(str(remote), "<execution host>"))
 
 
+@requires(SQL)
 @requires(SANS_R_EXTERNAL_SSH)
 @executions(DIRECT, SANDBOXED)
 def test_external_r_free_execution_host(

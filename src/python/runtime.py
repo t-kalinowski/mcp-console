@@ -712,7 +712,7 @@ def _mcp_console_activate_process_environment(
     multiprocessing = _sys.modules.get("multiprocessing")
     if multiprocessing is not None:
         multiprocessing.set_executable(executable)
-    _configure_psutil()
+    _sys.modules["_mcp_console"]._configure_backends(executable, _configure_psutil)
     return None
 
 
@@ -1000,6 +1000,21 @@ def _mcp_console_conversion_metadata(
 
 
 _mcp_console.conversion_metadata = _mcp_console_conversion_metadata
+
+
+def _configure_process_backends(executable, configure_psutil, _sys=_sys):
+    # Loky also captures the executable. A Windows virtualenv redirector is
+    # bypassed only when that capture matches the current interpreter; stale
+    # captures duplicate semaphore handles into the redirector instead of the
+    # process that executes the task after live environment activation.
+    loky_spawn = _sys.modules.get("joblib.externals.loky.backend.spawn")
+    if loky_spawn is not None:
+        loky_spawn._python_exe = executable
+    configure_psutil()
+
+
+_mcp_console._configure_backends = _configure_process_backends
+
 
 # The runtime runs with __main__ globals and private locals. Remember its code
 # objects so cell tracebacks can omit our frames without hiding user exec() code.

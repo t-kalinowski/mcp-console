@@ -23,6 +23,17 @@ PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
 # default Console cache coverage lives in requirements/test_cache_locations.py.
 
 
+def expose_uv(directory: Path) -> Path:
+    executable = shutil.which("uv")
+    assert executable is not None, "real uv is required"
+    target = directory / ("uv.exe" if os.name == "nt" else "uv")
+    if os.name == "nt":
+        shutil.copyfile(executable, target)
+    else:
+        target.symlink_to(executable)
+    return target
+
+
 def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
     # Native sandbox launchers own the resolver beneath the server's children.
     pending = list(child_process_identities(server))
@@ -314,7 +325,10 @@ def bare_runtime_environment(
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in environment["PATH"].split(os.pathsep)
-        if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
+        if not any(
+            (Path(entry) / (name + (".exe" if os.name == "nt" else ""))).exists()
+            for name in ("ir", "uv", "uvx")
+        )
     )
     environment.pop("RETICULATE_UV", None)
     environment.pop("RETICULATE_PYTHON", None)

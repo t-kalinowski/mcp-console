@@ -10,7 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
-use super::lifecycle::{self, ExitDeadline, FirstFailure, WORKER_SHUTDOWN_GRACE};
+use super::lifecycle::{self, FirstFailure, Retirement, WORKER_SHUTDOWN_GRACE};
 use super::routing::Operation;
 use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
@@ -22,6 +22,7 @@ enum Control {
     ControllerEof,
     SidebandEof,
     SidebandReaderFinished,
+    SidebandForwardingFailed,
     Exited,
     Failed(String),
 }
@@ -103,7 +104,11 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
             };
             match message {
                 Ok(command) => {
+                    let shutdown = matches!(command, RelayCommand::Shutdown { .. });
                     if input_controls.send(Control::Command(command)).is_err() {
+                        return;
+                    }
+                    if shutdown {
                         return;
                     }
                 }
@@ -177,6 +182,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
             match sideband.receive::<WorkerMessage>() {
                 Ok(message) => {
                     if !sideband_events.send(message.into()) {
+                        completion = Control::SidebandForwardingFailed;
                         break;
                     }
                 }
@@ -245,9 +251,13 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         input_ready.set();
     }));
     let mut send_stdin = Some(send_stdin);
-    let mut deadline = ExitDeadline::default();
+    let mut retirement = Retirement::default();
     loop {
-        let next = match deadline.remaining() {
+        let next = match retirement.remaining() {
+            Some(remaining) if remaining.is_zero() => {
+                let _ = child.kill();
+                break;
+            }
             Some(remaining) => commands.recv_timeout(remaining),
             None => commands
                 .recv()
@@ -259,14 +269,15 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Failed(_)) => {
+            Ok(Control::Failed(_) | Control::SidebandForwardingFailed) => {
+                // Failed event admission can precede the writer's failure
+                // callback when stdout is blocked. Retire the direct child
+                // before cancelling/joining its I/O, just as for other failures.
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::ControllerEof | Control::SidebandEof | Control::SidebandReaderFinished) => {
-                // Preserve the existing Windows action for these distinct
-                // inputs; changing shutdown admission/EOF policy is separate.
-                if deadline.start_if_idle(|| {
+            Ok(Control::ControllerEof | Control::SidebandEof) => {
+                if retirement.start_if_idle(|| {
                     stopping.store(true, Ordering::SeqCst);
                     Instant::now() + WORKER_SHUTDOWN_GRACE
                 }) {
@@ -274,31 +285,40 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
             }
-            Ok(Control::Command(command)) => match Operation::from(command) {
-                Operation::Interrupt { request_id } => {
-                    interrupt.set();
-                    events.send_supervisor(RelayEvent::InterruptResult {
-                        request_id,
-                        error: None,
-                    });
-                }
-                Operation::Shutdown { grace_millis } => {
-                    stopping.store(true, Ordering::SeqCst);
-                    deadline.accept_shutdown(&events, || {
-                        Instant::now() + Duration::from_millis(grace_millis)
-                    });
-                    send_stdin.take();
-                    let _ = send_sideband.send(ServerMessage::Shutdown);
-                }
-                Operation::Stdin { data } => {
-                    if let Some(stdin) = &send_stdin {
-                        let _ = stdin.send(data);
+            // Cancellation completion is not observed sideband EOF. Its owner
+            // has already begun retirement before setting the cancellation.
+            Ok(Control::SidebandReaderFinished) => {}
+            Ok(Control::Command(command)) if retirement.accepts_commands() => {
+                match Operation::from(command) {
+                    Operation::Interrupt { request_id } => {
+                        interrupt.set();
+                        events.send_supervisor(RelayEvent::InterruptResult {
+                            request_id,
+                            error: None,
+                        });
+                    }
+                    Operation::Shutdown { grace_millis } => {
+                        stopping.store(true, Ordering::SeqCst);
+                        if !retirement.accept_shutdown(&events, || {
+                            Instant::now() + Duration::from_millis(grace_millis)
+                        }) {
+                            let _ = child.kill();
+                            break;
+                        }
+                        send_stdin.take();
+                        let _ = send_sideband.send(ServerMessage::Shutdown);
+                    }
+                    Operation::Stdin { data } => {
+                        if let Some(stdin) = &send_stdin {
+                            let _ = stdin.send(data);
+                        }
+                    }
+                    Operation::Worker(message) => {
+                        let _ = send_sideband.send(message);
                     }
                 }
-                Operation::Worker(message) => {
-                    let _ = send_sideband.send(message);
-                }
-            },
+            }
+            Ok(Control::Command(_)) => {}
         }
     }
     if let Err(message) = exit.finish() {

@@ -28,9 +28,8 @@ send:
     import matplotlib
     import matplotlib.pyplot as plt
 
-    assert (
-        Path(matplotlib.matplotlib_fname()).resolve()
-        == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve()
+    assert Path(matplotlib.matplotlib_fname()).samefile(
+        os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]
     )
     assert matplotlib.rcParams["lines.linewidth"] == 7.25
 

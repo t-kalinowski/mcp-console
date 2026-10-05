@@ -31,7 +31,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
@@ -48,6 +48,7 @@ from boundaries.client_server._harness import (
 )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
     binary: Path, execution: Execution
@@ -201,6 +202,7 @@ def test_compacts_each_polled_output_segment(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_compacts_many_redraws_in_one_response(
     binary: Path,
@@ -219,6 +221,7 @@ def test_compacts_many_redraws_in_one_response(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_invalid_raw_output_when_worker_exits(
     binary: Path, execution: Execution
@@ -342,6 +345,7 @@ def test_preserves_raw_output_during_malformed_sideband_failure(
             return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_raw_output_during_semantically_invalid_sideband_message(
     binary: Path,
@@ -440,6 +444,7 @@ def test_drains_background_stderr_while_idle(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_times_out_and_polls_running_evaluation(
     binary: Path, execution: Execution
