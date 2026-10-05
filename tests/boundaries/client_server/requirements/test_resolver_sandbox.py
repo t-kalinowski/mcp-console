@@ -407,7 +407,7 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
                     """),
             )
             client.finish()
-        cache = root / "cache-base/mcp-console"
+        cache = root / "cache-base/mcp-console/dependencies"
         descriptions = list((cache / "ir").rglob("utf8/DESCRIPTION"))
         assert descriptions
         assert all(path.resolve().is_relative_to(cache) for path in descriptions)

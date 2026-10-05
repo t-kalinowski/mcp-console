@@ -64,6 +64,13 @@ def test_host_cache_opt_out(binary: Path) -> Transcript:
     return cache_locations(binary, host=True, sources=("direct", "config", "cli"))
 
 
+@requires(SANDBOX)
+def test_resolver_cannot_write_companion_build_cache(binary: Path) -> Transcript:
+    cache_locations(binary, host=False, sources=("default", "platform"))
+    cache_locations(binary, host=True, sources=("cli",))
+    return [{"companion_build_cache_read_only": True}]
+
+
 def test_console_cache_rejects_unsandboxed_execution(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory)
@@ -98,7 +105,7 @@ def test_uses_reticulate_managed_uv_inside_console_cache(binary: Path) -> Transc
             RETICULATE_UV="managed",
             MCP_CONSOLE_LANGUAGES="r",
         )
-        uv = root / "cache-base/mcp-console/R/reticulate/uv/bin/uv"
+        uv = root / "cache-base/mcp-console/dependencies/R/reticulate/uv/bin/uv"
         if sys.platform == "darwin":
             # macOS's system shell writes heredoc files outside TMPDIR. Seed the
             # tool here; Linux exercises the cold managed installer as well.
@@ -134,7 +141,7 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
         env.pop("UV_PYTHON", None)
         env["UV_PYTHON_PREFERENCE"] = "only-managed"
         env["XDG_CACHE_HOME"] = str(root / "cache-base")
-        env["CACHE_TEST_ROOT"] = str(root / "cache-base/mcp-console")
+        env["CACHE_TEST_ROOT"] = str(root / "cache-base/mcp-console/dependencies")
         for name in CACHE_VARIABLES:
             env[name] = str(root / "host" / name)
         with McpClient(binary, ("serve",), env, root) as client:
@@ -164,14 +171,14 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
                 )
                 assert not result.get("isError"), result
                 assert str(
-                    root / "cache-base/mcp-console/duckdb/extensions"
+                    root / "cache-base/mcp-console/dependencies/duckdb/extensions"
                 ) in json.dumps(result), result
             client.send(requirements={"python": ["six"]})
             client.expect("six\n", python="import six; print(six.__name__)")
             result = client.send(sql="LOAD sqlite")
             assert not result.get("isError"), result
             client.finish()
-        cache = root / "cache-base/mcp-console"
+        cache = root / "cache-base/mcp-console/dependencies"
         assert list(
             (cache / "duckdb/extensions").glob("v*/**/sqlite_scanner.duckdb_extension")
         )
@@ -221,16 +228,28 @@ def cache_locations(
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
             settings = {}
-            console_root = root / "cache-base/mcp-console"
+            console_base = root / "cache-base/mcp-console"
             if source == "platform":
                 env.pop("XDG_CACHE_HOME")
                 home = root / "account"
                 settings["resolver"] = {"environment": {"HOME": str(home)}}
-                console_root = home / (
+                console_base = home / (
                     "Library/Caches/mcp-console"
                     if sys.platform == "darwin"
                     else ".cache/mcp-console"
                 )
+            console_root = console_base / "dependencies"
+            companion = console_base / "sandbox/fixture/revision/source"
+            companion_files = (
+                companion / ".git/config",
+                companion / "target/release/mcp-console-sandbox",
+            )
+            for file in companion_files:
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text("trusted companion cache")
+            env["CACHE_TEST_COMPANION_FILES"] = json.dumps(
+                [str(file) for file in companion_files]
+            )
             if source == "config":
                 settings["cache"] = "host"
             if source == "isolated":
@@ -286,7 +305,6 @@ def cache_locations(
                         assert actual == Path(value) if {host!r} else actual.is_relative_to(value), (name, actual, value)
                     cache = Path(os.environ["UV_CACHE_DIR"])
                     cache.mkdir(parents=True, exist_ok=True)
-                    cache.joinpath("resolver-probe").write_text("prepared")
                     if not {host!r}:
                         try:
                             Path(os.environ["CACHE_TEST_ROOT"]).joinpath("host-write").write_text("escaped")
@@ -294,6 +312,17 @@ def cache_locations(
                             pass
                         else:
                             raise AssertionError("resolver wrote outside Console caches")
+                    if {source != "direct"!r}:
+                        for file in json.loads(os.environ["CACHE_TEST_COMPANION_FILES"]):
+                            file = Path(file)
+                            assert file.read_text() == "trusted companion cache"
+                            try:
+                                file.write_text("resolver overwrote companion cache")
+                            except PermissionError:
+                                pass
+                            else:
+                                raise AssertionError("resolver wrote to companion build cache")
+                    cache.joinpath("resolver-probe").write_text("prepared")
                 """)
             (site / "sitecustomize.py").write_text(probe)
             arguments = ["serve"]
@@ -329,6 +358,8 @@ def cache_locations(
                     client.expect("cache selection retained\n", python=check)
                 client.finish()
             assert not (root / "host-write").exists()
+            for file in companion_files:
+                assert file.read_text() == "trusted companion cache", file
             if not host:
                 assert not (root / "host").exists()
     return [

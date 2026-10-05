@@ -18,17 +18,19 @@ These permissions are intended for ordinary package preparation, including sourc
 Local sandboxed sessions default to `cache: console`.
 Downloaded Python installations, uv environments, IR libraries, reticulate tooling, renv packages, pak metadata, and DuckDB extensions live beneath one Console cache directory:
 
-| Platform | Default directory                  |
-| -------- | ---------------------------------- |
-| Linux    | `$HOME/.cache/mcp-console`         |
-| macOS    | `$HOME/Library/Caches/mcp-console` |
-| Windows  | `%LOCALAPPDATA%/mcp-console/cache` |
+| Platform | Default directory                               |
+| -------- | ----------------------------------------------- |
+| Linux    | `$HOME/.cache/mcp-console/dependencies`         |
+| macOS    | `$HOME/Library/Caches/mcp-console/dependencies` |
+| Windows  | `%LOCALAPPDATA%/mcp-console/cache/dependencies` |
 
-An absolute `XDG_CACHE_HOME` selects `<XDG_CACHE_HOME>/mcp-console` on any platform.
+An absolute `XDG_CACHE_HOME` selects `<XDG_CACHE_HOME>/mcp-console/dependencies` on any platform.
 This selection does not require `HOME`.
 The root uses the resolver's effective environment, before Console redirects the cache variables.
 On Windows, missing `LOCALAPPDATA` uses `USERPROFILE/AppData/Local` or the absolute `HOME` equivalent.
 Console captures this selection once for preparation and worker restarts.
+The writable dependency directory is separate from `mcp-console/sandbox`, which holds the source checkout and build artifacts used for host-side companion staging.
+On macOS and Linux, the default resolver policy permits reads of that companion cache but denies writes to it and the shared Console cache parent.
 
 Console overrides cache-location variables inherited from the host or supplied in `resolver.environment` and `sandbox.environment`.
 uv's cache, Python installations, tools, and executable links use `uv/`; IR uses `ir/`; renv uses `renv/`; R's package cache base is the Console root, including `R/reticulate` and `R/pkgcache`.
@@ -145,7 +147,7 @@ resolver:
     entries:
       - path: {type: special, value: {kind: root}}
         access: read
-      - path: {type: path, path: /home/alice/.cache/mcp-console}
+      - path: {type: path, path: /home/alice/.cache/mcp-console/dependencies}
         access: write
   network: restricted
   proxy:

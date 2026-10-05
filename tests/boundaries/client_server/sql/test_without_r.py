@@ -73,7 +73,7 @@ def extension_cache(root: Path, execution: Execution) -> Path:
     return (
         root / "home/.duckdb/extensions"
         if execution is DIRECT
-        else root / "cache-base/mcp-console/duckdb/extensions"
+        else root / "cache-base/mcp-console/dependencies/duckdb/extensions"
     )
 
 

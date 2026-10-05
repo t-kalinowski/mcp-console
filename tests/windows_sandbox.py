@@ -54,7 +54,7 @@ class WindowsSandbox(unittest.TestCase):
                 [sys.executable, "-m", "venv", "--without-pip", selected], check=True
             )
             python = selected / "Scripts/python.exe"
-            cache = root / "local/mcp-console/cache"
+            cache = root / "local/mcp-console/cache/dependencies"
             environment = dict(
                 os.environ,
                 PATH=str(root),

@@ -23,7 +23,9 @@ pub(crate) fn configure(
     if no_sandbox {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
     }
-    let root = console_root(resolver)?;
+    // Host-side companion staging uses the sibling mcp-console/sandbox cache.
+    // Grant only dependency storage, never the shared Console cache parent.
+    let root = console_root(resolver)?.join("dependencies");
     let path = |relative: &str| -> Result<Value, String> {
         root.join(relative)
             .to_str()

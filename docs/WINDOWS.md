@@ -42,7 +42,7 @@ Python selection is inspected at startup, and enabled interpreters initialize in
 
 The server waits for an MCP client on standard input; it does not open an interactive terminal.
 Configure clients with command `mcp-console` and arguments `["serve"]`; use `["serve", "--no-sandbox"]` to explicitly run with host permissions.
-Local sandboxed sessions redirect resolver and worker caches to `%LOCALAPPDATA%/mcp-console/cache`, or `<XDG_CACHE_HOME>/mcp-console` when selected.
+Local sandboxed sessions redirect resolver and worker caches to `%LOCALAPPDATA%/mcp-console/cache/dependencies`, or `<XDG_CACHE_HOME>/mcp-console/dependencies` when selected.
 `cache: host` retains host caches, as does `--no-sandbox` by default.
 Cache redirection does not sandbox Windows dependency preparation; it retains host permissions and its owned Job lifecycle.
 There is no automatic fallback from sandboxed execution.
