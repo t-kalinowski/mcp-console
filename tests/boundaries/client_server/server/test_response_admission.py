@@ -9,6 +9,7 @@ those Rust cases until equivalent response-write checkpoints are available.
 """
 
 import os
+import select
 import socket
 import sys
 import tempfile
@@ -17,11 +18,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server._harness import (
+    FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+    TEST_CONTROL_READY_NAME,
     TEST_GATED_RESPONSE_SIZE,
+    TEST_RESPONSE_QUERY_FIFO_NAME,
+    TEST_RESPONSE_RESULT_FIFO_NAME,
     ResponseGateObserver,
     SocketGateMcpClient,
     ZodFixtureControl,
     queued_socket_bytes,
+    wait_for_marker,
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
@@ -47,6 +53,7 @@ def test_keeps_wire_order_across_cancelled_waiting_send(
         live_release = FifoCheckpoint.create(temporary / "live-write-release")
         initial_completed = temporary / "initial-response-completed"
         live_completed = temporary / "live-response-completed"
+        live_query_path = temporary / "live-response-query"
         environment = os.environ.copy()
         environment["MCP_CONSOLE_HOME"] = str(temporary / "console-home")
         environment[LOADER_VARIABLE] = str(
@@ -60,6 +67,7 @@ def test_keeps_wire_order_across_cancelled_waiting_send(
             MCP_CONSOLE_TEST_INITIAL_WRITE_RELEASE=str(initial_release.path),
             MCP_CONSOLE_TEST_LIVE_WRITE_REACHED=str(live_reached.path),
             MCP_CONSOLE_TEST_LIVE_WRITE_RELEASE=str(live_release.path),
+            MCP_CONSOLE_TEST_LIVE_WRITE_QUERY=str(live_query_path),
             ZOD_TEST_RESPONSE_GATE_RELEASED=str(initial_completed),
         )
         with ZodFixtureControl(temporary) as control:
@@ -71,6 +79,7 @@ def test_keeps_wire_order_across_cancelled_waiting_send(
                 temporary,
             )
             observers: list[ResponseGateObserver] = []
+            live_controls: list[FifoCheckpoint] = []
             finished = False
             try:
                 client.initialize_and_list_tools()
@@ -132,6 +141,15 @@ def test_keeps_wire_order_across_cancelled_waiting_send(
                 ]
 
                 control.connect(client)
+                directory = wait_for_marker(
+                    temporary, TEST_CONTROL_READY_NAME, client
+                ).parent
+                live_query_path.symlink_to(directory / TEST_RESPONSE_QUERY_FIFO_NAME)
+                live_controls.append(FifoCheckpoint.attach(live_query_path))
+                live_controls.append(
+                    FifoCheckpoint.attach(directory / TEST_RESPONSE_RESULT_FIFO_NAME)
+                )
+                live_query, live_result = live_controls
                 live_reached.wait("first live response prefix written")
                 # Reading the initial response may also buffer the live prefix.
                 pending = queued_socket_bytes(client.stdout.stream)
@@ -148,20 +166,35 @@ def test_keeps_wire_order_across_cancelled_waiting_send(
                     control.diagnostics()
                 )
                 control.wait_for(first_id, "worker_operation_completed")
-                # A completed worker operation still owns admission until its
-                # response write finishes. The successor queries this actual
-                # response, including when a broken cancellation chain lets it
-                # start while the write remains blocked.
-                observers.append(
-                    ResponseGateObserver(
-                        temporary, client.stdout.stream, live_completed
-                    )
-                )
+                # The native writer publishes b"2" in the query FIFO after the
+                # complete response is written, before acknowledging that write.
+                # FIFO order preserves an early b"1" query even though we only
+                # observe it after response completion. Starting an observer
+                # thread before release would not establish this ordering.
                 live_release.release()
                 client.stdout.release_completed_response(
                     first_id, live_completed, control.diagnostics()
                 )
-                observers[1].finish()
+                completed_at_query = False
+                while True:
+                    assert select.select(
+                        [live_query.descriptor],
+                        [],
+                        [],
+                        FIXTURE_CHECKPOINT_TIMEOUT_SECONDS,
+                    )[0], "successor did not query the live response gate"
+                    token = os.read(live_query.descriptor, 1)
+                    assert token in {b"1", b"2"}, token
+                    if token == b"1":
+                        break
+                    assert not completed_at_query, "duplicate response completion"
+                    completed_at_query = True
+                assert (
+                    os.write(
+                        live_result.descriptor, b"1" if completed_at_query else b"0"
+                    )
+                    == 1
+                )
                 second_started = control.wait_for(second_id, "worker_operation_started")
                 assert second_started["response_gate_released"] is True, (
                     control.diagnostics()
@@ -222,6 +255,7 @@ def test_keeps_wire_order_across_cancelled_waiting_send(
                     initial_release,
                     live_reached,
                     live_release,
+                    *live_controls,
                 ):
                     checkpoint.close()
                 if not finished:

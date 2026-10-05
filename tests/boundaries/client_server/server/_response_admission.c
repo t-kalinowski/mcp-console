@@ -58,7 +58,24 @@ static ssize_t gated_write(int descriptor, const void *buffer, size_t count) {
     do { received = read(release, &token, 1); } while (received < 0 && errno == EINTR);
     if (received != 1 || token != '1') _exit(125);
     close(release);
-    return prefix;
+    if (gate == 0) return prefix;
+
+    // A successor may enqueue its query while this response is blocked. Publish
+    // completion in that same FIFO only after the entire frame is written and
+    // before acknowledging the write. The client can read both tokens later
+    // without changing whether the query preceded actual delivery.
+    if (bytes[count - 1] != '\n') _exit(125);
+    size_t written = (size_t)prefix;
+    while (written < count) {
+        ssize_t suffix = write_next(descriptor, bytes + written, count - written);
+        if (suffix < 0 && errno == EINTR) continue;
+        if (suffix <= 0) _exit(125);
+        written += (size_t)suffix;
+    }
+    int query = open(getenv("MCP_CONSOLE_TEST_LIVE_WRITE_QUERY"), O_WRONLY);
+    if (query < 0 || write_next(query, "2", 1) != 1) _exit(125);
+    close(query);
+    return (ssize_t)count;
 }
 
 #ifdef __APPLE__
