@@ -197,7 +197,11 @@ def cache_locations(
     binary: Path, *, host: bool, sources: tuple[str, ...]
 ) -> Transcript:
     for source in sources:
-        with TemporaryDirectory() as directory:
+        # Host cache mode grants Darwin's user temp. Keep protected companion
+        # artifacts outside that grant, as the actual host build cache is.
+        with TemporaryDirectory(
+            prefix="mcp-console-cache-locations-", dir=Path.home()
+        ) as directory:
             root = Path(directory).resolve()
             tools = root / "bin"
             tools.mkdir()

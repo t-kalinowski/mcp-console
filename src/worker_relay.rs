@@ -2,6 +2,10 @@ use std::ffi::OsString;
 
 #[cfg(any(unix, windows))]
 mod event_writer;
+#[cfg(any(unix, windows))]
+mod lifecycle;
+#[cfg(any(unix, windows))]
+mod routing;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]

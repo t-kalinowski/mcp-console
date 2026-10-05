@@ -209,7 +209,9 @@ def test_default_extension_failure_preserves_close_failure(
                     diagnostic
                 )
                 assert "path exists but is not a directory!" in diagnostic, diagnostic
-                assert diagnostic.endswith("; resolver input closed"), diagnostic
+                assert diagnostic.endswith(
+                    "; resolver input closed; local resolver sandbox exited with exit status: 47"
+                ), diagnostic
             else:
                 diagnostic = (
                     "DuckDB extension preparation requires an absolute HOME at server startup; "

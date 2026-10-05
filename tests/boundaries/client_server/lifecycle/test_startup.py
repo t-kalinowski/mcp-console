@@ -116,6 +116,7 @@ def startup_fixture(
         environment.update(
             {
                 "TMPDIR": str(temporary),
+                "UV_TOOL_DIR": str(temporary),
                 "MCP_CONSOLE_TEST_REAL_IR": real_ir,
                 "MCP_CONSOLE_TEST_REAL_UV": real_uv,
                 "MCP_CONSOLE_TEST_STARTUP_PHASE": phase,
@@ -129,7 +130,7 @@ def startup_fixture(
         environment.update(server_environment or {})
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             response_timeout=5,
         )
@@ -170,7 +171,9 @@ def test_preserves_initialize_buffered_during_startup(
         assert fixture.invocations() == invocations, (
             "poll or invalid input duplicated startup"
         )
-        assert not list(fixture.root.glob("sandbox-*"))
+        # The resolver owns one native temp directory; a worker would add another.
+        storage = list(fixture.root.glob("sandbox-*"))
+        assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         return client.finish()
 
 
@@ -247,7 +250,8 @@ def test_first_cell_prepares_defaults_after_running_response(
         client.send(r=r, timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
-        assert not list(fixture.root.glob("sandbox-*"))
+        storage = list(fixture.root.glob("sandbox-*"))
+        assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         assert any(
             invocation["program"] == "uv"
             and invocation["arguments"][:2] == ["tool", "run"]
@@ -328,7 +332,8 @@ def test_explicit_preparation_keeps_its_wait_precondition(
         assert "result" not in preparation, (
             "explicit preparation returned before resolution"
         )
-        assert not list(fixture.root.glob("sandbox-*"))
+        storage = list(fixture.root.glob("sandbox-*"))
+        assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         fixture.release.release()
         client.response_timeout = 600
         client.receive(preparation)

@@ -19,8 +19,91 @@ from support.normalization import code
 from support.records import Transcript
 from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
+from support.resolvers import ir_cache_directory
 from support.ssh import SSH, configure, localhost, remote_command
 from boundaries.client_server.python.test_without_r import environment
+
+
+@requires(SANDBOX)
+def test_default_caches_use_console_namespace(binary: Path) -> Transcript:
+    return console_cache_defaults(binary, configured_empty=False)
+
+
+@requires(SANDBOX)
+def test_empty_cache_overrides_use_console_defaults(binary: Path) -> Transcript:
+    return console_cache_defaults(binary, configured_empty=True)
+
+
+def console_cache_defaults(binary: Path, *, configured_empty: bool) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        tools = root / "bin"
+        tools.mkdir()
+        (tools / "uv").symlink_to(shutil.which("uv"))
+        env = environment(tools)
+        home = root / "home"
+        env.update(HOME=str(home), XDG_CACHE_HOME="", UV_NO_CONFIG="1")
+        for name in (
+            "UV_CACHE_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+            "UV_TOOL_DIR",
+            "UV_CONFIG_FILE",
+            "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
+            "MPLCONFIGDIR",
+        ):
+            env.pop(name, None)
+        payload = home / (
+            "Library/Caches/mcp-console/dependencies"
+            if sys.platform == "darwin"
+            else ".cache/mcp-console/dependencies"
+        )
+        if configured_empty:
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "resolver": {
+                            "environment": {
+                                name: ""
+                                for name in (
+                                    "UV_CACHE_DIR",
+                                    "UV_PYTHON_INSTALL_DIR",
+                                    "UV_TOOL_DIR",
+                                    "IR_CACHE_DIR",
+                                    "R_USER_CACHE_DIR",
+                                    "RENV_PATHS_ROOT",
+                                    "PKG_CACHE_DIR",
+                                    "MPLCONFIGDIR",
+                                    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
+                                )
+                            }
+                        }
+                    }
+                )
+            )
+        with McpClient(binary, ("serve",), env, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                lambda text: Path(text.strip()).is_relative_to(payload),
+                requirements={"python": ["six"]},
+                python="import six, sys; print(sys.executable)",
+            )
+            client.expect(
+                lambda text: str(payload / "duckdb/extensions") in text,
+                sql="SELECT current_setting('extension_directory') AS directory",
+            )
+            client.send(control="restart")
+            client.expect("retained\n", python="import six; print('retained')")
+            client.finish()
+        assert (payload / "uv/cache").is_dir()
+        assert not (home / ".cache/uv").exists()
+        assert not (home / "Library/Caches/uv").exists()
+        assert not (home / "Library/Application Support/uv").exists()
+    result = {"default_caches": "console-owned", "empty_xdg": "HOME fallback"}
+    if configured_empty:
+        result["empty_cache_overrides"] = "Console defaults"
+    return [result]
 
 
 @requires(SANDBOX)
@@ -380,6 +463,37 @@ def test_ssh_resolver_permissions(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX, R, command("ir"))
+def test_bootstraps_reticulate_uv_with_host_cache_policy(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        env, _ = r_test_environment()
+        env["IR_CACHE_DIR"] = ir_cache_directory(env)
+        env.update(XDG_CACHE_HOME=str(root / "cache"), RETICULATE_UV="managed")
+        for name in (
+            "RETICULATE_PYTHON",
+            "R_USER_CACHE_DIR",
+            "UV_CACHE_DIR",
+            "UV_TOOL_DIR",
+            "UV_PYTHON_INSTALL_DIR",
+        ):
+            env.pop(name, None)
+        # Cold shell installation on macOS needs the host policy's Darwin temp
+        # grant. The redirected XDG cache keeps this fixture's artifacts private.
+        with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "managed uv prepared\n",
+                requirements={"python": ["six"]},
+                python="import six; print('managed uv prepared')",
+            )
+            client.finish()
+        cache = root / "cache"
+        assert (cache / "R/reticulate/uv/bin/uv").is_file()
+        assert not (cache / "reticulate").exists()
+    return [{"reticulate_managed_uv": "R/reticulate", "cache_write_granted": True}]
+
+
+@requires(SANDBOX, R, command("ir"))
 def test_cold_r_cache_resolution(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory).resolve()
@@ -421,7 +535,12 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
     from contextlib import ExitStack
 
     with ExitStack() as stack:
-        directory = stack.enter_context(TemporaryDirectory())
+        # The protected workspace must be outside Darwin's granted user temp.
+        directory = stack.enter_context(
+            TemporaryDirectory(
+                prefix="mcp-console-resolver-permissions-", dir=Path.home()
+            )
+        )
         root = Path(directory).resolve()
         tools = root / "bin"
         tools.mkdir()

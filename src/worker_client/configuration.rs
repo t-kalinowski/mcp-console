@@ -263,6 +263,7 @@ impl ClientConfiguration {
             },
         );
         configuration.duckdb_extension_directory = duckdb_extension_directory;
+        configuration.resolver_settings = resolver_settings;
         configuration.local_preparation = Mutex::new(local_preparation);
         configuration.languages = Some(languages);
         Ok(configuration)

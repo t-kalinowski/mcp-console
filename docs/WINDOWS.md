@@ -121,7 +121,14 @@ The shared workflows choose Windows acceptance rather than the Unix transcript/s
 The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
 Python 3.11 or newer is required; CI uses Python 3.13.
 
+Configure `R_HOME` before running the complete suite, and use the C locale to match CI.
+If `R` on PATH is a `.bat` or `.cmd` launcher, preflight can probe it successfully while Console's native `R.exe` discovery still treats R as absent.
+An explicit `R_HOME` selects the installation for runtime and resolver tests and enables R sandbox acceptance.
+Replace the example path below with the installed R directory.
+
 ```powershell
+$env:R_HOME = 'C:/Program Files/R/R-4.6.1'
+$env:LC_ALL = 'C'
 scripts/preflight.cmd
 scripts/stage-sandbox-runner.cmd
 scripts/test.cmd --list

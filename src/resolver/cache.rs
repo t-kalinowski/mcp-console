@@ -182,13 +182,18 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         env("UV_PYTHON_INSTALL_DIR").unwrap_or_else(|| xdg_data.join("uv/python")),
         env("UV_TOOL_DIR").unwrap_or_else(|| xdg_data.join("uv/tools")),
         env("IR_CACHE_DIR").unwrap_or_else(|| r_cache.join("R/ir")),
+        // tools::R_user_dir appends R/<package> even to R_USER_CACHE_DIR.
         r_cache.join("R/reticulate"),
         duckdb_extension_directory(settings)?.expect("absolute resolver HOME"),
         env("MPLCONFIGDIR").unwrap_or_else(|| xdg_cache.join("matplotlib")),
         env("RENV_PATHS_ROOT").unwrap_or_else(|| r_cache.join("R/renv")),
         r_cache.join("R/pkgcache"),
     ];
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos")
+        && ["UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR", "UV_TOOL_DIR"]
+            .into_iter()
+            .any(|name| env(name).is_none())
+    {
         // uv retains existing installations in its pre-XDG native locations.
         caches.extend([
             home.join("Library/Caches/uv"),
@@ -210,6 +215,27 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         if let Some(path) = env(name) {
             caches.push(path);
         }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS mktemp and shell here-documents use Darwin's user temporary
+        // directory even when the native runner supplies a private TMPDIR.
+        let temporary = std::process::Command::new("/usr/bin/getconf")
+            .arg("DARWIN_USER_TEMP_DIR")
+            .output()
+            .map_err(|error| {
+                format!("cannot locate the macOS user temporary directory: {error}")
+            })?;
+        if !temporary.status.success() {
+            return Err("cannot locate the macOS user temporary directory".into());
+        }
+        let temporary = String::from_utf8(temporary.stdout)
+            .map_err(|_| "resolver policy paths must be UTF-8")?;
+        let temporary = PathBuf::from(temporary.trim_end_matches('\n'));
+        if !temporary.is_absolute() {
+            return Err("macOS user temporary directory must be absolute".into());
+        }
+        caches.push(temporary);
     }
     Ok(caches)
 }

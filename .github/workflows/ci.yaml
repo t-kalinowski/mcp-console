@@ -74,9 +74,9 @@ jobs:
           key: windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
           restore-keys: |
             windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
-      - name: Install Windows runtime packages
+      - name: Install Windows runtime and formatting tools
         run: |
-          python -m pip install packaging matplotlib
+          python -m pip install packaging matplotlib ruff yamark
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install Windows R bridge
         uses: r-lib/actions/setup-r-dependencies@v2

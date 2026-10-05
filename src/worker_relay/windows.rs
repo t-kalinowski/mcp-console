@@ -5,11 +5,13 @@ use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
+use super::lifecycle::{self, ExitDeadline, FirstFailure, WORKER_SHUTDOWN_GRACE};
+use super::routing::Operation;
 use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
 use crate::windows::{Event, Pipe};
@@ -17,7 +19,9 @@ use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 enum Control {
     Command(RelayCommand),
-    Closed,
+    ControllerEof,
+    SidebandEof,
+    SidebandReaderFinished,
     Exited,
     Failed(String),
 }
@@ -25,7 +29,7 @@ enum Control {
 #[derive(Clone)]
 struct Controls {
     sender: mpsc::Sender<Control>,
-    failure: Arc<OnceLock<String>>,
+    failure: FirstFailure,
 }
 
 impl Controls {
@@ -33,7 +37,7 @@ impl Controls {
         if let Control::Failed(message) = &control {
             // Preserve the first error even when a reader reports it during
             // retirement. Collecting it must not drain a live command queue.
-            let _ = self.failure.set(message.clone());
+            self.failure.record(message.clone());
         }
         self.sender.send(control)
     }
@@ -46,7 +50,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     let (sender, commands) = mpsc::channel();
     let controls = Controls {
         sender,
-        failure: Arc::new(OnceLock::new()),
+        failure: FirstFailure::default(),
     };
     let failed = controls.clone();
     let (events, mut event_writer) = event_writer::start(move |message| {
@@ -67,15 +71,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     } = match start_worker(program, arguments, controls.clone()) {
         Ok(worker) => worker,
         Err(message) => {
-            event_writer.begin_retirement();
-            events.send_supervisor(RelayEvent::Fatal {
-                message: message.clone(),
-            });
-            events.finish();
-            return match event_writer.join() {
-                Ok(()) => Err(message),
-                Err(error) => Err(format!("{message}; additionally {error}")),
-            };
+            return lifecycle::report_startup_failure(&events, event_writer, message);
         }
     };
     let input_controls = controls.clone();
@@ -119,7 +115,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
             }
         }
-        let _ = input_controls.send(Control::Closed);
+        let _ = input_controls.send(Control::ControllerEof);
     });
     let mut tasks = Vec::new();
     for (handle, is_error) in [(stdout, false), (stderr, true)] {
@@ -176,6 +172,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     let sideband_events = events.clone();
     let sideband_controls = controls.clone();
     tasks.push(thread::spawn(move || {
+        let mut completion = Control::SidebandReaderFinished;
         loop {
             match sideband.receive::<WorkerMessage>() {
                 Ok(message) => {
@@ -193,7 +190,10 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                     }
                     break;
                 }
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                    completion = Control::SidebandEof;
+                    break;
+                }
                 Err(error) => {
                     let _ = sideband_controls.send(Control::Failed(format!(
                         "worker sideband read failed: {error}"
@@ -202,7 +202,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
             }
         }
-        let _ = sideband_controls.send(Control::Closed);
+        let _ = sideband_controls.send(completion);
     }));
     let (send_sideband, messages) = mpsc::channel::<ServerMessage>();
     let writer_controls = controls.clone();
@@ -245,12 +245,10 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         input_ready.set();
     }));
     let mut send_stdin = Some(send_stdin);
-    let mut deadline = None::<Instant>;
+    let mut deadline = ExitDeadline::default();
     loop {
-        let next = match deadline {
-            Some(deadline) => {
-                commands.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            }
+        let next = match deadline.remaining() {
+            Some(remaining) => commands.recv_timeout(remaining),
             None => commands
                 .recv()
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
@@ -265,62 +263,40 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Closed) => {
-                if deadline.is_none() {
+            Ok(Control::ControllerEof | Control::SidebandEof | Control::SidebandReaderFinished) => {
+                // Preserve the existing Windows action for these distinct
+                // inputs; changing shutdown admission/EOF policy is separate.
+                if deadline.start_if_idle(|| {
                     stopping.store(true, Ordering::SeqCst);
-                    deadline = Some(Instant::now() + Duration::from_secs(1));
+                    Instant::now() + WORKER_SHUTDOWN_GRACE
+                }) {
                     send_stdin.take();
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
             }
-            Ok(Control::Command(command)) => match command {
-                RelayCommand::Interrupt { request_id } => {
+            Ok(Control::Command(command)) => match Operation::from(command) {
+                Operation::Interrupt { request_id } => {
                     interrupt.set();
                     events.send_supervisor(RelayEvent::InterruptResult {
                         request_id,
                         error: None,
                     });
                 }
-                RelayCommand::Shutdown { grace_millis } => {
+                Operation::Shutdown { grace_millis } => {
                     stopping.store(true, Ordering::SeqCst);
-                    events.send_supervisor(RelayEvent::ShutdownStarted);
-                    deadline = Some(Instant::now() + Duration::from_millis(grace_millis));
+                    deadline.accept_shutdown(&events, || {
+                        Instant::now() + Duration::from_millis(grace_millis)
+                    });
                     send_stdin.take();
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
-                RelayCommand::Stdin { data } => {
+                Operation::Stdin { data } => {
                     if let Some(stdin) = &send_stdin {
                         let _ = stdin.send(data);
                     }
                 }
-                RelayCommand::Evaluate { language, source } => {
-                    let _ = send_sideband.send(ServerMessage::Evaluate { language, source });
-                }
-                RelayCommand::PrepareR { library } => {
-                    let _ = send_sideband.send(ServerMessage::PrepareR { library });
-                }
-                RelayCommand::RResolved { library } => {
-                    let _ = send_sideband.send(ServerMessage::RResolved { library });
-                }
-                RelayCommand::RResolutionFailed { failure, message } => {
-                    let _ =
-                        send_sideband.send(ServerMessage::RResolutionFailed { failure, message });
-                }
-                RelayCommand::PreparePython { packages } => {
-                    let _ = send_sideband.send(ServerMessage::PreparePython { packages });
-                }
-                RelayCommand::PythonResolved { python, native } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolved { python, native });
-                }
-                RelayCommand::PythonResolutionFailed { message } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolutionFailed { message });
-                }
-                RelayCommand::PythonVersionResolved { version } => {
-                    let _ = send_sideband.send(ServerMessage::PythonVersionResolved { version });
-                }
-                RelayCommand::PythonVersionResolutionFailed { message } => {
-                    let _ = send_sideband
-                        .send(ServerMessage::PythonVersionResolutionFailed { message });
+                Operation::Worker(message) => {
+                    let _ = send_sideband.send(message);
                 }
             },
         }
@@ -337,19 +313,14 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     for task in tasks {
         task.join().map_err(|_| "worker I/O task panicked")?;
     }
-    events.send_supervisor(RelayEvent::StdoutClosed);
-    events.send_supervisor(RelayEvent::StderrClosed);
-    if let Some(message) = controls.failure.get() {
-        events.send_supervisor(RelayEvent::Fatal {
-            message: message.clone(),
-        });
-    }
-    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
-    events.send_supervisor(RelayEvent::WorkerExited {
-        code: status.code().unwrap_or(1),
-    });
-    events.finish();
-    event_writer.join()
+    lifecycle::finish(
+        &events,
+        event_writer,
+        controls.failure.message(),
+        Some(RelayEvent::WorkerExited {
+            code: status.code().unwrap_or(1),
+        }),
+    )
 }
 
 struct StartedWorker {

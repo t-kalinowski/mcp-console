@@ -12,6 +12,8 @@ It allows PyPI, CRAN, Posit's package manager, Bioconductor, GitHub sources and 
 Loopback binding is allowed for installer subprocess coordination.
 On macOS this also permits access to host loopback services and DNS; Linux uses the runner's private network namespace.
 These permissions are intended for ordinary package preparation, including source builds that use installed compilers and system libraries.
+Resolver executables, wrappers, configuration, and package sources remain trusted inputs.
+Cache placement does not make these inputs immutable or protect wrappers writable under the worker policy.
 
 ## Cache locations
 
@@ -37,6 +39,8 @@ uv's cache, Python installations, tools, and executable links use `uv/`; IR uses
 DuckDB uses `duckdb/extensions`, Matplotlib uses `matplotlib`, and Python's user base and bytecode cache use `python/`.
 `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` are redirected explicitly so an inherited override cannot share host artifacts.
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
+Workers link the warmed font cache into their private Matplotlib directory.
+Host Matplotlib configuration remains selected independently of this cache.
 Explicitly selected Python uses its preinstalled packages and DuckDB extensions.
 Host R and installed resolver executables remain readable.
 On macOS, keep uv on `PATH` or select an installed executable with `RETICULATE_UV`.
@@ -200,7 +204,8 @@ With `cache: host`, cache paths and write grants follow the resolver's effective
 
 R's cache base is `R_USER_CACHE_DIR`, then `XDG_CACHE_HOME`, then `$HOME/Library/Caches/org.R-project.R` on macOS or `$HOME/.cache` on Linux.
 An explicit `IR_LIBRARY_ROOT` also receives writes.
-macOS additionally permits uv's legacy `$HOME/Library/Caches/uv` and `$HOME/Library/Application Support/uv` locations.
+When uv's cache, Python installation, and tool directories are not all explicitly selected, macOS additionally permits uv's legacy `$HOME/Library/Caches/uv` and `$HOME/Library/Application Support/uv` locations.
+Host cache mode on macOS also grants Darwin's user temporary directory, which `mktemp` and shell here-documents select independently of `TMPDIR`.
 Existing uv and reticulate cache selection remains unchanged in host cache mode.
 For uv grants, relative `XDG_CACHE_HOME` and `XDG_DATA_HOME` values are ignored in favor of the defaults beneath `HOME`.
 Default host cache grants require an absolute `HOME`.
