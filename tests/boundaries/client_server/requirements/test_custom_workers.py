@@ -244,9 +244,10 @@ def test_custom_worker_starts_without_home(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
     environment.pop("HOME", None)
+    environment.pop("XDG_CACHE_HOME", None)
     client = McpClient(
         binary,
-        execution.serve("--worker", str(zod)),
+        execution.serve("--worker", str(zod), "-c", "cache=host"),
         environment,
     )
     client.initialize_and_list_tools()

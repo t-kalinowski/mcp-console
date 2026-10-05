@@ -251,7 +251,11 @@ def managed_session(
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
             with McpClient(
-                binary, execution.serve(), controller, local, response_timeout=180
+                binary,
+                execution.serve("-c", "cache=host"),
+                controller,
+                local,
+                response_timeout=180,
             ) as client:
                 client.initialize_and_list_tools()
                 yield client, remote, ir_record, uv_record

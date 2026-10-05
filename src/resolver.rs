@@ -9,6 +9,7 @@ pub(crate) use environment::{ManagedPython, ManagedR};
 pub(crate) mod cache;
 pub(crate) mod execution;
 pub(crate) mod preparation;
+#[cfg(unix)]
 pub(crate) mod sandbox;
 
 pub(crate) fn run() -> Result<(), String> {
