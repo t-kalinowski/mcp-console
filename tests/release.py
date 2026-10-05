@@ -64,6 +64,7 @@ def elf_fixture(**changes: object) -> bytes:
         "interpreter": "/lib64/ld-linux-x86-64.so.2",
         "needed": ["libc.so.6"],
         "versions": ["GLIBC_2.34"],
+        "rpath": None,
         "runpath": None,
     }
     fields.update(changes)
@@ -108,8 +109,9 @@ def write_readelf_fixture(commands: Path) -> None:
             for name in fields["needed"]:
                 if name != "libcap.so.2" or not os.environ.get("FAKE_STATIC_LIBCAP"):
                     print(" (NEEDED) Shared library: [" + name + "]")
-            if fields["runpath"]:
-                print(" (RUNPATH) Library runpath: [" + fields["runpath"] + "]")
+            for kind in ("rpath", "runpath"):
+                if fields.get(kind):
+                    print(" (" + kind.upper() + ") Library path: [" + fields[kind] + "]")
             print("Version needs section '.gnu.version_r':")
             for name in fields["versions"]:
                 print("  Name: " + name + " Flags: none Version: 2")
@@ -715,6 +717,121 @@ class ReleaseScriptTests(ReleaseFixture):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     evidence = json.loads(report.read_text())["elf"]
                     self.assertEqual(evidence[member]["search"], [library_directory])
+
+    def test_inspect_wheel_inherits_rpath_only_along_dependency_chains(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            executable = "mcp_console-0.0.2.data/scripts/mcp-console"
+            libexec = "mcp_console-0.0.2.data/data/libexec"
+            for name, root_paths, child_paths, accepted in (
+                ("inherited RPATH", {"rpath": "$ORIGIN/../libexec"}, {}, True),
+                ("cyclic RPATH chain", {"rpath": "$ORIGIN/../libexec"}, {}, True),
+                ("direct-only RUNPATH", {"runpath": "$ORIGIN/../libexec"}, {}, False),
+                (
+                    "child supplies RUNPATH",
+                    {"runpath": "$ORIGIN/../libexec"},
+                    {"runpath": "${ORIGIN}"},
+                    True,
+                ),
+                (
+                    "ancestor RPATH survives an intermediate RUNPATH",
+                    {"rpath": "$ORIGIN/../libexec"},
+                    {"runpath": "$ORIGIN"},
+                    True,
+                ),
+                (
+                    "RUNPATH overrides local RPATH",
+                    {"rpath": "$ORIGIN/../libexec", "runpath": "$ORIGIN/../libexec"},
+                    {},
+                    False,
+                ),
+                (
+                    "child RUNPATH overrides inherited RPATH for direct needs",
+                    {"rpath": "$ORIGIN/../libexec"},
+                    {"runpath": "$ORIGIN/missing"},
+                    False,
+                ),
+                (
+                    "child RPATH keeps its own origin",
+                    {"runpath": "$ORIGIN/../libexec"},
+                    {"rpath": "${ORIGIN}/nested"},
+                    True,
+                ),
+            ):
+                with self.subTest(name=name):
+                    self.write_wheel(wheel)
+                    rewrite_wheel(
+                        wheel,
+                        {executable: elf_fixture(needed=["liba.so"], **root_paths)},
+                    )
+                    library_directory = (
+                        f"{libexec}/nested" if "rpath" in child_paths else libexec
+                    )
+                    with zipfile.ZipFile(wheel, "a") as archive:
+                        archive.writestr(
+                            f"{libexec}/liba.so",
+                            elf_fixture(
+                                interpreter=None, needed=["libb.so"], **child_paths
+                            ),
+                        )
+                        archive.writestr(
+                            f"{library_directory}/libb.so",
+                            elf_fixture(
+                                interpreter=None,
+                                needed=["libcfixture.so"],
+                                runpath="$ORIGIN"
+                                if name == "child supplies RUNPATH"
+                                else None,
+                            ),
+                        )
+                        archive.writestr(
+                            f"{library_directory}/libcfixture.so",
+                            elf_fixture(
+                                interpreter=None,
+                                needed=["liba.so"]
+                                if name == "cyclic RPATH chain"
+                                else ["libc.so.6"],
+                            ),
+                        )
+                    result = self.run_script(
+                        "inspect-wheel",
+                        str(wheel),
+                        "--release",
+                        cwd=directory,
+                        env=environment,
+                    )
+                    if accepted:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0, result.stdout)
+                        self.assertIn("undeclared dependency", result.stderr)
+
+            # The runner is a separate process: it cannot borrow the main executable's RPATH.
+            self.write_wheel(wheel)
+            rewrite_wheel(
+                wheel,
+                {
+                    executable: elf_fixture(
+                        needed=["liba.so"], rpath="$ORIGIN/../libexec"
+                    ),
+                    f"{libexec}/mcp-console-sandbox": elf_fixture(needed=["liba.so"]),
+                },
+            )
+            with zipfile.ZipFile(wheel, "a") as archive:
+                archive.writestr(f"{libexec}/liba.so", elf_fixture(interpreter=None))
+            result = self.run_script(
+                "inspect-wheel",
+                str(wheel),
+                "--release",
+                cwd=directory,
+                env=environment,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn(
+                "mcp-console-sandbox: undeclared dependency liba.so", result.stderr
+            )
 
     def test_inspect_wheel_rejects_loader_paths_outside_installed_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

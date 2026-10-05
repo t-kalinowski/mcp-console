@@ -417,7 +417,8 @@ def inspect_linux_abi(
         "platlib": site_packages,
     }
     data_prefix = f"mcp_console-{version}.data/"
-    installed_elves: set[str] = set()
+    installed_elves: dict[str, str] = {}
+    rpaths: dict[str, tuple[str, ...]] = {}
     with zipfile.ZipFile(wheel) as archive, tempfile.TemporaryDirectory() as directory:
         for member in archive.namelist():
             with archive.open(member) as stream:
@@ -431,7 +432,7 @@ def inspect_linux_abi(
                 )
             else:
                 installed = posixpath.join(site_packages, member)
-            installed_elves.add(installed)
+            installed_elves[installed] = member
             elf = Path(directory) / "artifact"
             elf.write_bytes(archive.read(member))
             output = command_output(
@@ -458,8 +459,9 @@ def inspect_linux_abi(
                 f"{member}: unexpected ELF interpreter",
             )
             paths = re.findall(r"\((RPATH|RUNPATH)\).*\[([^]]*)\]", output)
-            search = []
+            search_paths: dict[str, list[str]] = {}
             for kind, value in paths:
+                search_paths[kind] = []
                 for path in value.split(":"):
                     path = path.replace("${ORIGIN}", "$ORIGIN")
                     require(
@@ -476,7 +478,13 @@ def inspect_linux_abi(
                         resolved != ".." and not resolved.startswith("../"),
                         f"{member}: {kind} escapes the installed wheel: {value}",
                     )
-                    search.append(resolved)
+                    search_paths[kind].append(resolved)
+            # RUNPATH suppresses this object's RPATH, and is never inherited.
+            rpaths[member] = (
+                tuple(search_paths.get("RPATH", []))
+                if "RUNPATH" not in search_paths
+                else ()
+            )
             versions = re.findall(
                 r"Name: ((?:GLIBC|GLIBCXX|CXXABI|GCC)_[^\s]+)",
                 output.partition("Version needs section")[2],
@@ -514,31 +522,69 @@ def inspect_linux_abi(
                 "interpreter": interp[1] if interp else None,
                 "needed": sorted(re.findall(r"\(NEEDED\).*\[([^]]+)\]", output)),
                 "rpath_runpath": dict(paths),
-                "search": search,
+                "search": search_paths.get("RUNPATH", search_paths.get("RPATH", [])),
                 "glibc": sorted(set(requirements["GLIBC"])),
                 "glibcxx": sorted(set(requirements["GLIBCXX"])),
                 "cxxabi": sorted(set(requirements["CXXABI"])),
                 "gcc": sorted(set(requirements["GCC"])),
             }
-        for name in (
+        commands = (
             f"mcp_console-{version}.data/scripts/mcp-console",
             *(
                 f"mcp_console-{version}.data/data/libexec/{name}"
                 for name in ("mcp-console-sandbox", "bwrap")
             ),
-        ):
+        )
+        for name in commands:
             require(name in evidence, f"{name}: required wheel executable is not ELF")
-        for member, elf in evidence.items():
+        visited: set[tuple[str, tuple[str, ...]]] = set()
+        checked: set[str] = set()
+
+        def check_dependencies(member: str, inherited: tuple[str, ...] = ()) -> None:
+            context = (member, inherited)
+            if context in visited:
+                return
+            visited.add(context)
+            checked.add(member)
+            elf = evidence[member]
+            # Each ancestor's paths already use that ancestor's installed $ORIGIN.
+            ancestors = tuple(dict.fromkeys((*rpaths[member], *inherited)))
+            search = elf["search"] if "RUNPATH" in elf["rpath_runpath"] else ancestors
             for needed in elf["needed"]:
-                require(
-                    needed in LINUX_SYSTEM_LIBRARIES
-                    or any(
-                        posixpath.normpath(posixpath.join(path, needed))
+                if needed in LINUX_SYSTEM_LIBRARIES:
+                    continue
+                dependency = next(
+                    (
+                        installed_elves[candidate]
+                        for path in search
+                        if (
+                            candidate := posixpath.normpath(
+                                posixpath.join(path, needed)
+                            )
+                        )
                         in installed_elves
-                        for path in elf["search"]
                     ),
+                    None,
+                )
+                require(
+                    dependency is not None,
                     f"{member}: undeclared dependency {needed}",
                 )
+                check_dependencies(dependency, ancestors)
+
+        needed_names = {name for elf in evidence.values() for name in elf["needed"]}
+        # Audit independent entry points separately; children inherit only their chain.
+        for member, elf in evidence.items():
+            if (
+                member in commands
+                or elf["interpreter"] is not None
+                or posixpath.basename(member) not in needed_names
+            ):
+                check_dependencies(member)
+        # Also audit unreferenced bundles, including closed dependency cycles.
+        for member in evidence:
+            if member not in checked:
+                check_dependencies(member)
     return evidence
 
 
